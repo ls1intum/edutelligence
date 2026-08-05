@@ -21,6 +21,9 @@ from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+from iris.pipeline.lecture_unit_segment_summary_pipeline import (
+    LectureUnitSegmentSummaryPipeline,
+)
 from iris.pipeline.lecture_update_lock import lecture_update_lock
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
@@ -171,6 +174,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 self.dto.lecture_unit.lecture_id,
                 self.dto.lecture_unit.lecture_unit_id,
             ):
+                raise_if_cancelled(
+                    self.cancel_event,
+                    self.dto.lecture_unit.lecture_unit_id,
+                    "after acquiring initial state lock",
+                )
                 initial_properties = LectureUnitPipeline.fetch_existing_properties(
                     VectorDatabase().get_client(),
                     self._build_lecture_unit_dto(),
@@ -202,21 +210,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             # ── Phase 2: Ingestion (existing logic) ──────────────────────
             # Ingestion-phase failures (vector DB, PDF, summary) are NOT
             # transcription failures and must not be labeled as such.
-            with lecture_update_lock(
-                self.dto.settings.artemis_base_url,
-                self.dto.lecture_unit.course_id,
-                self.dto.lecture_unit.lecture_id,
-                self.dto.lecture_unit.lecture_unit_id,
-            ):
-                # Last gate before any write. The successor is not started
-                # until this thread exits, so passing here means our writes
-                # cannot be overtaken by fresher content.
-                raise_if_cancelled(
-                    self.cancel_event,
-                    self.dto.lecture_unit.lecture_unit_id,
-                    "Weaviate mutation phase",
-                )
-                self._run_ingestion(callback, initial_properties)
+            self._run_ingestion(callback, initial_properties)
 
         except IngestionCancelledException as e:
             # Superseded, not failed. Artemis is already waiting on the newer
@@ -426,7 +420,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
     def _run_ingestion(
         self, callback: IngestionStatusCallback, initial_properties: dict
     ) -> None:
-        """Run the existing ingestion logic (PDF + transcription + summary)."""
+        """Prepare expensive work outside the commit lock, then commit in short windows."""
         db = VectorDatabase()
         client = db.get_client()
         language = ""
@@ -434,11 +428,21 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
         variant_id = self.variant_id
         is_local = self._is_local
+        lecture_unit = self.dto.lecture_unit
+        lock_args = (
+            self.dto.settings.artemis_base_url,
+            lecture_unit.course_id,
+            lecture_unit.lecture_id,
+            lecture_unit.lecture_unit_id,
+        )
+
+        prepared_page_chunks = None
+        page_content_pipeline = None
 
         # PDF page ingestion
         if (
-            self.dto.lecture_unit.pdf_file_base64 is not None
-            and self.dto.lecture_unit.pdf_file_base64 != ""
+            lecture_unit.pdf_file_base64 is not None
+            and lecture_unit.pdf_file_base64 != ""
         ):
             variant = find_variant(
                 LectureUnitPageIngestionPipeline.get_variants(), variant_id
@@ -451,15 +455,18 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 local=is_local,
                 cancel_event=self.cancel_event,
             )
-            language, tokens_page_content_pipeline = page_content_pipeline()
-            tokens += tokens_page_content_pipeline
+            language, prepared_page_chunks = page_content_pipeline.prepare_replacement()
+            tokens += page_content_pipeline.tokens
         else:
             self._send_heartbeats(callback, 6, "missing PDF page ingestion")
 
+        prepared_transcription_chunks = None
+        transcription_pipeline = None
+
         # Transcription ingestion
         if (
-            self.dto.lecture_unit.transcription is not None
-            and self.dto.lecture_unit.transcription.segments is not None
+            lecture_unit.transcription is not None
+            and lecture_unit.transcription.segments is not None
         ):
             transcription_pipeline = TranscriptionIngestionPipeline(
                 client=client,
@@ -468,20 +475,88 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 local=is_local,
                 cancel_event=self.cancel_event,
             )
-            language, tokens_transcription_pipeline = transcription_pipeline()
-            tokens += tokens_transcription_pipeline
+            language = lecture_unit.transcription.language
+            prepared_transcription_chunks = transcription_pipeline.prepare_replacement()
+            tokens += transcription_pipeline.tokens
         else:
             self._send_heartbeats(callback, 8, "missing transcription ingestion")
+
+        if (
+            prepared_page_chunks is not None
+            or prepared_transcription_chunks is not None
+        ):
+            raise_if_cancelled(
+                self.cancel_event,
+                lecture_unit.lecture_unit_id,
+                "before content commit lock",
+            )
+            with lecture_update_lock(*lock_args):
+                raise_if_cancelled(
+                    self.cancel_event,
+                    lecture_unit.lecture_unit_id,
+                    "after acquiring content commit lock",
+                )
+                if (
+                    prepared_page_chunks is not None
+                    and page_content_pipeline is not None
+                ):
+                    page_content_pipeline.commit_prepared_replacement(
+                        prepared_page_chunks
+                    )
+                if (
+                    prepared_transcription_chunks is not None
+                    and transcription_pipeline is not None
+                ):
+                    transcription_pipeline.commit_prepared_replacement(
+                        prepared_transcription_chunks
+                    )
 
         # Lecture unit summary
         callback.update()
         lecture_unit_dto = self._build_lecture_unit_dto(language)
+        segment_pipeline = LectureUnitSegmentSummaryPipeline(
+            client,
+            lecture_unit_dto,
+            local=is_local,
+            callback=callback,
+            cancel_event=self.cancel_event,
+        )
+        lecture_unit_segment_summaries, prepared_segments = (
+            segment_pipeline.prepare_replacement()
+        )
+        tokens += segment_pipeline.tokens
 
-        tokens += LectureUnitPipeline(
+        lecture_unit_pipeline = LectureUnitPipeline(
             local=is_local, callback=callback, cancel_event=self.cancel_event
-        )(
-            lecture_unit=lecture_unit_dto,
-            initial_properties=initial_properties,
+        )
+        tokens_unit_summary, unit_embedding = lecture_unit_pipeline.prepare_replacement(
+            lecture_unit_dto,
+            lecture_unit_segment_summaries,
+        )
+        tokens += tokens_unit_summary
+
+        raise_if_cancelled(
+            self.cancel_event,
+            lecture_unit.lecture_unit_id,
+            "before segment/unit commit lock",
+        )
+        with lecture_update_lock(*lock_args):
+            raise_if_cancelled(
+                self.cancel_event,
+                lecture_unit.lecture_unit_id,
+                "after acquiring segment/unit commit lock",
+            )
+            segment_pipeline.commit_prepared_replacement(prepared_segments)
+            lecture_unit_pipeline.commit_prepared_replacement(
+                lecture_unit=lecture_unit_dto,
+                initial_properties=initial_properties,
+                embedding=unit_embedding,
+            )
+
+        raise_if_cancelled(
+            self.cancel_event,
+            lecture_unit.lecture_unit_id,
+            "before terminal callback",
         )
         callback.finish(
             display_page_numbers=self.dto.lecture_unit.display_page_numbers,

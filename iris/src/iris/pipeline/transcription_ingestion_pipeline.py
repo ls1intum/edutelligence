@@ -114,7 +114,6 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
             self.batch_insert(chunks)
             self.callback.update()
-
             return self.dto.lecture_unit.transcription.language, self.tokens
         except Exception as e:
             logger.error(
@@ -141,7 +140,47 @@ class TranscriptionIngestionPipeline(SubPipeline):
         )
 
     def batch_insert(self, chunks):
-        prepared_chunks = []
+        prepared_chunks = self._prepare_batch_insert(chunks)
+        # Last checkpoint: the batch below must not be torn in half.
+        raise_if_cancelled(
+            self.cancel_event,
+            self.dto.lecture_unit.lecture_unit_id,
+            "transcription indexing",
+        )
+        with batch_update_lock:
+            with self.collection.batch.dynamic() as batch:
+                try:
+                    for chunk, embed_chunk in prepared_chunks:
+                        batch.add_object(properties=chunk, vector=embed_chunk)
+                except Exception as e:
+                    logger.error("Error indexing lecture transcription chunk: %s", e)
+                    raise
+
+    def prepare_replacement(self) -> list[tuple[dict[str, Any], list[float]]]:
+        """Prepare transcription chunks and embeddings outside the commit lock."""
+        self.callback.update()
+        chunks = self.chunk_transcription(self.dto.lecture_unit)
+        self.callback.update()
+
+        self.callback.update()
+        chunks = self.summarize_chunks(chunks)
+        self.callback.update()
+
+        self.callback.update()
+        logger.info(
+            "[%s / %s] Embedding %d transcription chunks for later commit",
+            self.dto.lecture_unit.lecture_name,
+            self.dto.lecture_unit.lecture_unit_name,
+            len(chunks),
+        )
+        prepared_chunks = self._prepare_batch_insert(chunks)
+        self.callback.update()
+        return prepared_chunks
+
+    def _prepare_batch_insert(
+        self, chunks: list[dict[str, Any]]
+    ) -> list[tuple[dict[str, Any], list[float]]]:
+        prepared_chunks: list[tuple[dict[str, Any], list[float]]] = []
         try:
             for i, chunk in enumerate(chunks):
                 raise_if_cancelled(
@@ -160,13 +199,20 @@ class TranscriptionIngestionPipeline(SubPipeline):
         except Exception as e:
             logger.error("Error embedding lecture transcription chunk: %s", e)
             raise
+        return prepared_chunks
 
-        # Last checkpoint: the batch below must not be torn in half.
+    def commit_prepared_replacement(
+        self, prepared_chunks: list[tuple[dict[str, Any], list[float]]]
+    ) -> None:
+        """Replace transcription rows with a prepared payload."""
         raise_if_cancelled(
             self.cancel_event,
             self.dto.lecture_unit.lecture_unit_id,
-            "transcription indexing",
+            "transcription replacement",
         )
+        self.delete_existing_transcription_data(self.dto.lecture_unit)
+        # Once the old rows are gone, this commit window must not be cancelled
+        # until the prepared replacement has been written.
         with batch_update_lock:
             with self.collection.batch.dynamic() as batch:
                 try:

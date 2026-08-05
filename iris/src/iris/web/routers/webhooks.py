@@ -65,9 +65,9 @@ def run_lecture_update_pipeline_worker(
     """Run the lecture unit ingestion pipeline in a separate thread.
 
     No concurrency throttling here — Artemis controls how many jobs are
-    dispatched via MAX_CONCURRENT_PROCESSING. Jobs for *different* lecture
-    units run concurrently; a second job for the *same* unit supersedes the
-    first and waits for it to exit (see ``IngestionJobHandler``).
+    dispatched via MAX_CONCURRENT_PROCESSING. Jobs for the same lecture unit may
+    overlap during preprocessing; the write phase is serialized deeper in the
+    ingestion pipeline.
     """
     lecture_unit_id = (
         dto.lecture_unit.lecture_unit_id
@@ -75,15 +75,6 @@ def run_lecture_update_pipeline_worker(
         else dto.lecture_unit_id
     )
     try:
-        # Wait for any job this one replaced to exit before touching anything.
-        if not ingestion_job_handler.await_turn(
-            dto.lecture_unit.course_id,
-            dto.lecture_unit.lecture_id,
-            dto.lecture_unit.lecture_unit_id,
-            cancel_event,
-        ):
-            return
-
         pipeline = LectureIngestionUpdatePipeline(
             dto, variant_id=variant_id, cancel_event=cancel_event
         )

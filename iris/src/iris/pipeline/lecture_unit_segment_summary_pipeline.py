@@ -139,6 +139,80 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             )
         return summaries, self.tokens
 
+    def prepare_replacement(
+        self,
+    ) -> tuple[list[str], list[dict[str, object]]]:
+        """Prepare segment summaries and embeddings outside the commit lock."""
+        slide_number_start, slide_number_end = self._get_slide_range()
+        summaries: list[str] = []
+        prepared_segments: list[dict[str, object]] = []
+        for slide_index in range(slide_number_start, slide_number_end + 1):
+            raise_if_cancelled(
+                self.cancel_event,
+                self.lecture_unit_dto.lecture_unit_id,
+                "lecture unit segment summary",
+            )
+            if self.callback is not None:
+                self.callback.update()
+            transcriptions = self._get_transcriptions(slide_index)
+            slides = self._get_slides(slide_index)
+            display_page_number = slide_index
+
+            if len(slides) != 0:
+                display_page_number = int(
+                    slides[0].properties.get(
+                        LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                        slide_index,
+                    )
+                )
+                if display_page_number == -1:
+                    transcriptions = []
+                else:
+                    transcriptions = self._get_transcriptions(display_page_number)
+
+            summary = self._create_summary(transcriptions, slides)
+            summaries.append(summary)
+            embedding = self.llm_embedding.embed(summary)
+            raise_if_cancelled(
+                self.cancel_event,
+                self.lecture_unit_dto.lecture_unit_id,
+                "lecture unit segment write",
+            )
+            prepared_segments.append(
+                {
+                    "slide_number": slide_index,
+                    "display_page_number": display_page_number,
+                    "summary": summary,
+                    "embedding": embedding,
+                }
+            )
+        return summaries, prepared_segments
+
+    def commit_prepared_replacement(
+        self, prepared_segments: list[dict[str, object]]
+    ) -> None:
+        """Write prepared segment summaries while preserving latest visibility."""
+        for prepared_segment in prepared_segments:
+            raise_if_cancelled(
+                self.cancel_event,
+                self.lecture_unit_dto.lecture_unit_id,
+                "lecture unit segment upsert",
+            )
+            slide_number = int(prepared_segment["slide_number"])
+            slides = self._get_slides(slide_number)
+            hidden_until = (
+                slides[0].properties.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value)
+                if slides
+                else None
+            )
+            self._upsert_lecture_object(
+                slide_number=slide_number,
+                summary=str(prepared_segment["summary"]),
+                display_page_number=int(prepared_segment["display_page_number"]),
+                hidden_until=hidden_until,
+                embedding=prepared_segment["embedding"],
+            )
+
     def _get_transcriptions(self, slide_number: int):
         transcription_filter = self._get_lecture_transcription_filter()
         transcription_filter &= Filter.by_property(
@@ -256,6 +330,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         summary: str,
         display_page_number: int,
         hidden_until=None,
+        embedding=None,
     ):
         lecture_filter = Filter.by_property(
             LectureUnitSegmentSchema.COURSE_ID.value
@@ -278,6 +353,14 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             filters=lecture_filter, limit=1
         ).objects
 
+        if embedding is None:
+            embedding = self.llm_embedding.embed(summary)
+            raise_if_cancelled(
+                self.cancel_event,
+                self.lecture_unit_dto.lecture_unit_id,
+                "lecture unit segment write",
+            )
+
         # transcriptions = self._get_transcriptions(slide_number)
         # slides = self._get_slides(slide_number)
 
@@ -294,7 +377,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
                     LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
                 },
-                vector=self.llm_embedding.embed(summary),
+                vector=embedding,
             )
             # lecture = self.lecture_unit_segment_collection.query
             # .fetch_objects(filters=lecture_filter, limit=1).objects[0]
@@ -331,7 +414,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
                 LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
             },
-            vector=self.llm_embedding.embed(summary),
+            vector=embedding,
         )
 
         # self.lecture_unit_segment_collection.data.reference_replace(
