@@ -110,10 +110,12 @@ class LectureUnitPipeline(SubPipeline):
         )
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
-        raise_if_cancelled(
-            cancel_event, lecture_unit.lecture_unit_id, "lecture unit replacement"
-        )
         with batch_update_lock:
+            # Final guard after waiting for the write lock. Once this passes,
+            # keep the replacement contiguous so a superseded run cannot commit.
+            raise_if_cancelled(
+                cancel_event, lecture_unit.lecture_unit_id, "lecture unit replacement"
+            )
             latest_units = self.lecture_unit_collection.query.fetch_objects(
                 filters=lecture_unit_filter, limit=1
             ).objects

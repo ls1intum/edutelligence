@@ -85,7 +85,6 @@ class TranscriptionIngestionPipeline(SubPipeline):
     @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
-            cancel_event = getattr(self, "cancel_event", None)
             lecture_unit = getattr(self.dto, "lecture_unit", None)
             self.callback.update()
             chunks = self.chunk_transcription(lecture_unit)
@@ -104,15 +103,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
             prepared_chunks = self._prepare_batch_insert(chunks)
             self.callback.update()
-            # Commit phase: once these final cancel checks pass, keep delete+insert
-            # contiguous so a cancelled stale run does not leave partial state.
-            raise_if_cancelled(
-                cancel_event,
-                lecture_unit.lecture_unit_id,
-                "transcription replacement",
-            )
-            self.delete_existing_transcription_data(lecture_unit)
-            self._insert_prepared_chunks(prepared_chunks)
+            self._replace_prepared_chunks(lecture_unit, prepared_chunks)
             self.callback.update()
 
             transcription = getattr(lecture_unit, "transcription", None)
@@ -174,20 +165,34 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
                 )
                 prepared_chunks.append((chunk, embed_chunk))
+        except IngestionCancelledException:
+            raise
         except Exception as e:
             logger.error("Error embedding lecture transcription chunk: %s", e)
             raise
         return prepared_chunks
 
     def _insert_prepared_chunks(self, prepared_chunks):
+        with self.collection.batch.dynamic() as batch:
+            try:
+                for chunk, embed_chunk in prepared_chunks:
+                    batch.add_object(properties=chunk, vector=embed_chunk)
+            except Exception as e:
+                logger.error("Error indexing lecture transcription chunk: %s", e)
+                raise
+
+    def _replace_prepared_chunks(self, lecture_unit, prepared_chunks):
+        cancel_event = getattr(self, "cancel_event", None)
         with batch_update_lock:
-            with self.collection.batch.dynamic() as batch:
-                try:
-                    for chunk, embed_chunk in prepared_chunks:
-                        batch.add_object(properties=chunk, vector=embed_chunk)
-                except Exception as e:
-                    logger.error("Error indexing lecture transcription chunk: %s", e)
-                    raise
+            # Final guard after waiting for the write lock. Once this passes,
+            # keep delete+insert contiguous to avoid stale replacement writes.
+            raise_if_cancelled(
+                cancel_event,
+                lecture_unit.lecture_unit_id,
+                "transcription replacement",
+            )
+            self.delete_existing_transcription_data(lecture_unit)
+            self._insert_prepared_chunks(prepared_chunks)
 
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO

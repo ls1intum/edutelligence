@@ -9,7 +9,8 @@ logger = get_logger(__name__)
 class IngestionJobHandler:
     """
     A handler to track the current ingestion jobs for lecture units.
-    Skips duplicate jobs if a thread is already running for the same lecture unit.
+    Starts every new job immediately and marks the previous same-unit job as
+    superseded via its cancellation event.
     """
 
     def __init__(self):

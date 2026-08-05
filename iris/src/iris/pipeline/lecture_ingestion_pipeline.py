@@ -251,31 +251,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             prepared_chunks = self._prepare_chunk_vectors(chunks)
             self.callback.update()
             self.callback.update()
-            # From here on, replacement is a short commit phase: do not add
-            # more fallible work between the final cancel checks and delete+insert.
-            raise_if_cancelled(
-                cancel_event,
-                self.dto.lecture_unit.lecture_unit_id,
-                "lecture page replacement",
-            )
-            self._load_existing_slide_visibility()
-            for chunk, _ in prepared_chunks:
-                page_number = int(chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value])
-                chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
-                    self._hidden_until_by_page.get(page_number)
-                )
-            raise_if_cancelled(
-                cancel_event,
-                self.dto.lecture_unit.lecture_unit_id,
-                "lecture page indexing",
-            )
-            self.delete_lecture_unit(
-                self.dto.lecture_unit.course_id,
-                self.dto.lecture_unit.lecture_id,
-                self.dto.lecture_unit.lecture_unit_id,
-                self.dto.settings.artemis_base_url,
-            )
-            self._insert_prepared_chunks(prepared_chunks)
+            self._replace_prepared_chunks(prepared_chunks)
 
             self.callback.update(tokens=self.tokens)
 
@@ -393,15 +369,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             by_page[page_number] for page_number in sorted(by_page)
         ]
 
-    def batch_update(self, chunks):
-        """
-        Batch update the chunks into the database
-        This method is thread-safe and can only be executed by one thread at a time.
-        Weaviate limitation.
-        """
-        prepared_chunks = self._prepare_chunk_vectors(chunks)
-        self._insert_prepared_chunks(prepared_chunks)
-
     def _prepare_chunk_vectors(self, chunks):
         cancel_event = getattr(self, "cancel_event", None)
         prepared_chunks = []
@@ -420,14 +387,37 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         return prepared_chunks
 
     def _insert_prepared_chunks(self, prepared_chunks):
+        with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
+            try:
+                for chunk, embed_chunk in prepared_chunks:
+                    batch.add_object(properties=chunk, vector=embed_chunk)
+            except Exception as e:
+                logger.error("Error updating lecture unit", exc_info=e)
+                raise
+
+    def _replace_prepared_chunks(self, prepared_chunks):
+        cancel_event = getattr(self, "cancel_event", None)
         with batch_update_lock:
-            with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
-                try:
-                    for chunk, embed_chunk in prepared_chunks:
-                        batch.add_object(properties=chunk, vector=embed_chunk)
-                except Exception as e:
-                    logger.error("Error updating lecture unit", exc_info=e)
-                    raise
+            self._load_existing_slide_visibility()
+            for chunk, _ in prepared_chunks:
+                page_number = int(chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value])
+                chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
+                    self._hidden_until_by_page.get(page_number)
+                )
+            # Final guard after waiting for the write lock. Once this passes,
+            # keep delete+insert contiguous to avoid partial replacements.
+            raise_if_cancelled(
+                cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page replacement",
+            )
+            self.delete_lecture_unit(
+                self.dto.lecture_unit.course_id,
+                self.dto.lecture_unit.lecture_id,
+                self.dto.lecture_unit.lecture_unit_id,
+                self.dto.settings.artemis_base_url,
+            )
+            self._insert_prepared_chunks(prepared_chunks)
 
     def chunk_data(
         self,
