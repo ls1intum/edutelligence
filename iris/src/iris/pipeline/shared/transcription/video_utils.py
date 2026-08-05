@@ -1,9 +1,7 @@
 import subprocess  # nosec B404
 from typing import Optional
 
-from iris.common.cancellation import CancellationSignal
 from iris.common.logging_config import get_logger
-from iris.pipeline.shared.transcription.subprocess_utils import run_cancellable
 from iris.tracing import observe
 
 logger = get_logger(__name__)
@@ -21,7 +19,6 @@ def download_video(
     video_path: str,
     timeout: int,
     lecture_unit_id: Optional[int] = None,
-    cancel_event: Optional[CancellationSignal] = None,
 ) -> None:
     """Download a video from a URL to disk using FFmpeg.
 
@@ -30,12 +27,9 @@ def download_video(
         video_path: Destination file path for the downloaded video.
         timeout: Maximum seconds to wait before aborting (from config).
         lecture_unit_id: Used for log prefixing.
-        cancel_event: When set, FFmpeg is killed and the download aborts with
-            ``IngestionCancelledException`` instead of running to completion.
 
     Raises:
         RuntimeError: If FFmpeg exits with a non-zero return code.
-        IngestionCancelledException: If the job was superseded mid-download.
     """
     prefix = _prefix(lecture_unit_id)
     logger.info("%s Downloading video from %s", prefix, video_url)
@@ -58,11 +52,13 @@ def download_video(
     ]
 
     try:
-        run_cancellable(
+        subprocess.run(  # nosec B603
             command,
+            shell=False,
+            capture_output=True,
+            text=True,
+            check=True,
             timeout=timeout,
-            cancel_event=cancel_event,
-            lecture_unit_id=lecture_unit_id,
         )
         logger.info("%s Video download complete: %s", prefix, video_path)
     except subprocess.TimeoutExpired as e:
@@ -81,7 +77,6 @@ def extract_audio(
     audio_path: str,
     timeout: int,
     lecture_unit_id: Optional[int] = None,
-    cancel_event: Optional[CancellationSignal] = None,
 ) -> None:
     """Extract the audio track from a video file using FFmpeg.
 
@@ -90,12 +85,9 @@ def extract_audio(
         audio_path: Destination path for the extracted audio.
         timeout: Maximum seconds to wait before aborting (from config).
         lecture_unit_id: Used for log prefixing.
-        cancel_event: When set, FFmpeg is killed and extraction aborts with
-            ``IngestionCancelledException``.
 
     Raises:
         RuntimeError: If FFmpeg exits with a non-zero return code.
-        IngestionCancelledException: If the job was superseded mid-extraction.
     """
     prefix = _prefix(lecture_unit_id)
     logger.info("%s Extracting audio from %s", prefix, video_path)
@@ -113,11 +105,13 @@ def extract_audio(
     ]
 
     try:
-        run_cancellable(
+        subprocess.run(  # nosec B603
             command,
+            shell=False,
+            capture_output=True,
+            text=True,
+            check=True,
             timeout=timeout,
-            cancel_event=cancel_event,
-            lecture_unit_id=lecture_unit_id,
         )
         logger.info("%s Audio extraction complete: %s", prefix, audio_path)
     except subprocess.TimeoutExpired as e:

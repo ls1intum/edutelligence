@@ -79,38 +79,22 @@ class LectureUnitPipeline(SubPipeline):
         lecture_unit: LectureUnitDTO,
         initial_properties: Optional[dict] = None,
     ):
+        cancel_event = getattr(self, "cancel_event", None)
+        lecture_unit_filter = self._filter(lecture_unit)
         if initial_properties is None:
-            lecture_unit_filter = self._filter(lecture_unit)
             initial_units = self.lecture_unit_collection.query.fetch_objects(
                 filters=lecture_unit_filter, limit=1
             ).objects
             initial_properties = initial_units[0].properties if initial_units else {}
 
-        segment_pipeline = LectureUnitSegmentSummaryPipeline(
-            self.weaviate_client,
-            lecture_unit,
-            local=self.local,
-            callback=self.callback,
-            cancel_event=self.cancel_event,
-        )
-        lecture_unit_segment_summaries, token_unit_segment_summary = segment_pipeline()
-
-        tokens_unit_summary, embedding = self.prepare_replacement(
-            lecture_unit,
-            lecture_unit_segment_summaries,
-        )
-        self.commit_prepared_replacement(lecture_unit, initial_properties, embedding)
-
-        return tokens_unit_summary + token_unit_segment_summary
-
-    def prepare_replacement(
-        self,
-        lecture_unit: LectureUnitDTO,
-        lecture_unit_segment_summaries: list[str],
-    ) -> tuple[list, list[float]]:
-        """Build the unit summary and embedding outside the commit lock."""
-        raise_if_cancelled(
-            self.cancel_event, lecture_unit.lecture_unit_id, "lecture unit summary"
+        lecture_unit_segment_summaries, token_unit_segment_summary = (
+            LectureUnitSegmentSummaryPipeline(
+                self.weaviate_client,
+                lecture_unit,
+                local=self.local,
+                callback=self.callback,
+                cancel_event=self.cancel_event,
+            )()
         )
         lecture_unit.lecture_unit_summary, tokens_unit_summary = (
             LectureUnitSummaryPipeline(
@@ -122,21 +106,12 @@ class LectureUnitPipeline(SubPipeline):
         )
 
         raise_if_cancelled(
-            self.cancel_event, lecture_unit.lecture_unit_id, "lecture unit embedding"
+            cancel_event, lecture_unit.lecture_unit_id, "lecture unit embedding"
         )
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
-        return tokens_unit_summary, embedding
 
-    def commit_prepared_replacement(
-        self,
-        lecture_unit: LectureUnitDTO,
-        initial_properties: dict,
-        embedding: list[float],
-    ) -> None:
-        """Replace the lecture unit while preserving latest metadata and visibility."""
-        lecture_unit_filter = self._filter(lecture_unit)
         raise_if_cancelled(
-            self.cancel_event, lecture_unit.lecture_unit_id, "lecture unit replacement"
+            cancel_event, lecture_unit.lecture_unit_id, "lecture unit replacement"
         )
         with batch_update_lock:
             latest_units = self.lecture_unit_collection.query.fetch_objects(
@@ -150,6 +125,8 @@ class LectureUnitPipeline(SubPipeline):
                 latest_value = latest_properties.get(property_name)
                 return latest_value if latest_value != initial_value else incoming_value
 
+            # Delete only after all fallible preparation succeeds and while metadata
+            # updates are excluded from the replacement window.
             self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
             self.lecture_unit_collection.data.insert(
                 properties={
@@ -188,3 +165,5 @@ class LectureUnitPipeline(SubPipeline):
                 },
                 vector=embedding,
             )
+
+        return tokens_unit_summary + token_unit_segment_summary

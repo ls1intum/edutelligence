@@ -48,12 +48,7 @@ class PipelineNotFoundException(HTTPException):
 
 
 class IngestionCancelledException(Exception):
-    """Raised when an ingestion job is superseded by a newer request.
-
-    This is a controlled stop, not a failure. Artemis has already moved on to
-    the newer run's token, so the cancelled job unwinds and exits without
-    sending a terminal status update of its own.
-    """
+    """Raised when an ingestion job is superseded by a newer request."""
 
     def __init__(
         self,

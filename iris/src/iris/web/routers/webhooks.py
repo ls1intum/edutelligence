@@ -1,9 +1,9 @@
-from threading import Thread
+from threading import Event, Thread
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sentry_sdk import capture_exception
 
-from iris.common.cancellation import CancellationSignal
 from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
@@ -60,14 +60,13 @@ ingestion_job_handler = IngestionJobHandler()
 def run_lecture_update_pipeline_worker(
     dto: IngestionPipelineExecutionDto,
     variant_id: str,
-    cancel_event: CancellationSignal,
+    cancel_event: Optional[Event] = None,
 ):
     """Run the lecture unit ingestion pipeline in a separate thread.
 
     No concurrency throttling here — Artemis controls how many jobs are
-    dispatched via MAX_CONCURRENT_PROCESSING. Jobs for the same lecture unit may
-    overlap during preprocessing; the write phase is serialized deeper in the
-    ingestion pipeline.
+    dispatched via MAX_CONCURRENT_PROCESSING. Every job Iris receives
+    starts immediately so Artemis has an accurate view of what's running.
     """
     lecture_unit_id = (
         dto.lecture_unit.lecture_unit_id
@@ -80,8 +79,6 @@ def run_lecture_update_pipeline_worker(
         )
         pipeline()
     except IngestionCancelledException as e:
-        # Controlled stop: a newer request for this lecture unit took over.
-        # It reports on its own token, so this run stays silent.
         logger.info("[Lecture %s] Worker cancelled: %s", lecture_unit_id, e.reason)
         return
     except Exception as e:
@@ -91,11 +88,12 @@ def run_lecture_update_pipeline_worker(
             e,
             exc_info=True,
         )
-        IngestionStatusCallback(
+        callback = IngestionStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             lecture_unit_id=lecture_unit_id,
-        ).fail(str(e), exception=e)
+        )
+        callback.fail(str(e), exception=e)
         capture_exception(e)
 
 

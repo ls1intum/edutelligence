@@ -208,15 +208,73 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
-            self.course_language, prepared_chunks = self.prepare_replacement()
-            if prepared_chunks is None:
+            cancel_event = getattr(self, "cancel_event", None)
+            raise_if_cancelled(
+                cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page ingestion start",
+            )
+            if not self.check_if_attachment_needs_update():
+                pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
+                doc = fitz.open(pdf_path)
+                try:
+                    self.course_language = self.get_course_language(
+                        doc.load_page(min(5, doc.page_count - 1)).get_text()
+                    )
+                finally:
+                    cleanup_temporary_file(pdf_path)
+                self.restore_display_page_numbers_from_existing_chunks()
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
                 return self.course_language, self.tokens
+            self.callback.update()
+            pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
+            try:
+                chunks = self.chunk_data(
+                    lecture_pdf=pdf_path,
+                    lecture_unit_slide_dto=self.dto.lecture_unit,
+                    base_url=self.dto.settings.artemis_base_url,
+                )
+            finally:
+                cleanup_temporary_file(pdf_path)
+            self.callback.update()
+            self.callback.update()
             logger.info(
                 "[%s] Embedding and indexing %d chunks into Weaviate",
                 self.dto.lecture_unit.lecture_unit_name,
-                len(prepared_chunks),
+                len(chunks),
             )
-            self.commit_prepared_replacement(prepared_chunks)
+            prepared_chunks = self._prepare_chunk_vectors(chunks)
+            self.callback.update()
+            self.callback.update()
+            raise_if_cancelled(
+                cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page replacement",
+            )
+            self._load_existing_slide_visibility()
+            for chunk, _ in prepared_chunks:
+                page_number = int(chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value])
+                chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
+                    self._hidden_until_by_page.get(page_number)
+                )
+            raise_if_cancelled(
+                cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page indexing",
+            )
+            self.delete_lecture_unit(
+                self.dto.lecture_unit.course_id,
+                self.dto.lecture_unit.lecture_id,
+                self.dto.lecture_unit.lecture_unit_id,
+                self.dto.settings.artemis_base_url,
+            )
+            self._insert_prepared_chunks(prepared_chunks)
+
             self.callback.update(tokens=self.tokens)
 
             logger.info(
@@ -342,58 +400,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         prepared_chunks = self._prepare_chunk_vectors(chunks)
         self._insert_prepared_chunks(prepared_chunks)
 
-    def prepare_replacement(
-        self,
-    ) -> tuple[str, Optional[list[tuple[dict, list[float]]]]]:
-        """Prepare page chunks and embeddings outside the lecture-unit commit lock."""
-        raise_if_cancelled(
-            self.cancel_event,
-            self.dto.lecture_unit.lecture_unit_id,
-            "lecture page ingestion start",
-        )
-        if not self.check_if_attachment_needs_update():
-            pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
-            doc = fitz.open(pdf_path)
-            try:
-                self.course_language = self.get_course_language(
-                    doc.load_page(min(5, doc.page_count - 1)).get_text()
-                )
-            finally:
-                cleanup_temporary_file(pdf_path)
-            self.restore_display_page_numbers_from_existing_chunks()
-            self.callback.update()
-            self.callback.update()
-            self.callback.update()
-            self.callback.update()
-            self.callback.update()
-            self.callback.update()
-            return self.course_language, None
-
-        self.callback.update()
-        pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
-        try:
-            chunks = self.chunk_data(
-                lecture_pdf=pdf_path,
-                lecture_unit_slide_dto=self.dto.lecture_unit,
-                base_url=self.dto.settings.artemis_base_url,
-            )
-        finally:
-            cleanup_temporary_file(pdf_path)
-        self.callback.update()
-        self.callback.update()
-        prepared_chunks = self._prepare_chunk_vectors(chunks)
-        self.callback.update()
-        self.callback.update()
-        return self.course_language, prepared_chunks
-
-    def _prepare_chunk_vectors(
-        self, chunks: list[dict]
-    ) -> list[tuple[dict, list[float]]]:
-        """Embed page chunks before the short replacement commit."""
-        prepared_chunks: list[tuple[dict, list[float]]] = []
+    def _prepare_chunk_vectors(self, chunks):
+        cancel_event = getattr(self, "cancel_event", None)
+        prepared_chunks = []
         for i, chunk in enumerate(chunks):
             raise_if_cancelled(
-                self.cancel_event,
+                cancel_event,
                 self.dto.lecture_unit.lecture_unit_id,
                 "lecture page embedding",
             )
@@ -405,41 +417,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             prepared_chunks.append((chunk, embed_chunk))
         return prepared_chunks
 
-    def commit_prepared_replacement(
-        self, prepared_chunks: list[tuple[dict, list[float]]]
-    ) -> None:
-        """Refresh latest visibility and replace page chunks with prepared payloads."""
-        raise_if_cancelled(
-            self.cancel_event,
-            self.dto.lecture_unit.lecture_unit_id,
-            "lecture page replacement",
-        )
-        self._load_existing_slide_visibility()
-        for chunk, _ in prepared_chunks:
-            page_number = int(chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value])
-            chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
-                self._hidden_until_by_page.get(page_number)
-            )
-        self.delete_lecture_unit(
-            self.dto.lecture_unit.course_id,
-            self.dto.lecture_unit.lecture_id,
-            self.dto.lecture_unit.lecture_unit_id,
-            self.dto.settings.artemis_base_url,
-        )
-        # From here to the insert below, the replacement must run to completion.
-        # A cancellation in this window is handled by the successor after this
-        # job restores a consistent state.
-        self._insert_prepared_chunks(prepared_chunks)
-
-    def _insert_prepared_chunks(
-        self, prepared_chunks: list[tuple[dict, list[float]]]
-    ) -> None:
-        """Insert already embedded page chunks without extra work in the commit lock."""
+    def _insert_prepared_chunks(self, prepared_chunks):
         with batch_update_lock:
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
-                    for chunk, vector in prepared_chunks:
-                        batch.add_object(properties=chunk, vector=vector)
+                    for chunk, embed_chunk in prepared_chunks:
+                        batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
                     logger.error("Error updating lecture unit", exc_info=e)
                     raise
@@ -465,12 +448,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
         old_page_text = ""
         display_page_numbers: list[int] = []
+        cancel_event = getattr(self, "cancel_event", None)
         for page_num in range(doc.page_count):
-            # One GPT Vision call per page — the longest loop in this pipeline,
-            # so a superseded job must be able to give up between pages instead
-            # of chunking a whole deck nobody will read.
             raise_if_cancelled(
-                self.cancel_event,
+                cancel_event,
                 getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
                 "lecture page chunking",
             )

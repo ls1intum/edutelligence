@@ -378,7 +378,6 @@ def test_full_page_reingestion_loads_existing_visibility_by_page():
 
 def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metadata():
     pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
-    pipeline.cancel_event = None
     pipeline.weaviate_client = Mock()
     pipeline.local = False
     pipeline.callback = None
@@ -443,7 +442,6 @@ def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metad
 
 def test_full_unit_reingestion_preserves_metadata_updated_after_ingestion_started():
     pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
-    pipeline.cancel_event = None
     pipeline.weaviate_client = Mock()
     pipeline.local = False
     pipeline.callback = None
@@ -498,7 +496,6 @@ def test_full_unit_reingestion_preserves_metadata_updated_after_ingestion_starte
 
 def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fails():
     pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
-    pipeline.cancel_event = None
     pipeline.weaviate_client = Mock()
     pipeline.local = False
     pipeline.callback = None

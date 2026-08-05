@@ -1,10 +1,7 @@
 import os
 import subprocess  # nosec B404
-from typing import Optional
 
-from iris.common.cancellation import CancellationSignal
 from iris.common.logging_config import get_logger
-from iris.pipeline.shared.transcription.subprocess_utils import run_cancellable
 from iris.tracing import observe
 
 logger = get_logger(__name__)
@@ -12,11 +9,7 @@ logger = get_logger(__name__)
 
 @observe(name="Split Audio")
 def split_audio_ffmpeg(
-    audio_path: str,
-    output_dir: str,
-    chunk_duration: int,
-    timeout: int,
-    cancel_event: Optional[CancellationSignal] = None,
+    audio_path: str, output_dir: str, chunk_duration: int
 ) -> list[str]:
     """Split an audio file into fixed-length chunks optimised for Whisper.
 
@@ -27,16 +20,12 @@ def split_audio_ffmpeg(
         audio_path: Path to the source audio file.
         output_dir: Directory where chunk files will be written.
         chunk_duration: Length of each chunk in seconds (from config).
-        timeout: Maximum seconds to wait before aborting (from config).
-        cancel_event: When set, FFmpeg is killed and splitting aborts with
-            ``IngestionCancelledException``.
 
     Returns:
         Sorted list of paths to the generated chunk files.
 
     Raises:
-        RuntimeError: If FFmpeg fails, times out, or produces no output chunks.
-        IngestionCancelledException: If the job was superseded mid-split.
+        RuntimeError: If FFmpeg fails or produces no output chunks.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -71,9 +60,13 @@ def split_audio_ffmpeg(
     logger.info("Splitting audio into %ss chunks: %s", chunk_duration, audio_path)
 
     try:
-        run_cancellable(command, timeout=timeout, cancel_event=cancel_event)
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"FFmpeg audio split timed out after {timeout}s") from e
+        subprocess.run(  # nosec B603
+            command,
+            shell=False,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"FFmpeg audio split failed: {e.stderr}") from e
 

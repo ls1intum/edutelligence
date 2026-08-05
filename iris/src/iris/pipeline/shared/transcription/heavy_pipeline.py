@@ -8,9 +8,8 @@ but no slide numbers).
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from iris.common.cancellation import CancellationSignal
 from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.domain.data.video_source_type import VideoSourceType
@@ -44,11 +43,9 @@ class HeavyTranscriptionPipeline:
         self,
         callback: StatusCallback,
         storage: TranscriptionTempStorage,
-        cancel_event: Optional[CancellationSignal] = None,
     ):
         self.callback = callback
         self.storage = storage
-        self.cancel_event = cancel_event
         self.whisper_client = WhisperClient(
             model=settings.transcription.whisper_model,
             chunk_duration=settings.transcription.chunk_duration_seconds,
@@ -56,7 +53,6 @@ class HeavyTranscriptionPipeline:
             max_workers=settings.transcription.whisper_max_workers,
             request_timeout=settings.transcription.whisper_request_timeout_seconds,
             no_speech_threshold=settings.transcription.no_speech_filter_threshold,
-            split_timeout=settings.transcription.split_audio_timeout_seconds,
         )
 
     @observe(name="Heavy Transcription Pipeline")
@@ -106,7 +102,6 @@ class HeavyTranscriptionPipeline:
                 video_url,
                 Path(self.storage.video_path),
                 timeout=yt_cfg.youtube_download_timeout_seconds,
-                cancel_event=self.cancel_event,
             )
         else:  # TUM_LIVE (default)
             download_video(
@@ -114,7 +109,6 @@ class HeavyTranscriptionPipeline:
                 self.storage.video_path,
                 timeout=settings.transcription.download_timeout_seconds,
                 lecture_unit_id=lecture_unit_id,
-                cancel_event=self.cancel_event,
             )
         size_mb = os.path.getsize(self.storage.video_path) / (1024 * 1024)
         self.callback.update()
@@ -127,7 +121,6 @@ class HeavyTranscriptionPipeline:
             self.storage.audio_path,
             timeout=settings.transcription.extract_audio_timeout_seconds,
             lecture_unit_id=lecture_unit_id,
-            cancel_event=self.cancel_event,
         )
         audio_mb = os.path.getsize(self.storage.audio_path) / (1024 * 1024)
         self.callback.update()
@@ -151,7 +144,6 @@ class HeavyTranscriptionPipeline:
             self.storage.audio_path,
             lecture_unit_id=lecture_unit_id,
             on_chunk_complete=on_chunk_complete,
-            cancel_event=self.cancel_event,
         )
         segment_count = len(transcription.get("segments", []))
         logger.info(

@@ -85,28 +85,39 @@ class TranscriptionIngestionPipeline(SubPipeline):
     @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
-            # Before the first write of this pipeline. A superseded job must
-            # not delete the existing transcription and then stop, and a job
-            # the handler gave up waiting for must not delete anything at all.
-            raise_if_cancelled(
-                self.cancel_event,
-                self.dto.lecture_unit.lecture_unit_id,
-                "transcription replacement",
-            )
+            cancel_event = getattr(self, "cancel_event", None)
+            lecture_unit = getattr(self.dto, "lecture_unit", None)
             self.callback.update()
-            self.delete_existing_transcription_data(self.dto.lecture_unit)
+            chunks = self.chunk_transcription(lecture_unit)
             self.callback.update()
 
-            prepared_chunks = self._prepare_replacement_payload()
+            self.callback.update()
+            chunks = self.summarize_chunks(chunks)
+            self.callback.update()
+
+            self.callback.update()
             logger.info(
-                "[%s / %s] Indexing %d prepared transcription chunks into Weaviate",
+                "[%s / %s] Embedding and indexing %d transcription chunks into Weaviate",
                 self.dto.lecture_unit.lecture_name,
                 self.dto.lecture_unit.lecture_unit_name,
-                len(prepared_chunks),
+                len(chunks),
             )
+            prepared_chunks = self._prepare_batch_insert(chunks)
+            self.callback.update()
+            raise_if_cancelled(
+                cancel_event,
+                lecture_unit.lecture_unit_id,
+                "transcription replacement",
+            )
+            self.delete_existing_transcription_data(lecture_unit)
             self._insert_prepared_chunks(prepared_chunks)
             self.callback.update()
-            return self.dto.lecture_unit.transcription.language, self.tokens
+
+            transcription = getattr(lecture_unit, "transcription", None)
+            language = getattr(transcription, "language", "")
+            return language, self.tokens
+        except IngestionCancelledException:
+            raise
         except Exception as e:
             logger.error(
                 "Error processing transcription ingestion pipeline: %s",
@@ -133,50 +144,26 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
     def batch_insert(self, chunks):
         prepared_chunks = self._prepare_batch_insert(chunks)
-        # Last checkpoint: the batch below must not be torn in half.
+        cancel_event = getattr(self, "cancel_event", None)
+        lecture_unit_id = getattr(getattr(self, "dto", None), "lecture_unit", None)
+        lecture_unit_id = getattr(lecture_unit_id, "lecture_unit_id", None)
         raise_if_cancelled(
-            self.cancel_event,
-            self.dto.lecture_unit.lecture_unit_id,
+            cancel_event,
+            lecture_unit_id,
             "transcription indexing",
         )
         self._insert_prepared_chunks(prepared_chunks)
 
-    def prepare_replacement(self) -> list[tuple[dict[str, Any], list[float]]]:
-        """Prepare transcription chunks and embeddings outside the commit lock."""
-        return self._prepare_replacement_payload()
-
-    def _prepare_replacement_payload(
-        self,
-    ) -> list[tuple[dict[str, Any], list[float]]]:
-        """Chunk, summarize, and embed transcription data for later insertion."""
-        self.callback.update()
-        chunks = self.chunk_transcription(self.dto.lecture_unit)
-        self.callback.update()
-
-        self.callback.update()
-        chunks = self.summarize_chunks(chunks)
-        self.callback.update()
-
-        self.callback.update()
-        logger.info(
-            "[%s / %s] Embedding %d transcription chunks for later commit",
-            self.dto.lecture_unit.lecture_name,
-            self.dto.lecture_unit.lecture_unit_name,
-            len(chunks),
-        )
-        prepared_chunks = self._prepare_batch_insert(chunks)
-        self.callback.update()
-        return prepared_chunks
-
-    def _prepare_batch_insert(
-        self, chunks: list[dict[str, Any]]
-    ) -> list[tuple[dict[str, Any], list[float]]]:
-        prepared_chunks: list[tuple[dict[str, Any], list[float]]] = []
+    def _prepare_batch_insert(self, chunks):
+        cancel_event = getattr(self, "cancel_event", None)
+        lecture_unit_id = getattr(getattr(self, "dto", None), "lecture_unit", None)
+        lecture_unit_id = getattr(lecture_unit_id, "lecture_unit_id", None)
+        prepared_chunks = []
         try:
             for i, chunk in enumerate(chunks):
                 raise_if_cancelled(
-                    self.cancel_event,
-                    self.dto.lecture_unit.lecture_unit_id,
+                    cancel_event,
+                    lecture_unit_id,
                     "transcription embedding",
                 )
                 if i % 5 == 0:
@@ -185,31 +172,12 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
                 )
                 prepared_chunks.append((chunk, embed_chunk))
-        except IngestionCancelledException:
-            raise
         except Exception as e:
             logger.error("Error embedding lecture transcription chunk: %s", e)
             raise
         return prepared_chunks
 
-    def commit_prepared_replacement(
-        self, prepared_chunks: list[tuple[dict[str, Any], list[float]]]
-    ) -> None:
-        """Replace transcription rows with a prepared payload."""
-        raise_if_cancelled(
-            self.cancel_event,
-            self.dto.lecture_unit.lecture_unit_id,
-            "transcription replacement",
-        )
-        self.delete_existing_transcription_data(self.dto.lecture_unit)
-        # Once the old rows are gone, this commit window must not be cancelled
-        # until the prepared replacement has been written.
-        self._insert_prepared_chunks(prepared_chunks)
-
-    def _insert_prepared_chunks(
-        self, prepared_chunks: list[tuple[dict[str, Any], list[float]]]
-    ) -> None:
-        """Insert already-embedded transcription chunks."""
+    def _insert_prepared_chunks(self, prepared_chunks):
         with batch_update_lock:
             with self.collection.batch.dynamic() as batch:
                 try:
@@ -222,7 +190,10 @@ class TranscriptionIngestionPipeline(SubPipeline):
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO
     ) -> List[Dict[str, Any]]:
+        cancel_event = getattr(self, "cancel_event", None)
         chunks = []
+        if transcription is None or transcription.transcription is None:
+            return chunks
 
         slide_chunks = {}
         for segment in transcription.transcription.segments:
@@ -258,6 +229,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
             len(slide_chunks),
         )
         for i, segment in enumerate(slide_chunks.values()):
+            raise_if_cancelled(
+                cancel_event,
+                transcription.lecture_unit_id,
+                "transcription chunking",
+            )
             # If the segment is shorter than 1200 characters, we can just add it as is
             if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
                 # Add the segment to the chunks list and replace the chunk separator character with a space
@@ -287,6 +263,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
             offset_start = offset_slide_chunk
             for _, chunk in enumerate(semantic_chunks):
+                raise_if_cancelled(
+                    cancel_event,
+                    transcription.lecture_unit_id,
+                    "transcription chunking",
+                )
                 offset_end = offset_start + len(self.remove_separator_char(chunk))
 
                 start_time = self.get_transcription_segment_of_char_position(
@@ -346,12 +327,12 @@ class TranscriptionIngestionPipeline(SubPipeline):
         return self.replace_separator_char(text, "")
 
     def summarize_chunks(self, chunks: List[Dict[str, Any]]):
+        cancel_event = getattr(self, "cancel_event", None)
         chunks_with_summaries = []
         total = len(chunks)
         for i, chunk in enumerate(chunks):
-            # One LLM call per chunk; the longest loop in the ingestion phase.
             raise_if_cancelled(
-                self.cancel_event,
+                cancel_event,
                 self.dto.lecture_unit.lecture_unit_id,
                 "transcription summarization",
             )

@@ -5,7 +5,6 @@ It takes the raw transcript from the heavy phase and enriches each segment
 with a slide number by analysing video frames.
 """
 
-from threading import Event
 from typing import Any, Dict, List, Optional
 
 from iris.common.logging_config import get_logger
@@ -37,11 +36,9 @@ class LightTranscriptionPipeline:
         callback: StatusCallback,
         video_path: Optional[str],
         local: bool = False,
-        cancel_event: Optional[Event] = None,
     ):
         self.callback = callback
         self.video_path = video_path
-        self.cancel_event = cancel_event
         # Vision model for slide-number detection. Resolved through the
         # standard llm_configuration so it can be swapped per deployment
         # without touching code.
@@ -103,7 +100,6 @@ class LightTranscriptionPipeline:
             min_stride=1,
             job_id=str(lecture_unit_id),
             on_progress=on_slide_detection_progress,
-            cancel_event=self.cancel_event,
         )
         self.callback.update()
         logger.info(

@@ -88,26 +88,22 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
     @observe(name="Lecture Unit Segment Summary Pipeline")
     def __call__(self) -> [str]:
-        summaries, prepared_segments = self.prepare_replacement()
-        self.commit_prepared_replacement(prepared_segments)
-        return summaries, self.tokens
-
-    def prepare_replacement(
-        self,
-    ) -> tuple[list[str], list[dict[str, object]]]:
-        """Prepare segment summaries and embeddings outside the commit lock."""
+        cancel_event = getattr(self, "cancel_event", None)
         slide_number_start, slide_number_end = self._get_slide_range()
-        summaries: list[str] = []
-        prepared_segments: list[dict[str, object]] = []
+
+        summaries = []
         for slide_index in range(slide_number_start, slide_number_end + 1):
             raise_if_cancelled(
-                self.cancel_event,
+                cancel_event,
                 self.lecture_unit_dto.lecture_unit_id,
                 "lecture unit segment summary",
             )
             if self.callback is not None:
                 self.callback.update()
             transcriptions = self._get_transcriptions(slide_index)
+            # PAGE_NUMBER is unique at the PDF page level, but the ingestion pipeline
+            # stores one object per page chunk after splitting the page text. That is
+            # why this returns a list even though the logical slide/page is unique.
             slides = self._get_slides(slide_index)
             display_page_number = slide_index
 
@@ -125,46 +121,15 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
             summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
-            embedding = self.llm_embedding.embed(summary)
-            raise_if_cancelled(
-                self.cancel_event,
-                self.lecture_unit_dto.lecture_unit_id,
-                "lecture unit segment write",
-            )
-            prepared_segments.append(
-                {
-                    "slide_number": slide_index,
-                    "display_page_number": display_page_number,
-                    "summary": summary,
-                    "embedding": embedding,
-                }
-            )
-        return summaries, prepared_segments
-
-    def commit_prepared_replacement(
-        self, prepared_segments: list[dict[str, object]]
-    ) -> None:
-        """Write prepared segment summaries while preserving latest visibility."""
-        for prepared_segment in prepared_segments:
-            raise_if_cancelled(
-                self.cancel_event,
-                self.lecture_unit_dto.lecture_unit_id,
-                "lecture unit segment upsert",
-            )
-            slide_number = int(prepared_segment["slide_number"])
-            slides = self._get_slides(slide_number)
             hidden_until = (
                 slides[0].properties.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value)
                 if slides
                 else None
             )
             self._upsert_lecture_object(
-                slide_number=slide_number,
-                summary=str(prepared_segment["summary"]),
-                display_page_number=int(prepared_segment["display_page_number"]),
-                hidden_until=hidden_until,
-                embedding=prepared_segment["embedding"],
+                slide_index, summary, display_page_number, hidden_until
             )
+        return summaries, self.tokens
 
     def _get_transcriptions(self, slide_number: int):
         transcription_filter = self._get_lecture_transcription_filter()
@@ -283,8 +248,8 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         summary: str,
         display_page_number: int,
         hidden_until=None,
-        embedding=None,
     ):
+        cancel_event = getattr(self, "cancel_event", None)
         lecture_filter = Filter.by_property(
             LectureUnitSegmentSchema.COURSE_ID.value
         ).equal(self.lecture_unit_dto.course_id)
@@ -305,14 +270,12 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         lectures = self.lecture_unit_segment_collection.query.fetch_objects(
             filters=lecture_filter, limit=1
         ).objects
-
-        if embedding is None:
-            embedding = self.llm_embedding.embed(summary)
-            raise_if_cancelled(
-                self.cancel_event,
-                self.lecture_unit_dto.lecture_unit_id,
-                "lecture unit segment write",
-            )
+        embedding = self.llm_embedding.embed(summary)
+        raise_if_cancelled(
+            cancel_event,
+            self.lecture_unit_dto.lecture_unit_id,
+            "lecture unit segment write",
+        )
 
         # transcriptions = self._get_transcriptions(slide_number)
         # slides = self._get_slides(slide_number)
