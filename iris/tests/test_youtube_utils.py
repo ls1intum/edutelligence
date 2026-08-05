@@ -47,7 +47,9 @@ def test_download_command_includes_no_playlist_and_double_dash(tmp_path, monkeyp
             args=args, returncode=0, stdout="", stderr=""
         )
 
-    monkeypatch.setattr("subprocess.run", _fake_run)
+    monkeypatch.setattr(
+        "iris.pipeline.shared.transcription.youtube_utils.run_cancellable", _fake_run
+    )
     download_youtube_video("https://youtu.be/X", output, timeout=60)
     cmd = captured["cmd"]
     assert "--no-playlist" in cmd
@@ -201,7 +203,9 @@ def test_download_success_returns_output_path(tmp_path, monkeypatch):
             args=args, returncode=0, stdout="", stderr=""
         )
 
-    monkeypatch.setattr("subprocess.run", _fake_run)
+    monkeypatch.setattr(
+        "iris.pipeline.shared.transcription.youtube_utils.run_cancellable", _fake_run
+    )
     result = download_youtube_video("https://youtu.be/X", output, timeout=600)
     assert result == output
     assert output.exists()
@@ -210,7 +214,7 @@ def test_download_success_returns_output_path(tmp_path, monkeypatch):
 def test_download_timeout_raises_download_failed(tmp_path, monkeypatch):
     timeout_err = subprocess.TimeoutExpired(cmd=["yt-dlp"], timeout=1)
     monkeypatch.setattr(
-        "subprocess.run",
+        "iris.pipeline.shared.transcription.youtube_utils.run_cancellable",
         lambda *a, **kw: (_ for _ in ()).throw(timeout_err),
     )
     with pytest.raises(YouTubeDownloadError) as excinfo:
@@ -223,7 +227,7 @@ def test_download_nonzero_exit_raises_download_failed(tmp_path, monkeypatch):
         returncode=1, cmd=["yt-dlp"], stderr="network error"
     )
     monkeypatch.setattr(
-        "subprocess.run",
+        "iris.pipeline.shared.transcription.youtube_utils.run_cancellable",
         lambda *a, **kw: (_ for _ in ()).throw(err),
     )
     with pytest.raises(YouTubeDownloadError) as excinfo:
@@ -236,7 +240,7 @@ def test_download_missing_yt_dlp_binary_raises_download_failed(tmp_path, monkeyp
     # — the function must translate that into a structured YouTubeDownloadError
     # so callers get the documented error_code contract.
     monkeypatch.setattr(
-        "subprocess.run",
+        "iris.pipeline.shared.transcription.youtube_utils.run_cancellable",
         lambda *a, **kw: (_ for _ in ()).throw(
             FileNotFoundError("[Errno 2] No such file or directory: 'yt-dlp'")
         ),
@@ -250,7 +254,7 @@ def test_download_missing_yt_dlp_binary_raises_download_failed(tmp_path, monkeyp
 def test_download_output_missing_raises_download_failed(tmp_path, monkeypatch):
     # subprocess returns success but no file materialized — yt-dlp quirk
     monkeypatch.setattr(
-        "subprocess.run",
+        "iris.pipeline.shared.transcription.youtube_utils.run_cancellable",
         lambda *a, **kw: subprocess.CompletedProcess(
             args=a, returncode=0, stdout="", stderr=""
         ),

@@ -7,13 +7,14 @@ the Whisper endpoint/key is loaded from llm_config.yml via LlmManager.
 
 import os
 import threading
-import time
-from concurrent.futures import as_completed
+from threading import Event
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import ffmpeg  # type: ignore
 import requests
 
+from iris.common.cancellation import CancellationSignal, noop_unregister
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.llm.external.whisper import AzureWhisperModel, OpenAIWhisperModel
 from iris.llm.llm_manager import LlmManager
@@ -21,6 +22,47 @@ from iris.pipeline.shared.transcription.audio_utils import split_audio_ffmpeg
 from iris.tracing import TracedThreadPoolExecutor, observe
 
 logger = get_logger(__name__)
+
+
+def _completed_watching_cancellation(futures, cancel_event, lecture_unit_id):
+    """Yield chunk futures as they finish, giving up at once if cancelled.
+
+    Futures and cancellation both signal the same event, so this waits rather
+    than polls: no timer decides how fast a superseded job notices.
+
+    Raises:
+        IngestionCancelledException: If the job was superseded while waiting.
+    """
+    progress = Event()
+    pending = set(futures)
+    for future in pending:
+        future.add_done_callback(lambda _f: progress.set())
+
+    unregister = (
+        cancel_event.on_cancel(progress.set) if cancel_event else noop_unregister
+    )
+    try:
+        while pending:
+            if cancel_event is not None and cancel_event.is_set():
+                raise IngestionCancelledException(
+                    lecture_unit_id, "Cancelled during transcription"
+                )
+            progress.wait()
+            progress.clear()
+            done = {f for f in pending if f.done()}
+            pending -= done
+            yield from done
+    finally:
+        unregister()
+
+
+def _sleep_unless_stopped(seconds: float, stop_event: Event) -> None:
+    """Sleep for ``seconds``, returning the instant the run is told to stop.
+
+    Azure's retry backoff reaches 180s. ``Event.wait`` wakes on notification,
+    so nothing here polls and nothing sleeps through a cancellation.
+    """
+    stop_event.wait(seconds)
 
 
 def _audio_duration(audio_path: str) -> float:
@@ -50,6 +92,7 @@ class WhisperClient:
         max_workers: int = 2,
         request_timeout: int = 300,
         no_speech_threshold: float = 0.8,
+        split_timeout: int = 3600,
     ):
         """
         Args:
@@ -59,6 +102,7 @@ class WhisperClient:
             max_workers: Max parallel chunk uploads.
             request_timeout: Timeout per Whisper API request in seconds.
             no_speech_threshold: Segments with no_speech_prob above this are discarded.
+            split_timeout: Timeout in seconds for splitting audio into chunks.
         """
         self.llm = LlmManager().get_llm_by_id(model)
         if self.llm is None:
@@ -74,6 +118,7 @@ class WhisperClient:
         self.max_workers = max_workers
         self.request_timeout = request_timeout
         self.no_speech_threshold = no_speech_threshold
+        self.split_timeout = split_timeout
         self.provider_name = (
             "Azure" if isinstance(self.llm, AzureWhisperModel) else "OpenAI"
         )
@@ -114,6 +159,7 @@ class WhisperClient:
         audio_path: str,
         lecture_unit_id: Optional[int] = None,
         on_chunk_complete: Optional[Callable[[int, int], None]] = None,
+        cancel_event: Optional[CancellationSignal] = None,
     ) -> Dict[str, Any]:
         """Transcribe an audio file using Whisper.
 
@@ -126,6 +172,9 @@ class WhisperClient:
             on_chunk_complete: Optional callback invoked after each chunk
                 finishes. Receives (chunks_done, total_chunks). Used as a
                 heartbeat to keep Artemis informed during long transcriptions.
+            cancel_event: Job-level cancellation. When set, in-flight retries
+                and backoff stop early and the call raises
+                ``IngestionCancelledException``.
 
         Returns:
             Dict with:
@@ -134,11 +183,16 @@ class WhisperClient:
 
         Raises:
             RuntimeError: If any chunk fails after all retries.
+            IngestionCancelledException: If the job was superseded.
         """
         uid = os.path.splitext(os.path.basename(audio_path))[0]
         chunks_dir = os.path.join(os.path.dirname(audio_path), f"chunks_{uid}")
         chunk_paths = split_audio_ffmpeg(
-            audio_path, chunks_dir, chunk_duration=self.chunk_duration
+            audio_path,
+            chunks_dir,
+            chunk_duration=self.chunk_duration,
+            timeout=self.split_timeout,
+            cancel_event=cancel_event,
         )
 
         # Pre-calculate cumulative offsets so chunks can be transcribed in parallel.
@@ -155,8 +209,26 @@ class WhisperClient:
         language_votes: Dict[str, int] = {}
 
         chunks_done = 0
-        cancel_event = threading.Event()
-        with TracedThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        # Distinct from ``cancel_event``: this aborts sibling chunks when one
+        # of them fails. Aliasing the two would let an ordinary Whisper error
+        # mark the whole job as cancelled.
+        # One stop signal for both sources: a failing sibling chunk sets it
+        # directly, cancellation feeds into it via notification. Everything
+        # below then waits on a single event instead of watching two.
+        abort_event = threading.Event()
+        stop_on_cancel = (
+            cancel_event.on_cancel(abort_event.set) if cancel_event else noop_unregister
+        )
+        # Not a ``with`` block: on cancellation the pool is abandoned rather
+        # than joined. An in-flight Whisper upload cannot be interrupted — a
+        # requests call blocked on the socket runs to its timeout no matter
+        # what — so joining here would hold a superseded job for up to
+        # ``request_timeout`` seconds. The orphaned workers finish their one
+        # request against an already-open file descriptor and exit; their
+        # results are simply never read.
+        executor = TracedThreadPoolExecutor(max_workers=self.max_workers)
+        abandoned = False
+        try:
             futures = {
                 executor.submit(
                     self._transcribe_chunk,
@@ -164,12 +236,15 @@ class WhisperClient:
                     i,
                     total,
                     lecture_unit_id,
+                    abort_event,
                     cancel_event,
                 ): i
                 for i, chunk_path in enumerate(chunk_paths)
             }
             try:
-                for future in as_completed(futures):
+                for future in _completed_watching_cancellation(
+                    futures, cancel_event, lecture_unit_id
+                ):
                     i = futures[future]
                     offset = offsets[i]
                     segments, language = future.result()
@@ -188,11 +263,18 @@ class WhisperClient:
                     chunks_done += 1
                     if on_chunk_complete is not None:
                         on_chunk_complete(chunks_done, total)
+            except IngestionCancelledException:
+                abort_event.set()
+                abandoned = True
+                raise
             except Exception:
-                cancel_event.set()
+                abort_event.set()
                 for f in futures:
                     f.cancel()
                 raise
+        finally:
+            stop_on_cancel()
+            executor.shutdown(wait=not abandoned, cancel_futures=True)
 
         language_map = {"english": "en", "german": "de"}
         winner = (
@@ -222,9 +304,14 @@ class WhisperClient:
         chunk_index: int,
         total_chunks: int,
         lecture_unit_id: Optional[int] = None,
+        abort_event: Optional[threading.Event] = None,
         cancel_event: Optional[threading.Event] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """Transcribe a single chunk with retry logic.
+
+        Args:
+            abort_event: Set when a sibling chunk failed; this chunk gives up.
+            cancel_event: Set when the whole ingestion job was superseded.
 
         Returns:
             Tuple of (filtered_segments, language).
@@ -234,7 +321,11 @@ class WhisperClient:
 
         for attempt in range(self.max_retries):
             if cancel_event is not None and cancel_event.is_set():
-                raise InterruptedError("Transcription cancelled")
+                raise IngestionCancelledException(
+                    lecture_unit_id, "Cancelled during transcription"
+                )
+            if abort_event is not None and abort_event.is_set():
+                raise InterruptedError("Transcription aborted after a chunk failure")
             with open(chunk_path, "rb") as f:
                 logger.debug(
                     "%s %s uploading chunk %d/%d",
@@ -271,7 +362,7 @@ class WhisperClient:
                             attempt + 1,
                             self.max_retries,
                         )
-                        time.sleep(wait)
+                        _sleep_unless_stopped(wait, abort_event)
                         continue
 
                     response.raise_for_status()
@@ -291,7 +382,7 @@ class WhisperClient:
                                 f"response after {self.max_retries} retries"
                             ) from json_err
                         wait = self._get_retry_wait_time(attempt)
-                        time.sleep(wait)
+                        _sleep_unless_stopped(wait, abort_event)
                         continue
                     raw_segments = body.get("segments", [])
                     language = body.get("language")
@@ -356,7 +447,7 @@ class WhisperClient:
                         attempt + 1,
                         self.max_retries,
                     )
-                    time.sleep(wait)
+                    _sleep_unless_stopped(wait, abort_event)
 
                 except requests.Timeout as e:
                     # Read/connect timeouts are transient — retry with backoff
@@ -384,7 +475,7 @@ class WhisperClient:
                         attempt + 1,
                         self.max_retries,
                     )
-                    time.sleep(wait)
+                    _sleep_unless_stopped(wait, abort_event)
 
                 except requests.ConnectionError as e:
                     # DNS failures, connection refused, network blips — transient
@@ -412,7 +503,7 @@ class WhisperClient:
                         attempt + 1,
                         self.max_retries,
                     )
-                    time.sleep(wait)
+                    _sleep_unless_stopped(wait, abort_event)
 
                 except requests.RequestException as e:
                     raise RuntimeError(

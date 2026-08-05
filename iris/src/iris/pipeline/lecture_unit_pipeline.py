@@ -1,7 +1,9 @@
+from threading import Event
 from typing import Optional
 
 from weaviate.classes.query import Filter
 
+from iris.common.cancellation import raise_if_cancelled
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import LlmRequestHandler
 from iris.llm.llm_configuration import resolve_model
@@ -26,13 +28,19 @@ class LectureUnitPipeline(SubPipeline):
     then updating the vector database with the processed lecture unit information.
     """
 
-    def __init__(self, local: bool = False, callback: Optional[StatusCallback] = None):
+    def __init__(
+        self,
+        local: bool = False,
+        callback: Optional[StatusCallback] = None,
+        cancel_event: Optional[Event] = None,
+    ):
         super().__init__(implementation_id="lecture_unit_pipeline")
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
         self.local = local
         self.callback = callback
+        self.cancel_event = cancel_event
         embedding_model = resolve_model(
             "lecture_unit_pipeline", "default", "embedding", local=local
         )
@@ -84,7 +92,12 @@ class LectureUnitPipeline(SubPipeline):
                 lecture_unit,
                 local=self.local,
                 callback=self.callback,
+                cancel_event=self.cancel_event,
             )()
+        )
+
+        raise_if_cancelled(
+            self.cancel_event, lecture_unit.lecture_unit_id, "lecture unit summary"
         )
         lecture_unit.lecture_unit_summary, tokens_unit_summary = (
             LectureUnitSummaryPipeline(
@@ -95,8 +108,16 @@ class LectureUnitPipeline(SubPipeline):
             )()
         )
 
+        raise_if_cancelled(
+            self.cancel_event, lecture_unit.lecture_unit_id, "lecture unit embedding"
+        )
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
+        # Last checkpoint: everything below replaces the stored unit, and the
+        # delete/insert pair must not be torn in half.
+        raise_if_cancelled(
+            self.cancel_event, lecture_unit.lecture_unit_id, "lecture unit replacement"
+        )
         with batch_update_lock:
             latest_units = self.lecture_unit_collection.query.fetch_objects(
                 filters=lecture_unit_filter, limit=1

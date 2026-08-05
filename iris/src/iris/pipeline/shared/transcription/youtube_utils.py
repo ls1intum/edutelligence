@@ -8,9 +8,11 @@ import json
 import re
 import subprocess  # nosec B404
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from iris.common.cancellation import CancellationSignal
 from iris.common.logging_config import get_logger
+from iris.pipeline.shared.transcription.subprocess_utils import run_cancellable
 from iris.tracing import observe
 
 logger = get_logger(__name__)
@@ -150,16 +152,25 @@ def download_youtube_video(
     url: str,
     output_path: Path,
     timeout: int,
+    cancel_event: Optional[CancellationSignal] = None,
 ) -> Path:
     """Download a YouTube video as an MP4 to ``output_path``.
 
     Uses a 1080p-capped format selector so long videos don't unexpectedly
     pull multi-GB 4K/8K sources and blow the timeout/disk budget.
 
+    Args:
+        url: YouTube watch/share URL.
+        output_path: Destination MP4 path.
+        timeout: Maximum seconds to allow the download to run.
+        cancel_event: When set, ``yt-dlp`` is killed and the download aborts
+            with ``IngestionCancelledException``.
+
     Raises:
         YouTubeDownloadError: with error_code="YOUTUBE_DOWNLOAD_FAILED" on
         timeout, non-zero exit, a successful exit that nonetheless produced
         no output file, or the ``yt-dlp`` binary being absent from PATH.
+        IngestionCancelledException: If the job was superseded mid-download.
     """
     output_path = Path(output_path)
     command = [
@@ -177,13 +188,7 @@ def download_youtube_video(
     ]
     logger.info("Downloading YouTube video %s -> %s", url, output_path)
     try:
-        subprocess.run(  # nosec B603
-            command,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=timeout,
-        )
+        run_cancellable(command, timeout=timeout, cancel_event=cancel_event)
     except FileNotFoundError as e:
         raise YouTubeDownloadError(
             "YOUTUBE_DOWNLOAD_FAILED",

@@ -5,6 +5,7 @@ import re
 import tempfile
 import threading
 from datetime import datetime
+from threading import Event
 from typing import Optional
 
 import fitz
@@ -14,6 +15,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.cancellation import raise_if_cancelled
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
@@ -180,12 +182,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         callback: ingestion_status_callback,
         variant: Variant,
         local: bool = False,
+        cancel_event: Optional[Event] = None,
     ):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.dto = dto
         self.callback = callback
+        self.cancel_event = cancel_event
         chat_model = variant.model("chat", local)
         embedding_model = variant.model("embedding", local)
         self.llm_chat = LlmRequestHandler(chat_model)
@@ -203,6 +207,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
+            raise_if_cancelled(
+                self.cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page ingestion start",
+            )
             if not self.check_if_attachment_needs_update():
                 pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
                 doc = fitz.open(pdf_path)
@@ -220,6 +229,16 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.callback.update()
                 self.callback.update()
                 return self.course_language, self.tokens
+            # Stop here rather than delete content this job will not replace.
+            # Past this point the unit has no page chunks until ``batch_update``
+            # puts them back, so cancelling *during* chunking below costs
+            # nothing extra: the gap is already open, and the successor is the
+            # one that closes it either way.
+            raise_if_cancelled(
+                self.cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page replacement",
+            )
             self.callback.update()
             self._load_existing_slide_visibility()
             self.delete_lecture_unit(
@@ -246,6 +265,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 "[%s] Embedding and indexing %d chunks into Weaviate",
                 self.dto.lecture_unit.lecture_unit_name,
                 len(chunks),
+            )
+            # Immediately before the write. ``batch_update`` embeds inside the
+            # Weaviate batch, which flushes on exit, so it cannot be
+            # interrupted once started — this is the last chance to stop.
+            raise_if_cancelled(
+                self.cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page indexing",
             )
             self.batch_update(chunks)
 
@@ -405,6 +432,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         old_page_text = ""
         display_page_numbers: list[int] = []
         for page_num in range(doc.page_count):
+            # One GPT Vision call per page — the longest loop in this pipeline,
+            # so a superseded job must be able to give up between pages instead
+            # of chunking a whole deck nobody will read.
+            raise_if_cancelled(
+                self.cancel_event,
+                getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
+                "lecture page chunking",
+            )
             self.callback.update()
             page = doc.load_page(page_num)
             page_text = page.get_text()

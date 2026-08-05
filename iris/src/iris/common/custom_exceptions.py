@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import HTTPException, status
 
 
@@ -43,3 +45,21 @@ class PipelineNotFoundException(HTTPException):
                 "errorMessage": "Pipeline not found",
             },
         )
+
+
+class IngestionCancelledException(Exception):
+    """Raised when an ingestion job is superseded by a newer request.
+
+    This is a controlled stop, not a failure. Artemis has already moved on to
+    the newer run's token, so the cancelled job unwinds and exits without
+    sending a terminal status update of its own.
+    """
+
+    def __init__(
+        self,
+        lecture_unit_id: Optional[int] = None,
+        reason: str = "Superseded by a newer ingestion request",
+    ):
+        self.lecture_unit_id = lecture_unit_id
+        self.reason = reason
+        super().__init__(f"Lecture {lecture_unit_id} ingestion cancelled: {reason}")

@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
+from threading import Event
 from typing import Optional
 
+from iris.common.cancellation import raise_if_cancelled
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.domain.data.metrics.transcription_dto import (
@@ -120,10 +123,12 @@ class LectureIngestionUpdatePipeline(Pipeline):
         self,
         dto: IngestionPipelineExecutionDto,
         variant_id: str = "default",
+        cancel_event: Optional[Event] = None,
     ):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.dto = dto
         self.variant_id = variant_id
+        self.cancel_event = cancel_event
         self._is_local = bool(
             self.dto.settings and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
         )
@@ -152,6 +157,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
         )
 
         try:
+            raise_if_cancelled(
+                self.cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "pipeline start",
+            )
             # Snapshot before transcription/slide processing. Lightweight metadata
             # webhooks may run during that expensive phase; the final replacement
             # uses this baseline to recognize and preserve those newer values.
@@ -176,6 +186,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
                     self._run_full_transcription(callback)
                 elif needs_slides:
                     self._run_slide_detection_only(callback)
+            except IngestionCancelledException:
+                raise
             except Exception as e:
                 logger.error(
                     "[Lecture %d] Transcription failed: %s",
@@ -196,8 +208,26 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 self.dto.lecture_unit.lecture_id,
                 self.dto.lecture_unit.lecture_unit_id,
             ):
+                # Last gate before any write. The successor is not started
+                # until this thread exits, so passing here means our writes
+                # cannot be overtaken by fresher content.
+                raise_if_cancelled(
+                    self.cancel_event,
+                    self.dto.lecture_unit.lecture_unit_id,
+                    "Weaviate mutation phase",
+                )
                 self._run_ingestion(callback, initial_properties)
 
+        except IngestionCancelledException as e:
+            # Superseded, not failed. Artemis is already waiting on the newer
+            # run's token, so sending a terminal update here would report
+            # against a token it has stopped listening to.
+            logger.info(
+                "[Lecture %d] Ingestion cancelled: %s",
+                self.dto.lecture_unit.lecture_unit_id,
+                e.reason,
+            )
+            return
         except Exception as e:
             logger.error(
                 "[Lecture %d] Pipeline failed: %s",
@@ -230,6 +260,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             heavy = HeavyTranscriptionPipeline(
                 callback=callback,
                 storage=storage,
+                cancel_event=self.cancel_event,
             )
             raw_transcript = heavy(
                 video_url,
@@ -255,6 +286,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 video_path=storage.video_path,
                 local=self._is_local,
+                cancel_event=self.cancel_event,
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -340,6 +372,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                     video_url,
                     Path(storage.video_path),
                     timeout=yt_timeout,
+                    cancel_event=self.cancel_event,
                 )
             else:  # TUM_LIVE (default, includes None)
                 download_video(
@@ -347,6 +380,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                     storage.video_path,
                     timeout=settings.transcription.download_timeout_seconds,
                     lecture_unit_id=lecture_unit_id,
+                    cancel_event=self.cancel_event,
                 )
 
             # Light phase: slide detection → alignment
@@ -354,6 +388,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 video_path=storage.video_path,
                 local=self._is_local,
+                cancel_event=self.cancel_event,
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -414,6 +449,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 variant=variant,
                 local=is_local,
+                cancel_event=self.cancel_event,
             )
             language, tokens_page_content_pipeline = page_content_pipeline()
             tokens += tokens_page_content_pipeline
@@ -426,7 +462,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
             and self.dto.lecture_unit.transcription.segments is not None
         ):
             transcription_pipeline = TranscriptionIngestionPipeline(
-                client=client, dto=self.dto, callback=callback, local=is_local
+                client=client,
+                dto=self.dto,
+                callback=callback,
+                local=is_local,
+                cancel_event=self.cancel_event,
             )
             language, tokens_transcription_pipeline = transcription_pipeline()
             tokens += tokens_transcription_pipeline
@@ -437,7 +477,9 @@ class LectureIngestionUpdatePipeline(Pipeline):
         callback.update()
         lecture_unit_dto = self._build_lecture_unit_dto(language)
 
-        tokens += LectureUnitPipeline(local=is_local, callback=callback)(
+        tokens += LectureUnitPipeline(
+            local=is_local, callback=callback, cancel_event=self.cancel_event
+        )(
             lecture_unit=lecture_unit_dto,
             initial_properties=initial_properties,
         )

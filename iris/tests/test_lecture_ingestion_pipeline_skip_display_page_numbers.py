@@ -9,6 +9,7 @@ from iris.vector_database.lecture_unit_page_chunk_schema import (
 
 def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatch):
     pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.cancel_event = None
 
     lecture_unit = SimpleNamespace(
         pdf_file_base64="",

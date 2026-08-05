@@ -129,6 +129,12 @@ class TranscriptionSettings(BaseModel):
         default=600,
         description="Timeout for audio extraction via FFmpeg (default: 10 min)",
     )
+    split_audio_timeout_seconds: int = Field(
+        default=3600,
+        description="Timeout for splitting audio into chunks via FFmpeg "
+        "(default: 1 hour). Re-encodes the whole track, so it scales with "
+        "lecture length.",
+    )
     youtube_max_duration_seconds: int = Field(
         default=21600,
         description="Max YouTube video duration in seconds (default: 6 hours). "

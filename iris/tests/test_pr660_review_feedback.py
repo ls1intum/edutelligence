@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.cancellation import CancellationSignal
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO  # noqa: E402
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (  # noqa: E402
     IngestionPipelineExecutionDto,
@@ -56,6 +57,8 @@ def test_deletion_pipeline_attempts_all_units_after_failures():
 
 def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
     pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
+    pipeline.cancel_event = None
+    pipeline.dto = SimpleNamespace(lecture_unit=_lecture_unit())
     lock = SimpleNamespace(inside=False)
 
     class TrackingLock:
@@ -91,6 +94,7 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
 
 def test_transcription_ingestion_reraises_without_terminal_callback():
     pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
+    pipeline.cancel_event = None
     pipeline.callback = MagicMock()
     pipeline.dto = SimpleNamespace(lecture_unit=_lecture_unit())
     pipeline.tokens = []
@@ -127,7 +131,7 @@ def test_lecture_update_worker_reports_failure_without_lecture_unit_payload():
         ) as callback_cls,
         patch("iris.web.routers.webhooks.capture_exception") as capture_exception,
     ):
-        run_lecture_update_pipeline_worker(dto, "default")
+        run_lecture_update_pipeline_worker(dto, "default", CancellationSignal())
 
     callback_cls.assert_called_once_with(
         run_id="run-1",

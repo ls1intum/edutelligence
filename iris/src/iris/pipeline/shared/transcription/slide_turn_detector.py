@@ -14,10 +14,12 @@ from __future__ import annotations
 import base64
 import re
 from collections import OrderedDict
+from threading import Event
 from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -135,6 +137,7 @@ class SlideTurnDetector:
         job_id: Optional[str] = None,
         capture_offset_ratio: float = 0.2,
         on_progress: Optional[Callable[[int, int], None]] = None,
+        cancel_event: Optional[Event] = None,
     ):
         """
         Args:
@@ -154,6 +157,7 @@ class SlideTurnDetector:
         self.min_stride = max(1, min_stride)
         self.job_id = job_id
         self.on_progress = on_progress
+        self.cancel_event = cancel_event
         self.labels: List[Optional[int]] = [None] * len(segments)
         self.frame_cache = _FrameCache(
             video_path,
@@ -212,7 +216,13 @@ class SlideTurnDetector:
             anchors.append(len(self.segments) - 1)
         return anchors
 
+    def _check_cancellation(self) -> None:
+        """Abort if the ingestion job this detection belongs to was superseded."""
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise IngestionCancelledException(reason="Cancelled during slide detection")
+
     def _query_label(self, idx: int) -> Optional[int]:
+        self._check_cancellation()
         frame_b64 = self.frame_cache.get(idx)
         if frame_b64 is None:
             return None
@@ -342,6 +352,7 @@ def detect_slide_timestamps(
     min_stride: int = 1,
     job_id: Optional[str] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    cancel_event: Optional[Event] = None,
 ) -> List[Tuple[float, int]]:
     """Detect slide change timestamps using minimal GPT Vision calls.
 
@@ -364,5 +375,6 @@ def detect_slide_timestamps(
         min_stride=min_stride,
         job_id=job_id,
         on_progress=on_progress,
+        cancel_event=cancel_event,
     )
     return detector.detect()

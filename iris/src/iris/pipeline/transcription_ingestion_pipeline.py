@@ -1,4 +1,5 @@
 from functools import reduce
+from threading import Event
 from typing import Any, Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
@@ -7,6 +8,8 @@ from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.cancellation import raise_if_cancelled
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
@@ -56,11 +59,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
         dto: Optional[IngestionPipelineExecutionDto],
         callback: IngestionStatusCallback,
         local: bool = False,
+        cancel_event: Optional[Event] = None,
     ) -> None:
         super().__init__(implementation_id="transcription_ingestion_pipeline")
         self.client = client
         self.dto = dto
         self.callback = callback
+        self.cancel_event = cancel_event
         self.collection = init_lecture_transcription_schema(client)
         pipeline_id = "transcription_ingestion_pipeline"
         embedding_model = resolve_model(
@@ -80,6 +85,14 @@ class TranscriptionIngestionPipeline(SubPipeline):
     @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
+            # Before the first write of this pipeline. A superseded job must
+            # not delete the existing transcription and then stop, and a job
+            # the handler gave up waiting for must not delete anything at all.
+            raise_if_cancelled(
+                self.cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "transcription replacement",
+            )
             self.callback.update()
             self.delete_existing_transcription_data(self.dto.lecture_unit)
             self.callback.update()
@@ -131,16 +144,29 @@ class TranscriptionIngestionPipeline(SubPipeline):
         prepared_chunks = []
         try:
             for i, chunk in enumerate(chunks):
+                raise_if_cancelled(
+                    self.cancel_event,
+                    self.dto.lecture_unit.lecture_unit_id,
+                    "transcription embedding",
+                )
                 if i % 5 == 0:
                     self.callback.update()
                 embed_chunk = self.llm_embedding.embed(
                     chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
                 )
                 prepared_chunks.append((chunk, embed_chunk))
+        except IngestionCancelledException:
+            raise
         except Exception as e:
             logger.error("Error embedding lecture transcription chunk: %s", e)
             raise
 
+        # Last checkpoint: the batch below must not be torn in half.
+        raise_if_cancelled(
+            self.cancel_event,
+            self.dto.lecture_unit.lecture_unit_id,
+            "transcription indexing",
+        )
         with batch_update_lock:
             with self.collection.batch.dynamic() as batch:
                 try:
@@ -280,6 +306,12 @@ class TranscriptionIngestionPipeline(SubPipeline):
         chunks_with_summaries = []
         total = len(chunks)
         for i, chunk in enumerate(chunks):
+            # One LLM call per chunk; the longest loop in the ingestion phase.
+            raise_if_cancelled(
+                self.cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "transcription summarization",
+            )
             slide = chunk.get(LectureTranscriptionSchema.PAGE_NUMBER.value, "?")
             logger.info(
                 "[%s / %s] Summarizing chunk %d/%d (slide %s)",

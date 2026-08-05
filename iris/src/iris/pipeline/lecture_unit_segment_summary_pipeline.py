@@ -1,3 +1,4 @@
+from threading import Event
 from typing import Optional, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
@@ -6,6 +7,7 @@ from langchain_core.runnables import Runnable
 from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
 
+from iris.common.cancellation import raise_if_cancelled
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
@@ -52,11 +54,13 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         lecture_unit_dto: LectureUnitDTO,
         local: bool = False,
         callback: Optional[StatusCallback] = None,
+        cancel_event: Optional[Event] = None,
     ) -> None:
         super().__init__(implementation_id="lecture_unit_segment_summary_pipeline")
         self.weaviate_client = client
         self.lecture_unit_dto = lecture_unit_dto
         self.callback = callback
+        self.cancel_event = cancel_event
 
         self.lecture_unit_segment_collection = init_lecture_unit_segment_schema(client)
         self.lecture_transcription_collection = init_lecture_transcription_schema(
@@ -88,6 +92,12 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
         summaries = []
         for slide_index in range(slide_number_start, slide_number_end + 1):
+            # One summarization call per slide; cheapest place to give up.
+            raise_if_cancelled(
+                self.cancel_event,
+                self.lecture_unit_dto.lecture_unit_id,
+                "lecture unit segment summary",
+            )
             if self.callback is not None:
                 self.callback.update()
             transcriptions = self._get_transcriptions(slide_index)
@@ -115,6 +125,14 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 slides[0].properties.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value)
                 if slides
                 else None
+            )
+            # Immediately before the write: the summary call above can take
+            # seconds, and a job the handler stopped waiting for must not slip
+            # a stale segment in behind its successor.
+            raise_if_cancelled(
+                self.cancel_event,
+                self.lecture_unit_dto.lecture_unit_id,
+                "lecture unit segment upsert",
             )
             self._upsert_lecture_object(
                 slide_index, summary, display_page_number, hidden_until
