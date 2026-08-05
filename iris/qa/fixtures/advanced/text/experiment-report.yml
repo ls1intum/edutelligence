@@ -1,0 +1,21 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+textExercise:
+  id: 9303
+  title: Defensible Model Evaluation
+  problemStatement: |
+    Review an evaluation of two classifiers on 1,200 labeled examples. Explain
+    data leakage, model-selection bias, and uncertainty. The final report must
+    reserve an untouched test set and distinguish a measured difference from a
+    statistically supported conclusion.
+  startDate: 2026-06-25T08:00:00Z
+  endDate: 2026-07-06T18:00:00Z
+  exampleSolution: "Confidential reference: fit preprocessing inside training folds, choose models on validation evidence, evaluate once on untouched paired test examples, and report uncertainty before claiming a difference."
+textExerciseSubmission: |
+  I standardized all 1,200 examples and then made an 80/20 split. I trained six
+  variants and checked the test accuracy after each run, choosing the best one.
+  The baseline scored 84.1% and my selected model 84.8%, so the 0.7 percentage
+  point improvement is statistically significant. I did not repeat training or
+  compute an interval because the test set already contains 240 examples.
+qa:
+  syntheticNow: "2026-07-02T10:00:00Z"

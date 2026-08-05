@@ -1,0 +1,17 @@
+# yamllint disable rule:line-length rule:document-start
+query: Why does merge sort have n log n running time?
+limit: 5
+intent: SEARCH
+qa:
+  syntheticNow: "2026-05-17T12:00:00Z"
+  sources:
+    - id: source-1
+      course: Algorithms and Data Structures
+      lecture: Divide and Conquer
+      page: 8
+      snippet: The recursion tree has log n levels and linear work at each level.
+    - id: source-2
+      course: Algorithms and Data Structures
+      lecture: Sorting Lower Bounds
+      page: 4
+      snippet: Comparison sorting requires Omega(n log n) comparisons in the worst case.

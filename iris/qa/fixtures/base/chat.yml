@@ -1,0 +1,54 @@
+# yamllint disable rule:line-length rule:document-start
+settings:
+  authenticationToken: qa-local-only
+  selection: CLOUD_AI
+  artemisBaseUrl: https://artemis.example.invalid
+  variant: default
+  supportLevel: moderate
+  streamResponse: false
+user:
+  id: 117
+  firstName: Alex
+  lastName: Morgan
+  memirisEnabled: false
+  langKey: en
+course:
+  id: 42
+  name: Algorithms and Data Structures
+  description: An undergraduate course on algorithms, data structures, and complexity.
+  startTime: 2026-04-13T08:00:00Z
+  endTime: 2026-07-25T18:00:00Z
+  defaultProgrammingLanguage: JAVA
+  exercises:
+    - id: 9001
+      title: Insertion Sort
+      type: PROGRAMMING
+      mode: INDIVIDUAL
+      maxPoints: 10
+      dueDate: 2026-05-18T22:00:00Z
+      difficultyLevel: MEDIUM
+      problemStatement: Implement insertion sort in place without library sorting helpers.
+      submissions:
+        - id: 502
+          score: 6.0
+          submitted: true
+    - id: 9002
+      title: Graph Traversal Reflection
+      type: TEXT
+      mode: INDIVIDUAL
+      maxPoints: 10
+      dueDate: 2026-06-10T22:00:00Z
+      difficultyLevel: MEDIUM
+      problemStatement: Compare breadth-first and depth-first search for route planning.
+      submissions: []
+sessionTitle: null
+customInstructions: ""
+chatHistory:
+  - id: 1001
+    sentAt: 2026-05-11T09:25:00Z
+    sender: USER
+    contents:
+      - type: text
+        textContent: What should I work on next?
+qa:
+  syntheticNow: "2026-05-17T12:00:00Z"

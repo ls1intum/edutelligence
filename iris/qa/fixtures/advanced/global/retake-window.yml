@@ -1,0 +1,32 @@
+# yamllint disable rule:line-length rule:document-start
+query: I failed the graded checkpoint on Friday 26 June and the booking page offers Tuesday 30 June at 09:00. I also had a graded attempt on Wednesday 24 June, a practice run on Saturday, and an approved illness accommodation through Monday noon. Can I use the Tuesday slot, and if not, what is the earliest time the supplied rules establish?
+limit: 5
+intent: SEARCH
+qa:
+  syntheticNow: "2026-06-29T13:00:00Z"
+  sources:
+    - id: retake-rules-current
+      course: Reliable Systems 2026
+      lecture: Checkpoint retake rules effective 15 June 2026
+      page: 3
+      snippet: "After an unsuccessful graded result is recorded, another graded attempt may start only after 72 elapsed hours, measured from the recorded-result timestamp. Separately, a candidate start is permitted only when fewer than two earlier graded-attempt starts lie in [candidate start minus seven days, candidate start); an attempt exactly seven days earlier is outside this interval. Practice runs count for neither rule."
+    - id: student-record
+      course: Reliable Systems 2026
+      lecture: Student attempt and booking record
+      page: 1
+      snippet: "Graded attempt 1 started Wednesday 24 June 2026 at 10:00. Graded attempt 2 started Friday 26 June at 15:30; its unsuccessful result was recorded Friday at 16:40. A practice run started Saturday 27 June at 11:00. The calendar offers Tuesday 30 June at 09:00, but visible staffed slots are listed before personal eligibility checks."
+    - id: accommodation-scope
+      course: Reliable Systems 2026
+      lecture: Approved illness accommodation
+      page: 2
+      snippet: "The student's submission deadlines are suspended through Monday 29 June at 12:00. For assessment-integrity reasons, this accommodation neither pauses nor waives checkpoint cooldowns or rolling attempt caps."
+    - id: july-revision
+      course: Reliable Systems 2026
+      lecture: Rule revision effective 1 July 2026
+      page: 2
+      snippet: "For unsuccessful graded results recorded on or after 1 July, the 72-hour cooldown is replaced by two business days. Results recorded before 1 July remain governed by the rule in force when recorded. The rolling seven-day cap is unchanged."
+    - id: obsolete-guidance
+      course: Reliable Systems Archives and Forum
+      lecture: Non-current search matches
+      page: 1
+      snippet: "An archived 2025 pilot FAQ says illness days paused every timer. An unverified 2026 student post says displayed slots can always be used and the July rule should apply early. Neither item is marked as current staff guidance."
