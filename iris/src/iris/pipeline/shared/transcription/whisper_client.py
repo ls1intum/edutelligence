@@ -7,13 +7,14 @@ the Whisper endpoint/key is loaded from llm_config.yml via LlmManager.
 
 import os
 import threading
-import time
 from concurrent.futures import as_completed
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import ffmpeg  # type: ignore
 import requests
 
+from iris.common.cancellation import raise_if_cancelled, sleep_unless_cancelled
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.llm.external.whisper import AzureWhisperModel, OpenAIWhisperModel
 from iris.llm.llm_manager import LlmManager
@@ -114,6 +115,7 @@ class WhisperClient:
         audio_path: str,
         lecture_unit_id: Optional[int] = None,
         on_chunk_complete: Optional[Callable[[int, int], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         """Transcribe an audio file using Whisper.
 
@@ -135,6 +137,7 @@ class WhisperClient:
         Raises:
             RuntimeError: If any chunk fails after all retries.
         """
+        raise_if_cancelled(cancel_event, lecture_unit_id, "before audio splitting")
         uid = os.path.splitext(os.path.basename(audio_path))[0]
         chunks_dir = os.path.join(os.path.dirname(audio_path), f"chunks_{uid}")
         chunk_paths = split_audio_ffmpeg(
@@ -145,6 +148,7 @@ class WhisperClient:
         offsets: List[float] = []
         cumulative = 0.0
         for chunk_path in chunk_paths:
+            raise_if_cancelled(cancel_event, lecture_unit_id, "during audio chunking")
             offsets.append(cumulative)
             cumulative += _audio_duration(chunk_path)
 
@@ -155,7 +159,7 @@ class WhisperClient:
         language_votes: Dict[str, int] = {}
 
         chunks_done = 0
-        cancel_event = threading.Event()
+        worker_cancel_event = threading.Event()
         with TracedThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
                 executor.submit(
@@ -164,12 +168,16 @@ class WhisperClient:
                     i,
                     total,
                     lecture_unit_id,
+                    worker_cancel_event,
                     cancel_event,
                 ): i
                 for i, chunk_path in enumerate(chunk_paths)
             }
             try:
                 for future in as_completed(futures):
+                    raise_if_cancelled(
+                        cancel_event, lecture_unit_id, "during whisper transcription"
+                    )
                     i = futures[future]
                     offset = offsets[i]
                     segments, language = future.result()
@@ -189,7 +197,7 @@ class WhisperClient:
                     if on_chunk_complete is not None:
                         on_chunk_complete(chunks_done, total)
             except Exception:
-                cancel_event.set()
+                worker_cancel_event.set()
                 for f in futures:
                     f.cancel()
                 raise
@@ -222,6 +230,7 @@ class WhisperClient:
         chunk_index: int,
         total_chunks: int,
         lecture_unit_id: Optional[int] = None,
+        worker_cancel_event: Optional[threading.Event] = None,
         cancel_event: Optional[threading.Event] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """Transcribe a single chunk with retry logic.
@@ -233,8 +242,12 @@ class WhisperClient:
         prefix = _log_prefix(lecture_unit_id)
 
         for attempt in range(self.max_retries):
-            if cancel_event is not None and cancel_event.is_set():
+            if worker_cancel_event is not None and worker_cancel_event.is_set():
                 raise InterruptedError("Transcription cancelled")
+            if cancel_event is not None and cancel_event.is_set():
+                raise IngestionCancelledException(
+                    lecture_unit_id, "during whisper transcription"
+                )
             with open(chunk_path, "rb") as f:
                 logger.debug(
                     "%s %s uploading chunk %d/%d",
@@ -271,7 +284,9 @@ class WhisperClient:
                             attempt + 1,
                             self.max_retries,
                         )
-                        time.sleep(wait)
+                        sleep_unless_cancelled(
+                            wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                        )
                         continue
 
                     response.raise_for_status()
@@ -291,7 +306,9 @@ class WhisperClient:
                                 f"response after {self.max_retries} retries"
                             ) from json_err
                         wait = self._get_retry_wait_time(attempt)
-                        time.sleep(wait)
+                        sleep_unless_cancelled(
+                            wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                        )
                         continue
                     raw_segments = body.get("segments", [])
                     language = body.get("language")
@@ -356,7 +373,9 @@ class WhisperClient:
                         attempt + 1,
                         self.max_retries,
                     )
-                    time.sleep(wait)
+                    sleep_unless_cancelled(
+                        wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                    )
 
                 except requests.Timeout as e:
                     # Read/connect timeouts are transient — retry with backoff
@@ -384,7 +403,9 @@ class WhisperClient:
                         attempt + 1,
                         self.max_retries,
                     )
-                    time.sleep(wait)
+                    sleep_unless_cancelled(
+                        wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                    )
 
                 except requests.ConnectionError as e:
                     # DNS failures, connection refused, network blips — transient
@@ -412,7 +433,9 @@ class WhisperClient:
                         attempt + 1,
                         self.max_retries,
                     )
-                    time.sleep(wait)
+                    sleep_unless_cancelled(
+                        wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                    )
 
                 except requests.RequestException as e:
                     raise RuntimeError(

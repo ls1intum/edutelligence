@@ -15,6 +15,7 @@ class IngestionJobHandler:
     def __init__(self):
         self._lock = threading.Lock()
         self._latest = {}
+        self._superseded_jobs = 0
 
     def create_cancellation_event(self) -> Event:
         return Event()
@@ -32,8 +33,17 @@ class IngestionJobHandler:
             previous_cancel_event = self._latest.get(key)
             if previous_cancel_event is not None:
                 previous_cancel_event.set()
+                self._superseded_jobs += 1
             self._latest[key] = cancel_event
             process.start()
+        if previous_cancel_event is not None:
+            logger.info(
+                "Superseding running ingestion job | course=%d lecture=%d unit=%d total_superseded=%d",
+                course_id,
+                lecture_id,
+                lecture_unit_id,
+                self._superseded_jobs,
+            )
         logger.info(
             "Started ingestion job%s | course=%d lecture=%d unit=%d",
             ", superseding the previous one" if previous_cancel_event else "",

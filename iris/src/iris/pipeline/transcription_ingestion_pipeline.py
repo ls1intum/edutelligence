@@ -104,6 +104,8 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
             prepared_chunks = self._prepare_batch_insert(chunks)
             self.callback.update()
+            # Commit phase: once these final cancel checks pass, keep delete+insert
+            # contiguous so a cancelled stale run does not leave partial state.
             raise_if_cancelled(
                 cancel_event,
                 lecture_unit.lecture_unit_id,

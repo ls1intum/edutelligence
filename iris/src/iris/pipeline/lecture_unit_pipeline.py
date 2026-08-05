@@ -93,7 +93,7 @@ class LectureUnitPipeline(SubPipeline):
                 lecture_unit,
                 local=self.local,
                 callback=self.callback,
-                cancel_event=self.cancel_event,
+                cancel_event=cancel_event,
             )()
         )
         lecture_unit.lecture_unit_summary, tokens_unit_summary = (
@@ -125,8 +125,8 @@ class LectureUnitPipeline(SubPipeline):
                 latest_value = latest_properties.get(property_name)
                 return latest_value if latest_value != initial_value else incoming_value
 
-            # Delete only after all fallible preparation succeeds and while metadata
-            # updates are excluded from the replacement window.
+            # Commit phase: all expensive work already succeeded, so keep the
+            # replacement window tight and free of extra fallible steps.
             self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
             self.lecture_unit_collection.data.insert(
                 properties={

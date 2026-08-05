@@ -8,9 +8,11 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.pipeline.lecture_ingestion_update_pipeline import (
     LectureIngestionUpdatePipeline,
 )
+from iris.pipeline.lecture_update_lock import lecture_update_lock
 
 _MOD = "iris.pipeline.lecture_ingestion_update_pipeline"
 
@@ -70,3 +72,31 @@ def test_uncancelled_failure_still_reports_as_a_failure():
         _run(pipeline)
 
     callback.fail.assert_called_once()
+
+
+def test_cancelled_run_releases_lecture_update_lock():
+    cancel_event = threading.Event()
+    pipeline = _pipeline(cancel_event)
+
+    with (
+        patch(f"{_MOD}.IngestionStatusCallback") as callback_cls,
+        patch(f"{_MOD}._needs_transcription_generation", return_value=False),
+        patch(f"{_MOD}._needs_slide_detection", return_value=False),
+        patch(
+            f"{_MOD}.LectureUnitPipeline.fetch_existing_properties",
+            return_value={},
+        ),
+        patch.object(
+            LectureIngestionUpdatePipeline,
+            "_run_ingestion",
+            side_effect=IngestionCancelledException("cancelled in lock"),
+        ),
+    ):
+        callback_cls.return_value = MagicMock()
+        _run(pipeline)
+
+    reacquired = False
+    with lecture_update_lock("https://artemis.example", 1, 2, 7):
+        reacquired = True
+
+    assert reacquired is True

@@ -255,6 +255,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             heavy = HeavyTranscriptionPipeline(
                 callback=callback,
                 storage=storage,
+                cancel_event=getattr(self, "cancel_event", None),
             )
             raw_transcript = heavy(
                 video_url,
@@ -268,6 +269,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 raw_transcript, lecture_unit_id, enriched=False
             )
             segment_count = len(raw_transcript.get("segments", []))
+            raise_if_cancelled(
+                getattr(self, "cancel_event", None),
+                lecture_unit_id,
+                "before transcription checkpoint",
+            )
             callback.update(result=json.dumps(checkpoint_1))
             logger.info(
                 "[Lecture %d] Checkpoint 1: raw transcript (%d segments)",
@@ -280,6 +286,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 video_path=storage.video_path,
                 local=self._is_local,
+                cancel_event=getattr(self, "cancel_event", None),
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -290,6 +297,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 lecture_unit_id,
                 enriched=True,
                 aligned_segments=aligned_segments,
+            )
+            raise_if_cancelled(
+                getattr(self, "cancel_event", None),
+                lecture_unit_id,
+                "before alignment checkpoint",
             )
             callback.update(result=json.dumps(checkpoint_2))
             logger.info(
@@ -352,6 +364,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 "[Lecture %d] Re-downloading video for slide detection",
                 lecture_unit_id,
             )
+            raise_if_cancelled(
+                getattr(self, "cancel_event", None),
+                lecture_unit_id,
+                "before video download",
+            )
             video_source_type = self.dto.lecture_unit.video_source_type
             if video_source_type == VideoSourceType.YOUTUBE:
                 ts = settings.transcription
@@ -379,6 +396,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 video_path=storage.video_path,
                 local=self._is_local,
+                cancel_event=getattr(self, "cancel_event", None),
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -388,6 +406,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 lecture_unit_id,
                 enriched=True,
                 aligned_segments=aligned_segments,
+            )
+            raise_if_cancelled(
+                getattr(self, "cancel_event", None),
+                lecture_unit_id,
+                "before alignment checkpoint",
             )
             callback.update(result=json.dumps(checkpoint_2))
             logger.info(

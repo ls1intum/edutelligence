@@ -1,6 +1,7 @@
 """Cancellation helpers for the lecture ingestion pipelines."""
 
 import threading
+import time
 from typing import Optional
 
 from iris.common.custom_exceptions import IngestionCancelledException
@@ -31,3 +32,25 @@ def raise_if_cancelled(
         lecture_unit_id,
         f"Cancelled during {stage}" if stage else "Superseded by a newer request",
     )
+
+
+def sleep_unless_cancelled(
+    seconds: float,
+    cancel_event: Optional[threading.Event],
+    lecture_unit_id: Optional[int] = None,
+    stage: Optional[str] = None,
+) -> None:
+    """Wait for ``seconds`` and stop early if a newer request supersedes the job.
+
+    Use instead of ``time.sleep`` for retry backoffs, so a superseded job ends
+    within milliseconds instead of sitting out the full wait.
+
+    Raises:
+        IngestionCancelledException: If ``cancel_event`` is set while waiting.
+    """
+    if cancel_event is None:
+        time.sleep(seconds)
+        return
+
+    if cancel_event.wait(seconds):
+        raise_if_cancelled(cancel_event, lecture_unit_id, stage)

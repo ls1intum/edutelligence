@@ -251,6 +251,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             prepared_chunks = self._prepare_chunk_vectors(chunks)
             self.callback.update()
             self.callback.update()
+            # From here on, replacement is a short commit phase: do not add
+            # more fallible work between the final cancel checks and delete+insert.
             raise_if_cancelled(
                 cancel_event,
                 self.dto.lecture_unit.lecture_unit_id,
@@ -463,11 +465,21 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             pix = page.get_pixmap(matrix=matrix)
             img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
 
+            raise_if_cancelled(
+                cancel_event,
+                getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
+                "before lecture page vision",
+            )
             vision_result = self.interpret_image(
                 img_base64,
                 old_page_text,
                 lecture_unit_slide_dto.lecture_name,
                 self.course_language,
+            )
+            raise_if_cancelled(
+                cancel_event,
+                getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
+                "after lecture page vision",
             )
             display_page_numbers.append(vision_result.display_page_number)
 
