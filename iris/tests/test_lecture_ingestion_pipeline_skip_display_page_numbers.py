@@ -74,6 +74,7 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         load_page=MagicMock(
             return_value=SimpleNamespace(get_text=MagicMock(return_value="page text"))
         ),
+        close=MagicMock(),
     )
     monkeypatch.setattr(
         "iris.pipeline.lecture_ingestion_pipeline.save_pdf",

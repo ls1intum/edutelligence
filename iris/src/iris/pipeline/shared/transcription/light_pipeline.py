@@ -75,6 +75,7 @@ class LightTranscriptionPipeline:
 
         logger.info("%s Starting light pipeline: %d segments", prefix, len(segments))
 
+        raise_if_cancelled(self.cancel_event, lecture_unit_id, "before slide detection")
         if self.video_path is None:
             logger.info("%s No video file available, skipping slide detection", prefix)
             self.callback.update()
@@ -90,7 +91,6 @@ class LightTranscriptionPipeline:
             ]
 
         # Stage: Detect slide changes
-        raise_if_cancelled(self.cancel_event, lecture_unit_id, "before slide detection")
         self.callback.update()
 
         def on_slide_detection_progress(labeled: int, total: int) -> None:

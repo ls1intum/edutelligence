@@ -21,6 +21,12 @@ class IngestionJobHandler:
     def create_cancellation_event(self) -> Event:
         return Event()
 
+    @staticmethod
+    def _key(
+        course_id: int, lecture_id: int, lecture_unit_id: int
+    ) -> tuple[int, int, int]:
+        return (course_id, lecture_id, lecture_unit_id)
+
     def add_job(
         self,
         process: Thread,
@@ -29,7 +35,7 @@ class IngestionJobHandler:
         lecture_unit_id: int,
         cancel_event: Event,
     ):
-        key = (course_id, lecture_id, lecture_unit_id)
+        key = self._key(course_id, lecture_id, lecture_unit_id)
         with self._lock:
             previous_cancel_event = self._latest.get(key)
             if previous_cancel_event is not None:
@@ -52,3 +58,15 @@ class IngestionJobHandler:
             lecture_id,
             lecture_unit_id,
         )
+
+    def complete_job(
+        self,
+        course_id: int,
+        lecture_id: int,
+        lecture_unit_id: int,
+        cancel_event: Event,
+    ) -> None:
+        key = self._key(course_id, lecture_id, lecture_unit_id)
+        with self._lock:
+            if self._latest.get(key) is cancel_event:
+                del self._latest[key]

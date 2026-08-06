@@ -103,7 +103,8 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
             prepared_chunks = self._prepare_batch_insert(chunks)
             self.callback.update()
-            self._replace_prepared_chunks(lecture_unit, prepared_chunks)
+            if prepared_chunks:
+                self._replace_prepared_chunks(lecture_unit, prepared_chunks)
             self.callback.update()
 
             transcription = getattr(lecture_unit, "transcription", None)
@@ -135,22 +136,23 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
         )
 
+    def _lecture_unit_id(self) -> Optional[int]:
+        lecture_unit = getattr(getattr(self, "dto", None), "lecture_unit", None)
+        return getattr(lecture_unit, "lecture_unit_id", None)
+
     def batch_insert(self, chunks):
         prepared_chunks = self._prepare_batch_insert(chunks)
         cancel_event = getattr(self, "cancel_event", None)
-        lecture_unit_id = getattr(getattr(self, "dto", None), "lecture_unit", None)
-        lecture_unit_id = getattr(lecture_unit_id, "lecture_unit_id", None)
         raise_if_cancelled(
             cancel_event,
-            lecture_unit_id,
+            self._lecture_unit_id(),
             "transcription indexing",
         )
         self._insert_prepared_chunks(prepared_chunks)
 
     def _prepare_batch_insert(self, chunks):
         cancel_event = getattr(self, "cancel_event", None)
-        lecture_unit_id = getattr(getattr(self, "dto", None), "lecture_unit", None)
-        lecture_unit_id = getattr(lecture_unit_id, "lecture_unit_id", None)
+        lecture_unit_id = self._lecture_unit_id()
         prepared_chunks = []
         try:
             for i, chunk in enumerate(chunks):
@@ -180,6 +182,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
             except Exception as e:
                 logger.error("Error indexing lecture transcription chunk: %s", e)
                 raise
+        failed_objects = getattr(self.collection.batch, "failed_objects", None)
+        if failed_objects:
+            raise RuntimeError(
+                f"Failed to insert {len(failed_objects)} transcription chunks"
+            )
 
     def _replace_prepared_chunks(self, lecture_unit, prepared_chunks):
         cancel_event = getattr(self, "cancel_event", None)

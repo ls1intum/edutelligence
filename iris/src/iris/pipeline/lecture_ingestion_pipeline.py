@@ -216,12 +216,15 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             if not self.check_if_attachment_needs_update():
                 pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
-                doc = fitz.open(pdf_path)
+                doc = None
                 try:
+                    doc = fitz.open(pdf_path)
                     self.course_language = self.get_course_language(
                         doc.load_page(min(5, doc.page_count - 1)).get_text()
                     )
                 finally:
+                    if doc is not None:
+                        doc.close()
                     cleanup_temporary_file(pdf_path)
                 self.restore_display_page_numbers_from_existing_chunks()
                 self.callback.update()
@@ -394,6 +397,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             except Exception as e:
                 logger.error("Error updating lecture unit", exc_info=e)
                 raise
+        failed_objects = getattr(self.collection.batch, "failed_objects", None)
+        if failed_objects:
+            raise RuntimeError(
+                f"Failed to insert {len(failed_objects)} lecture page chunks"
+            )
 
     def _replace_prepared_chunks(self, prepared_chunks):
         cancel_event = getattr(self, "cancel_event", None)
@@ -411,12 +419,13 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.dto.lecture_unit.lecture_unit_id,
                 "lecture page replacement",
             )
-            self.delete_lecture_unit(
+            if not self.delete_lecture_unit(
                 self.dto.lecture_unit.course_id,
                 self.dto.lecture_unit.lecture_id,
                 self.dto.lecture_unit.lecture_unit_id,
                 self.dto.settings.artemis_base_url,
-            )
+            ):
+                raise RuntimeError("Error while removing old slides")
             self._insert_prepared_chunks(prepared_chunks)
 
     def chunk_data(
@@ -428,83 +437,88 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         """
         Chunk the data from the lecture into smaller pieces
         """
-        doc = fitz.open(lecture_pdf)
-        self.course_language = self.get_course_language(
-            doc.load_page(min(5, doc.page_count - 1)).get_text()
-        )
-        data = []
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=512, chunk_overlap=102
-        )
-        prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
-        logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
-        old_page_text = ""
-        display_page_numbers: list[int] = []
-        cancel_event = getattr(self, "cancel_event", None)
-        for page_num in range(doc.page_count):
-            raise_if_cancelled(
-                cancel_event,
-                getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
-                "lecture page chunking",
+        doc = None
+        try:
+            doc = fitz.open(lecture_pdf)
+            self.course_language = self.get_course_language(
+                doc.load_page(min(5, doc.page_count - 1)).get_text()
             )
-            self.callback.update()
-            page = doc.load_page(page_num)
-            page_text = page.get_text()
-
-            matrix = fitz.Matrix(5, 5)
-            pix = page.get_pixmap(matrix=matrix)
-            img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
-
-            raise_if_cancelled(
-                cancel_event,
-                getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
-                "before lecture page vision",
+            data = []
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=512, chunk_overlap=102
             )
-            vision_result = self.interpret_image(
-                img_base64,
-                old_page_text,
-                lecture_unit_slide_dto.lecture_name,
-                self.course_language,
-            )
-            raise_if_cancelled(
-                cancel_event,
-                getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
-                "after lecture page vision",
-            )
-            display_page_numbers.append(vision_result.display_page_number)
-
-            if vision_result.academic_description:
-                page_text = self.merge_page_content_and_image_interpretation(
-                    page_text, vision_result.academic_description
+            prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
+            logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
+            old_page_text = ""
+            display_page_numbers: list[int] = []
+            cancel_event = getattr(self, "cancel_event", None)
+            for page_num in range(doc.page_count):
+                raise_if_cancelled(
+                    cancel_event,
+                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
+                    "lecture page chunking",
                 )
+                self.callback.update()
+                page = doc.load_page(page_num)
+                page_text = page.get_text()
 
-            page_splits = text_splitter.create_documents([page_text])
-            data.extend(
-                create_page_data(
-                    page_num,
-                    page_splits,
-                    lecture_unit_slide_dto,
+                matrix = fitz.Matrix(5, 5)
+                pix = page.get_pixmap(matrix=matrix)
+                img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
+
+                raise_if_cancelled(
+                    cancel_event,
+                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
+                    "before lecture page vision",
+                )
+                vision_result = self.interpret_image(
+                    img_base64,
+                    old_page_text,
+                    lecture_unit_slide_dto.lecture_name,
                     self.course_language,
-                    base_url,
-                    vision_result.display_page_number,
-                    self._hidden_until_by_page.get(page_num + 1),
                 )
-            )
-            old_page_text = page_text
-        if lecture_unit_slide_dto is not None:
-            lecture_unit_slide_dto.display_page_numbers = display_page_numbers
+                raise_if_cancelled(
+                    cancel_event,
+                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
+                    "after lecture page vision",
+                )
+                display_page_numbers.append(vision_result.display_page_number)
+
+                if vision_result.academic_description:
+                    page_text = self.merge_page_content_and_image_interpretation(
+                        page_text, vision_result.academic_description
+                    )
+
+                page_splits = text_splitter.create_documents([page_text])
+                data.extend(
+                    create_page_data(
+                        page_num,
+                        page_splits,
+                        lecture_unit_slide_dto,
+                        self.course_language,
+                        base_url,
+                        vision_result.display_page_number,
+                        self._hidden_until_by_page.get(page_num + 1),
+                    )
+                )
+                old_page_text = page_text
+            if lecture_unit_slide_dto is not None:
+                lecture_unit_slide_dto.display_page_numbers = display_page_numbers
+                logger.info(
+                    "%s Display page numbers: %s",
+                    prefix,
+                    display_page_numbers,
+                )
             logger.info(
-                "%s Display page numbers: %s",
+                "%s PDF chunking complete: %d chunks from %d pages",
                 prefix,
-                display_page_numbers,
+                len(data),
+                doc.page_count,
             )
-        logger.info(
-            "%s PDF chunking complete: %d chunks from %d pages",
-            prefix,
-            len(data),
-            doc.page_count,
-        )
-        return data
+            return data
+        finally:
+            if doc is not None:
+                doc.close()
 
     def interpret_image(
         self,

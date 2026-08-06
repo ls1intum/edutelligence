@@ -73,6 +73,7 @@ def run_lecture_update_pipeline_worker(
         if dto.lecture_unit is not None
         else dto.lecture_unit_id
     )
+    lecture_unit = dto.lecture_unit
     try:
         pipeline = LectureIngestionUpdatePipeline(
             dto, variant_id=variant_id, cancel_event=cancel_event
@@ -95,6 +96,14 @@ def run_lecture_update_pipeline_worker(
         )
         callback.fail(str(e), exception=e)
         capture_exception(e)
+    finally:
+        if lecture_unit is not None and cancel_event is not None:
+            ingestion_job_handler.complete_job(
+                course_id=lecture_unit.course_id,
+                lecture_id=lecture_unit.lecture_id,
+                lecture_unit_id=lecture_unit.lecture_unit_id,
+                cancel_event=cancel_event,
+            )
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):

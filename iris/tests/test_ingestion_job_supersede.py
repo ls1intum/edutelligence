@@ -16,7 +16,10 @@ def _submit(handler, body, unit=UNIT):
     cancel_event = handler.create_cancellation_event()
 
     def run():
-        body(cancel_event)
+        try:
+            body(cancel_event)
+        finally:
+            handler.complete_job(COURSE, LECTURE, unit, cancel_event)
 
     thread = threading.Thread(target=run)
     handler.add_job(thread, COURSE, LECTURE, unit, cancel_event)
@@ -60,6 +63,25 @@ def test_superseding_request_cancels_the_previous_job():
     assert not first_thread.is_alive()
 
 
+def test_completed_job_is_not_superseded_by_a_later_request():
+    """A finished job must leave no entry behind that a later request cancels."""
+    handler = _handler()
+    finished = threading.Event()
+
+    first_cancel, first_thread = _submit(
+        handler, lambda unused_cancel_event: finished.set()
+    )
+
+    assert finished.wait(timeout=5)
+    first_thread.join(timeout=5)
+    assert not first_thread.is_alive()
+
+    _, second_thread = _submit(handler, lambda unused_cancel_event: None)
+    second_thread.join(timeout=5)
+
+    assert not first_cancel.is_set(), "completed job was still tracked as running"
+
+
 def test_same_unit_jobs_can_overlap_during_preprocessing():
     """Same-unit requests should not serialize whole worker threads."""
     handler = _handler()
@@ -91,11 +113,22 @@ def test_unrelated_lecture_units_are_not_serialized():
     """Only same-unit jobs queue; different units stay concurrent."""
     handler = _handler()
     both_running = threading.Barrier(2, timeout=5)
+    barrier_results = {}
+
+    def worker(unit):
+        try:
+            both_running.wait()
+            barrier_results[unit] = "ok"
+        except Exception as exc:  # pragma: no cover - asserted via captured result
+            barrier_results[unit] = type(exc).__name__
 
     threads = [
-        _submit(handler, lambda unused_cancel_event: both_running.wait(), unit=unit)[1]
+        _submit(
+            handler, lambda unused_cancel_event, unit=unit: worker(unit), unit=unit
+        )[1]
         for unit in (10, 11)
     ]
     for thread in threads:
         thread.join(timeout=5)
         assert not thread.is_alive()
+    assert barrier_results == {10: "ok", 11: "ok"}

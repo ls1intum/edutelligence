@@ -1,6 +1,7 @@
 """Focused cancellation checkpoints for superseded ingestion runs."""
 
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ from iris.pipeline.lecture_unit_pipeline import (
 from iris.pipeline.shared.transcription.heavy_pipeline import HeavyTranscriptionPipeline
 from iris.pipeline.shared.transcription.light_pipeline import LightTranscriptionPipeline
 from iris.pipeline.shared.transcription.slide_turn_detector import SlideTurnDetector
+from iris.pipeline.shared.transcription.whisper_client import WhisperClient
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
@@ -64,6 +66,26 @@ class _CancelledAfter(threading.Event):
 def _cancel_then_vector(cancel_event):
     cancel_event.set()
     return [0.1]
+
+
+def _whisper_client():
+    """Whisper client wired for OpenAI without touching the LLM config."""
+    client = WhisperClient.__new__(WhisperClient)
+    client.llm = SimpleNamespace(api_key="key", model="whisper-1")
+    client.chunk_duration = 900
+    client.max_retries = 3
+    client.max_workers = 2
+    client.request_timeout = 1
+    client.no_speech_threshold = 0.8
+    client.provider_name = "OpenAI"
+    return client
+
+
+def _whisper_response(status_code):
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = {"segments": [], "language": "english"}
+    return response
 
 
 def _signal_then_vector(reached):
@@ -261,11 +283,123 @@ def test_light_transcription_stops_during_slide_detection_progress():
             )
 
 
+def test_light_transcription_cancellation_precedes_no_video_shortcut():
+    pipeline = LightTranscriptionPipeline.__new__(LightTranscriptionPipeline)
+    pipeline.callback = MagicMock()
+    pipeline.cancel_event = _cancelled()
+    pipeline.video_path = None
+
+    with pytest.raises(IngestionCancelledException) as cancelled:
+        LightTranscriptionPipeline.__call__.__wrapped__(
+            pipeline,
+            {"segments": [{"start": 0.0, "end": 1.0, "text": "a"}]},
+            lecture_unit_id=3,
+        )
+
+    assert "before slide detection" in cancelled.value.reason
+    pipeline.callback.update.assert_not_called()
+
+
 def test_whisper_retry_wait_stops_when_cancelled():
     with pytest.raises(IngestionCancelledException):
         sleep_unless_cancelled(
             30, _cancelled(), lecture_unit_id=3, stage="whisper retry backoff"
         )
+
+
+def test_whisper_retry_wait_stops_when_worker_cancelled(tmp_path):
+    """A worker in retry backoff must abort once the run gives up.
+
+    The failing chunk backs off for 10s. Shutting the run down waits for that
+    worker, so the run only returns quickly if the backoff itself is
+    interruptible.
+    """
+    chunks = []
+    for index in range(2):
+        chunk = tmp_path / f"chunk_{index}.mp3"
+        chunk.write_bytes(b"audio")
+        chunks.append(str(chunk))
+
+    client = _whisper_client()
+    backing_off = threading.Event()
+
+    def post(*_args, **kwargs):
+        chunk_name = kwargs["files"]["file"][0]
+        if chunk_name.startswith("chunk_0"):
+            return _whisper_response(200)
+        backing_off.set()
+        return _whisper_response(429)
+
+    def fail_run(*_args, **_kwargs):
+        # Fails the run only once the other chunk sits in its retry backoff.
+        assert backing_off.wait(timeout=5)
+        raise RuntimeError("chunk bookkeeping failed")
+
+    started = time.monotonic()
+    with (
+        patch(
+            "iris.pipeline.shared.transcription.whisper_client.split_audio_ffmpeg",
+            return_value=chunks,
+        ),
+        patch(
+            "iris.pipeline.shared.transcription.whisper_client._audio_duration",
+            return_value=1.0,
+        ),
+        patch(
+            "iris.pipeline.shared.transcription.whisper_client.requests.post",
+            side_effect=post,
+        ),
+    ):
+        with pytest.raises(RuntimeError):
+            client.transcribe(
+                "/tmp/audio.mp3", lecture_unit_id=3, on_chunk_complete=fail_run
+            )
+
+    assert time.monotonic() - started < 5, "run waited out the full retry backoff"
+
+
+def test_whisper_transcribe_stops_polling_when_cancelled():
+    client = WhisperClient.__new__(WhisperClient)
+    client.max_workers = 1
+    client.max_retries = 1
+    client.chunk_duration = 900
+    client.no_speech_threshold = 0.8
+    client.provider_name = "OpenAI"
+
+    started = threading.Event()
+    unblock = threading.Event()
+    cancel_event = threading.Event()
+
+    def blocking_chunk(*_args, **_kwargs):
+        started.set()
+        unblock.wait(timeout=5)
+        return [], None
+
+    def trigger_cancel():
+        assert started.wait(timeout=5)
+        cancel_event.set()
+
+    canceller = threading.Thread(target=trigger_cancel)
+    canceller.start()
+
+    with (
+        patch(
+            "iris.pipeline.shared.transcription.whisper_client.split_audio_ffmpeg",
+            return_value=["/tmp/chunk.mp3"],
+        ),
+        patch(
+            "iris.pipeline.shared.transcription.whisper_client._audio_duration",
+            return_value=1.0,
+        ),
+        patch.object(client, "_transcribe_chunk", side_effect=blocking_chunk),
+    ):
+        with pytest.raises(IngestionCancelledException):
+            client.transcribe(
+                "/tmp/audio.mp3", lecture_unit_id=3, cancel_event=cancel_event
+            )
+
+    unblock.set()
+    canceller.join(timeout=5)
 
 
 def test_slide_turn_detector_stops_before_vision_query():
@@ -387,11 +521,63 @@ def _transcription_commit_target():
     )
 
 
+def _lecture_unit_commit_target():
+    pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
+    pipeline.cancel_event = threading.Event()
+    pipeline.local = False
+    pipeline.callback = MagicMock()
+    pipeline.weaviate_client = MagicMock()
+    pipeline.llm_embedding = MagicMock()
+    pipeline.lecture_unit_collection = MagicMock()
+
+    reached_commit = threading.Event()
+    pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
+
+    lecture_unit = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_unit_summary="summary",
+    )
+
+    def run():
+        with (
+            patch(
+                "iris.pipeline.lecture_unit_pipeline.LectureUnitSegmentSummaryPipeline"
+            ) as segment_cls,
+            patch(
+                "iris.pipeline.lecture_unit_pipeline.LectureUnitSummaryPipeline"
+            ) as summary_cls,
+        ):
+            segment_cls.return_value.return_value = ([], [])
+            summary_cls.return_value.return_value = ("summary", [])
+            LectureUnitPipeline.__call__.__wrapped__(
+                pipeline, lecture_unit, initial_properties={}
+            )
+
+    return SimpleNamespace(
+        run=run,
+        commit_lock=lecture_unit_batch_update_lock,
+        cancel_event=pipeline.cancel_event,
+        reached_commit=reached_commit,
+        delete_mock=pipeline.lecture_unit_collection.data.delete_many,
+        insert_mock=pipeline.lecture_unit_collection.data.insert,
+        extra_not_called=[pipeline.lecture_unit_collection.query.fetch_objects],
+    )
+
+
 @pytest.mark.parametrize(
-    "build_target",
-    [_page_commit_target, _transcription_commit_target],
+    "build_target, extra_not_called",
+    [
+        (_page_commit_target, []),
+        (_transcription_commit_target, []),
+        (_lecture_unit_commit_target, ["query.fetch_objects"]),
+    ],
 )
-def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(build_target):
+def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(
+    build_target, extra_not_called
+):
     target = build_target()
     errors = []
 
@@ -415,65 +601,6 @@ def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(build_targe
     assert isinstance(errors[0], IngestionCancelledException)
     target.delete_mock.assert_not_called()
     target.insert_mock.assert_not_called()
-
-
-def test_lecture_unit_replacement_is_cancelled_after_waiting_for_commit_lock():
-    pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
-    pipeline.cancel_event = threading.Event()
-    pipeline.local = False
-    pipeline.callback = MagicMock()
-    pipeline.weaviate_client = MagicMock()
-    pipeline.llm_embedding = MagicMock()
-    pipeline.lecture_unit_collection = MagicMock()
-
-    embedding_ready = threading.Event()
-
-    def embed_and_block(summary):
-        del summary
-        embedding_ready.set()
-        return [0.1]
-
-    pipeline.llm_embedding.embed.side_effect = embed_and_block
-
-    lecture_unit = SimpleNamespace(
-        course_id=1,
-        lecture_id=2,
-        lecture_unit_id=3,
-        base_url="https://artemis.example",
-        lecture_unit_summary="summary",
-    )
-    errors = []
-
-    with (
-        patch(
-            "iris.pipeline.lecture_unit_pipeline.LectureUnitSegmentSummaryPipeline"
-        ) as segment_cls,
-        patch(
-            "iris.pipeline.lecture_unit_pipeline.LectureUnitSummaryPipeline"
-        ) as summary_cls,
-    ):
-        segment_cls.return_value.return_value = ([], [])
-        summary_cls.return_value.return_value = ("summary", [])
-
-        def run():
-            try:
-                LectureUnitPipeline.__call__.__wrapped__(
-                    pipeline, lecture_unit, initial_properties={}
-                )
-            except Exception as exc:  # pragma: no cover - asserted below
-                errors.append(exc)
-
-        with lecture_unit_batch_update_lock:
-            thread = threading.Thread(target=run)
-            thread.start()
-            assert embedding_ready.wait(timeout=5)
-            pipeline.cancel_event.set()
-
-        thread.join(timeout=5)
-
-    assert not thread.is_alive()
-    assert len(errors) == 1
-    assert isinstance(errors[0], IngestionCancelledException)
-    pipeline.lecture_unit_collection.query.fetch_objects.assert_not_called()
-    pipeline.lecture_unit_collection.data.delete_many.assert_not_called()
-    pipeline.lecture_unit_collection.data.insert.assert_not_called()
+    for not_called in extra_not_called:
+        if not_called == "query.fetch_objects":
+            target.extra_not_called[0].assert_not_called()

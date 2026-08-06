@@ -92,16 +92,53 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
 def test_transcription_ingestion_reraises_without_terminal_callback():
     pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
     pipeline.callback = MagicMock()
-    pipeline.dto = SimpleNamespace(lecture_unit=_lecture_unit())
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(
+            lecture_unit_id=1,
+            lecture_name="Lecture",
+            lecture_unit_name="Unit",
+            transcription=SimpleNamespace(language="en"),
+        )
+    )
     pipeline.tokens = []
+    pipeline.chunk_transcription = MagicMock(return_value=[{"text": "segment"}])
+    pipeline.summarize_chunks = MagicMock(return_value=[{"text": "segment"}])
+    pipeline._prepare_batch_insert = MagicMock(
+        return_value=[({"text": "segment"}, [0.1])]
+    )
     pipeline.delete_existing_transcription_data = MagicMock(
         side_effect=RuntimeError("delete failed")
     )
+    pipeline.collection = MagicMock()
 
     with pytest.raises(RuntimeError, match="delete failed"):
         pipeline()
 
     pipeline.callback.fail.assert_not_called()
+
+
+def test_transcription_ingestion_skips_replacement_for_empty_prepared_chunks():
+    pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
+    pipeline.callback = MagicMock()
+    pipeline.tokens = []
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(
+            lecture_unit_id=1,
+            lecture_name="Lecture",
+            lecture_unit_name="Unit",
+            transcription=SimpleNamespace(language="en"),
+        )
+    )
+    pipeline.chunk_transcription = MagicMock(return_value=[{"text": "segment"}])
+    pipeline.summarize_chunks = MagicMock(return_value=[{"text": "segment"}])
+    pipeline._prepare_batch_insert = MagicMock(return_value=[])
+    pipeline._replace_prepared_chunks = MagicMock()
+
+    language, tokens = TranscriptionIngestionPipeline.__call__.__wrapped__(pipeline)
+
+    assert language == "en"
+    assert tokens == []
+    pipeline._replace_prepared_chunks.assert_not_called()
 
 
 def test_lecture_update_worker_reports_failure_without_lecture_unit_payload():

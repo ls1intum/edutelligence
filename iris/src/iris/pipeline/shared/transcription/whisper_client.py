@@ -7,13 +7,13 @@ the Whisper endpoint/key is loaded from llm_config.yml via LlmManager.
 
 import os
 import threading
-from concurrent.futures import as_completed
+from concurrent.futures import FIRST_COMPLETED, wait
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import ffmpeg  # type: ignore
 import requests
 
-from iris.common.cancellation import raise_if_cancelled, sleep_unless_cancelled
+from iris.common.cancellation import raise_if_cancelled
 from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.llm.external.whisper import AzureWhisperModel, OpenAIWhisperModel
@@ -22,6 +22,8 @@ from iris.pipeline.shared.transcription.audio_utils import split_audio_ffmpeg
 from iris.tracing import TracedThreadPoolExecutor, observe
 
 logger = get_logger(__name__)
+
+_CANCEL_POLL_INTERVAL_SECONDS = 0.2
 
 
 def _audio_duration(audio_path: str) -> float:
@@ -109,6 +111,24 @@ class WhisperClient:
             return 30 * (attempt + 1)
         return 10 * (attempt + 1)
 
+    def _wait_for_retry_or_cancellation(
+        self,
+        seconds: float,
+        worker_cancel_event: Optional[threading.Event],
+        cancel_event: Optional[threading.Event],
+        lecture_unit_id: Optional[int],
+    ) -> None:
+        remaining = seconds
+        while remaining > 0:
+            raise_if_cancelled(cancel_event, lecture_unit_id, "whisper retry backoff")
+            wait_time = min(_CANCEL_POLL_INTERVAL_SECONDS, remaining)
+            if worker_cancel_event is not None and worker_cancel_event.wait(wait_time):
+                raise_if_cancelled(
+                    cancel_event, lecture_unit_id, "whisper retry backoff"
+                )
+                raise InterruptedError("Transcription cancelled")
+            remaining -= wait_time
+
     @observe(name="Transcribe Audio")
     def transcribe(
         self,
@@ -160,7 +180,10 @@ class WhisperClient:
 
         chunks_done = 0
         worker_cancel_event = threading.Event()
-        with TracedThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        executor = TracedThreadPoolExecutor(max_workers=self.max_workers)
+        futures = {}
+        wait_for_shutdown = True
+        try:
             futures = {
                 executor.submit(
                     self._transcribe_chunk,
@@ -173,8 +196,19 @@ class WhisperClient:
                 ): i
                 for i, chunk_path in enumerate(chunk_paths)
             }
-            try:
-                for future in as_completed(futures):
+            pending = set(futures)
+            while pending:
+                raise_if_cancelled(
+                    cancel_event, lecture_unit_id, "during whisper transcription"
+                )
+                done, pending = wait(
+                    pending,
+                    timeout=_CANCEL_POLL_INTERVAL_SECONDS,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    continue
+                for future in done:
                     raise_if_cancelled(
                         cancel_event, lecture_unit_id, "during whisper transcription"
                     )
@@ -196,11 +230,19 @@ class WhisperClient:
                     chunks_done += 1
                     if on_chunk_complete is not None:
                         on_chunk_complete(chunks_done, total)
-            except Exception:
-                worker_cancel_event.set()
-                for f in futures:
-                    f.cancel()
-                raise
+        except IngestionCancelledException:
+            wait_for_shutdown = False
+            worker_cancel_event.set()
+            for future in futures:
+                future.cancel()
+            raise
+        except Exception:
+            worker_cancel_event.set()
+            for future in futures:
+                future.cancel()
+            raise
+        finally:
+            executor.shutdown(wait=wait_for_shutdown, cancel_futures=True)
 
         language_map = {"english": "en", "german": "de"}
         winner = (
@@ -284,8 +326,8 @@ class WhisperClient:
                             attempt + 1,
                             self.max_retries,
                         )
-                        sleep_unless_cancelled(
-                            wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                        self._wait_for_retry_or_cancellation(
+                            wait, worker_cancel_event, cancel_event, lecture_unit_id
                         )
                         continue
 
@@ -306,8 +348,8 @@ class WhisperClient:
                                 f"response after {self.max_retries} retries"
                             ) from json_err
                         wait = self._get_retry_wait_time(attempt)
-                        sleep_unless_cancelled(
-                            wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                        self._wait_for_retry_or_cancellation(
+                            wait, worker_cancel_event, cancel_event, lecture_unit_id
                         )
                         continue
                     raw_segments = body.get("segments", [])
@@ -373,8 +415,8 @@ class WhisperClient:
                         attempt + 1,
                         self.max_retries,
                     )
-                    sleep_unless_cancelled(
-                        wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                    self._wait_for_retry_or_cancellation(
+                        wait, worker_cancel_event, cancel_event, lecture_unit_id
                     )
 
                 except requests.Timeout as e:
@@ -403,8 +445,8 @@ class WhisperClient:
                         attempt + 1,
                         self.max_retries,
                     )
-                    sleep_unless_cancelled(
-                        wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                    self._wait_for_retry_or_cancellation(
+                        wait, worker_cancel_event, cancel_event, lecture_unit_id
                     )
 
                 except requests.ConnectionError as e:
@@ -433,8 +475,8 @@ class WhisperClient:
                         attempt + 1,
                         self.max_retries,
                     )
-                    sleep_unless_cancelled(
-                        wait, cancel_event, lecture_unit_id, "whisper retry backoff"
+                    self._wait_for_retry_or_cancellation(
+                        wait, worker_cancel_event, cancel_event, lecture_unit_id
                     )
 
                 except requests.RequestException as e:
