@@ -5,7 +5,6 @@ from weaviate.classes.query import Filter
 
 from iris.common.cancellation import raise_if_cancelled
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from iris.ingestion.ingestion_job_registry import ingestion_job_owner_guard
 from iris.llm import LlmRequestHandler
 from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
@@ -112,70 +111,61 @@ class LectureUnitPipeline(SubPipeline):
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
         with batch_update_lock:
-            with ingestion_job_owner_guard(
-                base_url=lecture_unit.base_url,
-                course_id=lecture_unit.course_id,
-                lecture_id=lecture_unit.lecture_id,
-                lecture_unit_id=lecture_unit.lecture_unit_id,
-                cancel_event=cancel_event,
-                stage="lecture unit replacement",
-            ):
-                latest_units = self.lecture_unit_collection.query.fetch_objects(
-                    filters=lecture_unit_filter, limit=1
-                ).objects
-                latest_properties = latest_units[0].properties if latest_units else {}
+            raise_if_cancelled(
+                cancel_event, lecture_unit.lecture_unit_id, "lecture unit replacement"
+            )
+            latest_units = self.lecture_unit_collection.query.fetch_objects(
+                filters=lecture_unit_filter, limit=1
+            ).objects
+            latest_properties = latest_units[0].properties if latest_units else {}
 
-                def metadata_value(property_name: str, incoming_value):
-                    """Keep metadata updated while this expensive re-ingestion was running."""
-                    initial_value = initial_properties.get(property_name)
-                    latest_value = latest_properties.get(property_name)
-                    return (
-                        latest_value
-                        if latest_value != initial_value
-                        else incoming_value
-                    )
+            def metadata_value(property_name: str, incoming_value):
+                """Keep metadata updated while this expensive re-ingestion was running."""
+                initial_value = initial_properties.get(property_name)
+                latest_value = latest_properties.get(property_name)
+                return latest_value if latest_value != initial_value else incoming_value
 
-                # Commit phase: all expensive work already succeeded, so keep the
-                # replacement window tight and free of extra fallible steps.
-                self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
-                self.lecture_unit_collection.data.insert(
-                    properties={
-                        LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
-                        LectureUnitSchema.COURSE_NAME.value: metadata_value(
-                            LectureUnitSchema.COURSE_NAME.value,
-                            lecture_unit.course_name,
-                        ),
-                        LectureUnitSchema.COURSE_DESCRIPTION.value: metadata_value(
-                            LectureUnitSchema.COURSE_DESCRIPTION.value,
-                            lecture_unit.course_description,
-                        ),
-                        LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
-                        LectureUnitSchema.LECTURE_NAME.value: metadata_value(
-                            LectureUnitSchema.LECTURE_NAME.value,
-                            lecture_unit.lecture_name,
-                        ),
-                        LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
-                        LectureUnitSchema.LECTURE_UNIT_NAME.value: metadata_value(
-                            LectureUnitSchema.LECTURE_UNIT_NAME.value,
-                            lecture_unit.lecture_unit_name,
-                        ),
-                        LectureUnitSchema.LECTURE_UNIT_LINK.value: metadata_value(
-                            LectureUnitSchema.LECTURE_UNIT_LINK.value,
-                            lecture_unit.lecture_unit_link,
-                        ),
-                        LectureUnitSchema.VIDEO_LINK.value: metadata_value(
-                            LectureUnitSchema.VIDEO_LINK.value, lecture_unit.video_link
-                        ),
-                        LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
-                        LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
-                        LectureUnitSchema.RELEASE_DATE.value: latest_properties.get(
-                            LectureUnitSchema.RELEASE_DATE.value
-                        ),
-                        LectureUnitSchema.SLIDE_VISIBILITY.value: latest_properties.get(
-                            LectureUnitSchema.SLIDE_VISIBILITY.value, "{}"
-                        ),
-                    },
-                    vector=embedding,
-                )
+            # Commit phase: all expensive work already succeeded, so keep the
+            # replacement window tight and free of extra fallible steps.
+            self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
+            self.lecture_unit_collection.data.insert(
+                properties={
+                    LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
+                    LectureUnitSchema.COURSE_NAME.value: metadata_value(
+                        LectureUnitSchema.COURSE_NAME.value,
+                        lecture_unit.course_name,
+                    ),
+                    LectureUnitSchema.COURSE_DESCRIPTION.value: metadata_value(
+                        LectureUnitSchema.COURSE_DESCRIPTION.value,
+                        lecture_unit.course_description,
+                    ),
+                    LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
+                    LectureUnitSchema.LECTURE_NAME.value: metadata_value(
+                        LectureUnitSchema.LECTURE_NAME.value,
+                        lecture_unit.lecture_name,
+                    ),
+                    LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value: metadata_value(
+                        LectureUnitSchema.LECTURE_UNIT_NAME.value,
+                        lecture_unit.lecture_unit_name,
+                    ),
+                    LectureUnitSchema.LECTURE_UNIT_LINK.value: metadata_value(
+                        LectureUnitSchema.LECTURE_UNIT_LINK.value,
+                        lecture_unit.lecture_unit_link,
+                    ),
+                    LectureUnitSchema.VIDEO_LINK.value: metadata_value(
+                        LectureUnitSchema.VIDEO_LINK.value, lecture_unit.video_link
+                    ),
+                    LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
+                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
+                    LectureUnitSchema.RELEASE_DATE.value: latest_properties.get(
+                        LectureUnitSchema.RELEASE_DATE.value
+                    ),
+                    LectureUnitSchema.SLIDE_VISIBILITY.value: latest_properties.get(
+                        LectureUnitSchema.SLIDE_VISIBILITY.value, "{}"
+                    ),
+                },
+                vector=embedding,
+            )
 
         return tokens_unit_summary + token_unit_segment_summary

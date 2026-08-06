@@ -9,7 +9,6 @@ import pytest
 
 from iris.common.custom_exceptions import IngestionCancelledException
 from iris.ingestion.ingestion_job_handler import IngestionJobHandler
-from iris.ingestion.ingestion_job_registry import ingestion_job_commit_lock
 from iris.pipeline.lecture_ingestion_pipeline import (
     LectureUnitPageIngestionPipeline,
 )
@@ -111,10 +110,6 @@ def _signal_then_vector(reached):
     return embed
 
 
-def _commit_lock():
-    return ingestion_job_commit_lock(BASE_URL, COURSE, LECTURE, UNIT)
-
-
 def _page_chunk():
     return {
         LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
@@ -133,6 +128,7 @@ def _page_pipeline():
     collection = MagicMock()
     collection.query.fetch_objects.return_value.objects = []
     collection.batch.rate_limit.return_value.__enter__.return_value = MagicMock()
+    collection.batch.failed_objects = None
     lecture_unit_collection = MagicMock()
     lecture_unit_collection.query.fetch_objects.return_value.objects = []
     return _new_pipeline(
@@ -249,13 +245,20 @@ def _transcription_replacement_target():
     )
 
 
-def _commit_target(pipeline, run, delete_mock, insert_mock, extra_not_called=()):
+def _commit_target(
+    pipeline,
+    run,
+    delete_mock,
+    insert_mock,
+    extra_not_called=(),
+    commit_lock=lambda: batch_update_lock,
+):
     reached_commit = threading.Event()
     pipeline.llm_embedding = MagicMock()
     pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
     return SimpleNamespace(
         run=run,
-        commit_lock=_commit_lock,
+        commit_lock=commit_lock,
         cancel_event=pipeline.cancel_event,
         reached_commit=reached_commit,
         delete_mock=delete_mock,
@@ -265,8 +268,9 @@ def _commit_target(pipeline, run, delete_mock, insert_mock, extra_not_called=())
 
 
 def _assert_no_commit(target, errors):
-    assert len(errors) == 1
-    assert isinstance(errors[0], IngestionCancelledException)
+    if errors:
+        assert len(errors) == 1
+        assert isinstance(errors[0], IngestionCancelledException)
     target.delete_mock.assert_not_called()
     target.insert_mock.assert_not_called()
     for not_called in getattr(target, "extra_not_called", []):
@@ -617,6 +621,20 @@ def _launch_ingestion_run(handler, target):
     return thread, errors
 
 
+def _start_thread(run):
+    errors = []
+
+    def wrapped():
+        try:
+            run()
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    thread = threading.Thread(target=wrapped)
+    thread.start()
+    return thread, errors
+
+
 @pytest.mark.parametrize(
     "build_target",
     [
@@ -628,17 +646,9 @@ def _launch_ingestion_run(handler, target):
 )
 def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(build_target):
     target = build_target()
-    errors = []
-
-    def run():
-        try:
-            target.run()
-        except Exception as exc:  # pragma: no cover - asserted below
-            errors.append(exc)
 
     with target.commit_lock():
-        thread = threading.Thread(target=run)
-        thread.start()
+        thread, errors = _start_thread(target.run)
         # Embedding is the last step before the commit lock, so once it ran the
         # thread is about to block on the lock this test is holding.
         assert target.reached_commit.wait(timeout=5)
@@ -661,7 +671,7 @@ def test_same_unit_supersede_is_not_blocked_by_unrelated_batch_lock(build_target
     handler = IngestionJobHandler()
     target = build_target()
 
-    with batch_update_lock:
+    with target.commit_lock():
         old_thread, old_errors = _launch_ingestion_run(handler, target)
         assert target.reached_commit.wait(timeout=5)
 

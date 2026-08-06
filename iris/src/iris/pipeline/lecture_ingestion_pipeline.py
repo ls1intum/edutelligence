@@ -3,7 +3,6 @@ import json
 import os
 import re
 import tempfile
-import threading
 from datetime import datetime
 from threading import Event
 from typing import Optional
@@ -23,7 +22,6 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from iris.domain.variant.variant import Variant
-from iris.ingestion.ingestion_job_registry import ingestion_job_owner_guard
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -37,6 +35,7 @@ from ..llm import (
 )
 from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
+from ..vector_database.database import batch_update_lock
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
@@ -49,8 +48,6 @@ from ..web.status import ingestion_status_callback
 from . import Pipeline
 
 logger = get_logger(__name__)
-
-batch_update_lock = threading.Lock()
 
 
 _UNICODE_BULLETS = (
@@ -413,22 +410,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
                     self._hidden_until_by_page.get(page_number)
                 )
-            with ingestion_job_owner_guard(
-                base_url=self.dto.settings.artemis_base_url,
-                course_id=self.dto.lecture_unit.course_id,
-                lecture_id=self.dto.lecture_unit.lecture_id,
-                lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
-                cancel_event=cancel_event,
-                stage="lecture page replacement",
+            raise_if_cancelled(
+                cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page replacement",
+            )
+            if not self.delete_lecture_unit(
+                self.dto.lecture_unit.course_id,
+                self.dto.lecture_unit.lecture_id,
+                self.dto.lecture_unit.lecture_unit_id,
+                self.dto.settings.artemis_base_url,
             ):
-                if not self.delete_lecture_unit(
-                    self.dto.lecture_unit.course_id,
-                    self.dto.lecture_unit.lecture_id,
-                    self.dto.lecture_unit.lecture_unit_id,
-                    self.dto.settings.artemis_base_url,
-                ):
-                    raise RuntimeError("Error while removing old slides")
-                self._insert_prepared_chunks(prepared_chunks)
+                raise RuntimeError("Error while removing old slides")
+            self._insert_prepared_chunks(prepared_chunks)
 
     def chunk_data(
         self,

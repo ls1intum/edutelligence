@@ -19,7 +19,6 @@ from iris.domain.data.metrics.transcription_dto import (
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
-from iris.ingestion.ingestion_job_registry import ingestion_job_owner_guard
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -104,7 +103,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
             prepared_chunks = self._prepare_batch_insert(chunks)
             self.callback.update()
-            if prepared_chunks:
+            if lecture_unit is not None:
                 self._replace_prepared_chunks(lecture_unit, prepared_chunks)
             self.callback.update()
 
@@ -192,16 +191,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
     def _replace_prepared_chunks(self, lecture_unit, prepared_chunks):
         cancel_event = getattr(self, "cancel_event", None)
         with batch_update_lock:
-            with ingestion_job_owner_guard(
-                base_url=self.dto.settings.artemis_base_url,
-                course_id=lecture_unit.course_id,
-                lecture_id=lecture_unit.lecture_id,
-                lecture_unit_id=lecture_unit.lecture_unit_id,
-                cancel_event=cancel_event,
-                stage="transcription replacement",
-            ):
-                self.delete_existing_transcription_data(lecture_unit)
-                self._insert_prepared_chunks(prepared_chunks)
+            raise_if_cancelled(
+                cancel_event,
+                lecture_unit.lecture_unit_id,
+                "transcription replacement",
+            )
+            self.delete_existing_transcription_data(lecture_unit)
+            self._insert_prepared_chunks(prepared_chunks)
 
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO

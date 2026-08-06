@@ -18,7 +18,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.domain.variant.abstract_variant import find_variant
 from iris.domain.variant.variant import Dep
-from iris.ingestion.ingestion_job_registry import ingestion_job_owner_guard
+from iris.ingestion.ingestion_job_handler import IngestionJobHandler
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -31,6 +31,8 @@ from iris.vector_database.database import VectorDatabase
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
 logger = get_logger(__name__)
+
+_job_state = IngestionJobHandler()
 
 
 def _translate_transcription_exception_to_error_code(
@@ -500,18 +502,26 @@ class LectureIngestionUpdatePipeline(Pipeline):
             lecture_unit=lecture_unit_dto,
             initial_properties=initial_properties,
         )
-        with ingestion_job_owner_guard(
-            base_url=self.dto.settings.artemis_base_url,
-            course_id=self.dto.lecture_unit.course_id,
-            lecture_id=self.dto.lecture_unit.lecture_id,
-            lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
-            cancel_event=cancel_event,
-            stage="terminal callback",
+        raise_if_cancelled(
+            cancel_event,
+            self.dto.lecture_unit.lecture_unit_id,
+            "terminal callback",
+        )
+        if cancel_event is not None and not _job_state.is_current_job(
+            self.dto.settings.artemis_base_url,
+            self.dto.lecture_unit.course_id,
+            self.dto.lecture_unit.lecture_id,
+            self.dto.lecture_unit.lecture_unit_id,
+            cancel_event,
         ):
-            callback.finish(
-                display_page_numbers=self.dto.lecture_unit.display_page_numbers,
-                tokens=tokens,
+            raise IngestionCancelledException(
+                self.dto.lecture_unit.lecture_unit_id,
+                "Cancelled during terminal callback",
             )
+        callback.finish(
+            display_page_numbers=self.dto.lecture_unit.display_page_numbers,
+            tokens=tokens,
+        )
 
     # ── Checkpoint helpers ───────────────────────────────────────────────
 

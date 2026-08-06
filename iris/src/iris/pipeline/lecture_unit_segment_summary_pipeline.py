@@ -10,7 +10,6 @@ from weaviate.client import WeaviateClient
 from iris.common.cancellation import raise_if_cancelled
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from iris.ingestion.ingestion_job_registry import ingestion_job_owner_guard
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -22,6 +21,7 @@ from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
+from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -269,14 +269,12 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             ).equal(self.lecture_unit_dto.base_url)
 
         embedding = self.llm_embedding.embed(summary)
-        with ingestion_job_owner_guard(
-            base_url=self.lecture_unit_dto.base_url,
-            course_id=self.lecture_unit_dto.course_id,
-            lecture_id=self.lecture_unit_dto.lecture_id,
-            lecture_unit_id=self.lecture_unit_dto.lecture_unit_id,
-            cancel_event=cancel_event,
-            stage="lecture unit segment write",
-        ):
+        with batch_update_lock:
+            raise_if_cancelled(
+                cancel_event,
+                self.lecture_unit_dto.lecture_unit_id,
+                "lecture unit segment write",
+            )
             lectures = self.lecture_unit_segment_collection.query.fetch_objects(
                 filters=lecture_filter, limit=1
             ).objects

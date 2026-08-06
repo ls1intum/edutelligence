@@ -2,14 +2,10 @@ import threading
 from threading import Event, Thread
 
 from iris.common.logging_config import get_logger
-from iris.ingestion.ingestion_job_registry import (
-    clear_current_job_cancel_event,
-    current_job_cancel_event,
-    ingestion_job_commit_lock,
-    set_current_job_cancel_event,
-)
 
 logger = get_logger(__name__)
+
+IngestionJobKey = tuple[str, int, int, int]
 
 
 class IngestionJobHandler:
@@ -19,9 +15,29 @@ class IngestionJobHandler:
     superseded via its cancellation event.
     """
 
+    _jobs_lock = threading.Lock()
+    _running_jobs: dict[IngestionJobKey, Event] = {}
+
     def __init__(self):
-        self._lock = threading.Lock()
         self._superseded_jobs = 0
+
+    @staticmethod
+    def _job_key(
+        base_url: str, course_id: int, lecture_id: int, lecture_unit_id: int
+    ) -> IngestionJobKey:
+        return (base_url, course_id, lecture_id, lecture_unit_id)
+
+    def is_current_job(
+        self,
+        base_url: str,
+        course_id: int,
+        lecture_id: int,
+        lecture_unit_id: int,
+        cancel_event: Event,
+    ) -> bool:
+        key = self._job_key(base_url, course_id, lecture_id, lecture_unit_id)
+        with self._jobs_lock:
+            return self._running_jobs.get(key) is cancel_event
 
     def create_cancellation_event(self) -> Event:
         return Event()
@@ -35,24 +51,14 @@ class IngestionJobHandler:
         lecture_unit_id: int,
         cancel_event: Event,
     ):
-        with ingestion_job_commit_lock(
-            base_url, course_id, lecture_id, lecture_unit_id
-        ):
-            with self._lock:
-                previous_cancel_event = current_job_cancel_event(
-                    base_url, course_id, lecture_id, lecture_unit_id
-                )
-                if previous_cancel_event is not None:
-                    previous_cancel_event.set()
-                    self._superseded_jobs += 1
-                set_current_job_cancel_event(
-                    base_url,
-                    course_id,
-                    lecture_id,
-                    lecture_unit_id,
-                    cancel_event,
-                )
-                process.start()
+        key = self._job_key(base_url, course_id, lecture_id, lecture_unit_id)
+        with self._jobs_lock:
+            previous_cancel_event = self._running_jobs.get(key)
+            if previous_cancel_event is not None:
+                previous_cancel_event.set()
+                self._superseded_jobs += 1
+            self._running_jobs[key] = cancel_event
+            process.start()
         if previous_cancel_event is not None:
             logger.info(
                 "Superseding running ingestion job | course=%d lecture=%d unit=%d total_superseded=%d",
@@ -77,13 +83,7 @@ class IngestionJobHandler:
         lecture_unit_id: int,
         cancel_event: Event,
     ) -> None:
-        with ingestion_job_commit_lock(
-            base_url, course_id, lecture_id, lecture_unit_id
-        ):
-            clear_current_job_cancel_event(
-                base_url,
-                course_id,
-                lecture_id,
-                lecture_unit_id,
-                cancel_event,
-            )
+        key = self._job_key(base_url, course_id, lecture_id, lecture_unit_id)
+        with self._jobs_lock:
+            if self._running_jobs.get(key) is cancel_event:
+                del self._running_jobs[key]
