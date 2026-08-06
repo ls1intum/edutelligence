@@ -16,6 +16,9 @@ from iris.pipeline.lecture_ingestion_pipeline import (
 from iris.pipeline.lecture_unit_pipeline import (
     LectureUnitPipeline,
 )
+from iris.pipeline.lecture_unit_segment_summary_pipeline import (
+    LectureUnitSegmentSummaryPipeline,
+)
 from iris.pipeline.shared.transcription.heavy_pipeline import HeavyTranscriptionPipeline
 from iris.pipeline.shared.transcription.light_pipeline import LightTranscriptionPipeline
 from iris.pipeline.shared.transcription.slide_turn_detector import SlideTurnDetector
@@ -29,6 +32,9 @@ from iris.vector_database.lecture_transcription_schema import (
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
+
+BASE_URL = "https://artemis.example"
+COURSE, LECTURE, UNIT = 1, 2, 3
 
 
 def _cancelled():
@@ -90,6 +96,118 @@ def _signal_then_vector(reached):
     return embed
 
 
+def _commit_lock():
+    return ingestion_job_commit_lock(BASE_URL, COURSE, LECTURE, UNIT)
+
+
+def _page_chunk():
+    return {
+        LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
+        LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: "page",
+    }
+
+
+def _transcription_chunk():
+    return {
+        LectureTranscriptionSchema.SEGMENT_TEXT.value: "segment",
+        "page_number": 1,
+    }
+
+
+def _page_pipeline():
+    pipeline = LectureUnitPageIngestionPipeline.__new__(
+        LectureUnitPageIngestionPipeline
+    )
+    pipeline.cancel_event = threading.Event()
+    pipeline.callback = MagicMock()
+    pipeline.tokens = []
+    pipeline.course_language = "en"
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(
+            lecture_unit_id=UNIT,
+            course_id=COURSE,
+            lecture_id=LECTURE,
+            lecture_unit_name="Unit",
+            course_name="Course",
+            pdf_file_base64="pdf",
+        ),
+        settings=SimpleNamespace(artemis_base_url=BASE_URL),
+    )
+    pipeline.check_if_attachment_needs_update = MagicMock(return_value=True)
+    pipeline.chunk_data = MagicMock(return_value=[_page_chunk()])
+    pipeline.delete_lecture_unit = MagicMock()
+    pipeline.collection = MagicMock()
+    pipeline.collection.query.fetch_objects.return_value.objects = []
+    pipeline.collection.batch.rate_limit.return_value.__enter__.return_value = (
+        MagicMock()
+    )
+    pipeline.lecture_unit_collection = MagicMock()
+    pipeline.lecture_unit_collection.query.fetch_objects.return_value.objects = []
+    pipeline.get_course_language = MagicMock(return_value="en")
+    return pipeline
+
+
+def _transcription_pipeline():
+    pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
+    pipeline.cancel_event = threading.Event()
+    pipeline.callback = MagicMock()
+    pipeline.tokens = []
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(
+            course_id=COURSE,
+            lecture_id=LECTURE,
+            lecture_unit_id=UNIT,
+            lecture_name="Lecture",
+            lecture_unit_name="Unit",
+            transcription=SimpleNamespace(language="en"),
+        ),
+        settings=SimpleNamespace(artemis_base_url=BASE_URL),
+    )
+    pipeline.chunk_transcription = MagicMock(return_value=[_transcription_chunk()])
+    pipeline.summarize_chunks = MagicMock(return_value=[_transcription_chunk()])
+    pipeline.delete_existing_transcription_data = MagicMock()
+    pipeline.collection = MagicMock()
+    return pipeline
+
+
+def _segment_summary_pipeline():
+    pipeline = LectureUnitSegmentSummaryPipeline.__new__(
+        LectureUnitSegmentSummaryPipeline
+    )
+    pipeline.cancel_event = threading.Event()
+    pipeline.callback = MagicMock()
+    pipeline.tokens = []
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=COURSE,
+        lecture_id=LECTURE,
+        lecture_unit_id=UNIT,
+        lecture_name="Lecture",
+        course_name="Course",
+        base_url=BASE_URL,
+    )
+    pipeline.lecture_unit_segment_collection = MagicMock()
+    pipeline.lecture_unit_segment_collection.query.fetch_objects.return_value.objects = (
+        []
+    )
+    # One slide, so the summary loop runs exactly one write.
+    slide = SimpleNamespace(
+        properties={
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
+            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: 1,
+        }
+    )
+    pipeline.lecture_unit_page_chunk_collection = MagicMock()
+    pipeline.lecture_unit_page_chunk_collection.query.fetch_objects.return_value.objects = [
+        slide
+    ]
+    pipeline.lecture_transcription_collection = MagicMock()
+    pipeline.lecture_transcription_collection.query.fetch_objects.return_value.objects = (
+        []
+    )
+    pipeline.llm_embedding = MagicMock()
+    return pipeline
+
+
 def test_page_chunking_stops_after_first_page_vision_result():
     pipeline = LectureUnitPageIngestionPipeline.__new__(
         LectureUnitPageIngestionPipeline
@@ -128,45 +246,11 @@ def test_page_chunking_stops_after_first_page_vision_result():
 
 
 def test_page_replacement_is_skipped_after_cancellation_during_embedding():
-    pipeline = LectureUnitPageIngestionPipeline.__new__(
-        LectureUnitPageIngestionPipeline
-    )
-    pipeline.cancel_event = threading.Event()
-    pipeline.callback = MagicMock()
-    pipeline.tokens = []
-    pipeline.dto = SimpleNamespace(
-        lecture_unit=SimpleNamespace(
-            lecture_unit_id=3,
-            course_id=1,
-            lecture_id=2,
-            lecture_unit_name="Unit",
-            course_name="Course",
-            pdf_file_base64="pdf",
-        ),
-        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
-    )
-    pipeline.check_if_attachment_needs_update = MagicMock(return_value=True)
-    pipeline.chunk_data = MagicMock(
-        return_value=[
-            {
-                LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
-                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: "page",
-            }
-        ]
-    )
+    pipeline = _page_pipeline()
     pipeline.llm_embedding = MagicMock()
     pipeline.llm_embedding.embed.side_effect = lambda _text: _cancel_then_vector(
         pipeline.cancel_event
     )
-    pipeline.delete_lecture_unit = MagicMock()
-    pipeline.collection = MagicMock()
-    pipeline.collection.query.fetch_objects.return_value.objects = []
-    pipeline.collection.batch.rate_limit.return_value.__enter__.return_value = (
-        MagicMock()
-    )
-    pipeline.lecture_unit_collection = MagicMock()
-    pipeline.lecture_unit_collection.query.fetch_objects.return_value.objects = []
-    pipeline.get_course_language = MagicMock(return_value="en")
 
     with (
         patch(
@@ -182,38 +266,10 @@ def test_page_replacement_is_skipped_after_cancellation_during_embedding():
 
 
 def test_transcription_replacement_is_skipped_after_cancellation_during_embedding():
-    pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
-    pipeline.cancel_event = threading.Event()
-    pipeline.callback = MagicMock()
-    pipeline.tokens = []
-    pipeline.dto = SimpleNamespace(
-        lecture_unit=SimpleNamespace(
-            course_id=1,
-            lecture_id=2,
-            lecture_unit_id=3,
-            lecture_name="Lecture",
-            lecture_unit_name="Unit",
-            transcription=SimpleNamespace(language="en"),
-        ),
-        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
-    )
-    pipeline.chunk_transcription = MagicMock(
-        return_value=[
-            {LectureTranscriptionSchema.SEGMENT_TEXT.value: "segment", "page_number": 1}
-        ]
-    )
-    pipeline.summarize_chunks = MagicMock(
-        return_value=[
-            {LectureTranscriptionSchema.SEGMENT_TEXT.value: "segment", "page_number": 1}
-        ]
-    )
+    pipeline = _transcription_pipeline()
     pipeline.llm_embedding = MagicMock()
     pipeline.llm_embedding.embed.side_effect = lambda _text: _cancel_then_vector(
         pipeline.cancel_event
-    )
-    pipeline.delete_existing_transcription_data = MagicMock()
-    pipeline.collection = SimpleNamespace(
-        batch=SimpleNamespace(dynamic=MagicMock(return_value=MagicMock()))
     )
 
     with pytest.raises(IngestionCancelledException):
@@ -428,38 +484,7 @@ def test_slide_turn_detector_stops_before_vision_query():
 
 def _page_commit_target():
     """Page ingestion run stubbed down to the embedding and commit phases."""
-    pipeline = LectureUnitPageIngestionPipeline.__new__(
-        LectureUnitPageIngestionPipeline
-    )
-    pipeline.cancel_event = threading.Event()
-    pipeline.callback = MagicMock()
-    pipeline.tokens = []
-    pipeline.course_language = "en"
-    pipeline.dto = SimpleNamespace(
-        lecture_unit=SimpleNamespace(
-            lecture_unit_id=3,
-            course_id=1,
-            lecture_id=2,
-            lecture_unit_name="Unit",
-            course_name="Course",
-            pdf_file_base64="pdf",
-        ),
-        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
-    )
-    pipeline.check_if_attachment_needs_update = MagicMock(return_value=True)
-    pipeline.chunk_data = MagicMock(
-        return_value=[
-            {
-                LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
-                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: "page",
-            }
-        ]
-    )
-    pipeline.delete_lecture_unit = MagicMock()
-    pipeline.collection = MagicMock()
-    pipeline.collection.query.fetch_objects.return_value.objects = []
-    pipeline.lecture_unit_collection = MagicMock()
-    pipeline.lecture_unit_collection.query.fetch_objects.return_value.objects = []
+    pipeline = _page_pipeline()
 
     reached_commit = threading.Event()
     pipeline.llm_embedding = MagicMock()
@@ -477,9 +502,7 @@ def _page_commit_target():
 
     return SimpleNamespace(
         run=run,
-        commit_lock=lambda: ingestion_job_commit_lock(
-            "https://artemis.example", 1, 2, 3
-        ),
+        commit_lock=_commit_lock,
         cancel_event=pipeline.cancel_event,
         reached_commit=reached_commit,
         delete_mock=pipeline.delete_lecture_unit,
@@ -489,28 +512,7 @@ def _page_commit_target():
 
 def _transcription_commit_target():
     """Transcription ingestion run stubbed down to embedding and commit."""
-    pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
-    pipeline.cancel_event = threading.Event()
-    pipeline.callback = MagicMock()
-    pipeline.tokens = []
-    pipeline.dto = SimpleNamespace(
-        lecture_unit=SimpleNamespace(
-            course_id=1,
-            lecture_id=2,
-            lecture_unit_id=3,
-            lecture_name="Lecture",
-            lecture_unit_name="Unit",
-            transcription=SimpleNamespace(language="en"),
-        ),
-        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
-    )
-    chunks = [
-        {LectureTranscriptionSchema.SEGMENT_TEXT.value: "segment", "page_number": 1}
-    ]
-    pipeline.chunk_transcription = MagicMock(return_value=chunks)
-    pipeline.summarize_chunks = MagicMock(return_value=chunks)
-    pipeline.delete_existing_transcription_data = MagicMock()
-    pipeline.collection = MagicMock()
+    pipeline = _transcription_pipeline()
 
     reached_commit = threading.Event()
     pipeline.llm_embedding = MagicMock()
@@ -521,9 +523,7 @@ def _transcription_commit_target():
 
     return SimpleNamespace(
         run=run,
-        commit_lock=lambda: ingestion_job_commit_lock(
-            "https://artemis.example", 1, 2, 3
-        ),
+        commit_lock=_commit_lock,
         cancel_event=pipeline.cancel_event,
         reached_commit=reached_commit,
         delete_mock=pipeline.delete_existing_transcription_data,
@@ -544,10 +544,10 @@ def _lecture_unit_commit_target():
     pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
 
     lecture_unit = SimpleNamespace(
-        course_id=1,
-        lecture_id=2,
-        lecture_unit_id=3,
-        base_url="https://artemis.example",
+        course_id=COURSE,
+        lecture_id=LECTURE,
+        lecture_unit_id=UNIT,
+        base_url=BASE_URL,
         lecture_unit_summary="summary",
     )
 
@@ -568,9 +568,7 @@ def _lecture_unit_commit_target():
 
     return SimpleNamespace(
         run=run,
-        commit_lock=lambda: ingestion_job_commit_lock(
-            "https://artemis.example", 1, 2, 3
-        ),
+        commit_lock=_commit_lock,
         cancel_event=pipeline.cancel_event,
         reached_commit=reached_commit,
         delete_mock=pipeline.lecture_unit_collection.data.delete_many,
@@ -579,17 +577,37 @@ def _lecture_unit_commit_target():
     )
 
 
+def _segment_summary_commit_target():
+    pipeline = _segment_summary_pipeline()
+    reached_commit = threading.Event()
+    pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
+
+    def run():
+        # The summary itself needs an LLM round trip; only the write matters here.
+        with patch.object(pipeline, "_create_summary", return_value="summary"):
+            LectureUnitSegmentSummaryPipeline.__call__.__wrapped__(pipeline)
+
+    return SimpleNamespace(
+        run=run,
+        commit_lock=_commit_lock,
+        cancel_event=pipeline.cancel_event,
+        reached_commit=reached_commit,
+        delete_mock=pipeline.lecture_unit_segment_collection.query.fetch_objects,
+        insert_mock=pipeline.lecture_unit_segment_collection.data.insert,
+        extra_not_called=[pipeline.lecture_unit_segment_collection.data.update],
+    )
+
+
 @pytest.mark.parametrize(
-    "build_target, extra_not_called",
+    "build_target",
     [
-        (_page_commit_target, []),
-        (_transcription_commit_target, []),
-        (_lecture_unit_commit_target, ["query.fetch_objects"]),
+        _page_commit_target,
+        _transcription_commit_target,
+        _lecture_unit_commit_target,
+        _segment_summary_commit_target,
     ],
 )
-def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(
-    build_target, extra_not_called
-):
+def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(build_target):
     target = build_target()
     errors = []
 
@@ -613,6 +631,5 @@ def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(
     assert isinstance(errors[0], IngestionCancelledException)
     target.delete_mock.assert_not_called()
     target.insert_mock.assert_not_called()
-    for not_called in extra_not_called:
-        if not_called == "query.fetch_objects":
-            target.extra_not_called[0].assert_not_called()
+    for not_called in getattr(target, "extra_not_called", []):
+        not_called.assert_not_called()

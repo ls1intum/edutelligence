@@ -21,17 +21,10 @@ class IngestionJobHandler:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._latest = {}
         self._superseded_jobs = 0
 
     def create_cancellation_event(self) -> Event:
         return Event()
-
-    @staticmethod
-    def _key(
-        base_url: str, course_id: int, lecture_id: int, lecture_unit_id: int
-    ) -> tuple[str, int, int, int]:
-        return (base_url, course_id, lecture_id, lecture_unit_id)
 
     def add_job(
         self,
@@ -42,7 +35,6 @@ class IngestionJobHandler:
         lecture_unit_id: int,
         cancel_event: Event,
     ):
-        key = self._key(base_url, course_id, lecture_id, lecture_unit_id)
         with ingestion_job_commit_lock(
             base_url, course_id, lecture_id, lecture_unit_id
         ):
@@ -60,7 +52,6 @@ class IngestionJobHandler:
                     lecture_unit_id,
                     cancel_event,
                 )
-                self._latest[key] = cancel_event
                 process.start()
         if previous_cancel_event is not None:
             logger.info(
@@ -86,17 +77,13 @@ class IngestionJobHandler:
         lecture_unit_id: int,
         cancel_event: Event,
     ) -> None:
-        key = self._key(base_url, course_id, lecture_id, lecture_unit_id)
         with ingestion_job_commit_lock(
             base_url, course_id, lecture_id, lecture_unit_id
         ):
-            with self._lock:
-                if self._latest.get(key) is cancel_event:
-                    del self._latest[key]
-                clear_current_job_cancel_event(
-                    base_url,
-                    course_id,
-                    lecture_id,
-                    lecture_unit_id,
-                    cancel_event,
-                )
+            clear_current_job_cancel_event(
+                base_url,
+                course_id,
+                lecture_id,
+                lecture_unit_id,
+                cancel_event,
+            )

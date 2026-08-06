@@ -15,7 +15,6 @@ def _handler() -> IngestionJobHandler:
 
 
 def _submit(handler, body, unit=UNIT):
-    """Start a job and return its cancellation event and thread."""
     cancel_event = handler.create_cancellation_event()
 
     def run():
@@ -29,17 +28,20 @@ def _submit(handler, body, unit=UNIT):
     return cancel_event, thread
 
 
+def _blocking_body(started, release):
+    def body(unused_cancel_event):
+        started.set()
+        release.wait(timeout=5)
+
+    return body
+
+
 def test_new_request_runs_instead_of_being_dropped():
-    """The core bug: the superseding request must actually execute."""
-    handler = _handler()
+    handler = IngestionJobHandler()
     first_running, release_first = threading.Event(), threading.Event()
     second_ran = threading.Event()
 
-    def first(unused_cancel_event):
-        first_running.set()
-        release_first.wait(timeout=5)
-
-    _submit(handler, first)
+    _submit(handler, _blocking_body(first_running, release_first))
     assert first_running.wait(timeout=5)
 
     _submit(handler, lambda unused_cancel_event: second_ran.set())
@@ -49,14 +51,11 @@ def test_new_request_runs_instead_of_being_dropped():
 
 
 def test_superseding_request_cancels_the_previous_job():
-    handler = _handler()
+    handler = IngestionJobHandler()
     first_running, release_first = threading.Event(), threading.Event()
-
-    def first(unused_cancel_event):
-        first_running.set()
-        release_first.wait(timeout=5)
-
-    first_cancel, first_thread = _submit(handler, first)
+    first_cancel, first_thread = _submit(
+        handler, _blocking_body(first_running, release_first)
+    )
     assert first_running.wait(timeout=5)
     _submit(handler, lambda unused_cancel_event: None)
 
@@ -67,8 +66,7 @@ def test_superseding_request_cancels_the_previous_job():
 
 
 def test_completed_job_is_not_superseded_by_a_later_request():
-    """A finished job must leave no entry behind that a later request cancels."""
-    handler = _handler()
+    handler = IngestionJobHandler()
     finished = threading.Event()
 
     first_cancel, first_thread = _submit(
@@ -86,23 +84,13 @@ def test_completed_job_is_not_superseded_by_a_later_request():
 
 
 def test_same_unit_jobs_can_overlap_during_preprocessing():
-    """Same-unit requests should not serialize whole worker threads."""
-    handler = _handler()
+    handler = IngestionJobHandler()
     first_running = threading.Event()
     second_running = threading.Event()
     release_both = threading.Event()
-
-    def first(unused_cancel_event):
-        first_running.set()
-        release_both.wait(timeout=5)
-
-    def second(unused_cancel_event):
-        second_running.set()
-        release_both.wait(timeout=5)
-
-    _, first_thread = _submit(handler, first)
+    _, first_thread = _submit(handler, _blocking_body(first_running, release_both))
     assert first_running.wait(timeout=5)
-    _, second_thread = _submit(handler, second)
+    _, second_thread = _submit(handler, _blocking_body(second_running, release_both))
 
     assert second_running.wait(timeout=5), "superseding job never reached preprocessing"
     release_both.set()
@@ -113,8 +101,7 @@ def test_same_unit_jobs_can_overlap_during_preprocessing():
 
 
 def test_unrelated_lecture_units_are_not_serialized():
-    """Only same-unit jobs queue; different units stay concurrent."""
-    handler = _handler()
+    handler = IngestionJobHandler()
     both_running = threading.Barrier(2, timeout=5)
     barrier_results = {}
 
@@ -138,7 +125,7 @@ def test_unrelated_lecture_units_are_not_serialized():
 
 
 def test_superseding_request_waits_for_current_job_commit_boundary():
-    handler = _handler()
+    handler = IngestionJobHandler()
     inside_commit = threading.Event()
     release_commit = threading.Event()
     second_done = threading.Event()
