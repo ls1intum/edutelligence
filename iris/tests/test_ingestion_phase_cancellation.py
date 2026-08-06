@@ -325,12 +325,15 @@ def test_whisper_retry_wait_stops_when_worker_cancelled(tmp_path):
         backing_off.set()
         return _whisper_response(429)
 
+    shutdown_started = None
+
     def fail_run(*_args, **_kwargs):
+        nonlocal shutdown_started
         # Fails the run only once the other chunk sits in its retry backoff.
         assert backing_off.wait(timeout=5)
+        shutdown_started = time.monotonic()
         raise RuntimeError("chunk bookkeeping failed")
 
-    started = time.monotonic()
     with (
         patch(
             "iris.pipeline.shared.transcription.whisper_client.split_audio_ffmpeg",
@@ -347,10 +350,15 @@ def test_whisper_retry_wait_stops_when_worker_cancelled(tmp_path):
     ):
         with pytest.raises(RuntimeError):
             client.transcribe(
-                "/tmp/audio.mp3", lecture_unit_id=3, on_chunk_complete=fail_run
+                "/tmp/audio.mp3",
+                lecture_unit_id=3,
+                on_chunk_complete=fail_run,
             )
 
-    assert time.monotonic() - started < 5, "run waited out the full retry backoff"
+    assert shutdown_started is not None
+    assert (
+        time.monotonic() - shutdown_started < 5
+    ), "run waited out the full retry backoff"
 
 
 def test_whisper_transcribe_stops_polling_when_cancelled():
