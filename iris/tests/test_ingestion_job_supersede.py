@@ -1,9 +1,12 @@
 """Sequencing guarantees for superseded lecture-unit ingestion jobs."""
 
 import threading
+import time
 
 from iris.ingestion.ingestion_job_handler import IngestionJobHandler
+from iris.ingestion.ingestion_job_registry import ingestion_job_owner_guard
 
+BASE_URL = "https://artemis.example"
 COURSE, LECTURE, UNIT = 1, 2, 3
 
 
@@ -19,10 +22,10 @@ def _submit(handler, body, unit=UNIT):
         try:
             body(cancel_event)
         finally:
-            handler.complete_job(COURSE, LECTURE, unit, cancel_event)
+            handler.complete_job(BASE_URL, COURSE, LECTURE, unit, cancel_event)
 
     thread = threading.Thread(target=run)
-    handler.add_job(thread, COURSE, LECTURE, unit, cancel_event)
+    handler.add_job(thread, BASE_URL, COURSE, LECTURE, unit, cancel_event)
     return cancel_event, thread
 
 
@@ -132,3 +135,40 @@ def test_unrelated_lecture_units_are_not_serialized():
         thread.join(timeout=5)
         assert not thread.is_alive()
     assert barrier_results == {10: "ok", 11: "ok"}
+
+
+def test_superseding_request_waits_for_current_job_commit_boundary():
+    handler = _handler()
+    inside_commit = threading.Event()
+    release_commit = threading.Event()
+    second_done = threading.Event()
+
+    def first(cancel_event):
+        with ingestion_job_owner_guard(
+            base_url=BASE_URL,
+            course_id=COURSE,
+            lecture_id=LECTURE,
+            lecture_unit_id=UNIT,
+            cancel_event=cancel_event,
+            stage="test commit",
+        ):
+            inside_commit.set()
+            release_commit.wait(timeout=5)
+
+    first_cancel, first_thread = _submit(handler, first)
+    assert inside_commit.wait(timeout=5)
+
+    launcher = threading.Thread(
+        target=lambda: _submit(handler, lambda unused_cancel_event: second_done.set())
+    )
+    launcher.start()
+
+    time.sleep(0.2)
+    assert first_cancel.is_set() is False
+    assert second_done.is_set() is False
+
+    release_commit.set()
+    first_thread.join(timeout=5)
+    launcher.join(timeout=5)
+    assert not launcher.is_alive()
+    assert second_done.wait(timeout=5)

@@ -99,6 +99,7 @@ def run_lecture_update_pipeline_worker(
     finally:
         if lecture_unit is not None and cancel_event is not None:
             ingestion_job_handler.complete_job(
+                base_url=dto.settings.artemis_base_url,
                 course_id=lecture_unit.course_id,
                 lecture_id=lecture_unit.lecture_id,
                 lecture_unit_id=lecture_unit.lecture_unit_id,
@@ -212,6 +213,7 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     )
     ingestion_job_handler.add_job(
         process=thread,
+        base_url=dto.settings.artemis_base_url,
         course_id=dto.lecture_unit.course_id,
         lecture_id=dto.lecture_unit.lecture_id,
         lecture_unit_id=dto.lecture_unit.lecture_unit_id,

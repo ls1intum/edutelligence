@@ -18,6 +18,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.domain.variant.abstract_variant import find_variant
 from iris.domain.variant.variant import Dep
+from iris.ingestion.ingestion_job_registry import ingestion_job_owner_guard
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -499,15 +500,18 @@ class LectureIngestionUpdatePipeline(Pipeline):
             lecture_unit=lecture_unit_dto,
             initial_properties=initial_properties,
         )
-        raise_if_cancelled(
-            cancel_event,
-            self.dto.lecture_unit.lecture_unit_id,
-            "before terminal callback",
-        )
-        callback.finish(
-            display_page_numbers=self.dto.lecture_unit.display_page_numbers,
-            tokens=tokens,
-        )
+        with ingestion_job_owner_guard(
+            base_url=self.dto.settings.artemis_base_url,
+            course_id=self.dto.lecture_unit.course_id,
+            lecture_id=self.dto.lecture_unit.lecture_id,
+            lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
+            cancel_event=cancel_event,
+            stage="terminal callback",
+        ):
+            callback.finish(
+                display_page_numbers=self.dto.lecture_unit.display_page_numbers,
+                tokens=tokens,
+            )
 
     # ── Checkpoint helpers ───────────────────────────────────────────────
 

@@ -9,17 +9,12 @@ import pytest
 
 from iris.common.cancellation import sleep_unless_cancelled
 from iris.common.custom_exceptions import IngestionCancelledException
+from iris.ingestion.ingestion_job_registry import ingestion_job_commit_lock
 from iris.pipeline.lecture_ingestion_pipeline import (
     LectureUnitPageIngestionPipeline,
 )
-from iris.pipeline.lecture_ingestion_pipeline import (
-    batch_update_lock as page_batch_update_lock,
-)
 from iris.pipeline.lecture_unit_pipeline import (
     LectureUnitPipeline,
-)
-from iris.pipeline.lecture_unit_pipeline import (
-    batch_update_lock as lecture_unit_batch_update_lock,
 )
 from iris.pipeline.shared.transcription.heavy_pipeline import HeavyTranscriptionPipeline
 from iris.pipeline.shared.transcription.light_pipeline import LightTranscriptionPipeline
@@ -27,9 +22,6 @@ from iris.pipeline.shared.transcription.slide_turn_detector import SlideTurnDete
 from iris.pipeline.shared.transcription.whisper_client import WhisperClient
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
-)
-from iris.pipeline.transcription_ingestion_pipeline import (
-    batch_update_lock as transcription_batch_update_lock,
 )
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -196,11 +188,14 @@ def test_transcription_replacement_is_skipped_after_cancellation_during_embeddin
     pipeline.tokens = []
     pipeline.dto = SimpleNamespace(
         lecture_unit=SimpleNamespace(
+            course_id=1,
+            lecture_id=2,
             lecture_unit_id=3,
             lecture_name="Lecture",
             lecture_unit_name="Unit",
             transcription=SimpleNamespace(language="en"),
-        )
+        ),
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
     )
     pipeline.chunk_transcription = MagicMock(
         return_value=[
@@ -474,7 +469,9 @@ def _page_commit_target():
 
     return SimpleNamespace(
         run=run,
-        commit_lock=page_batch_update_lock,
+        commit_lock=lambda: ingestion_job_commit_lock(
+            "https://artemis.example", 1, 2, 3
+        ),
         cancel_event=pipeline.cancel_event,
         reached_commit=reached_commit,
         delete_mock=pipeline.delete_lecture_unit,
@@ -490,11 +487,14 @@ def _transcription_commit_target():
     pipeline.tokens = []
     pipeline.dto = SimpleNamespace(
         lecture_unit=SimpleNamespace(
+            course_id=1,
+            lecture_id=2,
             lecture_unit_id=3,
             lecture_name="Lecture",
             lecture_unit_name="Unit",
             transcription=SimpleNamespace(language="en"),
-        )
+        ),
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
     )
     chunks = [
         {LectureTranscriptionSchema.SEGMENT_TEXT.value: "segment", "page_number": 1}
@@ -513,7 +513,9 @@ def _transcription_commit_target():
 
     return SimpleNamespace(
         run=run,
-        commit_lock=transcription_batch_update_lock,
+        commit_lock=lambda: ingestion_job_commit_lock(
+            "https://artemis.example", 1, 2, 3
+        ),
         cancel_event=pipeline.cancel_event,
         reached_commit=reached_commit,
         delete_mock=pipeline.delete_existing_transcription_data,
@@ -558,7 +560,9 @@ def _lecture_unit_commit_target():
 
     return SimpleNamespace(
         run=run,
-        commit_lock=lecture_unit_batch_update_lock,
+        commit_lock=lambda: ingestion_job_commit_lock(
+            "https://artemis.example", 1, 2, 3
+        ),
         cancel_event=pipeline.cancel_event,
         reached_commit=reached_commit,
         delete_mock=pipeline.lecture_unit_collection.data.delete_many,
@@ -587,7 +591,7 @@ def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(
         except Exception as exc:  # pragma: no cover - asserted below
             errors.append(exc)
 
-    with target.commit_lock:
+    with target.commit_lock():
         thread = threading.Thread(target=run)
         thread.start()
         # Embedding is the last step before the commit lock, so once it ran the

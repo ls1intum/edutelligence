@@ -94,11 +94,14 @@ def test_transcription_ingestion_reraises_without_terminal_callback():
     pipeline.callback = MagicMock()
     pipeline.dto = SimpleNamespace(
         lecture_unit=SimpleNamespace(
+            course_id=3,
+            lecture_id=2,
             lecture_unit_id=1,
             lecture_name="Lecture",
             lecture_unit_name="Unit",
             transcription=SimpleNamespace(language="en"),
-        )
+        ),
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
     )
     pipeline.tokens = []
     pipeline.chunk_transcription = MagicMock(return_value=[{"text": "segment"}])
