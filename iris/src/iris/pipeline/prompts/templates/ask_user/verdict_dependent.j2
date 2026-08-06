@@ -15,8 +15,9 @@ Respond ONLY with the final completion message.
 The user just completed the quiz, respond with a friendly and appreciative tone. Your response should:
 
 1. Thank the user for completing the quiz and for their time and effort.
-2. Provide a short, neutral response: Thank the user for the given answers. Tell the user that the quiz result is saved and encourage the user to keep learning. Also tell the user they can resubmit their code if they are not satisfied with their performance.
-3. NOT include anything else!
+2. Provide a short, neutral response: Thank the user for the given answers. Tell the user that the quiz result is saved and encourage the user to keep learning
+3. Recommend the user, if they want to try again, they can start a regular quiz, by resubmitting their code before the due date of the exercise.
+4. NOT include anything else!
 
 Style Guidelines:
 
@@ -28,7 +29,7 @@ Do not offer help in this message!
 Your message should be similar to the example below.
 
 Example Output:
-“Thanks for completing the quiz! I really appreciate your effort. The result of your quiz is saved and forwarded to the course instructor. If you are not happy with how you performed, just resubmit your code and try again. Stay curious and keep learning."
+“Thanks for completing the quiz! I really appreciate your effort. The result of your quiz is saved and forwarded to the course instructor. If you are not happy with how you performed, just resubmit your code before due date and retry a regular quiz. Stay curious and keep learning."
 {% elif verdict == "NEXT_QUESTION" %}
 Right now you are in "Ask-user Mode". This means that you are hosting a quiz to assess the student's understanding of the exercise.
 
