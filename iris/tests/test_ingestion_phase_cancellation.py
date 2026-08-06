@@ -9,6 +9,7 @@ import pytest
 
 from iris.common.cancellation import sleep_unless_cancelled
 from iris.common.custom_exceptions import IngestionCancelledException
+from iris.ingestion.ingestion_job_handler import IngestionJobHandler
 from iris.ingestion.ingestion_job_registry import ingestion_job_commit_lock
 from iris.pipeline.lecture_ingestion_pipeline import (
     LectureUnitPageIngestionPipeline,
@@ -26,6 +27,7 @@ from iris.pipeline.shared.transcription.whisper_client import WhisperClient
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
+from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
 )
@@ -598,6 +600,22 @@ def _segment_summary_commit_target():
     )
 
 
+def _launch_ingestion_run(handler, target):
+    errors = []
+
+    def run():
+        try:
+            target.run()
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            handler.complete_job(BASE_URL, COURSE, LECTURE, UNIT, target.cancel_event)
+
+    thread = threading.Thread(target=run)
+    handler.add_job(thread, BASE_URL, COURSE, LECTURE, UNIT, target.cancel_event)
+    return thread, errors
+
+
 @pytest.mark.parametrize(
     "build_target",
     [
@@ -629,6 +647,73 @@ def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(build_targe
     assert not thread.is_alive()
     assert len(errors) == 1
     assert isinstance(errors[0], IngestionCancelledException)
+    target.delete_mock.assert_not_called()
+    target.insert_mock.assert_not_called()
+    for not_called in getattr(target, "extra_not_called", []):
+        not_called.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "build_target",
+    [
+        _page_commit_target,
+        _transcription_commit_target,
+        _lecture_unit_commit_target,
+    ],
+)
+def test_same_unit_supersede_is_not_blocked_by_unrelated_batch_lock(build_target):
+    handler = IngestionJobHandler()
+    target = build_target()
+
+    with batch_update_lock:
+        old_thread, old_errors = _launch_ingestion_run(handler, target)
+        assert target.reached_commit.wait(timeout=5)
+
+        replacement_started = threading.Event()
+        replacement_done = threading.Event()
+        replacement_cancel = handler.create_cancellation_event()
+
+        def replacement_body():
+            try:
+                replacement_started.set()
+            finally:
+                handler.complete_job(
+                    BASE_URL, COURSE, LECTURE, UNIT, replacement_cancel
+                )
+                replacement_done.set()
+
+        replacement_thread = threading.Thread(target=replacement_body)
+
+        submit_done = threading.Event()
+
+        def submit_replacement():
+            handler.add_job(
+                replacement_thread,
+                BASE_URL,
+                COURSE,
+                LECTURE,
+                UNIT,
+                replacement_cancel,
+            )
+            submit_done.set()
+
+        submit_thread = threading.Thread(target=submit_replacement)
+        submit_thread.start()
+
+        assert submit_done.wait(timeout=5)
+        assert target.cancel_event.is_set()
+        assert replacement_started.wait(timeout=5)
+
+    submit_thread.join(timeout=5)
+    old_thread.join(timeout=5)
+    replacement_thread.join(timeout=5)
+
+    assert not submit_thread.is_alive()
+    assert not old_thread.is_alive()
+    assert not replacement_thread.is_alive()
+    assert replacement_done.is_set()
+    assert len(old_errors) == 1
+    assert isinstance(old_errors[0], IngestionCancelledException)
     target.delete_mock.assert_not_called()
     target.insert_mock.assert_not_called()
     for not_called in getattr(target, "extra_not_called", []):

@@ -111,15 +111,15 @@ class LectureUnitPipeline(SubPipeline):
         )
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
-        with ingestion_job_owner_guard(
-            base_url=lecture_unit.base_url,
-            course_id=lecture_unit.course_id,
-            lecture_id=lecture_unit.lecture_id,
-            lecture_unit_id=lecture_unit.lecture_unit_id,
-            cancel_event=cancel_event,
-            stage="lecture unit replacement",
-        ):
-            with batch_update_lock:
+        with batch_update_lock:
+            with ingestion_job_owner_guard(
+                base_url=lecture_unit.base_url,
+                course_id=lecture_unit.course_id,
+                lecture_id=lecture_unit.lecture_id,
+                lecture_unit_id=lecture_unit.lecture_unit_id,
+                cancel_event=cancel_event,
+                stage="lecture unit replacement",
+            ):
                 latest_units = self.lecture_unit_collection.query.fetch_objects(
                     filters=lecture_unit_filter, limit=1
                 ).objects

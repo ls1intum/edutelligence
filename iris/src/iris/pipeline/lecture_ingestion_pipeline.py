@@ -406,23 +406,21 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
     def _replace_prepared_chunks(self, prepared_chunks):
         cancel_event = getattr(self, "cancel_event", None)
-        with ingestion_job_owner_guard(
-            base_url=self.dto.settings.artemis_base_url,
-            course_id=self.dto.lecture_unit.course_id,
-            lecture_id=self.dto.lecture_unit.lecture_id,
-            lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
-            cancel_event=cancel_event,
-            stage="lecture page replacement",
-        ):
-            with batch_update_lock:
-                self._load_existing_slide_visibility()
-                for chunk, _ in prepared_chunks:
-                    page_number = int(
-                        chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value]
-                    )
-                    chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
-                        self._hidden_until_by_page.get(page_number)
-                    )
+        with batch_update_lock:
+            self._load_existing_slide_visibility()
+            for chunk, _ in prepared_chunks:
+                page_number = int(chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value])
+                chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
+                    self._hidden_until_by_page.get(page_number)
+                )
+            with ingestion_job_owner_guard(
+                base_url=self.dto.settings.artemis_base_url,
+                course_id=self.dto.lecture_unit.course_id,
+                lecture_id=self.dto.lecture_unit.lecture_id,
+                lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
+                cancel_event=cancel_event,
+                stage="lecture page replacement",
+            ):
                 if not self.delete_lecture_unit(
                     self.dto.lecture_unit.course_id,
                     self.dto.lecture_unit.lecture_id,

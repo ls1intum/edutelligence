@@ -191,15 +191,15 @@ class TranscriptionIngestionPipeline(SubPipeline):
 
     def _replace_prepared_chunks(self, lecture_unit, prepared_chunks):
         cancel_event = getattr(self, "cancel_event", None)
-        with ingestion_job_owner_guard(
-            base_url=self.dto.settings.artemis_base_url,
-            course_id=lecture_unit.course_id,
-            lecture_id=lecture_unit.lecture_id,
-            lecture_unit_id=lecture_unit.lecture_unit_id,
-            cancel_event=cancel_event,
-            stage="transcription replacement",
-        ):
-            with batch_update_lock:
+        with batch_update_lock:
+            with ingestion_job_owner_guard(
+                base_url=self.dto.settings.artemis_base_url,
+                course_id=lecture_unit.course_id,
+                lecture_id=lecture_unit.lecture_id,
+                lecture_unit_id=lecture_unit.lecture_unit_id,
+                cancel_event=cancel_event,
+                stage="transcription replacement",
+            ):
                 self.delete_existing_transcription_data(lecture_unit)
                 self._insert_prepared_chunks(prepared_chunks)
 
