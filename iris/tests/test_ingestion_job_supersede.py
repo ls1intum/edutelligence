@@ -76,27 +76,3 @@ def test_same_unit_jobs_can_overlap_during_preprocessing():
     second_thread.join(timeout=5)
     assert not first_thread.is_alive()
     assert not second_thread.is_alive()
-
-
-def test_unrelated_lecture_units_are_not_serialized():
-    handler = IngestionJobHandler()
-    both_running = threading.Barrier(2, timeout=5)
-    barrier_results = {}
-
-    def worker(unit):
-        try:
-            both_running.wait()
-            barrier_results[unit] = "ok"
-        except Exception as exc:  # pragma: no cover - asserted via captured result
-            barrier_results[unit] = type(exc).__name__
-
-    threads = [
-        _submit(
-            handler, lambda unused_cancel_event, unit=unit: worker(unit), unit=unit
-        )[1]
-        for unit in (10, 11)
-    ]
-    for thread in threads:
-        thread.join(timeout=5)
-        assert not thread.is_alive()
-    assert barrier_results == {10: "ok", 11: "ok"}

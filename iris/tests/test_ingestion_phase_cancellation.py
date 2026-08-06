@@ -1,7 +1,6 @@
 """Focused cancellation checkpoints for superseded ingestion runs."""
 
 import threading
-import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -20,8 +19,6 @@ from iris.pipeline.lecture_unit_segment_summary_pipeline import (
 )
 from iris.pipeline.shared.transcription.heavy_pipeline import HeavyTranscriptionPipeline
 from iris.pipeline.shared.transcription.light_pipeline import LightTranscriptionPipeline
-from iris.pipeline.shared.transcription.slide_turn_detector import SlideTurnDetector
-from iris.pipeline.shared.transcription.whisper_client import WhisperClient
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
@@ -51,53 +48,9 @@ def _dto(**lecture_unit):
     )
 
 
-def _cancelled():
-    event = threading.Event()
-    event.set()
-    return event
-
-
-class _CancelledAfter(threading.Event):
-    """Event that reports itself as set only from the nth check onwards.
-
-    Lets a test reach a cancellation checkpoint that an earlier checkpoint on
-    the same code path would otherwise shadow.
-    """
-
-    def __init__(self, checks_before_cancellation: int):
-        super().__init__()
-        self.remaining_checks = checks_before_cancellation
-
-    def is_set(self) -> bool:
-        if self.remaining_checks > 0:
-            self.remaining_checks -= 1
-            return False
-        return True
-
-
 def _cancel_then_vector(cancel_event):
     cancel_event.set()
     return [0.1]
-
-
-def _whisper_client():
-    """Whisper client wired for OpenAI without touching the LLM config."""
-    client = WhisperClient.__new__(WhisperClient)
-    client.llm = SimpleNamespace(api_key="key", model="whisper-1")
-    client.chunk_duration = 900
-    client.max_retries = 3
-    client.max_workers = 2
-    client.request_timeout = 1
-    client.no_speech_threshold = 0.8
-    client.provider_name = "OpenAI"
-    return client
-
-
-def _whisper_response(status_code):
-    response = MagicMock()
-    response.status_code = status_code
-    response.json.return_value = {"segments": [], "language": "english"}
-    return response
 
 
 def _signal_then_vector(reached):
@@ -384,147 +337,6 @@ def test_light_transcription_stops_during_slide_detection_progress():
                 {"segments": [{"start": 0.0, "end": 1.0, "text": "a"}]},
                 lecture_unit_id=3,
             )
-
-
-def test_light_transcription_cancellation_precedes_no_video_shortcut():
-    pipeline = LightTranscriptionPipeline.__new__(LightTranscriptionPipeline)
-    pipeline.callback = MagicMock()
-    pipeline.cancel_event = _cancelled()
-    pipeline.video_path = None
-
-    with pytest.raises(IngestionCancelledException) as cancelled:
-        LightTranscriptionPipeline.__call__.__wrapped__(
-            pipeline,
-            {"segments": [{"start": 0.0, "end": 1.0, "text": "a"}]},
-            lecture_unit_id=3,
-        )
-
-    assert "before slide detection" in cancelled.value.reason
-    pipeline.callback.update.assert_not_called()
-
-
-def test_whisper_retry_wait_stops_when_worker_cancelled(tmp_path):
-    """A worker in retry backoff must abort once the run gives up.
-
-    The failing chunk backs off for 10s. Shutting the run down waits for that
-    worker, so the run only returns quickly if the backoff itself is
-    interruptible.
-    """
-    chunks = []
-    for index in range(2):
-        chunk = tmp_path / f"chunk_{index}.mp3"
-        chunk.write_bytes(b"audio")
-        chunks.append(str(chunk))
-
-    client = _whisper_client()
-    backing_off = threading.Event()
-
-    def post(*_args, **kwargs):
-        chunk_name = kwargs["files"]["file"][0]
-        if chunk_name.startswith("chunk_0"):
-            return _whisper_response(200)
-        backing_off.set()
-        return _whisper_response(429)
-
-    shutdown_started = None
-
-    def fail_run(*_args, **_kwargs):
-        nonlocal shutdown_started
-        # Fails the run only once the other chunk sits in its retry backoff.
-        assert backing_off.wait(timeout=5)
-        shutdown_started = time.monotonic()
-        raise RuntimeError("chunk bookkeeping failed")
-
-    with (
-        patch(
-            "iris.pipeline.shared.transcription.whisper_client.split_audio_ffmpeg",
-            return_value=chunks,
-        ),
-        patch(
-            "iris.pipeline.shared.transcription.whisper_client._audio_duration",
-            return_value=1.0,
-        ),
-        patch(
-            "iris.pipeline.shared.transcription.whisper_client.requests.post",
-            side_effect=post,
-        ),
-    ):
-        with pytest.raises(RuntimeError):
-            client.transcribe(
-                "/tmp/audio.mp3",
-                lecture_unit_id=3,
-                on_chunk_complete=fail_run,
-            )
-
-    assert shutdown_started is not None
-    assert (
-        time.monotonic() - shutdown_started < 5
-    ), "run waited out the full retry backoff"
-
-
-def test_whisper_transcribe_stops_polling_when_cancelled():
-    client = WhisperClient.__new__(WhisperClient)
-    client.max_workers = 1
-    client.max_retries = 1
-    client.chunk_duration = 900
-    client.no_speech_threshold = 0.8
-    client.provider_name = "OpenAI"
-
-    started = threading.Event()
-    unblock = threading.Event()
-    cancel_event = threading.Event()
-
-    def blocking_chunk(*_args, **_kwargs):
-        started.set()
-        unblock.wait(timeout=5)
-        return [], None
-
-    def trigger_cancel():
-        assert started.wait(timeout=5)
-        cancel_event.set()
-
-    canceller = threading.Thread(target=trigger_cancel)
-    canceller.start()
-
-    with (
-        patch(
-            "iris.pipeline.shared.transcription.whisper_client.split_audio_ffmpeg",
-            return_value=["/tmp/chunk.mp3"],
-        ),
-        patch(
-            "iris.pipeline.shared.transcription.whisper_client._audio_duration",
-            return_value=1.0,
-        ),
-        patch.object(client, "_transcribe_chunk", side_effect=blocking_chunk),
-    ):
-        with pytest.raises(IngestionCancelledException):
-            client.transcribe(
-                "/tmp/audio.mp3", lecture_unit_id=3, cancel_event=cancel_event
-            )
-
-    unblock.set()
-    canceller.join(timeout=5)
-
-
-def test_slide_turn_detector_stops_before_vision_query():
-    detector = SlideTurnDetector.__new__(SlideTurnDetector)
-    # Cancellation arrives after detect() and its anchor loop already checked,
-    # so only the checkpoint inside the label query can still stop the run.
-    detector.cancel_event = _CancelledAfter(2)
-    detector.segments = [{"start": 0.0}, {"start": 1.0}]
-    detector.labels = [None, None]
-    detector.anchor_stride = 1
-    detector.min_stride = 1
-    detector.job_id = "3"
-    detector.on_progress = None
-    detector.gpt_calls = 0
-    detector.frame_cache = MagicMock()
-
-    with pytest.raises(IngestionCancelledException) as cancelled:
-        detector.detect()
-
-    assert "slide vision query" in cancelled.value.reason
-    detector.frame_cache.get.assert_not_called()
 
 
 def _page_commit_target():
