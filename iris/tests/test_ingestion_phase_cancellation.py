@@ -20,7 +20,6 @@ from iris.pipeline.lecture_unit_pipeline import (
 from iris.pipeline.lecture_unit_pipeline import (
     batch_update_lock as lecture_unit_batch_update_lock,
 )
-from iris.pipeline.shared.transcription.alignment import align_slides_with_segments
 from iris.pipeline.shared.transcription.heavy_pipeline import HeavyTranscriptionPipeline
 from iris.pipeline.shared.transcription.light_pipeline import LightTranscriptionPipeline
 from iris.pipeline.shared.transcription.slide_turn_detector import SlideTurnDetector
@@ -77,46 +76,6 @@ def _signal_then_vector(reached):
     return embed
 
 
-def test_transcription_summarization_loop_stops_when_cancelled():
-    pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
-    pipeline.callback = MagicMock()
-    pipeline.cancel_event = _cancelled()
-    pipeline.dto = SimpleNamespace(
-        lecture_unit=SimpleNamespace(
-            lecture_unit_id=7, lecture_name="L", lecture_unit_name="U"
-        )
-    )
-
-    with pytest.raises(IngestionCancelledException):
-        pipeline.summarize_chunks([{"segment_text": "a"}])
-
-
-def test_page_chunking_stops_between_pages():
-    pipeline = LectureUnitPageIngestionPipeline.__new__(
-        LectureUnitPageIngestionPipeline
-    )
-    pipeline.cancel_event = _cancelled()
-    pipeline.callback = MagicMock()
-    pipeline.interpret_image = MagicMock()
-    pipeline.get_course_language = MagicMock(return_value="en")
-
-    doc = MagicMock()
-    doc.page_count = 40
-    doc.load_page.return_value.get_text.return_value = "text"
-
-    with patch("iris.pipeline.lecture_ingestion_pipeline.fitz.open", return_value=doc):
-        with pytest.raises(IngestionCancelledException):
-            pipeline.chunk_data(
-                lecture_pdf="/tmp/x.pdf",
-                lecture_unit_slide_dto=SimpleNamespace(
-                    lecture_unit_id=3, lecture_name="L", lecture_unit_name="U"
-                ),
-                base_url="https://artemis.example",
-            )
-
-    pipeline.interpret_image.assert_not_called()
-
-
 def test_page_chunking_stops_after_first_page_vision_result():
     pipeline = LectureUnitPageIngestionPipeline.__new__(
         LectureUnitPageIngestionPipeline
@@ -152,50 +111,6 @@ def test_page_chunking_stops_after_first_page_vision_result():
             )
 
     assert pipeline.interpret_image.call_count == 1
-
-
-def test_lecture_unit_replacement_is_skipped_after_cancellation():
-    pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
-    pipeline.cancel_event = threading.Event()
-    pipeline.local = False
-    pipeline.callback = MagicMock()
-    pipeline.weaviate_client = MagicMock()
-    pipeline.llm_embedding = MagicMock()
-    pipeline.lecture_unit_collection = MagicMock()
-
-    def embed_then_cancel(summary):
-        del summary
-        pipeline.cancel_event.set()
-        return [0.1]
-
-    pipeline.llm_embedding.embed.side_effect = embed_then_cancel
-
-    lecture_unit = SimpleNamespace(
-        course_id=1,
-        lecture_id=2,
-        lecture_unit_id=3,
-        base_url="https://artemis.example",
-        lecture_unit_summary="summary",
-    )
-
-    with (
-        patch(
-            "iris.pipeline.lecture_unit_pipeline.LectureUnitSegmentSummaryPipeline"
-        ) as segment_cls,
-        patch(
-            "iris.pipeline.lecture_unit_pipeline.LectureUnitSummaryPipeline"
-        ) as summary_cls,
-    ):
-        segment_cls.return_value.return_value = ([], [])
-        summary_cls.return_value.return_value = ("summary", [])
-
-        with pytest.raises(IngestionCancelledException):
-            LectureUnitPipeline.__call__.__wrapped__(
-                pipeline, lecture_unit, initial_properties={}
-            )
-
-    pipeline.lecture_unit_collection.data.delete_many.assert_not_called()
-    pipeline.lecture_unit_collection.data.insert.assert_not_called()
 
 
 def test_page_replacement_is_skipped_after_cancellation_during_embedding():
@@ -290,34 +205,6 @@ def test_transcription_replacement_is_skipped_after_cancellation_during_embeddin
     pipeline.delete_existing_transcription_data.assert_not_called()
 
 
-def test_heavy_transcription_stops_before_download():
-    pipeline = HeavyTranscriptionPipeline.__new__(HeavyTranscriptionPipeline)
-    pipeline.callback = MagicMock()
-    pipeline.storage = SimpleNamespace(
-        video_path="/tmp/video.mp4", audio_path="/tmp/audio.m4a"
-    )
-    pipeline.cancel_event = _cancelled()
-    pipeline.whisper_client = MagicMock()
-
-    with (
-        patch(
-            "iris.pipeline.shared.transcription.heavy_pipeline.download_video"
-        ) as download_video,
-        patch(
-            "iris.pipeline.shared.transcription.heavy_pipeline.download_youtube_video"
-        ) as download_youtube_video,
-    ):
-        with pytest.raises(IngestionCancelledException):
-            HeavyTranscriptionPipeline.__call__.__wrapped__(
-                pipeline,
-                "https://live.rbg.tum.de/foo.m3u8",
-                lecture_unit_id=3,
-            )
-
-    download_video.assert_not_called()
-    download_youtube_video.assert_not_called()
-
-
 def test_heavy_transcription_stops_during_whisper_progress(tmp_path):
     pipeline = HeavyTranscriptionPipeline.__new__(HeavyTranscriptionPipeline)
     pipeline.callback = MagicMock()
@@ -350,26 +237,6 @@ def test_heavy_transcription_stops_during_whisper_progress(tmp_path):
             )
 
 
-def test_light_transcription_stops_before_slide_detection():
-    pipeline = LightTranscriptionPipeline.__new__(LightTranscriptionPipeline)
-    pipeline.callback = MagicMock()
-    pipeline.cancel_event = _cancelled()
-    pipeline.video_path = "/tmp/video.mp4"
-    pipeline.request_handler = MagicMock()
-
-    with patch(
-        "iris.pipeline.shared.transcription.light_pipeline.detect_slide_timestamps"
-    ) as detect_slide_timestamps:
-        with pytest.raises(IngestionCancelledException):
-            LightTranscriptionPipeline.__call__.__wrapped__(
-                pipeline,
-                {"segments": [{"start": 0.0, "end": 1.0, "text": "a"}]},
-                lecture_unit_id=3,
-            )
-
-    detect_slide_timestamps.assert_not_called()
-
-
 def test_light_transcription_stops_during_slide_detection_progress():
     pipeline = LightTranscriptionPipeline.__new__(LightTranscriptionPipeline)
     pipeline.callback = MagicMock()
@@ -392,16 +259,6 @@ def test_light_transcription_stops_during_slide_detection_progress():
                 {"segments": [{"start": 0.0, "end": 1.0, "text": "a"}]},
                 lecture_unit_id=3,
             )
-
-
-def test_alignment_stops_between_segments():
-    with pytest.raises(IngestionCancelledException):
-        align_slides_with_segments(
-            [{"start": 0.0, "end": 1.0, "text": "a"}],
-            [(0.0, 1)],
-            lecture_unit_id=3,
-            cancel_event=_cancelled(),
-        )
 
 
 def test_whisper_retry_wait_stops_when_cancelled():

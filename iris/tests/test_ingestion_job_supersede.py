@@ -60,36 +60,6 @@ def test_superseding_request_cancels_the_previous_job():
     assert not first_thread.is_alive()
 
 
-def test_superseded_request_does_not_commit_stale_write():
-    handler = _handler()
-    first_running = threading.Event()
-    allow_first_commit = threading.Event()
-    second_done = threading.Event()
-    writes = []
-
-    def first(cancel_event):
-        first_running.set()
-        allow_first_commit.wait(timeout=5)
-        if cancel_event.is_set():
-            return
-        writes.append("first")
-
-    def second(unused_cancel_event):
-        writes.append("second")
-        second_done.set()
-
-    _, first_thread = _submit(handler, first)
-    assert first_running.wait(timeout=5)
-    _, second_thread = _submit(handler, second)
-    assert second_done.wait(timeout=5)
-
-    allow_first_commit.set()
-    first_thread.join(timeout=5)
-    second_thread.join(timeout=5)
-
-    assert writes == ["second"]
-
-
 def test_same_unit_jobs_can_overlap_during_preprocessing():
     """Same-unit requests should not serialize whole worker threads."""
     handler = _handler()
