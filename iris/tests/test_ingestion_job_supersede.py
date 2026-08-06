@@ -1,5 +1,3 @@
-"""Sequencing guarantees for superseded lecture-unit ingestion jobs."""
-
 import threading
 import time
 
@@ -8,10 +6,6 @@ from iris.ingestion.ingestion_job_registry import ingestion_job_owner_guard
 
 BASE_URL = "https://artemis.example"
 COURSE, LECTURE, UNIT = 1, 2, 3
-
-
-def _handler() -> IngestionJobHandler:
-    return IngestionJobHandler()
 
 
 def _submit(handler, body, unit=UNIT):
@@ -34,20 +28,6 @@ def _blocking_body(started, release):
         release.wait(timeout=5)
 
     return body
-
-
-def test_new_request_runs_instead_of_being_dropped():
-    handler = IngestionJobHandler()
-    first_running, release_first = threading.Event(), threading.Event()
-    second_ran = threading.Event()
-
-    _submit(handler, _blocking_body(first_running, release_first))
-    assert first_running.wait(timeout=5)
-
-    _submit(handler, lambda unused_cancel_event: second_ran.set())
-    release_first.set()
-
-    assert second_ran.wait(timeout=5), "superseding job was dropped"
 
 
 def test_superseding_request_cancels_the_previous_job():

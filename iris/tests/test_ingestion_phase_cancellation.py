@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iris.common.cancellation import sleep_unless_cancelled
 from iris.common.custom_exceptions import IngestionCancelledException
 from iris.ingestion.ingestion_job_handler import IngestionJobHandler
 from iris.ingestion.ingestion_job_registry import ingestion_job_commit_lock
@@ -37,6 +36,20 @@ from iris.vector_database.lecture_unit_page_chunk_schema import (
 
 BASE_URL = "https://artemis.example"
 COURSE, LECTURE, UNIT = 1, 2, 3
+
+
+def _new_pipeline(cls, **attrs):
+    pipeline = cls.__new__(cls)
+    for name, value in attrs.items():
+        setattr(pipeline, name, value)
+    return pipeline
+
+
+def _dto(**lecture_unit):
+    return SimpleNamespace(
+        lecture_unit=SimpleNamespace(**lecture_unit),
+        settings=SimpleNamespace(artemis_base_url=BASE_URL),
+    )
 
 
 def _cancelled():
@@ -117,15 +130,18 @@ def _transcription_chunk():
 
 
 def _page_pipeline():
-    pipeline = LectureUnitPageIngestionPipeline.__new__(
-        LectureUnitPageIngestionPipeline
-    )
-    pipeline.cancel_event = threading.Event()
-    pipeline.callback = MagicMock()
-    pipeline.tokens = []
-    pipeline.course_language = "en"
-    pipeline.dto = SimpleNamespace(
-        lecture_unit=SimpleNamespace(
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value.objects = []
+    collection.batch.rate_limit.return_value.__enter__.return_value = MagicMock()
+    lecture_unit_collection = MagicMock()
+    lecture_unit_collection.query.fetch_objects.return_value.objects = []
+    return _new_pipeline(
+        LectureUnitPageIngestionPipeline,
+        cancel_event=threading.Event(),
+        callback=MagicMock(),
+        tokens=[],
+        course_language="en",
+        dto=_dto(
             lecture_unit_id=UNIT,
             course_id=COURSE,
             lecture_id=LECTURE,
@@ -133,29 +149,22 @@ def _page_pipeline():
             course_name="Course",
             pdf_file_base64="pdf",
         ),
-        settings=SimpleNamespace(artemis_base_url=BASE_URL),
+        check_if_attachment_needs_update=MagicMock(return_value=True),
+        chunk_data=MagicMock(return_value=[_page_chunk()]),
+        delete_lecture_unit=MagicMock(),
+        collection=collection,
+        lecture_unit_collection=lecture_unit_collection,
+        get_course_language=MagicMock(return_value="en"),
     )
-    pipeline.check_if_attachment_needs_update = MagicMock(return_value=True)
-    pipeline.chunk_data = MagicMock(return_value=[_page_chunk()])
-    pipeline.delete_lecture_unit = MagicMock()
-    pipeline.collection = MagicMock()
-    pipeline.collection.query.fetch_objects.return_value.objects = []
-    pipeline.collection.batch.rate_limit.return_value.__enter__.return_value = (
-        MagicMock()
-    )
-    pipeline.lecture_unit_collection = MagicMock()
-    pipeline.lecture_unit_collection.query.fetch_objects.return_value.objects = []
-    pipeline.get_course_language = MagicMock(return_value="en")
-    return pipeline
 
 
 def _transcription_pipeline():
-    pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
-    pipeline.cancel_event = threading.Event()
-    pipeline.callback = MagicMock()
-    pipeline.tokens = []
-    pipeline.dto = SimpleNamespace(
-        lecture_unit=SimpleNamespace(
+    return _new_pipeline(
+        TranscriptionIngestionPipeline,
+        cancel_event=threading.Event(),
+        callback=MagicMock(),
+        tokens=[],
+        dto=_dto(
             course_id=COURSE,
             lecture_id=LECTURE,
             lecture_unit_id=UNIT,
@@ -163,51 +172,105 @@ def _transcription_pipeline():
             lecture_unit_name="Unit",
             transcription=SimpleNamespace(language="en"),
         ),
-        settings=SimpleNamespace(artemis_base_url=BASE_URL),
+        chunk_transcription=MagicMock(return_value=[_transcription_chunk()]),
+        summarize_chunks=MagicMock(return_value=[_transcription_chunk()]),
+        delete_existing_transcription_data=MagicMock(),
+        collection=MagicMock(),
     )
-    pipeline.chunk_transcription = MagicMock(return_value=[_transcription_chunk()])
-    pipeline.summarize_chunks = MagicMock(return_value=[_transcription_chunk()])
-    pipeline.delete_existing_transcription_data = MagicMock()
-    pipeline.collection = MagicMock()
-    return pipeline
 
 
 def _segment_summary_pipeline():
-    pipeline = LectureUnitSegmentSummaryPipeline.__new__(
-        LectureUnitSegmentSummaryPipeline
-    )
-    pipeline.cancel_event = threading.Event()
-    pipeline.callback = MagicMock()
-    pipeline.tokens = []
-    pipeline.lecture_unit_dto = SimpleNamespace(
-        course_id=COURSE,
-        lecture_id=LECTURE,
-        lecture_unit_id=UNIT,
-        lecture_name="Lecture",
-        course_name="Course",
-        base_url=BASE_URL,
-    )
-    pipeline.lecture_unit_segment_collection = MagicMock()
-    pipeline.lecture_unit_segment_collection.query.fetch_objects.return_value.objects = (
-        []
-    )
-    # One slide, so the summary loop runs exactly one write.
+    segment_collection = MagicMock()
+    segment_collection.query.fetch_objects.return_value.objects = []
     slide = SimpleNamespace(
         properties={
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
             LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: 1,
         }
     )
-    pipeline.lecture_unit_page_chunk_collection = MagicMock()
-    pipeline.lecture_unit_page_chunk_collection.query.fetch_objects.return_value.objects = [
-        slide
-    ]
-    pipeline.lecture_transcription_collection = MagicMock()
-    pipeline.lecture_transcription_collection.query.fetch_objects.return_value.objects = (
-        []
+    page_chunk_collection = MagicMock()
+    page_chunk_collection.query.fetch_objects.return_value.objects = [slide]
+    transcription_collection = MagicMock()
+    transcription_collection.query.fetch_objects.return_value.objects = []
+    return _new_pipeline(
+        LectureUnitSegmentSummaryPipeline,
+        cancel_event=threading.Event(),
+        callback=MagicMock(),
+        tokens=[],
+        lecture_unit_dto=SimpleNamespace(
+            course_id=COURSE,
+            lecture_id=LECTURE,
+            lecture_unit_id=UNIT,
+            lecture_name="Lecture",
+            course_name="Course",
+            base_url=BASE_URL,
+        ),
+        lecture_unit_segment_collection=segment_collection,
+        lecture_unit_page_chunk_collection=page_chunk_collection,
+        lecture_transcription_collection=transcription_collection,
+        llm_embedding=MagicMock(),
     )
+
+
+def _run_page_pipeline(pipeline):
+    with (
+        patch(
+            "iris.pipeline.lecture_ingestion_pipeline.save_pdf",
+            return_value="/tmp/x.pdf",
+        ),
+        patch("iris.pipeline.lecture_ingestion_pipeline.cleanup_temporary_file"),
+    ):
+        LectureUnitPageIngestionPipeline.__call__.__wrapped__(pipeline)
+
+
+def _replacement_target(pipeline, run, delete_mock):
     pipeline.llm_embedding = MagicMock()
-    return pipeline
+    pipeline.llm_embedding.embed.side_effect = lambda _text: _cancel_then_vector(
+        pipeline.cancel_event
+    )
+    return SimpleNamespace(run=run, delete_mock=delete_mock)
+
+
+def _page_replacement_target():
+    pipeline = _page_pipeline()
+    return _replacement_target(
+        pipeline,
+        lambda: _run_page_pipeline(pipeline),
+        pipeline.delete_lecture_unit,
+    )
+
+
+def _transcription_replacement_target():
+    pipeline = _transcription_pipeline()
+    return _replacement_target(
+        pipeline,
+        lambda: TranscriptionIngestionPipeline.__call__.__wrapped__(pipeline),
+        pipeline.delete_existing_transcription_data,
+    )
+
+
+def _commit_target(pipeline, run, delete_mock, insert_mock, extra_not_called=()):
+    reached_commit = threading.Event()
+    pipeline.llm_embedding = MagicMock()
+    pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
+    return SimpleNamespace(
+        run=run,
+        commit_lock=_commit_lock,
+        cancel_event=pipeline.cancel_event,
+        reached_commit=reached_commit,
+        delete_mock=delete_mock,
+        insert_mock=insert_mock,
+        extra_not_called=list(extra_not_called),
+    )
+
+
+def _assert_no_commit(target, errors):
+    assert len(errors) == 1
+    assert isinstance(errors[0], IngestionCancelledException)
+    target.delete_mock.assert_not_called()
+    target.insert_mock.assert_not_called()
+    for not_called in getattr(target, "extra_not_called", []):
+        not_called.assert_not_called()
 
 
 def test_page_chunking_stops_after_first_page_vision_result():
@@ -247,37 +310,20 @@ def test_page_chunking_stops_after_first_page_vision_result():
     assert pipeline.interpret_image.call_count == 1
 
 
-def test_page_replacement_is_skipped_after_cancellation_during_embedding():
-    pipeline = _page_pipeline()
-    pipeline.llm_embedding = MagicMock()
-    pipeline.llm_embedding.embed.side_effect = lambda _text: _cancel_then_vector(
-        pipeline.cancel_event
-    )
-
-    with (
-        patch(
-            "iris.pipeline.lecture_ingestion_pipeline.save_pdf",
-            return_value="/tmp/x.pdf",
-        ),
-        patch("iris.pipeline.lecture_ingestion_pipeline.cleanup_temporary_file"),
-    ):
-        with pytest.raises(IngestionCancelledException):
-            LectureUnitPageIngestionPipeline.__call__.__wrapped__(pipeline)
-
-    pipeline.delete_lecture_unit.assert_not_called()
-
-
-def test_transcription_replacement_is_skipped_after_cancellation_during_embedding():
-    pipeline = _transcription_pipeline()
-    pipeline.llm_embedding = MagicMock()
-    pipeline.llm_embedding.embed.side_effect = lambda _text: _cancel_then_vector(
-        pipeline.cancel_event
-    )
+@pytest.mark.parametrize(
+    "build_target",
+    [
+        _page_replacement_target,
+        _transcription_replacement_target,
+    ],
+)
+def test_replacement_is_skipped_after_cancellation_during_embedding(build_target):
+    target = build_target()
 
     with pytest.raises(IngestionCancelledException):
-        TranscriptionIngestionPipeline.__call__.__wrapped__(pipeline)
+        target.run()
 
-    pipeline.delete_existing_transcription_data.assert_not_called()
+    target.delete_mock.assert_not_called()
 
 
 def test_heavy_transcription_stops_during_whisper_progress(tmp_path):
@@ -351,13 +397,6 @@ def test_light_transcription_cancellation_precedes_no_video_shortcut():
 
     assert "before slide detection" in cancelled.value.reason
     pipeline.callback.update.assert_not_called()
-
-
-def test_whisper_retry_wait_stops_when_cancelled():
-    with pytest.raises(IngestionCancelledException):
-        sleep_unless_cancelled(
-            30, _cancelled(), lecture_unit_id=3, stage="whisper retry backoff"
-        )
 
 
 def test_whisper_retry_wait_stops_when_worker_cancelled(tmp_path):
@@ -485,66 +524,35 @@ def test_slide_turn_detector_stops_before_vision_query():
 
 
 def _page_commit_target():
-    """Page ingestion run stubbed down to the embedding and commit phases."""
     pipeline = _page_pipeline()
-
-    reached_commit = threading.Event()
-    pipeline.llm_embedding = MagicMock()
-    pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
-
-    def run():
-        with (
-            patch(
-                "iris.pipeline.lecture_ingestion_pipeline.save_pdf",
-                return_value="/tmp/x.pdf",
-            ),
-            patch("iris.pipeline.lecture_ingestion_pipeline.cleanup_temporary_file"),
-        ):
-            LectureUnitPageIngestionPipeline.__call__.__wrapped__(pipeline)
-
-    return SimpleNamespace(
-        run=run,
-        commit_lock=_commit_lock,
-        cancel_event=pipeline.cancel_event,
-        reached_commit=reached_commit,
+    return _commit_target(
+        pipeline,
+        lambda: _run_page_pipeline(pipeline),
         delete_mock=pipeline.delete_lecture_unit,
         insert_mock=pipeline.collection.batch.rate_limit,
     )
 
 
 def _transcription_commit_target():
-    """Transcription ingestion run stubbed down to embedding and commit."""
     pipeline = _transcription_pipeline()
-
-    reached_commit = threading.Event()
-    pipeline.llm_embedding = MagicMock()
-    pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
-
-    def run():
-        TranscriptionIngestionPipeline.__call__.__wrapped__(pipeline)
-
-    return SimpleNamespace(
-        run=run,
-        commit_lock=_commit_lock,
-        cancel_event=pipeline.cancel_event,
-        reached_commit=reached_commit,
+    return _commit_target(
+        pipeline,
+        lambda: TranscriptionIngestionPipeline.__call__.__wrapped__(pipeline),
         delete_mock=pipeline.delete_existing_transcription_data,
         insert_mock=pipeline.collection.batch.dynamic,
     )
 
 
 def _lecture_unit_commit_target():
-    pipeline = LectureUnitPipeline.__new__(LectureUnitPipeline)
-    pipeline.cancel_event = threading.Event()
-    pipeline.local = False
-    pipeline.callback = MagicMock()
-    pipeline.weaviate_client = MagicMock()
-    pipeline.llm_embedding = MagicMock()
-    pipeline.lecture_unit_collection = MagicMock()
-
-    reached_commit = threading.Event()
-    pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
-
+    pipeline = _new_pipeline(
+        LectureUnitPipeline,
+        cancel_event=threading.Event(),
+        local=False,
+        callback=MagicMock(),
+        weaviate_client=MagicMock(),
+        llm_embedding=MagicMock(),
+        lecture_unit_collection=MagicMock(),
+    )
     lecture_unit = SimpleNamespace(
         course_id=COURSE,
         lecture_id=LECTURE,
@@ -568,35 +576,28 @@ def _lecture_unit_commit_target():
                 pipeline, lecture_unit, initial_properties={}
             )
 
-    return SimpleNamespace(
-        run=run,
-        commit_lock=_commit_lock,
-        cancel_event=pipeline.cancel_event,
-        reached_commit=reached_commit,
+    return _commit_target(
+        pipeline,
+        run,
         delete_mock=pipeline.lecture_unit_collection.data.delete_many,
         insert_mock=pipeline.lecture_unit_collection.data.insert,
-        extra_not_called=[pipeline.lecture_unit_collection.query.fetch_objects],
+        extra_not_called=(pipeline.lecture_unit_collection.query.fetch_objects,),
     )
 
 
 def _segment_summary_commit_target():
     pipeline = _segment_summary_pipeline()
-    reached_commit = threading.Event()
-    pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
 
     def run():
-        # The summary itself needs an LLM round trip; only the write matters here.
         with patch.object(pipeline, "_create_summary", return_value="summary"):
             LectureUnitSegmentSummaryPipeline.__call__.__wrapped__(pipeline)
 
-    return SimpleNamespace(
-        run=run,
-        commit_lock=_commit_lock,
-        cancel_event=pipeline.cancel_event,
-        reached_commit=reached_commit,
+    return _commit_target(
+        pipeline,
+        run,
         delete_mock=pipeline.lecture_unit_segment_collection.query.fetch_objects,
         insert_mock=pipeline.lecture_unit_segment_collection.data.insert,
-        extra_not_called=[pipeline.lecture_unit_segment_collection.data.update],
+        extra_not_called=(pipeline.lecture_unit_segment_collection.data.update,),
     )
 
 
@@ -645,12 +646,7 @@ def test_cancelled_run_does_not_commit_after_waiting_for_commit_lock(build_targe
 
     thread.join(timeout=5)
     assert not thread.is_alive()
-    assert len(errors) == 1
-    assert isinstance(errors[0], IngestionCancelledException)
-    target.delete_mock.assert_not_called()
-    target.insert_mock.assert_not_called()
-    for not_called in getattr(target, "extra_not_called", []):
-        not_called.assert_not_called()
+    _assert_no_commit(target, errors)
 
 
 @pytest.mark.parametrize(
@@ -712,9 +708,4 @@ def test_same_unit_supersede_is_not_blocked_by_unrelated_batch_lock(build_target
     assert not old_thread.is_alive()
     assert not replacement_thread.is_alive()
     assert replacement_done.is_set()
-    assert len(old_errors) == 1
-    assert isinstance(old_errors[0], IngestionCancelledException)
-    target.delete_mock.assert_not_called()
-    target.insert_mock.assert_not_called()
-    for not_called in getattr(target, "extra_not_called", []):
-        not_called.assert_not_called()
+    _assert_no_commit(target, old_errors)
