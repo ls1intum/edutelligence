@@ -18,7 +18,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.domain.variant.abstract_variant import find_variant
 from iris.domain.variant.variant import Dep
-from iris.ingestion.ingestion_job_handler import IngestionJobHandler
+from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -31,8 +31,6 @@ from iris.vector_database.database import VectorDatabase
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
 logger = get_logger(__name__)
-
-_job_state = IngestionJobHandler()
 
 
 def _translate_transcription_exception_to_error_code(
@@ -152,7 +150,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
         """Run preprocessing, then serialize the Weaviate mutation phase."""
         needs_generation = _needs_transcription_generation(self.dto)
         needs_slides = _needs_slide_detection(self.dto)
-        cancel_event = getattr(self, "cancel_event", None)
+        cancel_event = self.cancel_event
 
         callback = IngestionStatusCallback(
             run_id=self.dto.settings.authentication_token,
@@ -258,7 +256,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             heavy = HeavyTranscriptionPipeline(
                 callback=callback,
                 storage=storage,
-                cancel_event=getattr(self, "cancel_event", None),
+                cancel_event=self.cancel_event,
             )
             raw_transcript = heavy(
                 video_url,
@@ -273,7 +271,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             )
             segment_count = len(raw_transcript.get("segments", []))
             raise_if_cancelled(
-                getattr(self, "cancel_event", None),
+                self.cancel_event,
                 lecture_unit_id,
                 "before transcription checkpoint",
             )
@@ -289,7 +287,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 video_path=storage.video_path,
                 local=self._is_local,
-                cancel_event=getattr(self, "cancel_event", None),
+                cancel_event=self.cancel_event,
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -302,7 +300,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 aligned_segments=aligned_segments,
             )
             raise_if_cancelled(
-                getattr(self, "cancel_event", None),
+                self.cancel_event,
                 lecture_unit_id,
                 "before alignment checkpoint",
             )
@@ -368,7 +366,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 lecture_unit_id,
             )
             raise_if_cancelled(
-                getattr(self, "cancel_event", None),
+                self.cancel_event,
                 lecture_unit_id,
                 "before video download",
             )
@@ -399,7 +397,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 video_path=storage.video_path,
                 local=self._is_local,
-                cancel_event=getattr(self, "cancel_event", None),
+                cancel_event=self.cancel_event,
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -411,7 +409,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 aligned_segments=aligned_segments,
             )
             raise_if_cancelled(
-                getattr(self, "cancel_event", None),
+                self.cancel_event,
                 lecture_unit_id,
                 "before alignment checkpoint",
             )
@@ -450,7 +448,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
         variant_id = self.variant_id
         is_local = self._is_local
-        cancel_event = getattr(self, "cancel_event", None)
+        cancel_event = self.cancel_event
 
         # PDF page ingestion
         if (
@@ -507,7 +505,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             self.dto.lecture_unit.lecture_unit_id,
             "terminal callback",
         )
-        if cancel_event is not None and not _job_state.is_current_job(
+        if cancel_event is not None and not ingestion_job_handler.is_current_job(
             self.dto.settings.artemis_base_url,
             self.dto.lecture_unit.course_id,
             self.dto.lecture_unit.lecture_id,

@@ -59,8 +59,9 @@ def test_deletion_pipeline_attempts_all_units_after_failures():
     assert pipeline.delete_lecture_unit.call_args_list == expected_calls
 
 
-def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
+def test_transcription_embedding_does_not_hold_lock_while_updating_status():
     pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
+    pipeline.cancel_event = None
     lock = SimpleNamespace(inside=False)
 
     class TrackingLock:
@@ -73,6 +74,7 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
     def update():
         assert lock.inside is False
 
+    lecture_unit = SimpleNamespace(lecture_unit_id=1)
     batch = MagicMock()
     dynamic_context = MagicMock()
     dynamic_context.__enter__.return_value = batch
@@ -80,15 +82,18 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
     pipeline.collection = SimpleNamespace(
         batch=SimpleNamespace(dynamic=MagicMock(return_value=dynamic_context))
     )
+    pipeline.dto = SimpleNamespace(lecture_unit=lecture_unit)
     pipeline.callback = SimpleNamespace(update=MagicMock(side_effect=update))
     pipeline.llm_embedding = SimpleNamespace(embed=MagicMock(return_value=[0.1]))
+    pipeline.delete_existing_transcription_data = MagicMock()
     chunk = {LectureTranscriptionSchema.SEGMENT_TEXT.value: "transcript"}
 
     with patch(
         "iris.pipeline.transcription_ingestion_pipeline.batch_update_lock",
         TrackingLock(),
     ):
-        pipeline.batch_insert([chunk])
+        prepared_chunks = pipeline._prepare_batch_insert([chunk])
+        pipeline._replace_prepared_chunks(lecture_unit, prepared_chunks)
 
     pipeline.callback.update.assert_called_once()
     batch.add_object.assert_called_once_with(properties=chunk, vector=[0.1])
@@ -96,6 +101,7 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
 
 def test_transcription_ingestion_reraises_without_terminal_callback():
     pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
+    pipeline.cancel_event = None
     pipeline.callback = MagicMock()
     pipeline.dto = SimpleNamespace(
         lecture_unit=SimpleNamespace(
@@ -127,6 +133,7 @@ def test_transcription_ingestion_reraises_without_terminal_callback():
 
 def test_transcription_ingestion_clears_existing_rows_when_new_chunks_are_empty():
     pipeline = TranscriptionIngestionPipeline.__new__(TranscriptionIngestionPipeline)
+    pipeline.cancel_event = None
     lecture_unit = SimpleNamespace(
         course_id=3,
         lecture_id=2,
@@ -222,7 +229,7 @@ def test_terminal_callback_is_skipped_when_run_is_no_longer_current():
             "iris.pipeline.lecture_ingestion_update_pipeline.LectureUnitPipeline"
         ) as lecture_unit_pipeline_cls,
         patch(
-            "iris.pipeline.lecture_ingestion_update_pipeline._job_state.is_current_job",
+            "iris.pipeline.lecture_ingestion_update_pipeline.ingestion_job_handler.is_current_job",
             return_value=False,
         ),
     ):

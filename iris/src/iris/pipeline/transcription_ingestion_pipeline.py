@@ -85,7 +85,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
     @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
-            lecture_unit = getattr(self.dto, "lecture_unit", None)
+            lecture_unit = self.dto.lecture_unit
             self.callback.update()
             chunks = self.chunk_transcription(lecture_unit)
             self.callback.update()
@@ -97,19 +97,16 @@ class TranscriptionIngestionPipeline(SubPipeline):
             self.callback.update()
             logger.info(
                 "[%s / %s] Embedding and indexing %d transcription chunks into Weaviate",
-                self.dto.lecture_unit.lecture_name,
-                self.dto.lecture_unit.lecture_unit_name,
+                lecture_unit.lecture_name,
+                lecture_unit.lecture_unit_name,
                 len(chunks),
             )
             prepared_chunks = self._prepare_batch_insert(chunks)
             self.callback.update()
-            if lecture_unit is not None:
-                self._replace_prepared_chunks(lecture_unit, prepared_chunks)
+            self._replace_prepared_chunks(lecture_unit, prepared_chunks)
             self.callback.update()
 
-            transcription = getattr(lecture_unit, "transcription", None)
-            language = getattr(transcription, "language", "")
-            return language, self.tokens
+            return lecture_unit.transcription.language, self.tokens
         except IngestionCancelledException:
             raise
         except Exception as e:
@@ -137,21 +134,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
         )
 
     def _lecture_unit_id(self) -> Optional[int]:
-        lecture_unit = getattr(getattr(self, "dto", None), "lecture_unit", None)
-        return getattr(lecture_unit, "lecture_unit_id", None)
-
-    def batch_insert(self, chunks):
-        prepared_chunks = self._prepare_batch_insert(chunks)
-        cancel_event = getattr(self, "cancel_event", None)
-        raise_if_cancelled(
-            cancel_event,
-            self._lecture_unit_id(),
-            "transcription indexing",
-        )
-        self._insert_prepared_chunks(prepared_chunks)
+        lecture_unit = self.dto.lecture_unit if self.dto is not None else None
+        return lecture_unit.lecture_unit_id if lecture_unit is not None else None
 
     def _prepare_batch_insert(self, chunks):
-        cancel_event = getattr(self, "cancel_event", None)
+        cancel_event = self.cancel_event
         lecture_unit_id = self._lecture_unit_id()
         prepared_chunks = []
         try:
@@ -189,10 +176,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
 
     def _replace_prepared_chunks(self, lecture_unit, prepared_chunks):
-        cancel_event = getattr(self, "cancel_event", None)
         with batch_update_lock:
             raise_if_cancelled(
-                cancel_event,
+                self.cancel_event,
                 lecture_unit.lecture_unit_id,
                 "transcription replacement",
             )
@@ -202,10 +188,8 @@ class TranscriptionIngestionPipeline(SubPipeline):
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO
     ) -> List[Dict[str, Any]]:
-        cancel_event = getattr(self, "cancel_event", None)
+        cancel_event = self.cancel_event
         chunks = []
-        if transcription is None or transcription.transcription is None:
-            return chunks
 
         slide_chunks = {}
         for segment in transcription.transcription.segments:
@@ -339,7 +323,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
         return self.replace_separator_char(text, "")
 
     def summarize_chunks(self, chunks: List[Dict[str, Any]]):
-        cancel_event = getattr(self, "cancel_event", None)
+        cancel_event = self.cancel_event
         chunks_with_summaries = []
         total = len(chunks)
         for i, chunk in enumerate(chunks):

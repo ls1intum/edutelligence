@@ -79,7 +79,7 @@ class LectureUnitPipeline(SubPipeline):
         lecture_unit: LectureUnitDTO,
         initial_properties: Optional[dict] = None,
     ):
-        cancel_event = getattr(self, "cancel_event", None)
+        cancel_event = self.cancel_event
         lecture_unit_filter = self._filter(lecture_unit)
         if initial_properties is None:
             initial_units = self.lecture_unit_collection.query.fetch_objects(

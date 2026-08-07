@@ -89,7 +89,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
     @observe(name="Lecture Unit Segment Summary Pipeline")
     def __call__(self) -> [str]:
-        cancel_event = getattr(self, "cancel_event", None)
+        cancel_event = self.cancel_event
         slide_number_start, slide_number_end = self._get_slide_range()
 
         summaries = []
@@ -250,7 +250,6 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         display_page_number: int,
         hidden_until=None,
     ):
-        cancel_event = getattr(self, "cancel_event", None)
         lecture_filter = Filter.by_property(
             LectureUnitSegmentSchema.COURSE_ID.value
         ).equal(self.lecture_unit_dto.course_id)
@@ -271,7 +270,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         embedding = self.llm_embedding.embed(summary)
         with batch_update_lock:
             raise_if_cancelled(
-                cancel_event,
+                self.cancel_event,
                 self.lecture_unit_dto.lecture_unit_id,
                 "lecture unit segment write",
             )

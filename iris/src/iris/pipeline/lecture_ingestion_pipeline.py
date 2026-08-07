@@ -206,9 +206,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
-            cancel_event = getattr(self, "cancel_event", None)
             raise_if_cancelled(
-                cancel_event,
+                self.cancel_event,
                 self.dto.lecture_unit.lecture_unit_id,
                 "lecture page ingestion start",
             )
@@ -371,7 +370,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         ]
 
     def _prepare_chunk_vectors(self, chunks):
-        cancel_event = getattr(self, "cancel_event", None)
+        cancel_event = self.cancel_event
         prepared_chunks = []
         for i, chunk in enumerate(chunks):
             raise_if_cancelled(
@@ -402,7 +401,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
 
     def _replace_prepared_chunks(self, prepared_chunks):
-        cancel_event = getattr(self, "cancel_event", None)
         with batch_update_lock:
             self._load_existing_slide_visibility()
             for chunk, _ in prepared_chunks:
@@ -411,7 +409,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     self._hidden_until_by_page.get(page_number)
                 )
             raise_if_cancelled(
-                cancel_event,
+                self.cancel_event,
                 self.dto.lecture_unit.lecture_unit_id,
                 "lecture page replacement",
             )
@@ -447,7 +445,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
             old_page_text = ""
             display_page_numbers: list[int] = []
-            cancel_event = getattr(self, "cancel_event", None)
+            cancel_event = self.cancel_event
             for page_num in range(doc.page_count):
                 raise_if_cancelled(
                     cancel_event,

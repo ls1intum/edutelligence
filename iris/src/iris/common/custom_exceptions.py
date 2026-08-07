@@ -1,5 +1,3 @@
-from typing import Optional
-
 from fastapi import HTTPException, status
 
 
@@ -52,7 +50,7 @@ class IngestionCancelledException(Exception):
 
     def __init__(
         self,
-        lecture_unit_id: Optional[int] = None,
+        lecture_unit_id: int | str | None = None,
         reason: str = "Superseded by a newer ingestion request",
     ):
         self.lecture_unit_id = lecture_unit_id

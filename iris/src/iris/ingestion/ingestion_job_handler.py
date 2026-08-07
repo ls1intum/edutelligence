@@ -13,12 +13,14 @@ class IngestionJobHandler:
     A handler to track the current ingestion jobs for lecture units.
     Starts every new job immediately and marks the previous same-unit job as
     superseded via its cancellation event.
+
+    Production code shares the ``ingestion_job_handler`` singleton below; a
+    fresh instance keeps its own registry, which is what tests want.
     """
 
-    _jobs_lock = threading.Lock()
-    _running_jobs: dict[IngestionJobKey, Event] = {}
-
     def __init__(self):
+        self._jobs_lock = threading.Lock()
+        self._running_jobs: dict[IngestionJobKey, Event] = {}
         self._superseded_jobs = 0
 
     @staticmethod
@@ -58,22 +60,31 @@ class IngestionJobHandler:
                 previous_cancel_event.set()
                 self._superseded_jobs += 1
             self._running_jobs[key] = cancel_event
-            process.start()
+            try:
+                process.start()
+            except BaseException:
+                # No worker will ever call complete_job for this key, so drop it
+                # here — otherwise the unit stays registered as running forever.
+                if self._running_jobs.get(key) is cancel_event:
+                    del self._running_jobs[key]
+                raise
+            superseded_jobs = self._superseded_jobs
         if previous_cancel_event is not None:
             logger.info(
-                "Superseding running ingestion job | course=%d lecture=%d unit=%d total_superseded=%d",
+                "Started ingestion job, superseding the previous one | "
+                "course=%d lecture=%d unit=%d total_superseded=%d",
                 course_id,
                 lecture_id,
                 lecture_unit_id,
-                self._superseded_jobs,
+                superseded_jobs,
             )
-        logger.info(
-            "Started ingestion job%s | course=%d lecture=%d unit=%d",
-            ", superseding the previous one" if previous_cancel_event else "",
-            course_id,
-            lecture_id,
-            lecture_unit_id,
-        )
+        else:
+            logger.info(
+                "Started ingestion job | course=%d lecture=%d unit=%d",
+                course_id,
+                lecture_id,
+                lecture_unit_id,
+            )
 
     def complete_job(
         self,
@@ -87,3 +98,7 @@ class IngestionJobHandler:
         with self._jobs_lock:
             if self._running_jobs.get(key) is cancel_event:
                 del self._running_jobs[key]
+
+
+ingestion_job_handler = IngestionJobHandler()
+"""Process-wide registry of running lecture ingestion jobs."""

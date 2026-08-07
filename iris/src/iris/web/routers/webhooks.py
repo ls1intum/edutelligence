@@ -39,7 +39,7 @@ from ...domain.ingestion.deletion_pipeline_execution_dto import (
     FaqDeletionExecutionDto,
     LecturesDeletionExecutionDto,
 )
-from ...ingestion.ingestion_job_handler import IngestionJobHandler
+from ...ingestion.ingestion_job_handler import ingestion_job_handler
 from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_update_pipeline import LectureIngestionUpdatePipeline
@@ -53,8 +53,6 @@ from ..status.lecture_deletion_status_callback import (
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
-
-ingestion_job_handler = IngestionJobHandler()
 
 
 def run_lecture_update_pipeline_worker(
