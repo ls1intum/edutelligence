@@ -147,6 +147,25 @@ def _merge_lecture_content(
     )
 
 
+def _current_slide_label(chunks: list) -> str:
+    """Describe the slide the student is on the way the student sees it.
+
+    The system prompt tells the agent to name slides by the number printed on them, never by the
+    technical page index used for retrieval and navigation. That rule only holds if the current
+    position is described the same way: with a deck whose printed numbering is shifted (title pages,
+    a cover sheet), labelling the position with the index would hand the agent a wrong number and
+    invite it to quote it.
+
+    A slide whose printed number could not be read is marked ``-1`` by ingestion (older records
+    ``0``); as in the retrieval results, that is no number at all and the slide is described without
+    one rather than by its index.
+    """
+    display_page_number = getattr(chunks[0], "display_page_number", None)
+    if display_page_number is None or display_page_number <= 0:
+        return "an unnumbered page"
+    return f"page {display_page_number}"
+
+
 def _tool_activity_snapshot(
     state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
 ) -> tuple[list[ActivityDTO], int]:
@@ -714,9 +733,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             chunks = chunks_by_page.get((p["lecture_unit_id"], p["page"]))
             if not chunks:
                 continue
+            # Labelled by the number printed on the slide, not by the technical page index the
+            # chunks were looked up with: the index stays internal, exactly as in the retrieval
+            # results the agent is told to quote printed numbers from.
             position = (
-                f'The student is currently viewing page {p["page"]} of the lecture '
-                f'slides of the lecture unit {names[p["lecture_unit_id"]]} '
+                f"The student is currently viewing {_current_slide_label(chunks)} of the "
+                f'lecture slides of the lecture unit {names[p["lecture_unit_id"]]} '
                 f'(lecture unit ID: {p["lecture_unit_id"]}).'
             )
             text = "\n".join(chunk.page_text_content for chunk in chunks)

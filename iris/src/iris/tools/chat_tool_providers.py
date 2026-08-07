@@ -161,7 +161,13 @@ def provide_current_view_content(state: State) -> Optional[Callable]:
 
     The material itself is deliberately kept out of the system prompt (see
     ``ChatPipeline._build_current_view``); this tool is how the agent gets at it.
+
+    Gated on the lecture tool like every other lecture provider: this hands out lecture material,
+    so a variant that may not retrieve lectures must not reach it through the viewing context
+    either.
     """
+    if not state.allow_lecture_tool:
+        return None
     content_blocks = getattr(state, "current_view_content_blocks", None)
     if not content_blocks:
         return None

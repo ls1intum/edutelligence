@@ -101,11 +101,15 @@ def _resolve_timestamp_segment(
     Grounds timestamps in the retrieval results the same way pages are grounded, including the
     restriction to the unit the point-out will navigate in. Returns None when no such segment was
     retrieved.
+
+    Segment intervals are half-open (``start <= t < end``), as they are everywhere else segments are
+    matched against a time. Adjacent segments share a boundary, so treating the end as inclusive
+    would resolve a timestamp taken from the later segment's start to the earlier one.
     """
     for segment in lecture_content.lecture_transcriptions:
         if (
             segment.lecture_unit_id == lecture_unit_id
-            and segment.segment_start_time <= timestamp <= segment.segment_end_time
+            and segment.segment_start_time <= timestamp < segment.segment_end_time
         ):
             return segment
     return None
@@ -234,13 +238,15 @@ def create_tool_combined_view_point_out(
         )
         same_page = page is not None and page == current_page
         # The student counts as already at the video position when they are anywhere inside the
-        # targeted segment's time interval, not only at its exact start.
+        # targeted segment's time interval, not only at its exact start. Half-open like the
+        # resolution above: a student sitting exactly on the boundary belongs to the next segment,
+        # and counting them as inside this one would suppress a jump they still need.
         same_timestamp = (
             target_segment is not None
             and current_timestamp is not None
             and target_segment.segment_start_time
             <= current_timestamp
-            <= target_segment.segment_end_time
+            < target_segment.segment_end_time
         )
 
         move_page = None if same_page else page
