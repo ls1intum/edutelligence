@@ -1,3 +1,8 @@
+# Import pyarrow before anything that transitively loads torch/sklearn (via the
+# iris.* import chain below). On Windows, loading pyarrow's native extension
+# after those libraries causes a fatal access violation (DLL conflict).
+import pyarrow  # noqa: F401
+
 import atexit
 import os
 import time
