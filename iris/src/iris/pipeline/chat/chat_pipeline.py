@@ -630,23 +630,29 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
     ) -> list[str]:
-        """Build the blocks describing what the student is currently viewing.
+        """Build the blocks describing where the student currently is.
 
         Looks up the slide page chunks / transcription segments for the student's
-        current position and renders one block per position: the position
-        description (page/timestamp + lecture unit) directly followed by the
-        corresponding lecture material. Only positions whose material is ingested
-        in the vector database are included — otherwise Iris can neither see nor
-        retrieve the material and could not actually be context-aware about it.
+        current position and renders one block per position. Only positions whose
+        material is ingested in the vector database are included — otherwise Iris
+        can neither see nor retrieve the material and could not actually be
+        context-aware about it.
+
+        Only the position itself goes into the system prompt. The material at that
+        position is put on the state for the current-position tool to read out
+        instead: ending the prompt with that material makes it read like a finished
+        answer, and a weaker model then answers straight from it without calling any
+        tool at all — which also costs it the lecture retrieval and the point-out,
+        since only retrieved results can be pointed at. Behind a tool the same
+        material stays reachable, but the agent has to decide it wants it.
 
         The content is also stored in ``lecture_content_storage`` so answers about
         the current position get lecture citations even when the agent never calls
         the lecture retrieval tool.
 
         Returns:
-            A list of blocks (position + content). Empty when there is no current
-            position or none of the viewed material is ingested in the vector
-            database.
+            A list of position descriptions. Empty when there is no current position
+            or none of the viewed material is ingested in the vector database.
         """
         context_pages, context_timestamps = self._collect_context_positions(
             getattr(state, "lecture_contexts", [])
@@ -700,19 +706,23 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 (chunk.lecture_unit_id, chunk.page_number), []
             ).append(chunk)
 
+        # Two parallel renderings of the same positions: the bare position for the prompt, and
+        # the position with its material for the tool to read out on request.
         blocks: list[str] = []
-        # One block per viewed position: position description first, then the
-        # corresponding lecture material directly below it.
+        content_blocks: list[str] = []
         for p in context_pages:
             chunks = chunks_by_page.get((p["lecture_unit_id"], p["page"]))
             if not chunks:
                 continue
-            text = "\n".join(chunk.page_text_content for chunk in chunks)
-            blocks.append(
+            position = (
                 f'The student is currently viewing page {p["page"]} of the lecture '
                 f'slides of the lecture unit {names[p["lecture_unit_id"]]} '
-                f'(lecture unit ID: {p["lecture_unit_id"]}). '
-                f"The content of this slide:\n---\n{text}\n---"
+                f'(lecture unit ID: {p["lecture_unit_id"]}).'
+            )
+            text = "\n".join(chunk.page_text_content for chunk in chunks)
+            blocks.append(position)
+            content_blocks.append(
+                f"{position} The content of this slide:\n---\n{text}\n---"
             )
         for t in context_timestamps:
             segments = [
@@ -723,13 +733,20 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             ]
             if not segments:
                 continue
-            text = "\n".join(tr.segment_text for tr in segments)
-            blocks.append(
+            position = (
                 f'The student is currently at {t["timestamp"]} seconds in the '
                 f'lecture video of the lecture unit {names[t["lecture_unit_id"]]} '
-                f'(lecture unit ID: {t["lecture_unit_id"]}). '
-                f"The transcript at this point:\n---\n{text}\n---"
+                f'(lecture unit ID: {t["lecture_unit_id"]}).'
             )
+            text = "\n".join(tr.segment_text for tr in segments)
+            blocks.append(position)
+            content_blocks.append(
+                f"{position} The transcript at this point:\n---\n{text}\n---"
+            )
+
+        # Read by provide_current_view_content when the tools are built, which happens after
+        # the system message.
+        state.current_view_content_blocks = content_blocks
 
         return blocks
 

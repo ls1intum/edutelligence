@@ -18,6 +18,7 @@ from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.tools import (
     create_tool_combined_view_point_out,
+    create_tool_current_view_content,
     create_tool_faq_content_retrieval,
     create_tool_file_lookup,
     create_tool_generate_mcq_questions,
@@ -155,6 +156,18 @@ def provide_combined_view_point_out(state: State) -> Optional[Callable]:
     )
 
 
+def provide_current_view_content(state: State) -> Optional[Callable]:
+    """Provide the current-position content tool when the student is viewing lecture material.
+
+    The material itself is deliberately kept out of the system prompt (see
+    ``ChatPipeline._build_current_view``); this tool is how the agent gets at it.
+    """
+    content_blocks = getattr(state, "current_view_content_blocks", None)
+    if not content_blocks:
+        return None
+    return create_tool_current_view_content(content_blocks)
+
+
 def provide_faq_retrieval(state: State) -> Optional[Callable]:
     if not state.dto.course.name:
         return None
@@ -244,6 +257,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
 CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_lecture_retrieval,
     provide_combined_view_point_out,
+    provide_current_view_content,
     provide_faq_retrieval,
     provide_course_details,
     provide_exercise_list,

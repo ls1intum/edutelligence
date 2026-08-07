@@ -142,9 +142,16 @@ def test_current_view_content_is_stored_for_citations():
 
     blocks = pipeline._build_current_view(state)
 
-    # Each block names the position (page/timestamp + unit) and includes the
-    # corresponding material directly below it.
+    # The prompt gets the position only. Spelling the material out there makes the prompt end
+    # on something that reads like a finished answer, and the agent stops calling tools.
     assert blocks == [
+        "The student is currently viewing page 3 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1).",
+        "The student is currently at 50.0 seconds in the lecture video of the "
+        "lecture unit Test Unit (lecture unit ID: 1).",
+    ]
+    # The material stays reachable, but through the current-position tool.
+    assert state.current_view_content_blocks == [
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nPage 3 content\n---",
@@ -180,8 +187,13 @@ def test_multiple_chunks_on_same_page_share_one_block():
 
     blocks = pipeline._build_current_view(state)
 
-    # Both chunks of page 2 are bundled into a single block under one position.
+    # One position in the prompt, and both chunks of page 2 bundled under that one position in
+    # what the current-position tool reads out.
     assert blocks == [
+        "The student is currently viewing page 2 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1)."
+    ]
+    assert state.current_view_content_blocks == [
         "The student is currently viewing page 2 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nFirst half\nSecond half\n---"
@@ -242,6 +254,10 @@ def test_only_ingested_positions_are_described():
     blocks = pipeline._build_current_view(state)
 
     assert blocks == [
+        "The student is currently viewing page 3 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1)."
+    ]
+    assert state.current_view_content_blocks == [
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nPage 3 content\n---",
