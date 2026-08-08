@@ -19,6 +19,7 @@ from iris.domain.data.metrics.transcription_dto import (
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
+from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -176,14 +177,18 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
 
     def _replace_prepared_chunks(self, lecture_unit, prepared_chunks):
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
         with batch_update_lock:
-            raise_if_cancelled(
-                self.cancel_event,
+            with job_handler.current_job_guard(
+                self.dto.settings.artemis_base_url,
+                lecture_unit.course_id,
+                lecture_unit.lecture_id,
                 lecture_unit.lecture_unit_id,
+                self.cancel_event,
                 "transcription replacement",
-            )
-            self.delete_existing_transcription_data(lecture_unit)
-            self._insert_prepared_chunks(prepared_chunks)
+            ):
+                self.delete_existing_transcription_data(lecture_unit)
+                self._insert_prepared_chunks(prepared_chunks)
 
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO

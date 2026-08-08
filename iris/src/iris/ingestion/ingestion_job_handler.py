@@ -1,7 +1,11 @@
 import threading
+from contextlib import contextmanager
 from threading import Event, Thread
+from typing import Iterator
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
+from iris.pipeline.lecture_update_lock import lecture_update_lock
 
 logger = get_logger(__name__)
 
@@ -44,6 +48,32 @@ class IngestionJobHandler:
     def create_cancellation_event(self) -> Event:
         return Event()
 
+    @contextmanager
+    def current_job_guard(
+        self,
+        base_url: str,
+        course_id: int,
+        lecture_id: int,
+        lecture_unit_id: int,
+        cancel_event: Event | None,
+        stage: str,
+    ) -> Iterator[None]:
+        if cancel_event is None:
+            yield
+            return
+        with lecture_update_lock(base_url, course_id, lecture_id, lecture_unit_id):
+            with self._jobs_lock:
+                current_job = self._running_jobs.get(
+                    self._job_key(base_url, course_id, lecture_id, lecture_unit_id)
+                )
+            if cancel_event.is_set() or (
+                current_job is not None and current_job is not cancel_event
+            ):
+                raise IngestionCancelledException(
+                    lecture_unit_id, f"Cancelled during {stage}"
+                )
+            yield
+
     def add_job(
         self,
         process: Thread,
@@ -54,21 +84,22 @@ class IngestionJobHandler:
         cancel_event: Event,
     ):
         key = self._job_key(base_url, course_id, lecture_id, lecture_unit_id)
-        with self._jobs_lock:
-            previous_cancel_event = self._running_jobs.get(key)
-            if previous_cancel_event is not None:
-                previous_cancel_event.set()
-                self._superseded_jobs += 1
-            self._running_jobs[key] = cancel_event
-            try:
-                process.start()
-            except BaseException:
-                # No worker will ever call complete_job for this key, so drop it
-                # here — otherwise the unit stays registered as running forever.
-                if self._running_jobs.get(key) is cancel_event:
-                    del self._running_jobs[key]
-                raise
-            superseded_jobs = self._superseded_jobs
+        with lecture_update_lock(base_url, course_id, lecture_id, lecture_unit_id):
+            with self._jobs_lock:
+                previous_cancel_event = self._running_jobs.get(key)
+                if previous_cancel_event is not None:
+                    previous_cancel_event.set()
+                    self._superseded_jobs += 1
+                self._running_jobs[key] = cancel_event
+                try:
+                    process.start()
+                except BaseException:
+                    # No worker will ever call complete_job for this key, so drop it
+                    # here — otherwise the unit stays registered as running forever.
+                    if self._running_jobs.get(key) is cancel_event:
+                        del self._running_jobs[key]
+                    raise
+                superseded_jobs = self._superseded_jobs
         if previous_cancel_event is not None:
             logger.info(
                 "Started ingestion job, superseding the previous one | "

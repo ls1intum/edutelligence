@@ -177,7 +177,7 @@ def _replacement_target(pipeline, run, delete_mock):
     pipeline.llm_embedding.embed.side_effect = lambda _text: _cancel_then_vector(
         pipeline.cancel_event
     )
-    return SimpleNamespace(run=run, delete_mock=delete_mock)
+    return SimpleNamespace(pipeline=pipeline, run=run, delete_mock=delete_mock)
 
 
 def _page_replacement_target():
@@ -210,6 +210,7 @@ def _commit_target(
     pipeline.llm_embedding = MagicMock()
     pipeline.llm_embedding.embed.side_effect = _signal_then_vector(reached_commit)
     return SimpleNamespace(
+        pipeline=pipeline,
         run=run,
         commit_lock=commit_lock,
         cancel_event=pipeline.cancel_event,
@@ -419,6 +420,7 @@ def _segment_summary_commit_target():
 
 def _launch_ingestion_run(handler, target):
     errors = []
+    target.pipeline.job_handler = handler
 
     def run():
         try:

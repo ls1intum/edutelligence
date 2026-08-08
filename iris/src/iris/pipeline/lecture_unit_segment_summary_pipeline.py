@@ -10,6 +10,7 @@ from weaviate.client import WeaviateClient
 from iris.common.cancellation import raise_if_cancelled
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -250,6 +251,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         display_page_number: int,
         hidden_until=None,
     ):
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
         lecture_filter = Filter.by_property(
             LectureUnitSegmentSchema.COURSE_ID.value
         ).equal(self.lecture_unit_dto.course_id)
@@ -269,41 +271,44 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
         embedding = self.llm_embedding.embed(summary)
         with batch_update_lock:
-            raise_if_cancelled(
-                self.cancel_event,
+            with job_handler.current_job_guard(
+                self.lecture_unit_dto.base_url,
+                self.lecture_unit_dto.course_id,
+                self.lecture_unit_dto.lecture_id,
                 self.lecture_unit_dto.lecture_unit_id,
+                self.cancel_event,
                 "lecture unit segment write",
-            )
-            lectures = self.lecture_unit_segment_collection.query.fetch_objects(
-                filters=lecture_filter, limit=1
-            ).objects
+            ):
+                lectures = self.lecture_unit_segment_collection.query.fetch_objects(
+                    filters=lecture_filter, limit=1
+                ).objects
 
-            if len(lectures) == 0:
-                self.lecture_unit_segment_collection.data.insert(
+                if len(lectures) == 0:
+                    self.lecture_unit_segment_collection.data.insert(
+                        properties={
+                            LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
+                            LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
+                            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
+                            LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
+                            LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
+                            LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
+                            LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
+                            LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
+                        },
+                        vector=embedding,
+                    )
+                    return
+
+                lecture_uuid = lectures[0].uuid
+                self.lecture_unit_segment_collection.data.update(
+                    uuid=lecture_uuid,
                     properties={
-                        LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
-                        LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
-                        LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
                         LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
-                        LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
                         LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
-                        LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
                         LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
                     },
                     vector=embedding,
                 )
-                return
-
-            lecture_uuid = lectures[0].uuid
-            self.lecture_unit_segment_collection.data.update(
-                uuid=lecture_uuid,
-                properties={
-                    LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
-                    LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
-                    LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
-                },
-                vector=embedding,
-            )
 
         # self.lecture_unit_segment_collection.data.reference_replace(
         #     from_uuid=lecture_uuid,

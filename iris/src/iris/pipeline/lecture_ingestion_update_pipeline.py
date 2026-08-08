@@ -147,7 +147,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
         self._run()
 
     def _run(self):
-        """Run preprocessing, then serialize the Weaviate mutation phase."""
+        """Run preprocessing, then perform guarded final mutations."""
         needs_generation = _needs_transcription_generation(self.dto)
         needs_slides = _needs_slide_detection(self.dto)
         cancel_event = self.cancel_event
@@ -204,18 +204,12 @@ class LectureIngestionUpdatePipeline(Pipeline):
             # ── Phase 2: Ingestion (existing logic) ──────────────────────
             # Ingestion-phase failures (vector DB, PDF, summary) are NOT
             # transcription failures and must not be labeled as such.
-            with lecture_update_lock(
-                self.dto.settings.artemis_base_url,
-                self.dto.lecture_unit.course_id,
-                self.dto.lecture_unit.lecture_id,
+            raise_if_cancelled(
+                cancel_event,
                 self.dto.lecture_unit.lecture_unit_id,
-            ):
-                raise_if_cancelled(
-                    cancel_event,
-                    self.dto.lecture_unit.lecture_unit_id,
-                    "before ingestion",
-                )
-                self._run_ingestion(callback, initial_properties)
+                "before ingestion",
+            )
+            self._run_ingestion(callback, initial_properties)
 
         except IngestionCancelledException as e:
             logger.info(
@@ -505,21 +499,18 @@ class LectureIngestionUpdatePipeline(Pipeline):
             self.dto.lecture_unit.lecture_unit_id,
             "terminal callback",
         )
-        if cancel_event is not None and not ingestion_job_handler.is_current_job(
+        with ingestion_job_handler.current_job_guard(
             self.dto.settings.artemis_base_url,
             self.dto.lecture_unit.course_id,
             self.dto.lecture_unit.lecture_id,
             self.dto.lecture_unit.lecture_unit_id,
             cancel_event,
+            "terminal callback",
         ):
-            raise IngestionCancelledException(
-                self.dto.lecture_unit.lecture_unit_id,
-                "Cancelled during terminal callback",
+            callback.finish(
+                display_page_numbers=self.dto.lecture_unit.display_page_numbers,
+                tokens=tokens,
             )
-        callback.finish(
-            display_page_numbers=self.dto.lecture_unit.display_page_numbers,
-            tokens=tokens,
-        )
 
     # ── Checkpoint helpers ───────────────────────────────────────────────
 

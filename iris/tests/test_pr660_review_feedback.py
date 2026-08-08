@@ -3,6 +3,7 @@
 # pylint: skip-file
 
 import threading
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
@@ -74,7 +75,7 @@ def test_transcription_embedding_does_not_hold_lock_while_updating_status():
     def update():
         assert lock.inside is False
 
-    lecture_unit = SimpleNamespace(lecture_unit_id=1)
+    lecture_unit = SimpleNamespace(course_id=3, lecture_id=2, lecture_unit_id=1)
     batch = MagicMock()
     dynamic_context = MagicMock()
     dynamic_context.__enter__.return_value = batch
@@ -82,7 +83,10 @@ def test_transcription_embedding_does_not_hold_lock_while_updating_status():
     pipeline.collection = SimpleNamespace(
         batch=SimpleNamespace(dynamic=MagicMock(return_value=dynamic_context))
     )
-    pipeline.dto = SimpleNamespace(lecture_unit=lecture_unit)
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=lecture_unit,
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+    )
     pipeline.callback = SimpleNamespace(update=MagicMock(side_effect=update))
     pipeline.llm_embedding = SimpleNamespace(embed=MagicMock(return_value=[0.1]))
     pipeline.delete_existing_transcription_data = MagicMock()
@@ -221,6 +225,11 @@ def test_terminal_callback_is_skipped_when_run_is_no_longer_current():
     pipeline = LectureIngestionUpdatePipeline(dto, cancel_event=threading.Event())
     callback = MagicMock()
 
+    @contextmanager
+    def cancelled_guard(*_args, **_kwargs):
+        raise IngestionCancelledException(7, "Cancelled during terminal callback")
+        yield
+
     with (
         patch(
             "iris.pipeline.lecture_ingestion_update_pipeline.VectorDatabase"
@@ -229,8 +238,8 @@ def test_terminal_callback_is_skipped_when_run_is_no_longer_current():
             "iris.pipeline.lecture_ingestion_update_pipeline.LectureUnitPipeline"
         ) as lecture_unit_pipeline_cls,
         patch(
-            "iris.pipeline.lecture_ingestion_update_pipeline.ingestion_job_handler.is_current_job",
-            return_value=False,
+            "iris.pipeline.lecture_ingestion_update_pipeline.ingestion_job_handler.current_job_guard",
+            side_effect=cancelled_guard,
         ),
     ):
         database_cls.return_value.get_client.return_value = MagicMock()

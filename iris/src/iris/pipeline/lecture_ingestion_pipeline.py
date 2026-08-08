@@ -29,6 +29,7 @@ from ..domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from ..domain.data.slide_vision_dto import SlideVisionDTO
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
+from ..ingestion.ingestion_job_handler import ingestion_job_handler
 from ..llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -401,26 +402,32 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
 
     def _replace_prepared_chunks(self, prepared_chunks):
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
         with batch_update_lock:
-            self._load_existing_slide_visibility()
-            for chunk, _ in prepared_chunks:
-                page_number = int(chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value])
-                chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
-                    self._hidden_until_by_page.get(page_number)
-                )
-            raise_if_cancelled(
-                self.cancel_event,
-                self.dto.lecture_unit.lecture_unit_id,
-                "lecture page replacement",
-            )
-            if not self.delete_lecture_unit(
+            with job_handler.current_job_guard(
+                self.dto.settings.artemis_base_url,
                 self.dto.lecture_unit.course_id,
                 self.dto.lecture_unit.lecture_id,
                 self.dto.lecture_unit.lecture_unit_id,
-                self.dto.settings.artemis_base_url,
+                self.cancel_event,
+                "lecture page replacement",
             ):
-                raise RuntimeError("Error while removing old slides")
-            self._insert_prepared_chunks(prepared_chunks)
+                self._load_existing_slide_visibility()
+                for chunk, _ in prepared_chunks:
+                    page_number = int(
+                        chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value]
+                    )
+                    chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
+                        self._hidden_until_by_page.get(page_number)
+                    )
+                if not self.delete_lecture_unit(
+                    self.dto.lecture_unit.course_id,
+                    self.dto.lecture_unit.lecture_id,
+                    self.dto.lecture_unit.lecture_unit_id,
+                    self.dto.settings.artemis_base_url,
+                ):
+                    raise RuntimeError("Error while removing old slides")
+                self._insert_prepared_chunks(prepared_chunks)
 
     def chunk_data(
         self,
