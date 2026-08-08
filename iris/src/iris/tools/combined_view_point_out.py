@@ -215,7 +215,7 @@ def create_tool_combined_view_point_out(
         )
         if timestamp is not None and target_segment is None:
             problems.append(
-                f"the video timestamp {timestamp:.0f}s does not fall within any retrieved "
+                f"the video timestamp {timestamp:g}s does not fall within any retrieved "
                 "video segment of the lecture unit the student is viewing"
             )
 

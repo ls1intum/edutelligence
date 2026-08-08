@@ -1,5 +1,6 @@
 """Tool for retrieving lecture content using RAG."""
 
+import math
 from typing import Any, Callable, Dict, List, Optional
 
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -27,6 +28,25 @@ def _format_page_reference(
         else f"Page: {display_page_number}"
     )
     return page if point_out_id is None else f"{page}, point-out id: {point_out_id}"
+
+
+def _format_video_timestamp(start_time: float, end_time: float) -> str:
+    """Render a transcription segment's start as a timestamp that still points back at it.
+
+    The agent is told to pass a displayed timestamp to the point-out tool exactly as shown, and that
+    tool matches segments half-open (``start <= t < end``). Rounding a fractional start to the
+    nearest whole second can move it before its own segment — 42.4 displayed as 42 lands in the
+    preceding segment, or nowhere — leaving the segment impossible to point at. So the value is
+    rounded up instead: never earlier than the start, and whole seconds wherever they fit, since a
+    round number is what the agent can also name to the student.
+
+    A segment too short to contain the next whole second falls back to its exact start: repr round-
+    trips a float, so that value is inside the segment by construction.
+    """
+    whole_second = math.ceil(start_time)
+    if whole_second < end_time:
+        return str(whole_second)
+    return repr(start_time)
 
 
 def create_tool_lecture_content_retrieval(
@@ -103,7 +123,11 @@ def create_tool_lecture_content_retrieval(
                 # two numberings diverge. What this segment can be pointed at by is its timestamp.
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
                 + _format_page_reference(paragraph.page_number)
-                + f", Video timestamp: {paragraph.segment_start_time:.0f}s"
+                + ", Video timestamp: "
+                + _format_video_timestamp(
+                    paragraph.segment_start_time, paragraph.segment_end_time
+                )
+                + "s"
                 f"\nContent:\n---{paragraph.segment_text}---\n\n"
             )
 
