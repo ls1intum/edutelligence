@@ -5,6 +5,7 @@ import {
   computed,
   inject,
   signal,
+  effect,
 } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 
@@ -13,6 +14,8 @@ import { Model } from '../../shared/models/model.model';
 
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { HttpClient } from '@angular/common/http';
+import { firstValueFrom } from 'rxjs';
 
 
 type ModelErrorTab = 'error_report' | 'complete_logs';
@@ -48,7 +51,7 @@ const PROCESS_DATA: Record<string, readonly ModelProcess[]> = {
       id: 1,
       process: 'Download',
       status: 'failure',
-      checklist: 'IceCold',
+      checklist: 'Download',
       items: [
         {
           name: 'Model Identification',
@@ -64,12 +67,12 @@ const PROCESS_DATA: Record<string, readonly ModelProcess[]> = {
   ],
 
 
-  'gemma-4': [
+  'google__gemma-3-4b-it': [
     {
       id: 1,
       process: 'Download',
       status: 'success',
-      checklist: 'IceCold',
+      checklist: 'Download',
       items: [
         {
           name: 'Model Identification',
@@ -86,7 +89,7 @@ const PROCESS_DATA: Record<string, readonly ModelProcess[]> = {
       id: 2,
       process: 'Initialization',
       status: 'failure',
-      checklist: 'Cold',
+      checklist: 'Initialization',
       items: [
         {
           name: 'Initialized vLLM engine',
@@ -132,7 +135,29 @@ const PROCESS_DATA: Record<string, readonly ModelProcess[]> = {
 
 };
 
+const AVAILABLE_LOGS = [
+  'google__gemma-3-4b-it',
+];
 
+interface ModelLog {
+  readonly node: string;
+  readonly file: string;
+}
+
+const MODEL_LOGS: Record<string, readonly ModelLog[]> = {
+
+  'google__gemma-3-4b-it': [
+    {
+      node: 'Node 1',
+      file: 'google__gemma-3-4b-it-node1.log',
+    },
+    {
+      node: 'Node 3',
+      file: 'google__gemma-3-4b-it-node3.log',
+    },
+  ],
+
+};
 
 @Component({
   selector: 'app-model-error-report',
@@ -156,6 +181,8 @@ export class ModelErrorReport implements OnInit {
 
   private readonly modelService = inject(ModelManagementService);
 
+  private readonly http = inject(HttpClient);
+
 
 
   readonly tabs: readonly ModelErrorTab[] = [
@@ -164,7 +191,15 @@ export class ModelErrorReport implements OnInit {
   ];
 
 
-  readonly visibleTabs = computed<readonly ModelErrorTab[]>(() => this.tabs);
+  readonly visibleTabs = computed<readonly ModelErrorTab[]>(() => {
+
+    if (this.hasCompleteLogs()) {
+      return this.tabs;
+    }
+
+    return ['error_report'];
+
+  });
 
 
 
@@ -184,27 +219,80 @@ export class ModelErrorReport implements OnInit {
 
   readonly loadError = signal(false);
 
+  readonly completeLog = signal('');
 
+  readonly hasCompleteLogs = computed(() => {
+
+    const currentModel = this.model();
+
+    if (!currentModel) {
+      return false;
+    }
+
+    return AVAILABLE_LOGS.includes(
+      currentModel.name
+    );
+
+  });
+
+  readonly selectedLogNode = signal<string | null>(null);
+
+  readonly availableLogs = computed(() => {
+
+    const currentModel = this.model();
+
+    if (!currentModel) {
+      return [];
+    }
+
+    return MODEL_LOGS[currentModel.name] ?? [];
+
+  });
+
+
+  readonly selectedLog = computed(() => {
+
+    const logs = this.availableLogs();
+
+    if (!logs.length) {
+      return null;
+    }
+
+    const selectedNode = this.selectedLogNode();
+
+    return (
+      logs.find(log =>
+        log.node === selectedNode
+      )
+      ?? logs[0]
+    );
+
+  });
+
+  constructor() {
+
+    effect(() => {
+
+      const log = this.selectedLog();
+
+      if (!log) {
+        return;
+      }
+
+      void this.loadLog(log.file);
+
+    });
+
+  }
 
   readonly activeTab = signal<ModelErrorTab>(
     'error_report'
   );
 
-
   readonly processesLoading = signal(false);
 
-
-
-  /**
-   * User-controlled UI state.
-   */
   readonly expandedProcess = signal<number[]>([]);
 
-
-
-  /**
-   * Derived process data based on current model.
-   */
   readonly processes = computed<readonly ModelProcess[]>(() => {
 
     const currentModel = this.model();
@@ -217,8 +305,6 @@ export class ModelErrorReport implements OnInit {
     return PROCESS_DATA[currentModel.name] ?? [];
 
   });
-
-
 
   readonly currentLifecycle = signal('IceCold');
 
@@ -265,6 +351,14 @@ export class ModelErrorReport implements OnInit {
 
       this.model.set(foundModel);
 
+      const logs = MODEL_LOGS[foundModel.name];
+
+      if (logs?.length) {
+        this.selectedLogNode.set(
+          logs[0].node
+        );
+
+      }
 
       this.expandFailedProcesses();
 
@@ -338,31 +432,6 @@ export class ModelErrorReport implements OnInit {
 
   }
 
-
-
-  getLifecycleEmoji(stage: string): string {
-
-    const lifecycleEmoji: Record<string, string> = {
-
-      DeepFreeze: '❄️',
-      IceCold: '🧊',
-      Cold: '🥶',
-      WarmDisk: '💽',
-      Lukewarm: '💧',
-      Warm: '♨️',
-      Hot: '🔥',
-      Dusty: '🕸️',
-      Dead: '☠️',
-
-    };
-
-
-    return lifecycleEmoji[stage] ?? '';
-
-  }
-
-
-
   getScopeLabel(scope?: ErrorScope): string {
 
     if (!scope) {
@@ -376,6 +445,31 @@ export class ModelErrorReport implements OnInit {
 
 
     return scope.nodes?.join(', ') ?? '';
+
+  }
+
+  private async loadLog(file: string): Promise<void> {
+
+    try {
+
+      const log = await firstValueFrom(
+        this.http.get(
+          `/logs/${file}`,
+          {
+            responseType: 'text',
+          }
+        )
+      );
+
+      this.completeLog.set(log);
+
+    } catch {
+
+      this.completeLog.set(
+        'Unable to load log file.'
+      );
+
+    }
 
   }
 

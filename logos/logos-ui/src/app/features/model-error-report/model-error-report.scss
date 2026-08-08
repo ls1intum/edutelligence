@@ -1,3 +1,5 @@
+@use 'styles/glass' as *;
+
 // ==========================================================================
 // Model Error Report
 // ==========================================================================
@@ -436,6 +438,83 @@
     rgb(var(--color-danger-800));
 }
 
+// ==========================================================================
+// Logs
+// ==========================================================================
+
+.logs-panel {
+  @include glass-surface;
+
+  padding: 12px;
+
+  border-radius: 8px;
+
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.log-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  padding: 4px 4px 12px;
+
+  border-bottom:
+    1px solid rgb(var(--color-typography-300) / 0.6);
+}
+
+
+.log-selector__label {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+
+  color:
+    rgb(var(--color-typography-700));
+}
+
+
+.log-selector__select {
+  min-width: 160px;
+
+  padding: 6px 12px;
+
+  border-radius: 8px;
+
+  border:
+    1px solid rgb(var(--color-typography-300));
+
+  background:
+    rgb(var(--glass-fill) / var(--glass-fill-opacity));
+
+  color:
+    rgb(var(--nav-active-text));
+}
+
+.log-viewer {
+  margin: 0;
+
+  padding: 12px;
+
+  max-height: 70vh;
+
+  overflow-y: auto;
+  overflow-x: auto;
+
+  white-space: pre;
+
+  background: transparent;
+
+  border-radius: 0;
+
+  font-family: 'JetBrains Mono', monospace;
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+
+  color:
+    rgb(var(--color-typography-700));
+}
 
 // ==========================================================================
 // Responsive

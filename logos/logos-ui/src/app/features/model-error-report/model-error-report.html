@@ -31,10 +31,6 @@
       <div class="header-left">
 
         <h1 class="model-name">
-          <span class="model-state-emoji">
-            {{ getLifecycleEmoji(currentLifecycle()) }}
-          </span>
-
           {{ model.name }}
         </h1>
 
@@ -154,12 +150,7 @@
 
                         <span class="expanded-title">
 
-                          <span class="checklist-emoji">
-                            {{ getLifecycleEmoji(process.checklist) }}
-                          </span>
-
-                          Checklist:
-                          {{ process.checklist }}
+                          Checklist
 
                         </span>
 
@@ -257,8 +248,26 @@
         <!-- Logs -->
         @case ('complete_logs') {
 
-          <div class="logs-placeholder">
-            Complete Logs go here.
+          <div class="logs-panel">
+
+            <div class="log-selector">
+              <select
+                class="log-selector__select"
+                [value]="selectedLogNode()"
+                (change)="selectedLogNode.set($any($event.target).value)"
+              >
+                @for (log of availableLogs(); track log.node) {
+                  <option [value]="log.node">
+                    {{ log.node }}
+                  </option>
+                }
+              </select>
+            </div>
+
+            <pre class="log-viewer">
+              {{ completeLog() }}
+            </pre>
+
           </div>
 
         }
