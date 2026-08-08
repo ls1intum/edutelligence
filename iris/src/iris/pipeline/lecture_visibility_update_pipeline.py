@@ -9,6 +9,7 @@ from iris.domain.ingestion.lecture_visibility_update_dto import (
     LectureUnitVisibilityUpdateDTO,
     SlideVisibilityDTO,
 )
+from iris.pipeline.lecture_update_lock import lecture_update_lock
 from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -41,38 +42,41 @@ class LectureVisibilityUpdatePipeline:
         self, dto: LectureUnitVisibilityUpdateDTO
     ) -> LectureVisibilityUpdateResult:
         with batch_update_lock:
-            units = self._find_units(dto)
-            if not units:
-                return LectureVisibilityUpdateResult(0, 0, 0)
+            with lecture_update_lock(
+                dto.base_url, dto.course_id, dto.lecture_id, dto.lecture_unit_id
+            ):
+                units = self._find_units(dto)
+                if not units:
+                    return LectureVisibilityUpdateResult(0, 0, 0)
 
-            snapshot = self._merge_slide_visibility_snapshot(units, dto)
-            self._update_units(
-                units,
-                {
-                    LectureUnitSchema.RELEASE_DATE.value: datetime.max.replace(
-                        tzinfo=timezone.utc
-                    ),
-                    LectureUnitSchema.SLIDE_VISIBILITY.value: snapshot,
-                },
-            )
-            page_count = 0
-            segment_count = 0
-            for slide in dto.slides:
-                page_count += self._update_slide_visibility(
-                    self.page_chunk_collection,
-                    LectureUnitPageChunkSchema,
-                    dto,
-                    slide,
+                snapshot = self._merge_slide_visibility_snapshot(units, dto)
+                self._update_units(
+                    units,
+                    {
+                        LectureUnitSchema.RELEASE_DATE.value: datetime.max.replace(
+                            tzinfo=timezone.utc
+                        ),
+                        LectureUnitSchema.SLIDE_VISIBILITY.value: snapshot,
+                    },
                 )
-                segment_count += self._update_slide_visibility(
-                    self.lecture_unit_segment_collection,
-                    LectureUnitSegmentSchema,
-                    dto,
-                    slide,
+                page_count = 0
+                segment_count = 0
+                for slide in dto.slides:
+                    page_count += self._update_slide_visibility(
+                        self.page_chunk_collection,
+                        LectureUnitPageChunkSchema,
+                        dto,
+                        slide,
+                    )
+                    segment_count += self._update_slide_visibility(
+                        self.lecture_unit_segment_collection,
+                        LectureUnitSegmentSchema,
+                        dto,
+                        slide,
+                    )
+                self._update_units(
+                    units, {LectureUnitSchema.RELEASE_DATE.value: dto.release_date}
                 )
-            self._update_units(
-                units, {LectureUnitSchema.RELEASE_DATE.value: dto.release_date}
-            )
         return LectureVisibilityUpdateResult(len(units), page_count, segment_count)
 
     @staticmethod

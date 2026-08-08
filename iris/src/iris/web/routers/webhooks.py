@@ -21,7 +21,6 @@ from iris.domain.variant.abstract_variant import find_variant
 from iris.pipeline.lecture_metadata_update_pipeline import (
     LectureMetadataUpdatePipeline,
 )
-from iris.pipeline.lecture_update_lock import lecture_update_lock
 from iris.pipeline.lecture_visibility_update_pipeline import (
     LectureVisibilityUpdatePipeline,
 )
@@ -232,12 +231,9 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
 @observe(name="POST /webhooks/lectures/metadata")
 def lecture_metadata_webhook(dto: LectureUnitMetadataUpdateDTO):
     """Update lecture-unit metadata without reprocessing its content."""
-    with lecture_update_lock(
-        dto.base_url, dto.course_id, dto.lecture_id, dto.lecture_unit_id
-    ):
-        db = VectorDatabase()
-        collection = init_lecture_unit_schema(db.get_client())
-        updated = LectureMetadataUpdatePipeline(collection)(dto)
+    db = VectorDatabase()
+    collection = init_lecture_unit_schema(db.get_client())
+    updated = LectureMetadataUpdatePipeline(collection)(dto)
     if updated == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -258,16 +254,13 @@ def lecture_metadata_webhook(dto: LectureUnitMetadataUpdateDTO):
 @observe(name="POST /webhooks/lectures/visibility")
 def lecture_visibility_webhook(dto: LectureUnitVisibilityUpdateDTO):
     """Update release and slide visibility without reprocessing content."""
-    with lecture_update_lock(
-        dto.base_url, dto.course_id, dto.lecture_id, dto.lecture_unit_id
-    ):
-        db = VectorDatabase()
-        client = db.get_client()
-        result = LectureVisibilityUpdatePipeline(
-            init_lecture_unit_page_chunk_schema(client),
-            init_lecture_unit_schema(client),
-            init_lecture_unit_segment_schema(client),
-        )(dto)
+    db = VectorDatabase()
+    client = db.get_client()
+    result = LectureVisibilityUpdatePipeline(
+        init_lecture_unit_page_chunk_schema(client),
+        init_lecture_unit_schema(client),
+        init_lecture_unit_segment_schema(client),
+    )(dto)
     if result.lecture_units_updated == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
