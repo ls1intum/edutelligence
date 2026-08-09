@@ -326,6 +326,34 @@ class AutonomousTutorPipeline(
 
     NO_RESPONSE_MARKER = "NO_RESPONSE_NEEDED"
 
+    def pre_agent_hook(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+    ) -> None:
+        """Log which model mode this run resolved to, before the agent starts.
+
+        Whether a run goes to on-premise or cloud inference is decided by the
+        Artemis-side selection of everyone in the thread, so it is not obvious from
+        the outside which one a given post triggered. This makes it visible at a
+        glance while testing.
+        """
+        mode = "ON-PREMISE (local)" if state.local else "CLOUD"
+        selection = (
+            state.dto.settings.artemis_llm_selection
+            if state.dto.settings
+            else "unknown"
+        )
+        logger.info(
+            "Autonomous tutor model mode: %s | model=%s | selection=%s | course=%s | post=%s",
+            mode,
+            state.llm.model_name if state.llm else "unknown",
+            selection,
+            state.dto.course.id if state.dto.course else "unknown",
+            state.dto.post.id if state.dto.post else "unknown",
+        )
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
