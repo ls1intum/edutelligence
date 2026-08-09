@@ -43,6 +43,14 @@ class PointOutParametersDTO(BaseModel):
         A slide with no printed number is therefore named without one. That also covers markers
         stored before Artemis started sending the printed number along, which is why this says
         nothing about the slide being unnumbered: for those the number is unknown, not absent.
+
+        Note that the chat-history chip Artemis renders for the same marker does fall back to the
+        deck index when there is no printed number (see ``IrisCommandService#persistAndPushMarker``),
+        so in that one case the student does see a number the agent must not name. The two do not
+        contradict each other: with nothing printed on the slide there is no number the chip could
+        agree with, and a chip labelled by position is still true. Naming it here would be the
+        harmful half — it would put the index into the agent's context, where it can be quoted as
+        if it were the printed number.
         """
         targets = []
         if self.page is not None:

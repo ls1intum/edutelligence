@@ -341,11 +341,23 @@ The student is viewing this lecture unit in the combined view, where the slides 
 {# Only the position, never its material: ending the prompt with the material makes it read like
    a finished answer, and a weaker model then answers from it without calling any tool — losing
    the retrieval and the point-out with it. `read_students_current_position` reads it out on
-   request instead. #}
+   request instead.
+
+   The tool is only named where it actually exists. `provide_current_view_content` withholds it
+   when the lecture tool is not allowed, while the positions below are built from the vector
+   database directly and survive that — a course whose page chunks are ingested but whose lecture
+   unit record is not gets positions without a tool to read them out. Naming it anyway would send
+   the agent after a tool that was never registered. #}
+{% if allow_lecture_tool %}
 The student is currently at the position(s) below. What that material actually says is not
 reproduced here — read it with `read_students_current_position` when you need to know what they
 have in front of them. Bear in mind it is only where they happen to be standing and may have
 nothing to do with their question; to find material about a topic, retrieve instead.
+{% else %}
+The student is currently at the position(s) below. What that material actually says is not
+available to you here. Bear in mind it is only where they happen to be standing and may have
+nothing to do with their question.
+{% endif %}
 {% for block in current_view_blocks %}
 {{ block }}
 {% endfor %}

@@ -8,6 +8,7 @@ yet, position not in the results), without any network or LLM calls.
 
 # pylint: skip-file
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -23,6 +24,7 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitPageChunkRetrievalDTO,
 )
 from iris.domain.status.command_result_dto import CommandResultDTO
+from iris.tools.chat_tool_providers import provide_combined_view_point_out
 from iris.tools.combined_view_point_out import create_tool_combined_view_point_out
 
 
@@ -386,3 +388,63 @@ def test_sends_no_printed_page_number_for_a_timestamp_only_point_out():
 
     assert callback.commands[0].parameters.page is None
     assert callback.commands[0].parameters.display_page is None
+
+
+def _provider_state(lecture_contexts, allow_lecture_tool=True):
+    return SimpleNamespace(
+        allow_lecture_tool=allow_lecture_tool,
+        lecture_contexts=lecture_contexts,
+        callback=_FakeCallback(),
+        lecture_content_storage={},
+    )
+
+
+def test_provider_offers_the_tool_in_the_combined_view():
+    tool = provide_combined_view_point_out(_provider_state([_combined(page=3)]))
+
+    assert tool is not None
+    assert tool.__name__ == "point_out_relevant_lecture_position"
+
+
+def test_provider_stays_silent_outside_the_combined_view():
+    """The tool moves the combined view, so anywhere else it has nothing to move.
+
+    A plain slides/video context is not the combined view: the student is looking at the unit on
+    the lecture page, where no pane is standing by to be navigated.
+    """
+    assert provide_combined_view_point_out(_provider_state(None)) is None
+    assert provide_combined_view_point_out(_provider_state([])) is None
+    assert (
+        provide_combined_view_point_out(
+            _provider_state(
+                [SlidesContextDTO(type="slides", lecture_unit_id=1, page=3)]
+            )
+        )
+        is None
+    )
+
+
+def test_provider_stays_silent_when_the_lecture_tool_is_not_allowed():
+    """Gated like every other lecture provider: the point-out navigates lecture material."""
+    assert (
+        provide_combined_view_point_out(
+            _provider_state([_combined(page=3)], allow_lecture_tool=False)
+        )
+        is None
+    )
+
+
+def test_provider_stays_silent_without_a_resolvable_lecture_unit():
+    """A combined view naming no unit gives the point-out no deck to navigate in.
+
+    ``lecture_unit_id`` is derived from the nested slides/video objects, so a context carrying
+    neither leaves it None. The command would then name no unit at all and Artemis would reject
+    it after the full ack timeout, with the pipeline standing still for it — better not to offer
+    the tool than to let the agent spend an answer on a point-out that cannot land.
+    """
+    empty_combined = CombinedViewContextDTO(
+        type="combinedView", slides=None, video=None
+    )
+
+    assert empty_combined.lecture_unit_id is None
+    assert provide_combined_view_point_out(_provider_state([empty_combined])) is None

@@ -39,7 +39,7 @@ from iris.tracing import TracedThreadPoolExecutor
 logger = get_logger(__name__)
 
 # How long to wait for Artemis to carry out a command on the client and reply. Must exceed the
-# Artemis-side client-ack timeout (2s) plus the HTTP round trip, so a slow client surfaces as
+# Artemis-side client-ack timeout (3s) plus the HTTP round trip, so a slow client surfaces as
 # "not applied" rather than a transport error. Lower this only after Artemis' own timeout has been
 # lowered and deployed — the other order makes Iris give up while an answer is still on its way.
 COMMAND_TIMEOUT_SECONDS = 5
@@ -304,10 +304,14 @@ class StatusCallback:
             )
             resp.raise_for_status()
             return CommandResultDTO.model_validate(resp.json())
-        except requests.exceptions.RequestException as e:
-            capture_exception(e)
-            return CommandResultDTO(applied=False)
-        except Exception as e:  # e.g. a malformed/unexpected response body
+        except Exception as e:
+            # One outcome for all of them — a refused connection, a read timeout, an error status, a body
+            # that does not parse: the command did not happen, and the agent is told that rather than the
+            # pipeline breaking over it. All of them are reported, too, because none is an ordinary result:
+            # Artemis' own client-ack timeout sits below ours, so a command the client did not carry out
+            # comes back as a perfectly good ``applied: false`` and never reaches this handler. Anything
+            # that does get here means the call itself went wrong.
+            logger.warning("Iris command could not be executed by Artemis: %s", e)
             capture_exception(e)
             return CommandResultDTO(applied=False)
 
