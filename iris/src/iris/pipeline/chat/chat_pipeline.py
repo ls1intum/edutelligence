@@ -28,7 +28,10 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
+from ...domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
+    printed_page_number,
+)
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
@@ -157,15 +160,9 @@ def _current_slide_label(chunks: list) -> str:
     position is described the same way: with a deck whose printed numbering is shifted (title pages,
     a cover sheet), labelling the position with the index would hand the agent a wrong number and
     invite it to quote it.
-
-    A slide whose printed number could not be read is marked ``-1`` by ingestion (older records
-    ``0``); as in the retrieval results, that is no number at all and the slide is described without
-    one rather than by its index.
     """
-    display_page_number = getattr(chunks[0], "display_page_number", None)
-    if display_page_number is None or display_page_number <= 0:
-        return "an unnumbered page"
-    return f"page {display_page_number}"
+    printed = printed_page_number(getattr(chunks[0], "display_page_number", None))
+    return "an unnumbered page" if printed is None else f"page {printed}"
 
 
 def _tool_activity_snapshot(
@@ -670,13 +667,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         can neither see nor retrieve the material and could not actually be
         context-aware about it.
 
-        Only the position itself goes into the system prompt. The material at that
-        position is put on the state for the current-position tool to read out
-        instead: ending the prompt with that material makes it read like a finished
-        answer, and a weaker model then answers straight from it without calling any
-        tool at all — which also costs it the lecture retrieval and the point-out,
-        since only retrieved results can be pointed at. Behind a tool the same
-        material stays reachable, but the agent has to decide it wants it.
+        Only the position itself goes into the system prompt; the material at that
+        position is put on the state for ``read_students_current_position`` to read
+        out instead (see ``iris.tools.current_view_content`` for why).
 
         The content is also stored in ``lecture_content_storage`` so answers about
         the current position get lecture citations even when the agent never calls

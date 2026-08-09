@@ -12,7 +12,10 @@ import pytest
 import requests
 
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
-from iris.domain.status.point_out_command_dto import PointOutCommandDTO
+from iris.domain.status.point_out_command_dto import (
+    PointOutCommandDTO,
+    PointOutParametersDTO,
+)
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.web.status.status_update import COMMAND_TIMEOUT_SECONDS, StatusCallback
 
@@ -41,7 +44,9 @@ def _callback(
 
 
 def _command() -> PointOutCommandDTO:
-    return PointOutCommandDTO(lecture_unit_id=42, page=3)
+    return PointOutCommandDTO(
+        parameters=PointOutParametersDTO(lecture_unit_id=42, page=3)
+    )
 
 
 def test_applied_true_round_trip(monkeypatch):

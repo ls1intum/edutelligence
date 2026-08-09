@@ -305,12 +305,11 @@ class StatusCallback:
             resp.raise_for_status()
             return CommandResultDTO.model_validate(resp.json())
         except Exception as e:
-            # One outcome for all of them — a refused connection, a read timeout, an error status, a body
-            # that does not parse: the command did not happen, and the agent is told that rather than the
-            # pipeline breaking over it. All of them are reported, too, because none is an ordinary result:
-            # Artemis' own client-ack timeout sits below ours, so a command the client did not carry out
-            # comes back as a perfectly good ``applied: false`` and never reaches this handler. Anything
-            # that does get here means the call itself went wrong.
+            # Refused connection, read timeout, error status, unparseable body: all mean the command
+            # did not happen, and the agent is told that rather than the pipeline breaking over it.
+            # All are reported, because none is an ordinary result — Artemis' client-ack timeout sits
+            # below ours, so a command the client ignored arrives as a valid ``applied: false`` and
+            # never reaches this handler. Anything that does means the call itself went wrong.
             logger.warning("Iris command could not be executed by Artemis: %s", e)
             capture_exception(e)
             return CommandResultDTO(applied=False)

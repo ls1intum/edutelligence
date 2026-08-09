@@ -33,24 +33,15 @@ class PointOutParametersDTO(BaseModel):
     def describe_position(self) -> str:
         """Describe the pointed-to position the way the LLM should read it back.
 
-        A slide is named by the number printed on it, which is what the student reads off it and the
-        only page number the agent may quote. The point-out id is deliberately left out: it is an
-        internal navigation value that must never reach the student, and repeating it in the chat
-        history every turn from here on is the surest way to get it quoted eventually. Nothing is
-        lost by omitting it — a fresh point-out takes its values from the retrieval results, never
-        from these notes.
+        A slide is named by the number printed on it, which is the only page number the agent may
+        quote. The point-out id is deliberately left out: it is an internal navigation value that
+        must never reach the student, and repeating it in the chat history every turn from here on
+        is the surest way to get it quoted eventually. Nothing is lost by omitting it — a fresh
+        point-out takes its values from the retrieval results, never from these notes.
 
-        A slide with no printed number is therefore named without one. That also covers markers
-        stored before Artemis started sending the printed number along, which is why this says
-        nothing about the slide being unnumbered: for those the number is unknown, not absent.
-
-        Note that the chat-history chip Artemis renders for the same marker does fall back to the
-        deck index when there is no printed number (see ``IrisCommandService#persistAndPushMarker``),
-        so in that one case the student does see a number the agent must not name. The two do not
-        contradict each other: with nothing printed on the slide there is no number the chip could
-        agree with, and a chip labelled by position is still true. Naming it here would be the
-        harmful half — it would put the index into the agent's context, where it can be quoted as
-        if it were the printed number.
+        A slide with no printed number is therefore named without one, which also covers markers
+        stored before Artemis sent the printed number along: for those the number is unknown rather
+        than absent, so this says nothing about the slide being unnumbered.
         """
         targets = []
         if self.page is not None:
@@ -83,20 +74,3 @@ class PointOutCommandDTO(CommandDTO):
 
     type: str = "pointOut"
     parameters: PointOutParametersDTO
-
-    def __init__(
-        self,
-        lecture_unit_id: int,
-        page: Optional[int] = None,
-        timestamp: Optional[float] = None,
-        display_page: Optional[int] = None,
-    ):
-        super().__init__(
-            type="pointOut",
-            parameters=PointOutParametersDTO(
-                lecture_unit_id=lecture_unit_id,
-                page=page,
-                timestamp=timestamp,
-                display_page=display_page,
-            ),
-        )

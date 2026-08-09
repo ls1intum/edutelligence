@@ -3,6 +3,7 @@
 import math
 from typing import Any, Callable, Dict, List, Optional
 
+from ..domain.retrieval.lecture.lecture_retrieval_dto import printed_page_number
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
 
@@ -16,32 +17,21 @@ def _format_page_reference(
     talking about it. Results that can also be navigated to pass their ``point_out_id`` — the slide's
     index in the deck, the only number the point-out tool accepts. Transcription segments know the
     printed number of the slide that was on screen but no deck index, so they omit it.
-
-    Both kinds of result can end up without a printed number — no number was visible on the slide or
-    in the video frame (``-1``), or the transcript was never enriched with slide numbers (``0``) —
-    and both are marked as unnumbered by the same rule here, so the agent refers to them without
-    naming a page instead of quoting a nonsensical "-1".
     """
-    page = (
-        "Page: unnumbered"
-        if display_page_number is None or display_page_number <= 0
-        else f"Page: {display_page_number}"
-    )
+    printed = printed_page_number(display_page_number)
+    page = "Page: unnumbered" if printed is None else f"Page: {printed}"
     return page if point_out_id is None else f"{page}, point-out id: {point_out_id}"
 
 
 def _format_video_timestamp(start_time: float, end_time: float) -> str:
     """Render a transcription segment's start as a timestamp that still points back at it.
 
-    The agent is told to pass a displayed timestamp to the point-out tool exactly as shown, and that
-    tool matches segments half-open (``start <= t < end``). Rounding a fractional start to the
-    nearest whole second can move it before its own segment — 42.4 displayed as 42 lands in the
-    preceding segment, or nowhere — leaving the segment impossible to point at. So the value is
-    rounded up instead: never earlier than the start, and whole seconds wherever they fit, since a
-    round number is what the agent can also name to the student.
-
-    A segment too short to contain the next whole second falls back to its exact start: repr round-
-    trips a float, so that value is inside the segment by construction.
+    The agent passes a displayed timestamp to the point-out tool exactly as shown, and that tool
+    matches segments half-open (``start <= t < end``). Rounding a fractional start to the nearest
+    whole second can move it before its own segment — 42.4 shown as 42 lands in the preceding one,
+    or nowhere — so it is rounded up instead: never earlier than the start, and a round number the
+    agent can also name to the student. A segment too short to contain the next whole second falls
+    back to its exact start, which ``repr`` round-trips and is inside the segment by construction.
     """
     whole_second = math.ceil(start_time)
     if whole_second < end_time:

@@ -12,8 +12,12 @@ from iris.domain.data.lecture_context_dto import CombinedViewContextDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
     LectureTranscriptionRetrievalDTO,
+    printed_page_number,
 )
-from iris.domain.status.point_out_command_dto import PointOutCommandDTO
+from iris.domain.status.point_out_command_dto import (
+    PointOutCommandDTO,
+    PointOutParametersDTO,
+)
 from iris.tools.current_view_content import MOVED_AWAY_KEY
 from iris.web.status.status_update import StatusCallback
 
@@ -58,12 +62,10 @@ def _find_retrieved_page(
     printed on the slide. Looking it up in the results keeps the agent from pointing at a page that
     never appeared there, and yields the result that carries the printed number for it.
 
-    Retrieval is not always scoped to the unit the student is looking at, while the point-out always
-    navigates within that unit — so results from other units are skipped here, or a page valid only
-    elsewhere would be navigated to in the wrong deck.
-
-    Transcription segments are not consulted: their ``page_number`` is the number printed on the
-    slide that was on screen, not a deck index, so matching against it would resolve the wrong slide.
+    Results from other units are skipped: retrieval is not always scoped to the unit the student is
+    looking at, while the point-out always navigates within it, so a page valid only elsewhere would
+    land in the wrong deck. Transcription segments are not consulted either — their ``page_number``
+    is a printed number, not a deck index, and would resolve the wrong slide.
 
     Returns:
         The matching page chunk or unit segment, or None when the page was not retrieved.
@@ -77,21 +79,6 @@ def _find_retrieved_page(
     return None
 
 
-def _printed_page_number(retrieved_page: Any) -> Optional[int]:
-    """The number printed on a retrieved slide, or None when it carries none.
-
-    Artemis labels the chat-history chip with this number so it matches what the agent names in its
-    answer text and what the student reads off the slide. Ingestion marks a slide whose number could
-    not be read as ``-1`` (and older records as ``0``), which is no number at all — the same rule the
-    retrieval results are rendered by. Artemis then falls back to the deck index for the label, which
-    is the honest choice: with nothing printed on the slide there is no other number to agree on.
-    """
-    display_page_number = getattr(retrieved_page, "display_page_number", None)
-    if display_page_number is None or display_page_number <= 0:
-        return None
-    return display_page_number
-
-
 def _resolve_timestamp_segment(
     lecture_content: LectureRetrievalDTO,
     lecture_unit_id: Optional[int],
@@ -103,9 +90,9 @@ def _resolve_timestamp_segment(
     restriction to the unit the point-out will navigate in. Returns None when no such segment was
     retrieved.
 
-    Segment intervals are half-open (``start <= t < end``), as they are everywhere else segments are
-    matched against a time. Adjacent segments share a boundary, so treating the end as inclusive
-    would resolve a timestamp taken from the later segment's start to the earlier one.
+    Intervals are half-open (``start <= t < end``): adjacent segments share a boundary, so treating
+    the end as inclusive would resolve a timestamp taken from the later segment's start to the
+    earlier one.
     """
     for segment in lecture_content.lecture_transcriptions:
         if (
@@ -197,8 +184,7 @@ def create_tool_combined_view_point_out(
         # a position here.
         lecture_unit_id = combined_context.lecture_unit_id
 
-        # Kept beyond the check: the matching result carries the number printed on the slide, which
-        # is sent along so Artemis can label the chat-history chip with it.
+        # Kept beyond the check: the matching result carries the printed page number sent below.
         target_page = (
             _find_retrieved_page(lecture_content, lecture_unit_id, page)
             if page is not None
@@ -267,12 +253,20 @@ def create_tool_combined_view_point_out(
         # Case 2/3: ask Artemis to move the student to the requested position.
         result = callback.execute_command(
             PointOutCommandDTO(
-                lecture_unit_id=lecture_unit_id,
-                page=move_page,
-                timestamp=move_timestamp,
-                display_page=(
-                    _printed_page_number(target_page) if move_page is not None else None
-                ),
+                parameters=PointOutParametersDTO(
+                    lecture_unit_id=lecture_unit_id,
+                    page=move_page,
+                    timestamp=move_timestamp,
+                    # The printed number of the slide pointed at, so Artemis can label the
+                    # chat-history chip with the same number the agent names in its answer.
+                    display_page=(
+                        printed_page_number(
+                            getattr(target_page, "display_page_number", None)
+                        )
+                        if move_page is not None
+                        else None
+                    ),
+                )
             )
         )
         if not result.applied:
