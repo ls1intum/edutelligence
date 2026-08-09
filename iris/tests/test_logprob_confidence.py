@@ -1,0 +1,291 @@
+import math
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+from pydantic import ValidationError
+
+# Bootstrap the iris package: importing iris.llm directly hits a pre-existing
+# circular import between iris.common.pyris_message and iris.domain. Loading
+# iris.pipeline.pipeline first establishes the right module init order — this
+# mirrors what every working pipeline test already does transitively.
+import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.llm import CompletionArguments  # noqa: E402
+from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
+from iris.pipeline.shared.confidence_scoring import (  # noqa: E402
+    logprob_confidence,
+    model_supports_logprobs,
+)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# logprob_confidence: mean-logprob → exp() → [0, 1]
+# ──────────────────────────────────────────────────────────────────────────
+def test_logprob_confidence_empty_or_missing_is_zero():
+    assert logprob_confidence(None) == 0.0
+    assert logprob_confidence([]) == 0.0
+
+
+def test_logprob_confidence_certain_tokens_is_one():
+    assert logprob_confidence([0.0, 0.0, 0.0]) == 1.0
+
+
+def test_logprob_confidence_is_exp_of_mean():
+    logprobs = [-0.2, -0.4]
+    assert logprob_confidence(logprobs) == math.exp(-0.3)
+
+
+def test_logprob_confidence_clamped_to_unit_interval():
+    # Strongly negative logprobs stay >= 0; positive (impossible) stay <= 1.
+    assert 0.0 <= logprob_confidence([-10.0, -8.0]) <= 1.0
+    assert logprob_confidence([1.0, 2.0]) == 1.0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# model_supports_logprobs: capability lookup via LlmManager
+# ──────────────────────────────────────────────────────────────────────────
+def test_model_supports_logprobs_true_when_entry_declares_support():
+    manager = MagicMock()
+    manager.get_llm_by_id.return_value = SimpleNamespace(supports_logprobs=True)
+    with patch("iris.llm.llm_manager.LlmManager", return_value=manager):
+        assert model_supports_logprobs("some-model") is True
+
+
+def test_model_supports_logprobs_false_when_unsupported_or_unknown():
+    manager = MagicMock()
+    manager.get_llm_by_id.return_value = SimpleNamespace(supports_logprobs=False)
+    with patch("iris.llm.llm_manager.LlmManager", return_value=manager):
+        assert model_supports_logprobs("ollama-model") is False
+
+    manager.get_llm_by_id.return_value = None
+    with patch("iris.llm.llm_manager.LlmManager", return_value=manager):
+        assert model_supports_logprobs("missing") is False
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# openai_chat: request logprobs and surface them on the PyrisMessage
+# ──────────────────────────────────────────────────────────────────────────
+def _mock_openai_response(logprobs=None):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="stop",
+                message=SimpleNamespace(
+                    role="assistant",
+                    content="ok",
+                    tool_calls=None,
+                    refusal=None,
+                ),
+                logprobs=logprobs,
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+    )
+
+
+def _build_model(**overrides):
+    # Capability flags are opt-in (class defaults are False); tests that
+    # exercise the logprob request path enable them explicitly.
+    base = {
+        "id": "test-model",
+        "type": "openai_chat",
+        "model": "gpt-test",
+        "api_key": "sk-test",  # pragma: allowlist secret
+        "supports_logprobs": True,
+        "supports_top_logprobs": True,
+    }
+    base.update(overrides)
+    # None means "omit the key" so class defaults can be tested.
+    base = {k: v for k, v in base.items() if v is not None}
+    return DirectOpenAIChatModel(**base)
+
+
+def _invoke_chat(model, response, **completion_kwargs):
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = response
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        message = model.chat([], CompletionArguments(**completion_kwargs), tools=None)
+    return mock_client.chat.completions.create.call_args.kwargs, message
+
+
+def test_logprobs_not_requested_by_default():
+    model = _build_model()
+    params, _ = _invoke_chat(model, _mock_openai_response())
+    assert "logprobs" not in params
+
+
+def test_logprobs_requested_when_opted_in_and_supported():
+    model = _build_model()
+    params, _ = _invoke_chat(model, _mock_openai_response(), logprobs=True)
+    assert params["logprobs"] is True
+
+
+def test_logprobs_dropped_when_model_does_not_support_them():
+    model = _build_model(supports_logprobs=False, supports_top_logprobs=False)
+    params, _ = _invoke_chat(model, _mock_openai_response(), logprobs=True)
+    assert "logprobs" not in params
+
+
+def test_token_logprobs_extracted_onto_message():
+    model = _build_model()
+    logprobs_payload = SimpleNamespace(
+        content=[
+            SimpleNamespace(token="ok", logprob=-0.1),
+            SimpleNamespace(token="!", logprob=-0.3),
+        ]
+    )
+    _, message = _invoke_chat(
+        model, _mock_openai_response(logprobs_payload), logprobs=True
+    )
+    assert message.token_logprobs == [-0.1, -0.3]
+
+
+def test_token_logprobs_none_when_absent():
+    model = _build_model()
+    _, message = _invoke_chat(model, _mock_openai_response())
+    assert message.token_logprobs is None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# openai_chat: top-k alternatives for the uncertainty strategy
+# ──────────────────────────────────────────────────────────────────────────
+def test_top_logprobs_not_requested_without_logprobs_opt_in():
+    model = _build_model()
+    params, _ = _invoke_chat(model, _mock_openai_response(), top_logprobs=10)
+    assert "logprobs" not in params
+    assert "top_logprobs" not in params
+
+
+def test_top_logprobs_requested_alongside_logprobs():
+    model = _build_model()
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=10
+    )
+    assert params["logprobs"] is True
+    assert params["top_logprobs"] == 10
+
+
+def test_top_logprobs_clamped_to_api_maximum():
+    model = _build_model()
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=50
+    )
+    assert params["top_logprobs"] == 20
+
+
+def test_top_logprobs_dropped_when_model_does_not_support_logprobs():
+    model = _build_model(supports_logprobs=False, supports_top_logprobs=False)
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=10
+    )
+    assert "logprobs" not in params
+    assert "top_logprobs" not in params
+
+
+def test_top_logprobs_dropped_for_strict_logprob_only_backends():
+    # A backend may accept plain logprobs but reject the top_logprobs
+    # parameter with a 4xx; supports_top_logprobs=false keeps plain logprobs
+    # so the mean-logprob fallback stays reachable.
+    model = _build_model(supports_top_logprobs=False)
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=10
+    )
+    assert params["logprobs"] is True
+    assert "top_logprobs" not in params
+
+
+def test_rich_entries_extracted_alongside_flat_logprobs():
+    model = _build_model()
+    logprobs_payload = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                token=" Yes",
+                logprob=-0.1,
+                top_logprobs=[
+                    SimpleNamespace(token=" Yes", logprob=-0.1),
+                    SimpleNamespace(token=" No", logprob=-2.5),
+                ],
+            ),
+        ]
+    )
+    _, message = _invoke_chat(
+        model, _mock_openai_response(logprobs_payload), logprobs=True, top_logprobs=10
+    )
+    # Both representations coexist: floats for mean-logprob, rich entries for
+    # the uncertainty method.
+    assert message.token_logprobs == [-0.1]
+    assert len(message.token_logprob_entries) == 1
+    entry = message.token_logprob_entries[0]
+    assert entry.token == " Yes"
+    assert entry.logprob == -0.1
+    assert [(c.token, c.logprob) for c in entry.top_logprobs] == [
+        (" Yes", -0.1),
+        (" No", -2.5),
+    ]
+
+
+def test_rich_entries_have_empty_candidates_for_plain_logprob_backends():
+    # Gateways may return per-token logprobs without top_logprobs.
+    model = _build_model()
+    logprobs_payload = SimpleNamespace(
+        content=[SimpleNamespace(token="ok", logprob=-0.2)]
+    )
+    _, message = _invoke_chat(
+        model, _mock_openai_response(logprobs_payload), logprobs=True, top_logprobs=10
+    )
+    assert message.token_logprobs == [-0.2]
+    assert message.token_logprob_entries[0].top_logprobs == []
+
+
+def test_rich_entries_none_when_logprobs_absent():
+    model = _build_model()
+    _, message = _invoke_chat(model, _mock_openai_response())
+    assert message.token_logprob_entries is None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Capability defaults and config validation
+# ──────────────────────────────────────────────────────────────────────────
+def test_logprob_capabilities_default_to_opt_in():
+    # Defaults must be False: reasoning models may 400 on `logprobs`, and
+    # wrongly-flagged models silently score every response 0.0 (discard).
+    model = _build_model(supports_logprobs=None, supports_top_logprobs=None)
+    assert model.supports_logprobs is False
+    assert model.supports_top_logprobs is False
+    params, _ = _invoke_chat(
+        model, _mock_openai_response(), logprobs=True, top_logprobs=10
+    )
+    assert "logprobs" not in params
+    assert "top_logprobs" not in params
+
+
+def test_responses_api_rejects_supports_logprobs():
+    # The Responses path never extracts logprobs; the combination would make
+    # the autonomous tutor discard every response. Must fail at config load.
+    with pytest.raises(ValidationError, match="use_responses_api"):
+        _build_model(use_responses_api=True)
+
+
+def test_top_logprobs_flag_requires_logprobs_flag():
+    with pytest.raises(ValidationError, match="supports_top_logprobs"):
+        _build_model(supports_logprobs=False)
+
+
+def test_streaming_request_skips_logprob_params():
+    # The streaming path does not extract per-chunk logprobs; the request
+    # must not pay for (or fail on) the parameters it cannot use.
+    model = _build_model()
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = iter([])
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: mock_client):
+        model.chat(
+            [],
+            CompletionArguments(
+                logprobs=True, top_logprobs=10, stream_handler=lambda _: None
+            ),
+            tools=None,
+        )
+    kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert kwargs["stream"] is True
+    assert "logprobs" not in kwargs
+    assert "top_logprobs" not in kwargs

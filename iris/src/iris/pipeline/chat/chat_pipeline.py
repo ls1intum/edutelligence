@@ -494,12 +494,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         dto = state.dto
 
-        metrics_enabled = bool(
-            dto.metrics
-            and dto.course.competencies
-            and dto.course.student_analytics_dashboard_enabled
-        )
-
         query = self.get_latest_user_message(state)
         exercise = dto.programming_exercise or dto.text_exercise
 
@@ -522,9 +516,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "allow_lecture_tool": state.allow_lecture_tool,
             "allow_faq_tool": state.allow_faq_tool,
             "allow_memiris_tool": state.allow_memiris_tool,
-            "metrics_enabled": metrics_enabled,
             "has_chat_history": bool(state.message_history),
-            "has_competencies": bool(dto.course.competencies),
             "has_exercises": bool(dto.course.exercises),
             "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,

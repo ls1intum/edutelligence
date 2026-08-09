@@ -14,7 +14,13 @@ from iris.pipeline.abstract_agent_pipeline import (
 )
 from iris.pipeline.shared.confidence_scoring import (
     is_large_model,
+    logprob_confidence,
+    model_supports_logprobs,
     parse_confidence_response,
+)
+from iris.pipeline.shared.uncertainty_scoring import (
+    DEFAULT_TOP_LOGPROBS,
+    uncertainty_confidence,
 )
 from iris.pipeline.shared.utils import (
     REDACTED_ANSWER_PLACEHOLDER,
@@ -175,6 +181,31 @@ class AutonomousTutorPipeline(
 
         return tool_list
 
+    def prepare_state(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+    ) -> None:
+        """Select the confidence strategy before generation.
+
+        When the selected model exposes token-level log-probabilities, the
+        pipeline derives confidence directly from them (thesis §6.6) and
+        requests logprobs on the generation call. Otherwise it falls back to
+        the verbalized strategy, whose confidence prompt is appended to the
+        system message by build_system_message.
+        """
+        model_id = state.llm.model_name if state.llm else ""
+        use_logprob = model_supports_logprobs(model_id)
+        state.use_logprob_confidence = use_logprob
+        if use_logprob and state.llm is not None:
+            state.llm.completion_args.logprobs = True
+            # Top-k alternatives enable the uncertainty method (Xu et al.,
+            # FSE '25); backends without top_logprobs support degrade to the
+            # mean-logprob strategy (see supports_top_logprobs in llm_config).
+            state.llm.completion_args.top_logprobs = DEFAULT_TOP_LOGPROBS
+            logger.info("Using logprob confidence strategy | model=%s", model_id)
+
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
@@ -204,6 +235,10 @@ class AutonomousTutorPipeline(
             ),
         }
         base_prompt = self.system_prompt_template.render(template_context)
+        # In logprob mode the model simply answers; confidence comes from the
+        # token log-probabilities, so no verbalized confidence prompt is added.
+        if getattr(state, "use_logprob_confidence", False):
+            return base_prompt
         model_id = state.llm.model_name if state.llm else ""
         if is_large_model(model_id):
             logger.info("Using combo confidence prompt | model=%s", model_id)
@@ -276,21 +311,58 @@ class AutonomousTutorPipeline(
             AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> float:
-        """Parse the verbalized confidence score from the agent's response.
+        """Estimate the confidence score for the generated response.
 
-        Mutates state.result to contain only the clean answer text (without the
-        trailing Probability line), and returns the extracted probability.
+        Three strategies, in order of preference:
+        1. Uncertainty scoring (Xu et al., FSE '25) over the final answer's
+           top-k token logprobs, when the backend returned alternatives.
+        2. Mean-logprob (thesis §6.6 baseline), when only plain logprobs are
+           available.
+        3. Verbalized confidence parsed from the response (mutates
+           ``state.result`` to drop the trailing Probability line), when the
+           model does not expose logprobs at all.
+        In logprob modes ``state.result`` is left untouched.
 
-        Confidence thresholds:
-        - >= 0.95: Post immediately
-        - 0.80 - 0.95: Forward to verification queue
-        - < 0.80: Do not post, forward to verification queue
+        Confidence thresholds (applied by Artemis):
+        - >= 0.85: Post immediately
+        - 0.70 - 0.85: Forward to verification queue
+        - < 0.70: Discard
 
         Returns:
             float: Confidence score between 0.0 and 1.0
         """
+        if getattr(state, "use_logprob_confidence", False):
+            entries = getattr(state.llm, "last_token_logprob_entries", None)
+            confidence = uncertainty_confidence(entries)
+            if confidence is not None:
+                logger.info(
+                    "Confidence strategy: logprob uncertainty scoring | "
+                    "confidence=%.4f",
+                    confidence,
+                )
+                return confidence
+            token_logprobs = getattr(state.llm, "last_token_logprobs", None)
+            if token_logprobs is None:
+                # Misconfiguration breadcrumb: the model was selected for
+                # logprob mode but returned no logprobs at all. Every
+                # response will score 0.0 (discard) until the model's
+                # supports_logprobs flag in llm_config.yml is corrected.
+                logger.warning(
+                    "Model %s is configured with supports_logprobs but "
+                    "returned no token logprobs; confidence defaults to 0.0 "
+                    "and Artemis will discard this response.",
+                    state.llm.model_name if state.llm else "<unknown>",
+                )
+            confidence = logprob_confidence(token_logprobs)
+            logger.info(
+                "Confidence strategy: mean-logprob fallback | confidence=%.4f",
+                confidence,
+            )
+            return confidence
+
         answer_text, confidence = parse_confidence_response(state.result)
         state.result = answer_text
+        logger.info("Confidence strategy: verbalized | confidence=%.4f", confidence)
         return confidence
 
     def _generate_retrieval_query_text(self, discussion: str) -> str:

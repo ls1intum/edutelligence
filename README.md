@@ -29,6 +29,14 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 
 > **Note:** Always ensure you're using compatible versions for optimal integration and functionality.
 
+## Pipeline and lifecycle references
+
+- **Iris:** [Pipeline system](https://ls1intum.github.io/edutelligence/iris/docs/developer/pipeline-system) and [RAG pipeline](https://ls1intum.github.io/edutelligence/iris/docs/developer/rag-pipeline)
+- **Athena:** [Module request lifecycle](https://ls1intum.github.io/edutelligence/athena/docs/dev/module/request-lifecycle)
+- **Atlas:** [AtlasML ML pipelines](https://ls1intum.github.io/edutelligence/atlas/dev/code-reference/ml-pipelines)
+- **Logos:** [Request pipeline source reference](./logos/logos-orchestrator/src/logos/pipeline/README.md)
+- **Memiris:** [Library source reference](./memiris/README.md)
+
 ## 🚀 Sub-Services Overview
 
 ### 🤖 [Iris](./iris/) - AI Virtual Tutor
