@@ -138,8 +138,10 @@ def test_thread_becomes_ordered_history_with_roles(pipeline):
     ]
     texts = [message.contents[0].text_content for message in history]
     assert texts[0] == "[Student] What is a bridge pattern?"
-    assert texts[1].startswith("[Iris (you)] ")
     assert texts[2] == "[Instructor] Then what is a strategy pattern"
+    # Iris's own turns carry no prefix: the assistant role already identifies them,
+    # and a prefix here gets copied into the reply the model writes.
+    assert texts[1] == "The Bridge Pattern separates..."
 
 
 def test_history_keeps_the_newest_messages_when_truncated(pipeline):
@@ -169,6 +171,41 @@ def test_redacted_replies_stay_in_the_history_as_placeholders(pipeline):
     texts = [message.contents[0].text_content for message in history]
     assert texts[1] == f"[Student] {REDACTED_ANSWER_PLACEHOLDER}"
     assert texts[2] == "[Student] and what about testing it?"
+
+
+# ---------------------------------------------------------------------------
+# Author label leaking into the answer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("[Iris (you)] The Strategy Pattern is...", "The Strategy Pattern is..."),
+        ("[Student] The Strategy Pattern is...", "The Strategy Pattern is..."),
+        ("  [Iris (you)]   Leading whitespace", "Leading whitespace"),
+        ("The Strategy Pattern is...", "The Strategy Pattern is..."),
+    ],
+)
+def test_strips_a_copied_author_label_from_the_answer(pipeline, raw, expected):
+    assert pipeline._strip_author_label(raw) == expected
+
+
+def test_keeps_an_answer_that_opens_with_a_markdown_link(pipeline):
+    """Only the known labels are stripped — a genuine bracket must survive."""
+    answer = "[Lecture 3: Patterns](/courses/1/lectures/3) covers this."
+
+    assert pipeline._strip_author_label(answer) == answer
+
+
+def test_strip_handles_an_empty_answer(pipeline):
+    assert pipeline._strip_author_label("") == ""
+
+
+def test_prompt_forbids_writing_a_role_label(pipeline):
+    prompt = _render_prompt(pipeline, _post({"id": 2, "content": "a follow-up"}))
+
+    assert "never begin your own reply with" in prompt
 
 
 # ---------------------------------------------------------------------------

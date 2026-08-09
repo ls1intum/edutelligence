@@ -371,6 +371,7 @@ class AutonomousTutorPipeline(
             return ""
 
         confidence = self._estimate_confidence(state)
+        state.result = self._strip_author_label(state.result)
 
         logger.info("Generated response: %s", state.result)
         logger.info("Confidence score | score=%.4f", confidence)
@@ -381,6 +382,24 @@ class AutonomousTutorPipeline(
             confidence=confidence,
         )
         return state.result
+
+    def _strip_author_label(self, result: str) -> str:
+        """Drop a role label the model copied from the thread onto its own answer.
+
+        The thread reaches the model with each other participant's message prefixed
+        by their role, and models sometimes reproduce that prefix in the reply they
+        write. Only the exact known labels are removed, so an answer that genuinely
+        opens with a markdown link (``[Title](url)``) is left alone.
+        """
+        if not result:
+            return result
+        stripped = result.lstrip()
+        for label in AUTHOR_ROLE_LABELS.values():
+            prefix = f"[{label}]"
+            if stripped.startswith(prefix):
+                logger.info("Stripped author label %s from the response.", prefix)
+                return stripped[len(prefix) :].lstrip()  # noqa: E203
+        return result
 
     def _estimate_confidence(
         self,
@@ -460,6 +479,11 @@ class AutonomousTutorPipeline(
 
         Iris's own earlier replies become assistant turns so it does not repeat them;
         everyone else's become user turns, prefixed with their role.
+
+        Only the other participants' turns carry a role prefix. Iris's own turns are
+        already identified by the assistant role, and prefixing them too made the
+        model read "[Iris (you)] " as part of how its replies are written and copy it
+        into the answer it posted.
         """
         effective_limit = limit if limit is not None else self.get_history_limit(state)
         history = [
@@ -469,7 +493,13 @@ class AutonomousTutorPipeline(
                     if role == IRIS_AUTHOR_ROLE
                     else IrisMessageRole.USER
                 ),
-                contents=[TextMessageContentDTO(textContent=f"[{label}] {text}")],
+                contents=[
+                    TextMessageContentDTO(
+                        textContent=(
+                            text if role == IRIS_AUTHOR_ROLE else f"[{label}] {text}"
+                        )
+                    )
+                ],
             )
             for role, label, text in self._thread_turns(state.dto.post)
         ]
