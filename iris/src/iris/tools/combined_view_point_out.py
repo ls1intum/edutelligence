@@ -11,7 +11,6 @@ from typing import Any, Callable, Dict, List, Optional
 from iris.domain.data.lecture_context_dto import CombinedViewContextDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
-    LectureTranscriptionRetrievalDTO,
     printed_page_number,
 )
 from iris.domain.status.point_out_command_dto import (
@@ -20,6 +19,12 @@ from iris.domain.status.point_out_command_dto import (
 )
 from iris.tools.current_view_content import MOVED_AWAY_KEY
 from iris.web.status.status_update import StatusCallback
+
+# How close the student's video position has to be to the requested one to count as already there.
+# Sized to a seek nobody would notice: it absorbs the sub-second difference between the player
+# position the client reports and the timestamp read off the retrieval results, and nothing more.
+# Anything wider would start swallowing jumps to a genuinely different moment.
+_SAME_TIMESTAMP_TOLERANCE_SECONDS = 0.5
 
 
 def get_combined_view_context(
@@ -79,28 +84,26 @@ def _find_retrieved_page(
     return None
 
 
-def _resolve_timestamp_segment(
+def _timestamp_is_retrieved(
     lecture_content: LectureRetrievalDTO,
     lecture_unit_id: Optional[int],
     timestamp: float,
-) -> Optional[LectureTranscriptionRetrievalDTO]:
-    """Find the retrieved transcription segment of ``lecture_unit_id`` containing ``timestamp``.
+) -> bool:
+    """Whether ``timestamp`` falls inside a retrieved segment of ``lecture_unit_id``.
 
     Grounds timestamps in the retrieval results the same way pages are grounded, including the
-    restriction to the unit the point-out will navigate in. Returns None when no such segment was
-    retrieved.
+    restriction to the unit the point-out will navigate in. Only coverage is asked for: which
+    segment covers the timestamp says nothing about where in the video it sits, since retrieved
+    intervals may overlap and can span the whole lecture.
 
-    Intervals are half-open (``start <= t < end``): adjacent segments share a boundary, so treating
-    the end as inclusive would resolve a timestamp taken from the later segment's start to the
-    earlier one.
+    Intervals are half-open (``start <= t < end``), so the end of a segment belongs to the segment
+    starting there rather than being covered twice.
     """
-    for segment in lecture_content.lecture_transcriptions:
-        if (
-            segment.lecture_unit_id == lecture_unit_id
-            and segment.segment_start_time <= timestamp < segment.segment_end_time
-        ):
-            return segment
-    return None
+    return any(
+        segment.lecture_unit_id == lecture_unit_id
+        and segment.segment_start_time <= timestamp < segment.segment_end_time
+        for segment in lecture_content.lecture_transcriptions
+    )
 
 
 def create_tool_combined_view_point_out(
@@ -142,7 +145,7 @@ def create_tool_combined_view_point_out(
         unit the student is viewing are rejected.
 
         Point out at most one position per answer. If the student is already at the position you
-        pass (for the video: anywhere inside that segment), their view is left untouched.
+        pass, their view is left untouched.
 
         System notes in the chat history record where you pointed the student earlier in this
         conversation. They are a record of what happened, not a restriction: point to a spot again
@@ -197,14 +200,9 @@ def create_tool_combined_view_point_out(
                 "the student is viewing"
             )
 
-        # Kept beyond the check: the segment's interval decides further down whether the student is
-        # already inside it.
-        target_segment = (
-            _resolve_timestamp_segment(lecture_content, lecture_unit_id, timestamp)
-            if timestamp is not None
-            else None
-        )
-        if timestamp is not None and target_segment is None:
+        if timestamp is not None and not _timestamp_is_retrieved(
+            lecture_content, lecture_unit_id, timestamp
+        ):
             problems.append(
                 f"the video timestamp {timestamp:g}s does not fall within any retrieved "
                 "video segment of the lecture unit the student is viewing"
@@ -228,16 +226,15 @@ def create_tool_combined_view_point_out(
             else None
         )
         same_page = page is not None and page == current_page
-        # The student counts as already at the video position when they are anywhere inside the
-        # targeted segment's time interval, not only at its exact start. Half-open like the
-        # resolution above: a student sitting exactly on the boundary belongs to the next segment,
-        # and counting them as inside this one would suppress a jump they still need.
+        # Compared against the requested moment itself, not against the interval of the segment it
+        # was resolved in: retrieved intervals may overlap and can be wide (ingestion groups every
+        # appearance of one slide into a single span, and semantic chunks share time ranges), so
+        # one of them covering both the student's position and the requested moment says nothing
+        # about the two being the same place in the video.
         same_timestamp = (
-            target_segment is not None
+            timestamp is not None
             and current_timestamp is not None
-            and target_segment.segment_start_time
-            <= current_timestamp
-            < target_segment.segment_end_time
+            and abs(current_timestamp - timestamp) <= _SAME_TIMESTAMP_TOLERANCE_SECONDS
         )
 
         move_page = None if same_page else page

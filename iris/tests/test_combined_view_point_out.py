@@ -68,7 +68,9 @@ def _page_chunk(
     )
 
 
-def _transcription(page_number, start_time, text="spoken", lecture_unit_id=1):
+def _transcription(
+    page_number, start_time, text="spoken", lecture_unit_id=1, end_time=None
+):
     return LectureTranscriptionRetrievalDTO(
         uuid=str(uuid4()),
         course_id=1,
@@ -81,7 +83,7 @@ def _transcription(page_number, start_time, text="spoken", lecture_unit_id=1):
         video_link="http://example.com/video",
         language="en",
         segment_start_time=start_time,
-        segment_end_time=start_time + 10,
+        segment_end_time=start_time + 10 if end_time is None else end_time,
         page_number=page_number,
         segment_summary="summary",
         segment_text=text,
@@ -170,28 +172,76 @@ def test_already_at_page_does_not_call_artemis():
     assert "already" in result.lower()
 
 
-def test_already_within_target_segment_does_not_call_artemis():
+def test_already_at_the_requested_timestamp_does_not_call_artemis():
+    """Only the requested moment itself counts as "already there", within a seek-sized tolerance.
+
+    The student's player position (45.2s) and the timestamp read off the results (45s) describe
+    the same moment; seeking two tenths of a second would change nothing on screen.
+    """
     callback = _FakeCallback(applied=True)
-    # Student is at 45s, inside the targeted segment [42s, 52s): no navigation.
-    combined = _combined(timestamp=45.0)
+    combined = _combined(timestamp=45.2)
     content = _content(
         page_chunks=[_page_chunk(3)],
         transcriptions=[_transcription(page_number=3, start_time=42.0)],
     )
     tool = _make_tool(callback, combined, content)
 
-    result = tool(timestamp=42.0)
+    result = tool(timestamp=45.0)
 
     assert callback.commands == []
     assert "already" in result.lower()
 
 
-def test_boundary_timestamp_resolves_to_the_later_of_two_adjacent_segments():
-    """Segment intervals are half-open, so a shared boundary belongs to the segment starting there.
+def test_another_moment_in_the_same_segment_is_still_navigated_to():
+    """Sharing a segment with the target is not being at it — the student is 7 seconds away."""
+    callback = _FakeCallback(applied=True)
+    # Student at 45s, target 52s; the segment [42s, 62s) covers both.
+    combined = _combined(timestamp=45.0)
+    content = _content(
+        page_chunks=[_page_chunk(3)],
+        transcriptions=[_transcription(page_number=3, start_time=42.0, end_time=62.0)],
+    )
+    tool = _make_tool(callback, combined, content)
 
-    With adjacent segments [0s, 10s) and [10s, 20s), pointing at 10s must resolve to the second one.
-    Were the end treated as inclusive, 10s would resolve to the first segment, and the student
-    sitting at 5s would count as already inside it — leaving them behind with no navigation at all.
+    result = tool(timestamp=52.0)
+
+    assert len(callback.commands) == 1
+    assert callback.commands[0].parameters.timestamp == 52.0
+    assert "brought up" in result.lower()
+
+
+def test_a_broad_overlapping_segment_does_not_suppress_navigation():
+    """Retrieved intervals overlap, so segment membership cannot stand in for "already there".
+
+    Ingestion groups every appearance of one slide into a single span, and semantic chunks share
+    time ranges — so a wide interval ([0s, 600s) here) can cover both where the student sits (5s)
+    and the moment being pointed at (10s), which are ten minutes of lecture apart in the worst
+    case. Deciding by that interval leaves the student behind with no command sent at all.
+    """
+    callback = _FakeCallback(applied=True)
+    combined = _combined(timestamp=5.0)
+    content = _content(
+        page_chunks=[_page_chunk(3)],
+        transcriptions=[
+            _transcription(page_number=3, start_time=0.0, end_time=600.0),
+            _transcription(page_number=4, start_time=8.0, end_time=20.0),
+        ],
+    )
+    tool = _make_tool(callback, combined, content)
+
+    result = tool(timestamp=10.0)
+
+    assert len(callback.commands) == 1
+    assert callback.commands[0].parameters.timestamp == 10.0
+    assert "brought up" in result.lower()
+
+
+def test_a_timestamp_on_a_segment_boundary_is_grounded_by_the_segment_starting_there():
+    """Half-open intervals: with [0s, 10s) and [10s, 20s), 10s is covered by the second one.
+
+    Were the end treated as inclusive too, the boundary would sit in both — harmless here, but the
+    coverage check is the only thing standing between the agent and a timestamp Artemis never saw,
+    so it stays exact.
     """
     callback = _FakeCallback(applied=True)
     combined = _combined(timestamp=5.0)
@@ -211,24 +261,20 @@ def test_boundary_timestamp_resolves_to_the_later_of_two_adjacent_segments():
     assert "brought up" in result.lower()
 
 
-def test_student_sitting_on_a_segment_boundary_is_not_counted_as_inside_it():
-    """The student at 10s is in [10s, 20s), not in the [0s, 10s) segment being pointed at."""
+def test_a_timestamp_past_the_last_retrieved_segment_is_rejected():
+    """The end of the last segment is outside it, so nothing covers it."""
     callback = _FakeCallback(applied=True)
-    combined = _combined(timestamp=10.0)
+    combined = _combined(timestamp=5.0)
     content = _content(
         page_chunks=[_page_chunk(3)],
-        transcriptions=[
-            _transcription(page_number=3, start_time=0.0),
-            _transcription(page_number=4, start_time=10.0),
-        ],
+        transcriptions=[_transcription(page_number=3, start_time=0.0)],
     )
     tool = _make_tool(callback, combined, content)
 
-    result = tool(timestamp=0.0)
+    result = tool(timestamp=10.0)
 
-    assert len(callback.commands) == 1
-    assert callback.commands[0].parameters.timestamp == 0.0
-    assert "brought up" in result.lower()
+    assert callback.commands == []
+    assert "does not fall within" in result.lower()
 
 
 def test_only_one_point_out_per_answer():
