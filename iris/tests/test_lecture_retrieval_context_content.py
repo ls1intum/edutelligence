@@ -26,7 +26,7 @@ from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 
 
 def _make_page_chunk(
-    page_number: int, text: str, display_page_number: int = None
+    page_number: int, text: str, display_page_number: int | None = None
 ) -> LectureUnitPageChunkRetrievalDTO:
     return LectureUnitPageChunkRetrievalDTO(
         uuid=str(uuid4()),

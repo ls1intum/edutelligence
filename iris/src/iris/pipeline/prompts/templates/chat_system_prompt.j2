@@ -159,8 +159,9 @@ You can retrieve lecture content, including slides, transcripts, and summarized 
 • Transcription results show the "Page: N" of the slide that was on screen while it was spoken, so you can tie a spoken passage to a slide ("he explains this on page 2, from 0:42"). They carry no point-out id — only results that show one can be pointed at by page.
 {% endif %}
 
-{# Combined-view point-out Block #}
-{% if allow_lecture_tool and current_view_is_combined %}
+{# Combined-view point-out Block. Gated on the tool actually being registered, not merely on the
+   student being in the combined view — see `can_point_out_in_combined_view` in ChatPipeline. #}
+{% if can_point_out_in_combined_view %}
 The student is viewing this lecture unit in the combined view, where the slides and/or the video are shown right next to the chat. The point-out tool (`point_out_relevant_lecture_position`) is the only way to move what they see there.
 • Treat every question about a topic or concept as a question about this lecture unit, even when the student phrases it generally ("tell me about X", "explain X"): answer it as "where in this unit is X covered, and what does it say".
 • For such a question, always retrieve the lecture content first — the point-out tool cannot search and has nothing to point to until you have retrieved.

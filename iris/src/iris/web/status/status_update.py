@@ -39,10 +39,10 @@ from iris.tracing import TracedThreadPoolExecutor
 logger = get_logger(__name__)
 
 # How long to wait for Artemis to carry out a command on the client and reply. Must exceed the
-# Artemis-side client-ack timeout (3s) plus the HTTP round trip, so a slow client surfaces as
+# Artemis-side client-ack timeout (5s) plus the HTTP round trip, so a slow client surfaces as
 # "not applied" rather than a transport error. Lower this only after Artemis' own timeout has been
 # lowered and deployed — the other order makes Iris give up while an answer is still on its way.
-COMMAND_TIMEOUT_SECONDS = 5
+COMMAND_TIMEOUT_SECONDS = 10
 
 
 class StatusCallback:

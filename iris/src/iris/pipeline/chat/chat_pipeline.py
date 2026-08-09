@@ -18,6 +18,7 @@ from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
 from iris.tools.chat_tool_providers import CHAT_TOOL_PROVIDERS
+from iris.tools.combined_view_point_out import get_combined_view_context
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.web.status.status_update import StatusCallback
 
@@ -520,6 +521,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             getattr(ctx, "type", None) == "combinedView"
             for ctx in getattr(state, "lecture_contexts", []) or []
         )
+        # Whether the prompt may advertise the point-out tool. Derived from the same function the
+        # provider gates on rather than from `current_view_is_combined`, so the two cannot drift:
+        # a combinedView context carrying neither slides nor video resolves to no lecture unit, and
+        # `provide_combined_view_point_out` then withholds the tool. Gating the block on the mere
+        # presence of the context would send the agent after a tool that was never registered.
+        can_point_out_in_combined_view = (
+            state.allow_lecture_tool
+            and get_combined_view_context(getattr(state, "lecture_contexts", None))
+            is not None
+        )
 
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
@@ -540,6 +551,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "lecture_name": dto.lecture.title if dto.lecture else None,
             "current_view_blocks": current_view_blocks,
             "current_view_is_combined": current_view_is_combined,
+            "can_point_out_in_combined_view": can_point_out_in_combined_view,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
             "programming_language": (
