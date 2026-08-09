@@ -23,6 +23,7 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from iris.pipeline.chat.chat_pipeline import ChatPipeline, _merge_lecture_content
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
+from iris.tools.current_view_content import CONTENT_BLOCKS_KEY
 
 
 def _make_page_chunk(
@@ -140,6 +141,7 @@ def test_current_view_content_is_stored_for_citations():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -157,7 +159,7 @@ def test_current_view_content_is_stored_for_citations():
         "lecture unit Test Unit (lecture unit ID: 1).",
     ]
     # The material stays reachable, but through the current-position tool.
-    assert state.current_view_content_blocks == [
+    assert state.current_view_storage[CONTENT_BLOCKS_KEY] == [
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nPage 3 content\n---",
@@ -185,6 +187,7 @@ def test_multiple_chunks_on_same_page_share_one_block():
         lecture_contexts=[SlidesContextDTO(type="slides", lectureUnitId=1, page=2)],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -199,7 +202,7 @@ def test_multiple_chunks_on_same_page_share_one_block():
         "The student is currently viewing page 2 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1)."
     ]
-    assert state.current_view_content_blocks == [
+    assert state.current_view_storage[CONTENT_BLOCKS_KEY] == [
         "The student is currently viewing page 2 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nFirst half\nSecond half\n---"
@@ -224,6 +227,7 @@ def test_current_position_is_labelled_with_the_printed_page_number():
         lecture_contexts=[SlidesContextDTO(type="slides", lectureUnitId=1, page=5)],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -263,6 +267,7 @@ def test_current_position_names_no_page_for_an_unnumbered_slide(unnumbered):
         lecture_contexts=[SlidesContextDTO(type="slides", lectureUnitId=1, page=5)],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -290,6 +295,7 @@ def test_position_omitted_when_material_not_ingested():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -322,6 +328,7 @@ def test_only_ingested_positions_are_described():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -334,7 +341,7 @@ def test_only_ingested_positions_are_described():
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1)."
     ]
-    assert state.current_view_content_blocks == [
+    assert state.current_view_storage[CONTENT_BLOCKS_KEY] == [
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nPage 3 content\n---",

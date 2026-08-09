@@ -33,6 +33,7 @@ from iris.tools import (
     create_tool_repository_files,
 )
 from iris.tools.combined_view_point_out import get_combined_view_context
+from iris.tools.current_view_content import CONTENT_BLOCKS_KEY
 
 logger = get_logger(__name__)
 
@@ -153,6 +154,7 @@ def provide_combined_view_point_out(state: State) -> Optional[Callable]:
         state.callback,
         state.lecture_content_storage,
         combined,
+        getattr(state, "current_view_storage", None),
     )
 
 
@@ -168,10 +170,12 @@ def provide_current_view_content(state: State) -> Optional[Callable]:
     """
     if not state.allow_lecture_tool:
         return None
-    content_blocks = getattr(state, "current_view_content_blocks", None)
-    if not content_blocks:
+    current_view_storage = getattr(state, "current_view_storage", None)
+    if not current_view_storage or not current_view_storage.get(CONTENT_BLOCKS_KEY):
         return None
-    return create_tool_current_view_content(content_blocks)
+    # The storage itself is handed over, not the blocks it currently holds: the point-out tool
+    # writes into it when it moves the student, and the tool has to see that.
+    return create_tool_current_view_content(current_view_storage)
 
 
 def provide_faq_retrieval(state: State) -> Optional[Callable]:

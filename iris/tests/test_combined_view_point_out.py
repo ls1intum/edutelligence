@@ -24,8 +24,15 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitPageChunkRetrievalDTO,
 )
 from iris.domain.status.command_result_dto import CommandResultDTO
-from iris.tools.chat_tool_providers import provide_combined_view_point_out
+from iris.tools.chat_tool_providers import (
+    provide_combined_view_point_out,
+    provide_current_view_content,
+)
 from iris.tools.combined_view_point_out import create_tool_combined_view_point_out
+from iris.tools.current_view_content import (
+    CONTENT_BLOCKS_KEY,
+    create_tool_current_view_content,
+)
 
 
 class _FakeCallback:
@@ -106,12 +113,13 @@ def _combined(page=None, timestamp=None, lecture_unit_id=1):
     return CombinedViewContextDTO(type="combinedView", slides=slides, video=video)
 
 
-def _make_tool(callback, combined, content=None):
+def _make_tool(callback, combined, content=None, current_view_storage=None):
     storage = {} if content is None else {"content": content}
     return create_tool_combined_view_point_out(
         callback=callback,
         lecture_content_storage=storage,
         combined_context=combined,
+        current_view_storage=current_view_storage,
     )
 
 
@@ -390,13 +398,88 @@ def test_sends_no_printed_page_number_for_a_timestamp_only_point_out():
     assert callback.commands[0].parameters.display_page is None
 
 
-def _provider_state(lecture_contexts, allow_lecture_tool=True):
+def _current_view_storage(
+    block="The student is currently viewing page 3 ... old content",
+):
+    return {CONTENT_BLOCKS_KEY: [block]}
+
+
+def test_a_successful_point_out_invalidates_the_current_position_tool():
+    """The material of the position the student just left must not be read out as "right now".
+
+    Both tools share the current-view storage: it is captured before the run starts, so after a
+    navigation it describes a position the student is no longer at. Left intact, a later call to
+    the current-position tool would overwrite this tool's warning with the stale slide, and the
+    agent would answer about the wrong view.
+    """
+    callback = _FakeCallback(applied=True)
+    storage = _current_view_storage(
+        "The student is currently viewing page 3 ... old content"
+    )
+    current_position = create_tool_current_view_content(storage)
+    tool = _make_tool(
+        callback,
+        _combined(page=1),
+        _content(page_chunks=[_page_chunk(7)]),
+        current_view_storage=storage,
+    )
+
+    assert "brought up" in tool(page=7).lower()
+    result = current_position()
+
+    assert "old content" not in result
+    assert "already moved" in result.lower()
+
+
+def test_a_point_out_that_moved_nothing_leaves_the_current_position_tool_intact():
+    """Nothing moved, nothing stale: the student is still at the position the blocks describe.
+
+    Covers both ways a call can end without navigation — Artemis refusing to apply the command,
+    and the student already sitting at the requested position.
+    """
+    for callback, requested_page in (
+        (_FakeCallback(applied=False), 7),
+        (_FakeCallback(applied=True), 1),
+    ):
+        storage = _current_view_storage()
+        current_position = create_tool_current_view_content(storage)
+        tool = _make_tool(
+            callback,
+            _combined(page=1),
+            _content(page_chunks=[_page_chunk(1), _page_chunk(7)]),
+            current_view_storage=storage,
+        )
+
+        tool(page=requested_page)
+
+        assert "old content" in current_position()
+
+
+def _provider_state(
+    lecture_contexts, allow_lecture_tool=True, current_view_storage=None
+):
     return SimpleNamespace(
         allow_lecture_tool=allow_lecture_tool,
         lecture_contexts=lecture_contexts,
         callback=_FakeCallback(),
         lecture_content_storage={},
+        current_view_storage=(
+            {} if current_view_storage is None else current_view_storage
+        ),
     )
+
+
+def test_the_providers_hand_both_tools_the_same_current_view_storage():
+    """Wiring regression: the invalidation only works if both tools share one storage object."""
+    storage = _current_view_storage()
+    state = _provider_state([_combined(page=1)], current_view_storage=storage)
+    state.lecture_content_storage["content"] = _content(page_chunks=[_page_chunk(7)])
+    point_out = provide_combined_view_point_out(state)
+    current_position = provide_current_view_content(state)
+
+    assert "brought up" in point_out(page=7).lower()
+
+    assert "old content" not in current_position()
 
 
 def test_provider_offers_the_tool_in_the_combined_view():

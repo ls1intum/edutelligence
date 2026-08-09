@@ -8,15 +8,25 @@ have needed. Behind a tool the same material stays available, but only when the 
 wants it.
 """
 
-from typing import Callable, List
+from typing import Any, Callable, Dict, List
+
+# Key holding the rendered blocks for the student's current position.
+CONTENT_BLOCKS_KEY = "content_blocks"
+# Key set by the point-out tool once it moved the student away from that position.
+MOVED_AWAY_KEY = "moved_away"
 
 
-def create_tool_current_view_content(content_blocks: List[str]) -> Callable[[], str]:
+def create_tool_current_view_content(
+    current_view_storage: Dict[str, Any],
+) -> Callable[[], str]:
     """Create the current-position content tool.
 
     Args:
-        content_blocks: One rendered block per viewed position (position description followed by
-            its lecture material), as built for the student's current view.
+        current_view_storage: Shared mutable state describing where the student is. Holds one
+            rendered block per viewed position (position description followed by its lecture
+            material) under ``CONTENT_BLOCKS_KEY``. The point-out tool writes ``MOVED_AWAY_KEY``
+            into it when it navigated the student elsewhere, which is why this is read on every
+            call rather than captured when the tool is built.
 
     Returns:
         The tool function.
@@ -37,6 +47,17 @@ def create_tool_current_view_content(content_blocks: List[str]) -> Callable[[], 
         Returns:
             The slide text and/or transcript at the student's current position.
         """
+        if current_view_storage.get(MOVED_AWAY_KEY):
+            # The blocks are a snapshot of where the student stood when this run started. Once
+            # the point-out moved them, that snapshot describes a position they have left, and
+            # handing it out as what they see "right now" would have the agent answer about the
+            # wrong material.
+            return (
+                "You already moved the student's view in this answer, so the position this tool "
+                "described is no longer the one they are looking at. What you pointed them to is "
+                "what they see now. Use the lecture content retrieval tool for anything else."
+            )
+        content_blocks: List[str] = current_view_storage.get(CONTENT_BLOCKS_KEY) or []
         if not content_blocks:
             return (
                 "The material at the student's current position is not available, so there is "

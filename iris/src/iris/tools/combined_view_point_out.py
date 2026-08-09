@@ -14,6 +14,7 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureTranscriptionRetrievalDTO,
 )
 from iris.domain.status.point_out_command_dto import PointOutCommandDTO
+from iris.tools.current_view_content import MOVED_AWAY_KEY
 from iris.web.status.status_update import StatusCallback
 
 
@@ -119,6 +120,7 @@ def create_tool_combined_view_point_out(
     callback: StatusCallback,
     lecture_content_storage: Dict[str, Any],
     combined_context: CombinedViewContextDTO,
+    current_view_storage: Optional[Dict[str, Any]] = None,
 ) -> Callable[..., str]:
     """Create the combined-view point-out tool bound to the current chat state.
 
@@ -127,6 +129,9 @@ def create_tool_combined_view_point_out(
         lecture_content_storage: Where the lecture retrieval tool writes its results. Used to
             require that a retrieval happened first and to ground the requested position in it.
         combined_context: Describes the student's current position in the combined view.
+        current_view_storage: Shared mutable state backing the current-position tool. Marked as
+            moved away once this tool navigated the student, so that tool stops reporting the
+            pre-navigation material as what the student is looking at right now.
 
     Returns:
         The point-out tool function.
@@ -279,6 +284,13 @@ def create_tool_combined_view_point_out(
 
         # Case 2: navigated successfully. This answer's one point-out is now spent.
         already_moved = True
+        # The current-position tool reads out material captured before this navigation. Whatever
+        # it holds now describes a position the student has left, so it is invalidated wholesale:
+        # even a point-out that only moved the slides leaves its blocks labelled as what the
+        # student sees "right now", and one stale block next to a still-valid one is exactly the
+        # mix that produces an answer about the wrong view.
+        if current_view_storage is not None:
+            current_view_storage[MOVED_AWAY_KEY] = True
         shown = _describe(move_page, move_timestamp)
         # The system prompt describes where the student stood when this run started and cannot be
         # re-rendered mid-run. This message is the agent's last input before it answers, so it is

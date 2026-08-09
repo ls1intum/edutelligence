@@ -19,6 +19,7 @@ from iris.pipeline.session_title_generation_pipeline import (
 )
 from iris.tools.chat_tool_providers import CHAT_TOOL_PROVIDERS
 from iris.tools.combined_view_point_out import get_combined_view_context
+from iris.tools.current_view_content import CONTENT_BLOCKS_KEY
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.web.status.status_update import StatusCallback
 
@@ -779,8 +780,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
 
         # Read by provide_current_view_content when the tools are built, which happens after
-        # the system message.
-        state.current_view_content_blocks = content_blocks
+        # the system message, and by the tool itself on every call — the point-out tool marks
+        # this storage as stale once it moved the student off this position.
+        state.current_view_storage[CONTENT_BLOCKS_KEY] = content_blocks
 
         return blocks
 
