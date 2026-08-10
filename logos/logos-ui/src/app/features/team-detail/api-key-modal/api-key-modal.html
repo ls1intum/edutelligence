@@ -215,18 +215,14 @@
           <div class="custom-info">
             <div class="kd-section-title" style="margin: 0">Override Team Permissions</div>
             <div class="custom-hint">
-              @if (isLogosAdmin) {
-                If enabled, this key ignores team rules and uses custom permissions.
-              } @else {
-                Logos Admin only.
-              }
+              If enabled, this key ignores team rules and uses custom permissions.
             </div>
           </div>
           <button
             class="toggle-btn"
             type="button"
             [class.toggle-btn--on]="fCustom()"
-            [disabled]="!isLogosAdmin || saveLoading()"
+            [disabled]="saveLoading()"
             (click)="fCustom.set(!fCustom())"
           >
             <span class="toggle-thumb"></span>
@@ -243,31 +239,29 @@
             <div class="perms-loading"><i class="pi pi-spin pi-spinner"></i> Loading…</div>
           } @else {
             <div class="perms-columns">
-              @if (isLogosAdmin) {
-                <div class="perms-col">
-                  <div class="perms-col-title">Providers</div>
-                  <app-search-input
-                    placeholder="Search…"
-                    [value]="providerSearch()"
-                    (valueChange)="providerSearch.set($event)"
-                  />
-                  <div class="perm-list">
-                    @for (p of filteredProviders(); track p.id) {
-                      <label class="perm-row">
-                        <input
-                          class="perm-check"
-                          type="checkbox"
-                          [checked]="isProviderSelected(p.id)"
-                          (change)="toggleProvider(p.id)"
-                        />
-                        <span class="perm-name">{{ p.name }}</span>
-                      </label>
-                    } @empty {
-                      <div class="perm-empty">No providers.</div>
-                    }
-                  </div>
+              <div class="perms-col">
+                <div class="perms-col-title">Providers</div>
+                <app-search-input
+                  placeholder="Search…"
+                  [value]="providerSearch()"
+                  (valueChange)="providerSearch.set($event)"
+                />
+                <div class="perm-list">
+                  @for (p of filteredProviders(); track p.id) {
+                    <label class="perm-row">
+                      <input
+                        class="perm-check"
+                        type="checkbox"
+                        [checked]="isProviderSelected(p.id)"
+                        (change)="toggleProvider(p.id)"
+                      />
+                      <span class="perm-name">{{ p.name }}</span>
+                    </label>
+                  } @empty {
+                    <div class="perm-empty">No providers.</div>
+                  }
                 </div>
-              }
+              </div>
               <div class="perms-col">
                 <div class="perms-col-title">Models</div>
                 <app-search-input
