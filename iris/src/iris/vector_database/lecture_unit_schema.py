@@ -8,6 +8,7 @@ from weaviate.collections.classes.config import (
     DataType,
     VectorDistances,
 )
+from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateInvalidInputError
 
 
 class LectureUnitSchema(Enum):
@@ -28,11 +29,49 @@ class LectureUnitSchema(Enum):
     BASE_URL = "base_url"
     LECTURE_UNIT_SUMMARY = "lecture_unit_summary"
     VIDEO_LINK = "video_link"
+    RELEASE_DATE = "release_date"
+    SLIDE_VISIBILITY = "slide_visibility"
+
+
+def _add_property_if_missing(collection: Collection, new_property: Property) -> None:
+    def property_exists() -> bool:
+        return any(
+            schema_property.name == new_property.name
+            for schema_property in collection.config.get(simple=True).properties
+        )
+
+    if property_exists():
+        return
+    try:
+        collection.config.add_property(new_property)
+    except (UnexpectedStatusCodeError, WeaviateInvalidInputError):
+        # Another concurrent initializer may have added the property after our check.
+        if not property_exists():
+            raise
 
 
 def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureUnitSchema.COLLECTION_NAME.value):
-        return client.collections.get(LectureUnitSchema.COLLECTION_NAME.value)
+        collection = client.collections.get(LectureUnitSchema.COLLECTION_NAME.value)
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSchema.RELEASE_DATE.value,
+                description="UTC release timestamp for student-level retrieval; null means released",
+                data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+        )
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSchema.SLIDE_VISIBILITY.value,
+                description="Latest serialized slide visibility snapshot from Artemis",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+        )
+        return collection
     return client.collections.create(
         name=LectureUnitSchema.COLLECTION_NAME.value,
         vector_config=Configure.Vectors.self_provided(
@@ -112,6 +151,18 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 description="The summary of the lecture unit",
                 data_type=DataType.TEXT,
                 index_searchable=True,
+            ),
+            Property(
+                name=LectureUnitSchema.RELEASE_DATE.value,
+                description="UTC release timestamp for student-level retrieval; null means released",
+                data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitSchema.SLIDE_VISIBILITY.value,
+                description="Latest serialized slide visibility snapshot from Artemis",
+                data_type=DataType.TEXT,
+                index_searchable=False,
             ),
         ],
     )

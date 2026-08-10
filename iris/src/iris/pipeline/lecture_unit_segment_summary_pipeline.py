@@ -111,7 +111,14 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
             summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
-            self._upsert_lecture_object(slide_index, summary, display_page_number)
+            hidden_until = (
+                slides[0].properties.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value)
+                if slides
+                else None
+            )
+            self._upsert_lecture_object(
+                slide_index, summary, display_page_number, hidden_until
+            )
         return summaries, self.tokens
 
     def _get_transcriptions(self, slide_number: int):
@@ -226,7 +233,11 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             raise e
 
     def _upsert_lecture_object(
-        self, slide_number: int, summary: str, display_page_number: int
+        self,
+        slide_number: int,
+        summary: str,
+        display_page_number: int,
+        hidden_until=None,
     ):
         lecture_filter = Filter.by_property(
             LectureUnitSegmentSchema.COURSE_ID.value
@@ -263,6 +274,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
                     LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
                     LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
+                    LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
                 },
                 vector=self.llm_embedding.embed(summary),
             )
@@ -299,6 +311,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             properties={
                 LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
                 LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
+                LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
             },
             vector=self.llm_embedding.embed(summary),
         )

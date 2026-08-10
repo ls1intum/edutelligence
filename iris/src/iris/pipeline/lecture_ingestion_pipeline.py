@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 import threading
+from datetime import datetime
 from typing import Optional
 
 import fitz
@@ -35,6 +36,10 @@ from ..tracing import observe
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
+)
+from ..vector_database.lecture_unit_schema import (
+    LectureUnitSchema,
+    init_lecture_unit_schema,
 )
 from ..web.status import ingestion_status_callback
 from . import Pipeline
@@ -126,6 +131,7 @@ def create_page_data(
     course_language,
     base_url,
     display_page_number,
+    hidden_until=None,
 ):
     """
     Create and return a list of dictionnaries to be ingested in the Vector Database.
@@ -141,6 +147,7 @@ def create_page_data(
             LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
             LectureUnitPageChunkSchema.BASE_URL.value: base_url,
             LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit_dto.attachment_version,
+            LectureUnitPageChunkSchema.HIDDEN_UNTIL.value: hidden_until,
         }
         for page_split in page_splits
     ]
@@ -176,6 +183,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     ):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.collection = init_lecture_unit_page_chunk_schema(client)
+        self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.dto = dto
         self.callback = callback
         chat_model = variant.model("chat", local)
@@ -190,6 +198,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.course_language = None
+        self._hidden_until_by_page: dict[int, object] = {}
 
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
@@ -212,6 +221,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.callback.update()
                 return self.course_language, self.tokens
             self.callback.update()
+            self._load_existing_slide_visibility()
             self.delete_lecture_unit(
                 self.dto.lecture_unit.course_id,
                 self.dto.lecture_unit.lecture_id,
@@ -282,6 +292,56 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
         ).equal(self.dto.lecture_unit.lecture_unit_id)
         return page_chunk_filter
+
+    def _load_existing_slide_visibility(self) -> None:
+        """Preserve visibility when full ingestion replaces page chunks."""
+        units = self.lecture_unit_collection.query.fetch_objects(
+            filters=Filter.all_of(
+                [
+                    Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+                        self.dto.settings.artemis_base_url
+                    ),
+                    Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                        self.dto.lecture_unit.course_id
+                    ),
+                    Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
+                        self.dto.lecture_unit.lecture_id
+                    ),
+                    Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
+                        self.dto.lecture_unit.lecture_unit_id
+                    ),
+                ]
+            ),
+            limit=1,
+        ).objects
+        if units:
+            serialized = units[0].properties.get(
+                LectureUnitSchema.SLIDE_VISIBILITY.value
+            )
+            if serialized is not None:
+                snapshot = json.loads(serialized)
+                self._hidden_until_by_page = {
+                    int(page_number): (
+                        datetime.fromisoformat(hidden_until)
+                        if hidden_until is not None
+                        else None
+                    )
+                    for page_number, hidden_until in snapshot.items()
+                }
+                return
+
+        chunks = self.collection.query.fetch_objects(
+            filters=self._get_page_chunk_filter(), limit=10_000
+        ).objects
+        self._hidden_until_by_page = {}
+        for chunk in chunks:
+            page_number = int(
+                chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value]
+            )
+            self._hidden_until_by_page.setdefault(
+                page_number,
+                chunk.properties.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value),
+            )
 
     def restore_display_page_numbers_from_existing_chunks(self) -> None:
         chunks = self.collection.query.fetch_objects(
@@ -375,6 +435,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     self.course_language,
                     base_url,
                     vision_result.display_page_number,
+                    self._hidden_until_by_page.get(page_num + 1),
                 )
             )
             old_page_text = page_text
