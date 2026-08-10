@@ -99,4 +99,19 @@ public class ModelController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
+
+    @PostMapping("/get_model_capabilities")
+    public ResponseEntity<?> getModelCapabilities(
+        @RequestBody GetModelRequestDTO req) {
+            if (req.id() == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
+            }
+            return modelService.getModelCapabilities(req.id())
+                .map(ResponseEntity::ok)
+                .<ResponseEntity<?>>map(r -> r)
+                .orElse(
+                    ResponseEntity.status(404)
+                        .body(Map.of("error", "Model capabilities not found"))
+                );
+        }
 }

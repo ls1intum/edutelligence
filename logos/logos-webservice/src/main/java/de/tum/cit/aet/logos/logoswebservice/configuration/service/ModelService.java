@@ -12,6 +12,8 @@ import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelWithPriceProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
@@ -23,12 +25,14 @@ public class ModelService {
     private final ModelRepository modelRepository;
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
+    private final ModelCapabilitiesRepository modelCapabilitiesRepository;
 
     public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
-                        OrchestratorNotificationService orchestratorNotificationService) {
+                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository) {
         this.modelRepository = modelRepository;
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
+        this.modelCapabilitiesRepository = modelCapabilitiesRepository;
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
@@ -135,5 +139,9 @@ public class ModelService {
         m.put("input_usd_per_million", p.getInputUsdPerMillion());
         m.put("output_usd_per_million", p.getOutputUsdPerMillion());
         return m;
+    }
+
+    public Optional<ModelCapabilities> getModelCapabilities(Integer modelId) {
+        return modelCapabilitiesRepository.findByModelId(modelId);
     }
 }

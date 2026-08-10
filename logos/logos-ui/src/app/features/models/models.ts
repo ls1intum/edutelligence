@@ -9,7 +9,7 @@ import {
 import { FormsModule } from '@angular/forms';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
-import { ModelManagementService } from '../../core/services/model-management.service';
+import { ModelManagementService, ModelCapability } from '../../core/services/model-management.service';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
@@ -35,6 +35,7 @@ export class Models implements OnInit {
 
   // ── List state ──────────────────────────────────────────────────────────
   models = signal<Model[]>([]);
+  capabilities = signal<Record<number, ModelCapability>>({});
   loading = signal(true);
   search = signal('');
   loadError = signal(false);
@@ -94,11 +95,25 @@ export class Models implements OnInit {
     try {
       const models = await this.modelService.getModels();
       this.models.set(models);
+
+      const capabilityEntries = await Promise.all(
+      models.map(async (model) => {
+        const capability =
+          await this.modelService.getModelCapabilities(model.id);
+
+        return [model.id, capability] as const;
+      }),
+    );
+    this.capabilities.set(Object.fromEntries(capabilityEntries))
     } catch {
       this.loadError.set(true);
     } finally {
       this.loading.set(false);
     }
+  }
+
+  getCapabilities(modelId: number): ModelCapability | undefined {
+    return this.capabilities()[modelId];
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

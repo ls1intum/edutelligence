@@ -21,12 +21,19 @@
 
   <!-- ── Table ──────────────────────────────────────────────────────────── -->
   <app-data-table
-    [columns]="['MODEL NAME', 'DESCRIPTION', 'TAGS', 'WEIGHTS', '']"
-    gridCols="220fr 260fr 160fr 180fr 72px"
-    [loading]="loading()"
-    [empty]="filteredModels().length === 0"
-    emptyMessage="No models match your search."
-  >
+  [columns]="[
+    'MODEL NAME',
+    'DESCRIPTION',
+    'TAGS',
+    'CAPABILITIES',
+    'WEIGHTS',
+    ''
+  ]"
+  gridCols="220fr 260fr 160fr 220fr 180fr 72px"
+  [loading]="loading()"
+  [empty]="filteredModels().length === 0"
+  emptyMessage="No models match your search."
+>
     @for (model of filteredModels(); track model.id) {
       <div class="table-row" role="row">
         <div class="col-name name-cell" role="cell">
@@ -57,6 +64,36 @@
 
         <div class="col-tags tags-cell" role="cell" data-label="Tags">
           <span class="tags-text">{{ model.tags || '-' }}</span>
+        </div>
+
+        <div class="col-capabilities capabilities-cell" role="cell" data-label="Capabilities">
+          @if (getCapabilities(model.id); as capabilities) {
+            <div class="capability-chips">
+              @if (capabilities.supports_function_calling) {
+                <span class="capability-chip capability-chip--supported" title="Function Calling">
+                  FC
+                </span>
+              }
+
+              @if (capabilities.supports_vision) {
+                <span class="capability-chip capability-chip--supported" title="Vision">
+                  V
+                </span>
+              }
+
+              @if (capabilities.supports_reasoning) {
+                <span class="capability-chip capability-chip--supported" title="Reasoning">
+                  R
+                </span>
+              }
+              
+              @if (!capabilities.supports_function_calling && !capabilities.supports_vision && !capabilities.supports_reasoning) {
+                <span>-</span>
+              }
+            </div>
+          } @else {
+            <span>-</span>
+          }
         </div>
 
         <div class="col-weights weights-cell" role="cell" data-label="Weights">

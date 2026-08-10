@@ -27,4 +27,19 @@ export class ModelManagementService {
   deleteModel(id: number): Promise<void> {
     return firstValueFrom(this.http.post<void>('/api/logosdb/delete_model', { id }));
   }
+  async getModelCapabilities(modelId: number): Promise<ModelCapability> {
+    return firstValueFrom(
+      this.http.post<ModelCapability>(
+        '/api/logosdb/get_model_capabilities',
+        { id: modelId },
+      ),
+    );
+  }
+}
+export interface ModelCapability {
+  id: number;
+  model_id: number;
+  supports_function_calling: boolean;
+  supports_vision: boolean;
+  supports_reasoning: boolean;
 }
