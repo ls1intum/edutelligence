@@ -146,18 +146,18 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
 
 
 def provide_lecture_list(state: State) -> Optional[Callable]:
-    if not state.allow_lecture_tool:
-        return None
     if not state.dto.course.lectures:
-        # Indexed lecture content exists, but Artemis sent no lectures field.
-        # The Artemis instance is probably not updated yet; without this log
-        # the version skew stays invisible.
-        logger.warning(
-            "Course %d has indexed lecture content but the DTO carries no "
-            "lectures. The Artemis instance probably does not send the course "
-            "lecture list yet.",
-            state.dto.course.id,
-        )
+        if state.allow_lecture_tool:
+            # Indexed lecture content exists, but Artemis sent no lectures field.
+            # The Artemis instance is probably not updated yet; without this log
+            # the version skew stays invisible.
+            logger.warning(
+                "Course %d has indexed lecture content but the DTO carries no "
+                "lectures. The Artemis instance probably does not send the course "
+                "lecture list yet.",
+                state.dto.course.id,
+            )
+        return None
     return create_tool_get_lecture_list(state.dto.course.lectures, state.callback)
 
 
