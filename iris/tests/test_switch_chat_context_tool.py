@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import patch
 
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
@@ -17,6 +18,7 @@ from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.tools.chat_tool_providers import (
+    provide_lecture_list,
     provide_lecture_retrieval,
     provide_switch_chat_context,
 )
@@ -248,6 +250,46 @@ def test_retrieval_stays_on_the_active_lecture_without_a_switch():
     call = state.lecture_retriever.calls[-1]
     assert call["lecture_id"] == 41
     assert call["lecture_unit_id"] == 410
+
+
+def test_lecture_list_reaches_the_agent_without_indexed_lecture_content():
+    """A course with lectures but no ingested content still allows a switch.
+
+    Indexed lecture content gates retrieval, not discovery. Gating the list as
+    well would leave the agent without a target ID, and the prompt forbids
+    guessing one, so the lecture switch would never happen in such a course.
+    """
+    state = _lecture_chat_state(_dto(lectures=_lectures()))
+    state.allow_lecture_tool = False
+
+    lecture_list = provide_lecture_list(state)
+
+    assert lecture_list is not None
+    assert [entry["lecture_id"] for entry in lecture_list()] == [41, 42]
+
+    switch = provide_switch_chat_context(state)
+    assert "Successfully registered" in switch("LECTURE_CHAT", 42)
+    assert state.pending_context_switch == SuggestedContextDTO(
+        mode=IrisChatMode.LECTURE, entity_id=42
+    )
+
+
+def test_lecture_retrieval_stays_gated_on_indexed_lecture_content():
+    """Retrieval reads the vector database, so it keeps the index precondition."""
+    state = _lecture_chat_state(_dto(lectures=_lectures()))
+    state.allow_lecture_tool = False
+
+    assert provide_lecture_retrieval(state) is None
+
+
+def test_lecture_list_is_absent_without_lectures(caplog):
+    state = _lecture_chat_state(_dto(lectures=[]))
+
+    with caplog.at_level(logging.WARNING):
+        assert provide_lecture_list(state) is None
+
+    # Indexed content without lectures in the DTO points at an outdated Artemis.
+    assert "carries no lectures" in caplog.text
 
 
 def test_switch_to_unknown_lecture_is_rejected():
