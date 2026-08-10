@@ -29,7 +29,7 @@ The active context decides what material Iris can draw on, so it makes a big dif
 | Improving a text submission           | That text exercise |
 | Question about a specific lecture     | That lecture       |
 
-You do not have to set it every time. Opening Iris from a lecture or exercise page fills it in, and Iris switches the context itself when you ask about something else. See [Chat Context](./chat-context).
+You do not have to set it every time. Opening Iris from a lecture or exercise page fills it in, and Iris switches the context itself when you ask about an identifiable lecture, exercise, or course-level topic in your course. See [Chat Context](./chat-context).
 
 ## Share Your Thinking
 

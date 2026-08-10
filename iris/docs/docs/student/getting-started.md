@@ -30,7 +30,7 @@ Not sure which to pick? Start with **Cloud** for the best experience. You can al
 
 ## Where to Find Iris
 
-Iris must be **enabled by your instructor** for a given course before it appears. Once enabled, you can open Iris from several places in Artemis:
+Iris must be **enabled by your instructor** for a given course and requires that you select **Cloud** or **On-Premise** AI features before it appears. Once both conditions are met, you can open Iris from several places in Artemis:
 
 | Location           | How to Open                                                    |
 | ------------------ | -------------------------------------------------------------- |

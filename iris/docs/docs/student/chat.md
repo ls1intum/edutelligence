@@ -8,7 +8,7 @@ You can keep as many chats in a course as you like, and every one of them works 
 
 ## Where to Open It
 
-Iris must be **enabled by your instructor** for a course before it appears. Once enabled, you can open it from several places:
+Iris appears when **enabled by your instructor** for a course and when you have selected **Cloud** or **On-Premise** AI features. Once both conditions are met, you can open it from several places:
 
 | Location           | How to Open                                                    |
 | ------------------ | -------------------------------------------------------------- |

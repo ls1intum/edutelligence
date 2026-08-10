@@ -27,16 +27,17 @@ When you use the **On-Premise** AI experience:
 
 When you use Iris, the following data may be included in requests to the language model:
 
-| Data                           | When It Is Sent                                                                              |
-| ------------------------------ | -------------------------------------------------------------------------------------------- |
-| Your chat messages             | Every conversation                                                                           |
-| Conversation history           | To maintain context within a chat                                                            |
-| Course structure               | Every conversation — exercise and lecture titles, competencies                               |
-| Exercise problem statement     | When an exercise is the active context                                                       |
-| Your code / submission text    | When a programming or text exercise is the active context                                    |
-| Build logs and test results    | When a programming exercise is the active context                                            |
-| Lecture slides and transcripts | Whenever they help answer your question — from the active lecture, or from across the course |
-| Memory summaries               | When Memory is enabled                                                                       |
+| Data                           | When It Is Sent                                                                                          |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Your chat messages             | Every conversation                                                                                       |
+| Conversation history           | To maintain context within a chat                                                                        |
+| Course structure               | Every conversation — exercise and lecture titles, competencies                                           |
+| Course FAQs                    | Every conversation — when relevant FAQ entries exist in the course                                       |
+| Exercise problem statement     | When an exercise is the active context                                                                   |
+| Your code / submission text    | When a programming or text exercise is the active context                                                |
+| Build logs and test results    | When a programming exercise is the active context                                                        |
+| Lecture slides and transcripts | When relevant to your question — scoped to the active lecture, or across the course when at course level |
+| Memory summaries               | When Memory is enabled                                                                                   |
 
 The [active context](./chat-context) therefore also determines the data footprint of a request. A chat at course level does not send your code, and switching away from an exercise stops sending it from the next message onwards.
 

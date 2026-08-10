@@ -37,7 +37,7 @@ Your choice takes effect with your next message, not the moment you pick it. The
 
 ## The Divider in the Chat
 
-Whenever the context changes, Iris draws a labelled divider into the conversation: "Chat topic set", "Chat topic switched" or "Chat topic cleared", with the name of the new lecture or exercise. Click the name to navigate to that lecture or exercise in Artemis.
+Whenever the context changes, Iris draws a labelled divider into the conversation: "Chat topic set", "Chat topic switched" or "Chat topic cleared". For set and switched dividers, the label includes the name of the new lecture or exercise and clicking it navigates to that page in Artemis. "Chat topic cleared" returns the chat to course level and carries no link destination.
 
 The divider is not decoration. It tells Iris where the topic changed, so earlier messages get read as being about the previous topic. That is why a long chat that has moved through several exercises does not confuse Iris about which one you are asking about now.
 
