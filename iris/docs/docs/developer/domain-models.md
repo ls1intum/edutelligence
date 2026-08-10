@@ -54,7 +54,7 @@ class PipelineExecutionSettingsDTO(BaseModel):
 
 ### `ChatPipelineExecutionDTO`
 
-The request body of `POST /chat/run`. It carries the chat itself, the course, and the entity fields for whichever context is active:
+The request body of `POST /api/v1/pipelines/chat/run`. It carries the chat itself, the course, and the entity fields for whichever context is active:
 
 ```python
 class ChatPipelineExecutionDTO(PipelineExecutionDTO):
@@ -64,7 +64,6 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
 
     session_title: Optional[str] = Field(alias="sessionTitle", default=None)
     chat_history: List[PyrisMessage] = Field(alias="chatHistory", default=[])
-    metrics: Optional[StudentMetricsDTO] = None
     custom_instructions: Optional[str] = Field(alias="customInstructions", default="")
 
     programming_exercise: Optional[ProgrammingExerciseDTO] = Field(

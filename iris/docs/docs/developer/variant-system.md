@@ -97,7 +97,7 @@ Inside `AbstractAgentPipeline.__call__`, the variant determines model selection:
 selected_version = state.variant.model("chat", local)
 ```
 
-The selected version string (e.g., `"gpt-5-mini"`) is then passed to `ModelVersionRequestHandler`, which looks up the corresponding model configuration in `llm_config.yml`.
+The selected version string (e.g., `"gpt-5-mini"`) is then passed to `IrisLangchainChatModel` via `LlmRequestHandler(model_id=selected_version)`, which looks up the corresponding model configuration in `llm_config.yml`.
 
 ## Cloud vs. Local Execution
 

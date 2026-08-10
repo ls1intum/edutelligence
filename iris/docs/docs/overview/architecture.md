@@ -32,7 +32,7 @@ Each pipeline defines which **LLM roles** it needs (e.g., a primary chat model, 
 
 ### One Pipeline, Several Contexts
 
-A single chat pipeline serves every student chat, whether the student is working through a lecture, a programming exercise, a text exercise, or the course as a whole. A chat carries an **active context** for that instead: the course, a lecture or an exercise. The context travels with each request and decides three things — which parts of the system prompt render, which tools the agent is offered, and how retrieval is scoped. Everything else is shared.
+A single chat pipeline serves every student chat, whether the student is working through a lecture, a programming exercise, a text exercise, or the course as a whole. A chat carries an **active context** for the chat: the course, a lecture or an exercise. The context travels with each request and decides three things — which parts of the system prompt render, which tools the agent is offered, and how retrieval is scoped. Everything else is shared.
 
 Splitting this along contexts instead would mean one pipeline per context, each duplicating the agent loop, the retrieval wiring and the citation handling, and none of them able to hand a conversation to another. Keeping the context as data means a chat can change what it is about without losing what came before it, which is what the next section describes.
 
