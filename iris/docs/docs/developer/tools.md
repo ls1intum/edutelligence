@@ -166,7 +166,7 @@ Three providers gate on flags that `ChatPipeline.prepare_state()` computes once 
 
 | Flag                 | Set from                                                | Gates                                                    |
 | -------------------- | ------------------------------------------------------- | -------------------------------------------------------- |
-| `allow_lecture_tool` | `should_allow_lecture_tool()` — indexed lecture content | `provide_lecture_retrieval`, `provide_lecture_list`      |
+| `allow_lecture_tool` | `should_allow_lecture_tool()` — indexed lecture content | `provide_lecture_retrieval`                              |
 | `allow_faq_tool`     | `should_allow_faq_tool()` — indexed FAQ entries         | `provide_faq_retrieval`                                  |
 | `allow_memiris_tool` | User opt-in and existing memories                       | `provide_memory_search`, `provide_find_similar_memories` |
 
