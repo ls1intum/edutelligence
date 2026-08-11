@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Callable, List
 
 import pytz
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
@@ -13,6 +13,7 @@ from langsmith import traceable
 
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
+from ..prompts.templates.ask_user.verdict_dependent_placeholder import VERDICT_DEPENDENT
 
 from ...common.memiris_setup import get_tenant_for_user
 from ...domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import (
@@ -38,8 +39,7 @@ from ..abstract_agent_pipeline import (
 from ..shared.utils import datetime_to_string
 from .assess_user_answer_pipeline import AssessUserAnswerPipeline
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class AskUserPipeline(
@@ -64,7 +64,12 @@ class AskUserPipeline(
         super().__init__(implementation_id="ask_user_chat_pipeline")
 
         # Create the assessment pipeline and its result variable
-        self.assess_user_answer_pipeline = AssessUserAnswerPipeline()
+        default_variant = next(
+            v for v in self.get_variants() if v.variant_id == "default"
+        )
+        self.assess_user_answer_pipeline = AssessUserAnswerPipeline(
+            model=default_variant.agent_model
+        )
         self.verdict = None
 
         # Setup Jinja2 template environment
@@ -72,7 +77,7 @@ class AskUserPipeline(
             os.path.dirname(__file__), "..", "prompts", "templates", "ask_user"
         )
         self.jinja_env = Environment(
-            loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["j2"])
+            loader=FileSystemLoader(template_dir), autoescape=False
         )
         self.system_prompt_template = self.jinja_env.get_template(
             "ask_user_chat_system_prompt.j2"
@@ -182,10 +187,6 @@ class AskUserPipeline(
         callback = state.callback
         dto = state.dto
 
-        # Initialize storage for shared data between tools
-        if not hasattr(state, "lecture_content_storage"):
-            setattr(state, "lecture_content_storage", {})
-
         # Build tool list based on available data and permissions
         tool_list: list[Callable] = [
             create_tool_get_submission_details(
@@ -246,7 +247,7 @@ class AskUserPipeline(
         )
         exercise_title: str = self._get_exercise_title(dto)
 
-        # Build system prompt using Jinja2 template (VERDICT_DEPENDENT and its context is set in pre_agent_hook)
+        # Build system prompt using Jinja2 template (VERDICT_DEPENDENT and its context is replaced in pre_agent_hook)
         template_context = {
             "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "event": self.event,
@@ -256,6 +257,7 @@ class AskUserPipeline(
             "programming_language": programming_language,
             "exercise_title": exercise_title,
             "user_language": dto.user.lang_key,
+            "verdict_dependent_placeholder": VERDICT_DEPENDENT
         }
 
         return self.system_prompt_template.render(template_context)
@@ -274,7 +276,7 @@ class AskUserPipeline(
         """
         # Update progress
         if step.get("intermediate_steps"):
-            state.callback.in_progress("Thinking ...")
+            state.callback.update()
 
     def pre_agent_hook(
         self,
@@ -296,7 +298,7 @@ class AskUserPipeline(
 
         except Exception as e:
             logger.error("Error in pre agent hook", exc_info=e)
-            state.callback.error("Error in processing response")
+            state.callback.fail("Error in processing response")
 
     def post_agent_hook(
         self,
@@ -347,13 +349,13 @@ class AskUserPipeline(
                 # Pass event back to server
                 state.callback.status.event = self.event
 
-            state.callback.done(
-                "Done!", final_result=result, tokens=state.tokens, verdict=self.verdict
+            state.callback.update(
+                result=result, tokens=state.tokens, verdict=self.verdict
             )
 
         except Exception as e:
             logger.error("Error in post agent hook", exc_info=e)
-            state.callback.error("Error in processing response")
+            state.callback.fail("Error in processing response")
 
         # reset assessment result for next pipeline run
         self.verdict = None
@@ -372,7 +374,7 @@ class AskUserPipeline(
             The refined response.
         """
         try:
-            state.callback.in_progress("Refining response ...")
+            state.callback.update()
 
             dto = state.dto
 
@@ -429,7 +431,7 @@ class AskUserPipeline(
 
         except Exception as e:
             logger.error("Error in refining question", exc_info=e)
-            state.callback.error("Error in refining question")
+            state.callback.fail("Error in refining question")
             return state.result
 
     def _assess_answer(
@@ -470,7 +472,7 @@ class AskUserPipeline(
                 "verdict": self.verdict.verdict,
                 "exercise_title": exercise_title,
                 "problem_statement": problem_statement,
-                "programming_language": programming_language,
+                "programming_language": programming_language
             }
             rendered_verdict_prompt = self.verdict_dependent_template.render(
                 template_context
@@ -483,10 +485,10 @@ class AskUserPipeline(
             for msg in state.prompt.messages:
                 if (
                     isinstance(msg, SystemMessagePromptTemplate)
-                    and "VERDICT_DEPENDENT" in msg.prompt.template
+                    and VERDICT_DEPENDENT in msg.prompt.template
                 ):
                     msg.prompt.template = msg.prompt.template.replace(
-                        "VERDICT_DEPENDENT", rendered_verdict_prompt
+                        VERDICT_DEPENDENT, rendered_verdict_prompt
                     )
 
             if self.assess_user_answer_pipeline.tokens is not None:
@@ -494,7 +496,7 @@ class AskUserPipeline(
 
         except Exception as e:
             logger.error("Error assessing answer", exc_info=e)
-            state.callback.error("Assessing answer failed.")
+            state.callback.fail("Assessing answer failed.")
 
     def assemble_prompt_with_history(
         self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
@@ -547,4 +549,4 @@ class AskUserPipeline(
 
         except Exception as e:
             logger.error("Error in ask-user pipeline", exc_info=e)
-            callback.error("An error occurred while running the ask-user pipeline.")
+            callback.fail("An error occurred while running the ask-user pipeline.")

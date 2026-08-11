@@ -57,9 +57,6 @@ test.structural.Policy_methods)
     2. [task][Select BubbleSort](test.behavior.use_BubbleSort_for_small_list)
        Select `BubbleSort` when the List has less or equal 10 dates.
 
-4. Complete the `client.dart` program which demonstrates switching between two strategies at runtime. \
-Start it by running `dart run :client`.
-
 @startuml
 
 class Client {
@@ -107,7 +104,7 @@ hide empty methods
 1. Create a new class `QuickSort` that implements `SortStrategy` and implement the Quick Sort algorithm.
 
 2. Make the method `performSort(List<DateTime>)` generic, so that other objects can also be sorted by the same method.
-   **Hint:** Have a look at Dart Generics and the interface `Comparable`.
+   **Hint:** Have a look at Generics and the interface `Comparable`.
 
 3. Think about a useful decision in `Policy` when to use the new `QuickSort` algorithm.
 """
@@ -539,8 +536,6 @@ Your entire output must follow exactly this format:
 OR
 !bad! <one short sentence explanation>
 """
-
-LLM_ASSESSMENT_EVALUATION_PROMPT = ""
 
 LLM_REPEATING_TOPICS_PROMPT = """
 You are an impartial and super strict jury member evaluating assessment questions about programming \

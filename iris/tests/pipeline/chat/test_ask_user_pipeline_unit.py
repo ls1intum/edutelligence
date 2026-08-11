@@ -5,6 +5,7 @@ import pytest
 
 from iris.domain.data.verdict_dto import VerdictDTO
 from iris.pipeline.chat.ask_user_pipeline import AskUserPipeline
+from iris.pipeline.prompts.templates.ask_user.verdict_dependent_placeholder import VERDICT_DEPENDENT
 
 
 def _make_pipeline() -> AskUserPipeline:
@@ -139,7 +140,7 @@ def test_build_system_message_renders_exercise_context():
     assert "java" in message  # programming_language is lower-cased
     assert "Implement bubble sort." in message
     assert (
-        "VERDICT_DEPENDENT" in message
+        VERDICT_DEPENDENT in message
     )  # self.event is None -> verdict-dependent branch
 
 
@@ -163,7 +164,7 @@ def test_build_system_message_uses_first_question_branch_for_event():
 
     message = pipeline.build_system_message(state)
 
-    assert "VERDICT_DEPENDENT" not in message
+    assert VERDICT_DEPENDENT not in message
     assert "Now generate the first question." in message
 
 
@@ -192,7 +193,7 @@ def test_on_agent_step_reports_progress_when_there_are_intermediate_steps():
 
     pipeline.on_agent_step(state, {"intermediate_steps": [object()]})
 
-    callback.in_progress.assert_called_once_with("Thinking ...")
+    callback.update.assert_called_once_with()
 
 
 def test_on_agent_step_is_silent_without_intermediate_steps():
@@ -202,7 +203,7 @@ def test_on_agent_step_is_silent_without_intermediate_steps():
 
     pipeline.on_agent_step(state, {"intermediate_steps": []})
 
-    callback.in_progress.assert_not_called()
+    callback.update.assert_not_called()
 
 
 # --------------------------------------------------------------------------
@@ -241,7 +242,7 @@ def test_pre_agent_hook_reports_error_on_exception():
 
     pipeline.pre_agent_hook(state)
 
-    callback.error.assert_called_once()
+    callback.fail.assert_called_once()
 
 
 # --------------------------------------------------------------------------
@@ -266,7 +267,7 @@ def test_post_agent_hook_refines_response_on_first_question():
     pipeline.post_agent_hook(state)
 
     pipeline._refine_response.assert_called_once_with(state)
-    assert callback.done.call_args.kwargs["final_result"] == "refined answer"
+    assert callback.update.call_args.kwargs["result"] == "refined answer"
 
 
 def test_post_agent_hook_refines_response_on_next_question_verdict():
@@ -276,11 +277,11 @@ def test_post_agent_hook_refines_response_on_next_question_verdict():
     pipeline.post_agent_hook(state)
 
     pipeline._refine_response.assert_called_once_with(state)
-    assert callback.done.call_args.kwargs["final_result"] == "refined answer"
+    assert callback.update.call_args.kwargs["result"] == "refined answer"
     assert callback.status.event == "NEXT_QUESTION"
     # NEXT_QUESTION verdicts are not accepted by the Artemis API and must be
     # cleared before being sent, while reasoning is preserved.
-    sent_verdict = callback.done.call_args.kwargs["verdict"]
+    sent_verdict = callback.update.call_args.kwargs["verdict"]
     assert sent_verdict.verdict is None
     assert sent_verdict.reasoning == "Too vague."
 
@@ -292,7 +293,7 @@ def test_post_agent_hook_uses_raw_result_without_refinement_otherwise():
     pipeline.post_agent_hook(state)
 
     pipeline._refine_response.assert_not_called()
-    assert callback.done.call_args.kwargs["final_result"] == "agent answer"
+    assert callback.update.call_args.kwargs["result"] == "agent answer"
     assert callback.status.event == "QUIZ_FINISHED"
 
 
@@ -301,7 +302,7 @@ def test_post_agent_hook_marks_suspicious_on_tab_defocus():
 
     pipeline.post_agent_hook(state)
 
-    sent_verdict = callback.done.call_args.kwargs["verdict"]
+    sent_verdict = callback.update.call_args.kwargs["verdict"]
     assert sent_verdict.verdict == "SUSPICIOUS"
     assert sent_verdict.reasoning == "Tab defocus!"
     assert callback.status.event == "QUIZ_FINISHED"
@@ -312,7 +313,7 @@ def test_post_agent_hook_marks_suspicious_on_timer_ran_out():
 
     pipeline.post_agent_hook(state)
 
-    sent_verdict = callback.done.call_args.kwargs["verdict"]
+    sent_verdict = callback.update.call_args.kwargs["verdict"]
     assert sent_verdict.verdict == "SUSPICIOUS"
     assert sent_verdict.reasoning == "Time limit exceeded!"
 
@@ -325,7 +326,7 @@ def test_post_agent_hook_forwards_event_when_no_verdict():
     pipeline.post_agent_hook(state)
 
     assert callback.status.event == "BUILD_WITH_POINTS"
-    assert callback.done.call_args.kwargs["verdict"] is None
+    assert callback.update.call_args.kwargs["verdict"] is None
 
 
 def test_post_agent_hook_resets_verdict_after_success():
@@ -344,8 +345,8 @@ def test_post_agent_hook_reports_error_and_resets_verdict_on_exception():
 
     pipeline.post_agent_hook(state)
 
-    callback.error.assert_called_once()
-    callback.done.assert_not_called()
+    callback.fail.assert_called_once()
+    callback.update.assert_not_called()
     assert pipeline.verdict is None
 
 
@@ -400,7 +401,7 @@ def test_refine_response_keeps_original_when_guide_says_ok():
 
 
 def test_refine_response_uses_rewritten_question_otherwise():
-    pipeline, _state, result = _refine_pipeline("Why does this loop terminate?")
+    _pipeline, _state, result = _refine_pipeline("Why does this loop terminate?")
 
     assert result == "Why does this loop terminate?"
 
@@ -415,7 +416,7 @@ def test_refine_response_falls_back_to_original_on_exception():
     result = pipeline._refine_response(state)
 
     assert result == "original question"
-    callback.error.assert_called_once()
+    callback.fail.assert_called_once()
 
 
 # --------------------------------------------------------------------------
@@ -444,7 +445,7 @@ def _assess_answer_state(assessment_result_text):
     pipeline.verdict_dependent_template.render.return_value = "Ask another {question}!"
 
     system_message = SystemMessagePromptTemplate.from_template(
-        "prefix VERDICT_DEPENDENT suffix", template_format="jinja2"
+        "prefix " + VERDICT_DEPENDENT + " suffix", template_format="jinja2"
     )
     callback = MagicMock()
     state = _make_state(
@@ -474,7 +475,7 @@ def test_assess_answer_replaces_verdict_placeholder_with_escaped_braces():
     pipeline._assess_answer(state)
 
     rendered = system_message.prompt.template
-    assert "VERDICT_DEPENDENT" not in rendered
+    assert VERDICT_DEPENDENT not in rendered
     # Braces from the rendered verdict template must be doubled so LangChain
     # does not try to interpret them as template variables.
     assert "{{question}}" in rendered
@@ -486,7 +487,7 @@ def test_assess_answer_reports_error_on_malformed_json():
 
     pipeline._assess_answer(state)
 
-    callback.error.assert_called_once_with("Assessing answer failed.")
+    callback.fail.assert_called_once_with("Assessing answer failed.")
     assert pipeline.verdict is None
 
 
@@ -581,4 +582,4 @@ def test_call_reports_error_when_super_call_raises():
     ):
         pipeline(dto, variant, callback, None)
 
-    callback.error.assert_called_once()
+    callback.fail.assert_called_once()

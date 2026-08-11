@@ -1,0 +1,2 @@
+# This string value should never be reachable -> it is always replaced, even assessment errors would abort pipeline before this
+VERDICT_DEPENDENT = "The assessment of the last user message was invalid. Say that an error occurred while assessing the last message."

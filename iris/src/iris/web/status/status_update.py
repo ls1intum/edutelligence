@@ -538,6 +538,12 @@ class AutonomousTutorCallback(StatusCallback):
 class AskUserStatusCallback(StatusCallback):
     """Status callback for ask-user pipelines."""
 
+    # The ask-user pipeline delivers its answer via a RUNNING update() ahead of
+    # the pipeline's terminal finish(), but that answer must still be present
+    # on the final FINISHED payload. Unlike other pipelines, "result" is
+    # therefore not treated as a single-update-only transient field here.
+    _TRANSIENT_RESULT_FIELDS: tuple[str, ...] = ()
+
     def __init__(self, run_id: str, base_url: str, event: str | None = None, **_kwargs):
         url = f"{base_url}/{self.api_url}/ask-user/runs/{run_id}/status"
         super().__init__(
@@ -548,36 +554,3 @@ class AskUserStatusCallback(StatusCallback):
                 event=event,
             ),
         )
-
-    def in_progress(self, message: str | None = None) -> bool:
-        """Compatibility wrapper for the ask-user pipeline's old progress API."""
-        del message
-        return self.update()
-
-    def done(
-        self,
-        message: str | None = None,
-        final_result: str | None = None,
-        tokens: Optional[list[TokenUsageDTO]] = None,
-        **fields,
-    ) -> bool:
-        """Send an answer-bearing RUNNING update before the base class finishes."""
-        del message
-        if final_result is not None:
-            fields["result"] = final_result
-        if tokens is not None:
-            fields["tokens"] = tokens
-        self.status.run_state = RunStateEnum.RUNNING
-        self.status.error = None
-        self._apply_fields(fields)
-        self._drain_running_updates()
-        return self.on_status_update()
-
-    def error(
-        self,
-        message: str,
-        exception=None,
-        tokens: Optional[list[TokenUsageDTO]] = None,
-    ) -> bool:
-        """Compatibility wrapper for the ask-user pipeline's old error API."""
-        return self.fail(message, exception=exception, tokens=tokens)

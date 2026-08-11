@@ -39,14 +39,14 @@ class TestAskUserMultipleQuestions(unittest.TestCase):
     def setUpClass(cls):
         number_of_tests = 5
         number_of_questions_per_test = 3
-        cls.required_test_pass_rate = 0.6
+        cls.required_test_pass_rate = 0.8
 
         cls.task = TASK_SORTING
         cls.template = TEMPLATE_SORTING
         cls.code = CODE_SORTING
 
         # This monkeypatch replaces the AssessUserAnswerPipeline with a mock that always assesses
-        # the answer as too vague (next_question is returned)
+        # the answer as too vague (NEXT_QUESTION is returned)
         import iris.pipeline.chat.ask_user_pipeline as pipeline_module
 
         monkeypatch = pytest.MonkeyPatch()
@@ -70,17 +70,14 @@ class TestAskUserMultipleQuestions(unittest.TestCase):
         cls.message_time = FIRST_MESSAGE_TIME
 
         cls.questions_all_tests = []
-        messages = []
 
-        for i in range(number_of_tests):
+        for _ in range(number_of_tests):
 
             callback = AskUserStatusCallbackMock()
             pipeline(cls.dto, VARIANT, callback, event="FIRST_QUESTION")
 
             cls.dto.chat_history = [get_pyris_message(0, False, callback.final_result)]
             cls.dto.chat_history.append(get_pyris_message(1, True, USER_ANSWER))
-            messages.append(callback.final_result)
-            messages.append(USER_ANSWER)
 
             for j in range(1, number_of_questions_per_test):
                 callback = AskUserStatusCallbackMock()
@@ -91,8 +88,6 @@ class TestAskUserMultipleQuestions(unittest.TestCase):
                 cls.dto.chat_history.append(
                     get_pyris_message(j * 2 + 1, True, USER_ANSWER)
                 )
-                messages.append(callback.final_result)
-                messages.append(USER_ANSWER)
 
             questions = "\n---\n".join(
                 content.text_content
@@ -103,8 +98,8 @@ class TestAskUserMultipleQuestions(unittest.TestCase):
 
             cls.questions_all_tests.append(questions)
 
-            logger.info("Pipeline results:")
-            logger.info(questions)
+            print("Pipeline results:")
+            print(questions)
 
     @classmethod
     def tearDownClass(cls):

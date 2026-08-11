@@ -16,8 +16,8 @@ from testcontainers.core.container import DockerContainer
 ROOT = Path(__file__).resolve().parent.parent
 
 # Set config paths before imports trigger Settings loading.
-os.environ.setdefault("APPLICATION_YML_PATH", str(ROOT / "application.local.yml"))
-os.environ.setdefault("LLM_CONFIG_PATH", str(ROOT / "llm_config.local.yml"))
+os.environ["APPLICATION_YML_PATH"] = str(ROOT / "application.local.yml")
+os.environ["LLM_CONFIG_PATH"] = str(ROOT / "llm_config.local.yml")
 
 TEST_WEAVIATE_HOST = "localhost"
 TEST_WEAVIATE_HTTP_PORT = 8001
@@ -36,7 +36,8 @@ def wait_for_weaviate(port, timeout=30):
             if requests.get(url, timeout=2).status_code == 200:
                 return True
         except requests.exceptions.RequestException:
-            time.sleep(0.5)
+            pass
+        time.sleep(0.5)
     return False
 
 

@@ -9,26 +9,22 @@ class AskUserStatusCallbackMock(AskUserStatusCallback):
     Test callback.
 
     - Prevents HTTP calls
-    - Captures final result, suggestions and token usage
+    - Captures final result and token usage
     """
 
     def __init__(self):
-
         super().__init__(
             run_id="test-run-id",
             base_url="http://localhost",  # not used
-            initial_stages=None,
         )
 
         # Captured outputs
-        self.final_result: Optional[str] = ""
-        self.suggestions: Optional[List[str]] = None
+        self.final_result: str = ""
         self.tokens: Optional[List[TokenUsageDTO]] = None
 
         # Debug / tracing
-        self.in_progress_messages: List[str] = []
-        self.done_messages: List[str] = []
-        self.error_messages: List[str] = []
+        self.update_calls: List[dict] = []
+        self.fail_messages: List[Optional[str]] = []
 
     # ------------------------------------------------------------------
     # Disable network calls
@@ -40,51 +36,25 @@ class AskUserStatusCallbackMock(AskUserStatusCallback):
         pass
 
     # ------------------------------------------------------------------
-    # Capture progress
+    # Capture progress / final result
     # ------------------------------------------------------------------
 
-    def in_progress(self, message: Optional[str] = None):
-        self.in_progress_messages.append(message)
-        super().in_progress(message)
+    def update(self, **fields) -> bool:
+        self.update_calls.append(fields)
 
-    # ------------------------------------------------------------------
-    # Capture final result
-    # ------------------------------------------------------------------
+        result = fields.get("result")
+        if result is not None:
+            # Append new result of sub-pipeline instead of replacing
+            self.final_result += result
+        if "tokens" in fields:
+            self.tokens = fields["tokens"]
 
-    def done(
-        self,
-        message: Optional[str] = None,
-        final_result: Optional[str] = None,
-        suggestions: Optional[List[str]] = None,
-        tokens: Optional[List[TokenUsageDTO]] = None,
-        **kwargs,
-    ):
-
-        # Call parent to keep pipeline logic intact
-        super().done(
-            message=message,
-            final_result=final_result,
-            suggestions=suggestions,
-            tokens=tokens,
-            **kwargs,
-        )
-
-        self.final_result += (
-            final_result or ""
-        )  # Append new result of sub-pipeline instead of replacing
-        self.suggestions = suggestions
-        self.tokens = tokens
-        self.done_messages.append(message)
+        return super().update(**fields)
 
     # ------------------------------------------------------------------
     # Capture errors
     # ------------------------------------------------------------------
 
-    def error(
-        self,
-        message: str,
-        exception=None,
-        tokens: Optional[List[TokenUsageDTO]] = None,
-    ):
-        self.error_messages.append(message)
-        super().error(message, exception, tokens)
+    def fail(self, message=None, code=None, tokens=None, **fields) -> bool:
+        self.fail_messages.append(message)
+        return super().fail(message, code, tokens, **fields)

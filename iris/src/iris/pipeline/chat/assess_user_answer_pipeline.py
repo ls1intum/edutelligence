@@ -33,18 +33,6 @@ from ..sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
 
-
-class FileSelectionDTO(BaseModel):
-    question: str
-    files: Dict[str, str]
-
-    def __str__(self):
-        return (
-            f'FileSelectionDTO(files="{self.files}", '
-            f'exercise_title="{self.exercise_title}", problem_statement="{self.problem_statement}")'
-        )
-
-
 class AssessUserAnswerPipeline(SubPipeline):
     """Pipeline that assesses a given answer by the student to decide whether it is convincing or not"""
 
@@ -53,25 +41,21 @@ class AssessUserAnswerPipeline(SubPipeline):
     callback: StatusCallback
     prompt: ChatPromptTemplate
     output_parser: StrOutputParser
-    tokens: TokenUsageDTO
-    variant: str
+    tokens: Optional[TokenUsageDTO]
 
     def __init__(
-        self, callback: Optional[StatusCallback] = None, variant: str = "default"
+        self,
+        callback: Optional[StatusCallback] = None,
+        model: str = "oai-gpt-5-mini",
     ):
         super().__init__(implementation_id="assess_user_answer_pipeline_reference_impl")
         self.callback = callback
-        self.variant = variant
+        self.tokens = None
 
         # Set up the language model
         completion_args = CompletionArguments(
             temperature=0, max_tokens=1024, response_format="text"
         )
-
-        if variant == "advanced":
-            model = "oai-gpt-52"
-        else:
-            model = "oai-gpt-5-mini"
 
         request_handler = LlmRequestHandler(model_id=model)
         self.llm = IrisLangchainChatModel(
@@ -91,17 +75,21 @@ class AssessUserAnswerPipeline(SubPipeline):
         """
         logger.info("Running assess user answer pipeline...")
 
+        submission_repository = (
+            dto.programming_exercise_submission.repository
+            if dto.programming_exercise_submission
+            else {}
+        ) or {}
+        template_repository = (
+            dto.programming_exercise.template_repository
+            if dto.programming_exercise
+            else {}
+        ) or {}
         submission_file_list = "\n------------\n".join(
-            [
-                f"{file_name}:\n{code}"
-                for file_name, code in dto.programming_exercise_submission.repository.items()
-            ]
+            f"{file_name}:\n{code}" for file_name, code in submission_repository.items()
         )
         template_file_list = "\n------------\n".join(
-            [
-                f"{file_name}:\n{code}"
-                for file_name, code in dto.programming_exercise.template_repository.items()
-            ]
+            f"{file_name}:\n{code}" for file_name, code in template_repository.items()
         )
 
         history: List[PyrisMessage] = dto.chat_history or []
@@ -129,9 +117,15 @@ class AssessUserAnswerPipeline(SubPipeline):
         else:
             rules = between_min_max_questions_rules
 
+        problem_statement: str = (
+            dto.programming_exercise.problem_statement
+            if dto.programming_exercise
+            else ""
+        )
+
         prompt_val = self.prompt.format_messages(
             template=template_file_list,
-            task=dto.programming_exercise.problem_statement,
+            task=problem_statement,
             files=submission_file_list,
             decision_rules=rules,
         )

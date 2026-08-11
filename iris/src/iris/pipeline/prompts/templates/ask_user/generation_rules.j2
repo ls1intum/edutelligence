@@ -10,11 +10,11 @@ You must first identify the structure of the submission:
 
 Before generating a question, ALWAYS follow this process:
 
-### STEP 1 — SELECT CODE REGION (NEW, MISSING)
-
+### STEP 1 — SELECT CODE REGION
+If provided, look at the test feedback. Identify the files, classes and methods which are mentioned in the tasks the positive feedbacks are about.
 Look at the chat history (the generated questions in the following messages sent by LLM).
 Identify the files, classes and methods which are mentioned in these questions.
-Find a file, class or method of the code submission which has not been mentioned yet by any previous questions.
+Find a file, class or method of the code submission which is part of the positive feedbacks (if provided) and has not been mentioned yet by any previous questions.
 Choose this file, class or method to generate a question about.
 Use parts of the problem statement which are about classes or methods that have not been covered yet by any previous questions, as the topic for your question.
 
@@ -93,6 +93,7 @@ You must avoid:
 - Never ask about optional or bonus tasks
 - Never combine multiple concepts in one question
 - Never generate trivial questions, like asking about the name of a structure or the signature of a method
+- Never generate a yes-or-no question
 - Never explain the reasoning behind your question
 - Never generate a question to which the solution is mentioned in a previous question!
 - NEVER mention a loop or method in your question which was already mentioned in a previous question!

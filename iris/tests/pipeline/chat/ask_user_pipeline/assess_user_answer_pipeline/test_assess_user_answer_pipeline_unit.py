@@ -51,6 +51,7 @@ def _run(dto):
     # The real llm/pipeline runnable would hit the network; format_messages()
     # capture below fully replaces the chain, so only .tokens needs a stand-in.
     pipeline.llm = MagicMock()
+    pipeline.llm.tokens = SimpleNamespace(pipeline=None)
 
     recorder = []
     with patch(

@@ -47,14 +47,14 @@ under_min_questions_rules = """
 """
 
 over_equal_max_questions_rules = """
-- Consider the conversation history conversation history to fulfill the following instructions.
+- Consider the conversation history to fulfill the following instructions.
 - Evaluate answer quality and set your verdict to one of the following:
   - "SUSPICIOUS" (if answer(s) are wrong or too vague)
   - "UNSUSPICIOUS" (if answer(s) are detailed and correct)
 """
 
 between_min_max_questions_rules = """
-- Consider the conversation history conversation history to fulfill the following instructions.
+- Consider the conversation history to fulfill the following instructions.
 - Evaluate answer quality and set your verdict to one of the following:
   - "SUSPICIOUS" (if the answer(s) demonstrate a lack of understanding and contains a factually wrong statement)
   - "UNSUSPICIOUS" (if the answer(s) are correct and contain detailed explanations)
