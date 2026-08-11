@@ -1,5 +1,6 @@
 import {
   ChangeDetectionStrategy,
+  ChangeDetectorRef,
   Component,
   OnInit,
   computed,
@@ -10,6 +11,7 @@ import {
   QueryList,
   ViewChildren,
 } from '@angular/core';
+import { NgClass } from '@angular/common';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 
 import { ModelManagementService } from '../../core/services/model-management.service';
@@ -205,6 +207,7 @@ interface ModelLog {
 
   imports: [
     RouterLink,
+    NgClass,
     ErrorMessageComponent,
     DataTableComponent,
   ],
@@ -223,6 +226,9 @@ export class ModelErrorReport implements OnInit {
 
   private readonly http =
     inject(HttpClient);
+
+  private readonly cdr =
+    inject(ChangeDetectorRef);
 
   private readonly modelLogs =
     signal<readonly ModelLog[]>([]);
@@ -419,6 +425,9 @@ export class ModelErrorReport implements OnInit {
   readonly highlightedError =
     signal<string | undefined>(undefined);
 
+  readonly highlightedErrorNode =
+    signal<string | null>(null);
+
   async ngOnInit(): Promise<void> {
     const id =
       Number(
@@ -561,21 +570,72 @@ export class ModelErrorReport implements OnInit {
     );
   }
 
+  getScopePercentageClass(
+    scope?: ErrorScope,
+    status?: 'success' | 'failure'
+  ): string {
+    if (!scope) {
+      return '';
+    }
+
+    const totalNodes = this.availableLogs().length;
+
+    if (totalNodes === 0) {
+      return 'scope-badge--danger';
+    }
+
+    const nodeCount = scope.nodes?.length ?? 0;
+
+    const successfulNodes =
+      status === 'failure'
+        ? totalNodes - nodeCount
+        : nodeCount;
+
+    const percentage =
+      (successfulNodes / totalNodes) * 100;
+
+    if (percentage >= 80) {
+      return 'scope-badge--success';
+    }
+
+    if (percentage >= 50) {
+      return 'scope-badge--warning';
+    }
+
+    return 'scope-badge--danger';
+  }
+
 
   getScopeLabel(
-    scope?: ErrorScope
+    scope?: ErrorScope,
+    status?: 'success' | 'failure'
   ): string {
     if (!scope) {
       return '';
     }
 
     if (scope.type === 'global') {
-      return 'Global';
+      return '100%';
     }
 
-    const count = scope.nodes?.length ?? 0;
+    const totalNodes = this.availableLogs().length;
 
-    return `Nodes: ${count}`;
+    if (totalNodes === 0) {
+      return '0%';
+    }
+
+    const nodeCount = scope.nodes?.length ?? 0;
+
+    const successfulNodes =
+      status === 'failure'
+        ? totalNodes - nodeCount
+        : nodeCount;
+
+    const percentage = Math.round(
+      (successfulNodes / totalNodes) * 100
+    );
+
+    return `${percentage}%`;
   }
 
 
@@ -606,9 +666,8 @@ export class ModelErrorReport implements OnInit {
       return;
     }
 
-    this.highlightedError.set(
-      errorMessage?.trim()
-    );
+    this.highlightedError.set(errorMessage);
+    this.highlightedErrorNode.set(node);
 
     this.selectedLogNode.set(node);
     this.activeTab.set('complete_logs');
@@ -682,12 +741,9 @@ export class ModelErrorReport implements OnInit {
 
       this.completeLog.set(log);
 
-      if (this.highlightedError()) {
-        requestAnimationFrame(() => {
-          this.scrollToHighlightedError();
-        });
-      }
+      this.cdr.detectChanges();
 
+      this.scrollToHighlightedError();
     } catch {
       this.completeLog.set(
         'Unable to load log file.'
@@ -703,23 +759,10 @@ export class ModelErrorReport implements OnInit {
       return;
     }
 
-    const elements =
-      this.logLineElements.toArray();
-
-    const lines =
-      this.logLines();
-
-    const index =
-      lines.findIndex(line =>
-        this.isHighlightedLogLine(line)
-      );
-
-    if (index === -1) {
-      return;
-    }
-
     const element =
-      elements[index]?.nativeElement;
+      document.querySelector(
+        '.log-line--highlighted'
+      );
 
     if (!element) {
       return;
@@ -897,14 +940,21 @@ export class ModelErrorReport implements OnInit {
     const error =
       this.highlightedError();
 
-    if (!error) {
+    const errorNode =
+      this.highlightedErrorNode();
+
+    const selectedNode =
+      this.selectedLogNode();
+
+    if (!error || !errorNode) {
       return false;
     }
 
-    return (
-      line.includes(error) ||
-      line.trim().includes(error.trim())
-    );
+    if (errorNode !== selectedNode) {
+      return false;
+    }
+
+    return line.includes(error);
   }
 
 
@@ -951,29 +1001,23 @@ export class ModelErrorReport implements OnInit {
       CALIBRATION_STAGES.filter(stage => {
         if (processName === 'Download') {
           return (
-            stage.name ===
-              'Model Identification' ||
-            stage.name ===
-              'Model Download'
+            stage.name === 'Model Identification' ||
+            stage.name === 'Model Download'
           );
         }
 
         return (
-          stage.name !==
-            'Model Identification' &&
-          stage.name !==
-            'Model Download'
+          stage.name !== 'Model Identification' &&
+          stage.name !== 'Model Download'
         );
       });
 
     for (const stage of stages) {
+
       const successfulNodes: string[] = [];
 
       const failures =
-        new Map<
-          string,
-          string[]
-        >();
+        new Map<string, string[]>();
 
       for (const result of results) {
 
@@ -982,8 +1026,7 @@ export class ModelErrorReport implements OnInit {
             .map(probe =>
               probe.stages.find(
                 item =>
-                  item.name ===
-                  stage.name
+                  item.name === stage.name
               )
             )
             .filter(
@@ -993,31 +1036,33 @@ export class ModelErrorReport implements OnInit {
                 !!item
             );
 
+        /*
+        * Ein Node gilt für diese Stage als erfolgreich,
+        * wenn mindestens ein Probe diese Stage erfolgreich
+        * abgeschlossen hat.
+        */
         const successful =
           stageResults.some(
             stageResult =>
-              stageResult.status ===
-              'success'
+              stageResult.status === 'success'
           );
 
         if (successful) {
-          successfulNodes.push(
-            result.node
-          );
+          successfulNodes.push(result.node);
           continue;
         }
 
+        /*
+        * Fehler dieser Stage sammeln.
+        */
         const failedStageResults =
           stageResults.filter(
             stageResult =>
-              stageResult.status ===
-              'failure'
+              stageResult.status === 'failure'
           );
 
-        for (
-          const stageResult of
-            failedStageResults
-        ) {
+        for (const stageResult of failedStageResults) {
+
           const error =
             stageResult.errorMessage ??
             'Unknown calibration error';
@@ -1034,27 +1079,35 @@ export class ModelErrorReport implements OnInit {
         }
       }
 
-      if (successfulNodes.length) {
+      /*
+      * SUCCESS
+      *
+      * Immer einen Success-Eintrag erzeugen,
+      * wenn mindestens ein Node erfolgreich war.
+      */
+      if (successfulNodes.length > 0) {
         items.push({
           name: stage.name,
           status: 'success',
           scope: {
             type: 'node',
             nodes: [
-              ...new Set(
-                successfulNodes
-              ),
+              ...new Set(successfulNodes),
             ],
           },
         });
       }
 
-      for (
-        const [
-          errorMessage,
-          nodes,
-        ] of failures
-      ) {
+      /*
+      * FAILURE
+      *
+      * Fehler unabhängig vom Success-Eintrag hinzufügen.
+      */
+      for (const [
+        errorMessage,
+        nodes,
+      ] of failures) {
+
         items.push({
           name: stage.name,
           status: 'failure',

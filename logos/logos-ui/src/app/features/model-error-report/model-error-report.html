@@ -74,8 +74,8 @@
           @if (hasCompleteLogs()) {
 
             <app-data-table
-              [columns]="['', 'PROCESS', 'STATUS']"
-              gridCols="40px 220fr 120fr"
+              [columns]="['', 'PROCESS']"
+              gridCols="40px 1fr"
               [loading]="processesLoading()"
               [empty]="processes().length === 0"
               emptyMessage="No process information available."
@@ -111,21 +111,6 @@
 
                   </div>
 
-                  <div class="col-status">
-
-                    <span
-                      class="status-badge"
-                      [class.status-badge--success]="process.status === 'success'"
-                      [class.status-badge--failure]="process.status === 'failure'"
-                    >
-                      {{ process.status === 'success'
-                        ? 'Success'
-                        : 'Failure'
-                      }}
-                    </span>
-
-                  </div>
-
                 </div>
 
                 <!-- Expanded Details -->
@@ -145,7 +130,7 @@
 
                         <div class="checklist">
 
-                          @for (item of process.items; track item.name) {
+                          @for (item of process.items; track $index) {
 
                             <div class="check-row">
 
@@ -165,17 +150,50 @@
                                 {{ item.name }}
                               </span>
 
-                              @if (item.status === 'failure' && item.scope) {
+                              @if (item.scope) {
                                 <span
                                   class="scope-badge"
-                                  [class.scope-badge--global]="item.scope.type === 'global'"
-                                  [class.scope-badge--node]="item.scope.type === 'node'"
+                                  [ngClass]="getScopePercentageClass(item.scope, item.status)"
                                 >
-                                  {{ getScopeLabel(item.scope) }}
+                                  {{ getScopeLabel(item.scope, item.status) }}
                                 </span>
                               }
 
                             </div>
+
+                            @if (
+                              item.name === 'Deployment Success' &&
+                              item.scope?.nodes?.length
+                            ) {
+
+                              <div class="error-scope">
+
+                                <strong>
+                                  Successful Nodes:
+                                </strong>
+
+                                <div class="scope-nodes">
+
+                                  @for (
+                                    node of item.scope?.nodes ?? [];
+                                    track node
+                                  ) {
+
+                                    <button
+                                      type="button"
+                                      class="scope-node-button scope-node-button--success"
+                                      (click)="openNodeLog(node)"
+                                    >
+                                      {{ node }}
+                                    </button>
+
+                                  }
+
+                                </div>
+
+                              </div>
+
+                            }
 
                             @if (item.errorMessage) {
 
@@ -274,14 +292,6 @@
                 </select>
 
               </div>
-
-              @if (calibrationResult()?.status === 'success') {
-
-                <div class="calibration-success">
-                  ✓ Success
-                </div>
-
-              }
 
               <div class="log-viewer">
 
