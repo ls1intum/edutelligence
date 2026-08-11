@@ -199,16 +199,14 @@
   position: absolute;
   top: 8px;
   transform: translateX(-50%);
-  background: rgb(var(--color-surface-0) / var(--opacity-semi));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: rgb(var(--color-surface-0));
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
   border-radius: 8px;
   padding: 8px 12px;
   pointer-events: none;
   z-index: 10;
   min-width: 140px;
   font-size: var(--font-size-sm);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   box-shadow: 0 4px 16px rgb(var(--shadow-color) / var(--opacity-border));
   white-space: nowrap;
 }

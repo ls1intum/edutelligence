@@ -4,10 +4,6 @@
   font-weight: var(--font-weight-normal);
   letter-spacing: var(--letter-spacing-wide);
   line-height: var(--line-height-normal);
-  background: var(--logo-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
   color: rgb(var(--logo-name-color));
   margin: 0;
 }

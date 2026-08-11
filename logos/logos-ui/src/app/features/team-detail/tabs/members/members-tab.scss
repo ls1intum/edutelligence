@@ -132,9 +132,9 @@
   font-weight: var(--font-weight-bold);
   letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
-  background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
-  color: rgb(var(--color-accent-purple));
-  border: 1px solid rgb(var(--color-accent-purple)  / var(--opacity-border));
+  background: rgb(var(--color-primary-500)  / var(--opacity-soft));
+  color: rgb(var(--color-text-accent));
+  border: 1px solid rgb(var(--color-primary-500)  / var(--opacity-border));
 }
 
 // ── Role badge ─────────────────────────────────────────────────────────────
@@ -469,10 +469,8 @@
   }
 
   :host ::ng-deep .expand-row {
-    background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
-    border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+    background: rgb(var(--color-surface-0));
+    border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
     border-top: none;
     border-bottom-left-radius: 8px;
     border-bottom-right-radius: 8px;

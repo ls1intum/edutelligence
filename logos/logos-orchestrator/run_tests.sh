@@ -32,7 +32,7 @@ EOF
 run_unit() {
   if [ -d tests/unit ]; then
     echo "=== Running unit tests ==="
-    poetry run pytest tests/unit -v "${EXTRA_ARGS[@]}"
+    .venv/bin/pytest tests/unit -v "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
   else
     echo "No unit tests directory (tests/unit); skipping."
   fi
@@ -40,18 +40,18 @@ run_unit() {
 
 run_integration() {
   echo "=== Running integration tests ==="
-  ./tests/integration/run_integration_tests.sh "${EXTRA_ARGS[@]}"
+  ./tests/integration/run_integration_tests.sh "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 }
 
 run_sdi() {
   echo "=== Running SDI/scheduling tests ==="
-  ./run_scheduling_data_test.sh "${EXTRA_ARGS[@]}"
+  ./run_scheduling_data_test.sh "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 }
 
 run_performance() {
   if [ -x ./tests/performance/test_scheduling_performance.sh ]; then
     echo "=== Running performance tests ==="
-    ./tests/performance/test_scheduling_performance.sh "${EXTRA_ARGS[@]}"
+    ./tests/performance/test_scheduling_performance.sh "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
   else
     echo "Performance runner not found; skipping."
   fi
