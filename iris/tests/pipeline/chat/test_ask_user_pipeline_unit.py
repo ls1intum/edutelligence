@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langchain_core.output_parsers import json
 
 from iris.domain.data.verdict_dto import VerdictDTO
 from iris.pipeline.chat.ask_user_pipeline import AskUserPipeline
@@ -522,7 +523,7 @@ def test_assess_answer_replaces_verdict_placeholder_with_escaped_braces():
 def test_assess_answer_reports_error_on_malformed_json():
     pipeline, state, _msg, callback = _assess_answer_state("not json at all")
 
-    with pytest.raises(Exception):
+    with pytest.raises(json.JSONDecodeError):
         pipeline._assess_answer(state)
 
     callback.fail.assert_called_once_with("Assessing answer failed.")
