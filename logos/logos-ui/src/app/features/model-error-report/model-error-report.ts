@@ -4,35 +4,39 @@ import {
   Component,
   OnInit,
   computed,
+  effect,
   inject,
   signal,
-  effect,
-  ElementRef,
-  QueryList,
-  ViewChildren,
 } from '@angular/core';
 import { NgClass } from '@angular/common';
 import { ActivatedRoute, RouterLink } from '@angular/router';
+import { HttpClient } from '@angular/common/http';
+import { firstValueFrom } from 'rxjs';
 
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { Model } from '../../shared/models/model.model';
 
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
-import { HttpClient } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
 
+
+// ==========================================================================
+// Types
+// ==========================================================================
 
 type ModelErrorTab =
   | 'error_report'
   | 'complete_logs';
 
+type CalibrationStatus =
+  | 'success'
+  | 'failure'
+  | 'unknown';
 
 interface ErrorScope {
   readonly type: 'global' | 'node';
   readonly nodes?: readonly string[];
 }
-
 
 interface ChecklistItem {
   readonly name: string;
@@ -47,7 +51,6 @@ interface ModelProcessDefinition {
   readonly checklist: string;
 }
 
-
 interface ModelProcess {
   readonly id: number;
   readonly process: string;
@@ -56,25 +59,16 @@ interface ModelProcess {
   readonly items: readonly ChecklistItem[];
 }
 
-
-type CalibrationStatus =
-  | 'success'
-  | 'failure'
-  | 'unknown';
-
-
 interface CalibrationStage {
   readonly name: string;
   readonly successPatterns: readonly RegExp[];
 }
-
 
 interface CalibrationStageResult {
   readonly name: string;
   readonly status: CalibrationStatus;
   readonly errorMessage?: string;
 }
-
 
 interface CalibrationProbeResult {
   readonly probe: number;
@@ -83,7 +77,6 @@ interface CalibrationProbeResult {
   readonly errorMessage?: string;
 }
 
-
 interface NodeCalibrationResult {
   readonly node: string;
   readonly status: CalibrationStatus;
@@ -91,6 +84,16 @@ interface NodeCalibrationResult {
   readonly probes: readonly CalibrationProbeResult[];
 }
 
+interface ModelLog {
+  readonly node: string;
+  readonly file: string;
+  readonly modelName: string;
+}
+
+
+// ==========================================================================
+// Process Definitions
+// ==========================================================================
 
 const PROCESS_DEFINITIONS: readonly ModelProcessDefinition[] = [
   {
@@ -106,6 +109,10 @@ const PROCESS_DEFINITIONS: readonly ModelProcessDefinition[] = [
 ];
 
 
+// ==========================================================================
+// Calibration Stages
+// ==========================================================================
+
 const CALIBRATION_STAGES: readonly CalibrationStage[] = [
   {
     name: 'Model Identification',
@@ -113,77 +120,66 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
       /non-default args:/,
     ],
   },
-
   {
     name: 'Model Download',
     successPatterns: [
       /non-default args:/,
     ],
   },
-
   {
     name: 'Initialized vLLM engine',
     successPatterns: [
       /Initializing a V1 LLM engine/,
     ],
   },
-
   {
     name: 'Downloaded Weights',
     successPatterns: [
       /Time spent downloading weights/,
     ],
   },
-
   {
     name: 'Loaded Safetensor Checkpoints',
     successPatterns: [
       /Loading safetensors checkpoint shards:\s*100%\s*Completed/,
     ],
   },
-
   {
     name: 'Loaded Weights',
     successPatterns: [
       /Loading weights took/,
     ],
   },
-
   {
     name: 'Loaded Model',
     successPatterns: [
       /Model loading took/,
     ],
   },
-
   {
     name: 'Completed Warmup Run',
     successPatterns: [
       /Initial profiling\/warmup run took/,
     ],
   },
-
   {
     name: 'Reserved KV-Cache Memory',
     successPatterns: [
       /reserved .* memory for KV Cache/,
     ],
   },
-
   {
     name: 'Engine Core Started',
     successPatterns: [
       /GPU KV cache size:/,
     ],
   },
-
   {
     name: 'Start vLLM Server',
     successPatterns: [
       /Starting vLLM server on/,
     ],
   },
-
   {
     name: 'Deployment Success',
     successPatterns: [
@@ -192,13 +188,6 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
     ],
   },
 ];
-
-
-interface ModelLog {
-  readonly node: string;
-  readonly file: string;
-  readonly modelName: string;
-}
 
 
 @Component({
@@ -219,106 +208,77 @@ interface ModelLog {
 })
 export class ModelErrorReport implements OnInit {
 
+  // ==========================================================================
+  // Dependencies
+  // ==========================================================================
+
   private readonly route = inject(ActivatedRoute);
+  private readonly modelService = inject(ModelManagementService);
+  private readonly http = inject(HttpClient);
+  private readonly cdr = inject(ChangeDetectorRef);
 
-  private readonly modelService =
-    inject(ModelManagementService);
 
-  private readonly http =
-    inject(HttpClient);
+  // ==========================================================================
+  // Component State
+  // ==========================================================================
 
-  private readonly cdr =
-    inject(ChangeDetectorRef);
+  readonly model = signal<Model | null>(null);
+  readonly modelId = signal<number | null>(null);
+
+  readonly loading = signal(true);
+  readonly loadError = signal(false);
+
+  readonly activeTab = signal<ModelErrorTab>('error_report');
+
+  readonly expandedProcess = signal<number[]>([]);
+
+  readonly selectedLogNode = signal<string | null>(null);
+
+  readonly completeLog = signal('');
 
   private readonly modelLogs =
     signal<readonly ModelLog[]>([]);
 
+  private readonly calibrationResults =
+    signal<readonly NodeCalibrationResult[]>([]);
+
+  readonly highlightedError =
+    signal<string | undefined>(undefined);
+
+  readonly highlightedErrorNode =
+    signal<string | null>(null);
+
+  readonly processesLoading = signal(false);
+
+  // ==========================================================================
+  // Tabs
+  // ==========================================================================
 
   readonly tabs: readonly ModelErrorTab[] = [
     'error_report',
     'complete_logs',
   ];
 
+  readonly tabLabel: Record<ModelErrorTab, string> = {
+    error_report: 'Error Report',
+    complete_logs: 'Complete Logs',
+  };
 
   readonly visibleTabs =
-    computed<readonly ModelErrorTab[]>(() => {
-      if (this.hasCompleteLogs()) {
-        return this.tabs;
-      }
-
-      return ['error_report'];
-    });
-
-
-  readonly tabLabel:
-    Record<ModelErrorTab, string> = {
-      error_report: 'Error Report',
-      complete_logs: 'Complete Logs',
-    };
-
-
-  readonly model =
-    signal<Model | null>(null);
-
-
-  readonly modelId =
-    signal<number | null>(null);
-
-
-  readonly loading =
-    signal(true);
-
-
-  readonly loadError =
-    signal(false);
-
-
-  readonly completeLog =
-    signal('');
-
-
-  readonly logLines =
-    computed(() =>
-      this.completeLog().split('\n')
+    computed<readonly ModelErrorTab[]>(() =>
+      this.hasCompleteLogs()
+        ? this.tabs
+        : ['error_report']
     );
 
 
-  private readonly calibrationResults =
-    signal<readonly NodeCalibrationResult[]>([]);
+  // ==========================================================================
+  // Logs
+  // ==========================================================================
 
-
-  readonly calibrationResult =
-    computed<NodeCalibrationResult | null>(() => {
-      const selectedLog =
-        this.selectedLog();
-
-      const result = selectedLog
-        ? this.calibrationResults()
-            .find(item =>
-              item.node === selectedLog.node
-            ) ?? null
-        : null;
-
-      return result;
-    });
-
-
-  readonly hasCompleteLogs = computed(() => {
-    const currentModel = this.model();
-
-    if (!currentModel) {
-      return false;
-    }
-
-    return this.modelLogs().some(
-      log => log.modelName === currentModel.name
-    );
-  });
-
-
-  readonly selectedLogNode =
-    signal<string | null>(null);
-
+  readonly logLines = computed(() =>
+    this.completeLog().split('\n')
+  );
 
   readonly availableLogs = computed(() => {
     const currentModel = this.model();
@@ -327,81 +287,70 @@ export class ModelErrorReport implements OnInit {
       return [];
     }
 
-    return this.modelLogs()
-      .filter(log =>
-        log.modelName === currentModel.name
-      );
+    return this.modelLogs().filter(
+      log => log.modelName === currentModel.name
+    );
+  });
+
+  readonly selectedLog = computed(() => {
+    const logs = this.availableLogs();
+
+    if (!logs.length) {
+      return null;
+    }
+
+    const selectedNode = this.selectedLogNode();
+
+    return (
+      logs.find(log => log.node === selectedNode) ??
+      logs[0]
+    );
+  });
+
+  readonly hasCompleteLogs = computed(() => {
+    return this.availableLogs().length > 0;
   });
 
 
-  readonly selectedLog =
-    computed(() => {
-      const logs =
-        this.availableLogs();
+  // ==========================================================================
+  // Calibration
+  // ==========================================================================
 
-      if (!logs.length) {
+  readonly calibrationResult =
+    computed<NodeCalibrationResult | null>(() => {
+      const selectedLog = this.selectedLog();
+
+      if (!selectedLog) {
         return null;
       }
 
-      const selectedNode =
-        this.selectedLogNode();
-
       return (
-        logs.find(log =>
-          log.node === selectedNode
-        )
-        ?? logs[0]
+        this.calibrationResults().find(
+          result => result.node === selectedLog.node
+        ) ?? null
       );
     });
 
 
-  constructor() {
-    effect(() => {
-      const log =
-        this.selectedLog();
-
-      if (!log) {
-        return;
-      }
-
-      void this.loadLog(log.file);
-    });
-  }
-
-
-  readonly activeTab =
-    signal<ModelErrorTab>(
-      'error_report'
-    );
-
-
-  readonly processesLoading =
-    signal(false);
-
-
-  readonly expandedProcess =
-    signal<number[]>([]);
-
+  // ==========================================================================
+  // Process Data
+  // ==========================================================================
 
   readonly processes =
-  computed<readonly ModelProcess[]>(() => {
+    computed<readonly ModelProcess[]>(() => {
+      if (!this.model()) {
+        return [];
+      }
 
-    if (!this.model()) {
-      return [];
-    }
-
-    return PROCESS_DEFINITIONS.map(
-      definition => {
-
+      return PROCESS_DEFINITIONS.map(definition => {
         const items =
           this.getCalibrationChecklistItems(
             definition.process
           );
 
-        const hasFailure =
-          items.some(item =>
-            item.status === 'failure'
-          );
+        const hasFailure = items.some(
+          item => item.status === 'failure'
+        );
 
         return {
           id: definition.id,
@@ -412,27 +361,28 @@ export class ModelErrorReport implements OnInit {
             : 'success',
           items,
         };
+      });
+    });
+
+
+  // ==========================================================================
+  // Lifecycle
+  // ==========================================================================
+
+  constructor() {
+    effect(() => {
+      const log = this.selectedLog();
+
+      if (log) {
+        void this.loadLog(log.file);
       }
-    );
-  });
-
-  @ViewChildren(
-    'logLine',
-    { read: ElementRef }
-  )
-  private readonly logLineElements!: QueryList<ElementRef<HTMLDivElement>>;
-
-  readonly highlightedError =
-    signal<string | undefined>(undefined);
-
-  readonly highlightedErrorNode =
-    signal<string | null>(null);
+    });
+  }
 
   async ngOnInit(): Promise<void> {
-    const id =
-      Number(
-        this.route.snapshot.paramMap.get('id')
-      );
+    const id = Number(
+      this.route.snapshot.paramMap.get('id')
+    );
 
     this.modelId.set(id);
 
@@ -440,9 +390,11 @@ export class ModelErrorReport implements OnInit {
   }
 
 
-  async fetchModel(
-    id: number
-  ): Promise<void> {
+  // ==========================================================================
+  // Initial Data Loading
+  // ==========================================================================
+
+  async fetchModel(id: number): Promise<void> {
     this.loading.set(true);
     this.loadError.set(false);
 
@@ -450,10 +402,9 @@ export class ModelErrorReport implements OnInit {
       const models =
         await this.modelService.getModels();
 
-      const foundModel =
-        models.find(
-          model => model.id === id
-        );
+      const foundModel = models.find(
+        model => model.id === id
+      );
 
       if (!foundModel) {
         this.loadError.set(true);
@@ -464,74 +415,44 @@ export class ModelErrorReport implements OnInit {
 
       await this.loadLogIndex();
 
-      const logs =
-        this.availableLogs();
+      const logs = this.availableLogs();
 
       await this.loadAllCalibrationLogs(logs);
 
-      if (logs.length) {
-        this.selectedLogNode.set(
-          logs[0].node
-        );
+      if (logs.length > 0) {
+        this.selectedLogNode.set(logs[0].node);
       }
 
       this.expandFailedProcesses();
 
     } catch {
       this.loadError.set(true);
-
     } finally {
       this.loading.set(false);
     }
   }
 
+  private async loadLogIndex(): Promise<void> {
+    try {
+      const files =
+        await firstValueFrom(
+          this.http.get<string[]>(
+            '/logs/index.json'
+          )
+        );
 
-  setTab(
-    tab: ModelErrorTab
-  ): void {
-    this.activeTab.set(tab);
-  }
+      const logs = files
+        .map(file => this.parseLogFilename(file))
+        .filter(
+          (log): log is ModelLog =>
+            log !== null
+        );
 
+      this.modelLogs.set(logs);
 
-  toggleProcess(
-    id: number
-  ): void {
-    this.expandedProcess.update(
-      current => {
-        if (current.includes(id)) {
-          return current.filter(
-            processId =>
-              processId !== id
-          );
-        }
-
-        return [
-          ...current,
-          id,
-        ];
-      }
-    );
-  }
-
-
-  isExpanded(
-    id: number
-  ): boolean {
-    return this.expandedProcess()
-      .includes(id);
-  }
-
-
-  private expandFailedProcesses(): void {
-    this.expandedProcess.set(
-      this.processes()
-        .filter(process =>
-          process.status === 'failure'
-        )
-        .map(process =>
-          process.id
-        )
-    );
+    } catch {
+      this.modelLogs.set([]);
+    }
   }
 
   private async loadAllCalibrationLogs(
@@ -554,6 +475,7 @@ export class ModelErrorReport implements OnInit {
             log.node,
             content
           );
+
         } catch {
           return null;
         }
@@ -569,6 +491,94 @@ export class ModelErrorReport implements OnInit {
       )
     );
   }
+
+  private async loadLog(file: string): Promise<void> {
+    try {
+      const log =
+        await firstValueFrom(
+          this.http.get(
+            `/logs/${file}`,
+            {
+              responseType: 'text',
+            }
+          )
+        );
+
+      this.completeLog.set(log);
+
+      this.cdr.detectChanges();
+
+      this.scrollToHighlightedError();
+
+    } catch {
+      this.completeLog.set(
+        'Unable to load log file.'
+      );
+    }
+  }
+
+
+  // ==========================================================================
+  // Navigation
+  // ==========================================================================
+
+  setTab(tab: ModelErrorTab): void {
+    this.activeTab.set(tab);
+  }
+
+  toggleProcess(id: number): void {
+    this.expandedProcess.update(current => {
+      if (current.includes(id)) {
+        return current.filter(
+          processId => processId !== id
+        );
+      }
+
+      return [...current, id];
+    });
+  }
+
+  isExpanded(id: number): boolean {
+    return this.expandedProcess().includes(id);
+  }
+
+  openNodeLog(
+    node: string,
+    errorMessage?: string
+  ): void {
+    const log = this.availableLogs().find(
+      item => item.node === node
+    );
+
+    if (!log) {
+      return;
+    }
+
+    this.highlightedError.set(errorMessage);
+    this.highlightedErrorNode.set(node);
+
+    this.selectedLogNode.set(node);
+    this.activeTab.set('complete_logs');
+
+    setTimeout(() => {
+      this.scrollToHighlightedError();
+    });
+  }
+
+  private expandFailedProcesses(): void {
+    this.expandedProcess.set(
+      this.processes()
+        .filter(
+          process => process.status === 'failure'
+        )
+        .map(process => process.id)
+    );
+  }
+
+
+  // ==========================================================================
+  // Scope
+  // ==========================================================================
 
   getScopePercentageClass(
     scope?: ErrorScope,
@@ -605,7 +615,6 @@ export class ModelErrorReport implements OnInit {
     return 'scope-badge--danger';
   }
 
-
   getScopeLabel(
     scope?: ErrorScope,
     status?: 'success' | 'failure'
@@ -631,17 +640,12 @@ export class ModelErrorReport implements OnInit {
         ? totalNodes - nodeCount
         : nodeCount;
 
-    const percentage = Math.round(
+    return `${Math.round(
       (successfulNodes / totalNodes) * 100
-    );
-
-    return `${percentage}%`;
+    )}%`;
   }
 
-
-  getScopeDetails(
-    scope?: ErrorScope
-  ): string {
+  getScopeDetails(scope?: ErrorScope): string {
     if (!scope) {
       return '';
     }
@@ -653,41 +657,68 @@ export class ModelErrorReport implements OnInit {
     return scope.nodes?.join(', ') ?? '';
   }
 
-  openNodeLog(
-    node: string,
-    errorMessage?: string
-  ): void {
-    const log =
-      this.availableLogs().find(
-        item => item.node === node
-      );
 
-    if (!log) {
+  // ==========================================================================
+  // Log Highlighting
+  // ==========================================================================
+
+  isHighlightedLogLine(line: string): boolean {
+    const error = this.highlightedError();
+    const errorNode = this.highlightedErrorNode();
+    const selectedNode = this.selectedLogNode();
+
+    if (!error || !errorNode) {
+      return false;
+    }
+
+    if (errorNode !== selectedNode) {
+      return false;
+    }
+
+    return line.includes(error);
+  }
+
+  private scrollToHighlightedError(): void {
+    if (!this.highlightedError()) {
       return;
     }
 
-    this.highlightedError.set(errorMessage);
-    this.highlightedErrorNode.set(node);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const element =
+          document.querySelector(
+            '.log-line--highlighted'
+          );
 
-    this.selectedLogNode.set(node);
-    this.activeTab.set('complete_logs');
+        if (!element) {
+          return;
+        }
+
+        element.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        });
+      });
+    });
   }
 
+
+  // ==========================================================================
+  // Log Parsing
+  // ==========================================================================
 
   private parseLogFilename(
     file: string
   ): ModelLog | null {
-    const match =
-      file.match(
-        /^(.+)-node(\d+)\.log$/
-      );
+    const match = file.match(
+      /^(.+)-node(\d+)\.log$/
+    );
 
     if (!match) {
       return null;
     }
 
-    const [, modelName, nodeNumber] =
-      match;
+    const [, modelName, nodeNumber] = match;
 
     return {
       file,
@@ -696,156 +727,47 @@ export class ModelErrorReport implements OnInit {
     };
   }
 
-  private async loadLogIndex(): Promise<void> {
-    try {
-      const files =
-        await firstValueFrom(
-          this.http.get<string[]>(
-            '/logs/index.json'
-          )
-        );
-
-      const logs =
-        files
-          .map(file =>
-            this.parseLogFilename(file)
-          )
-          .filter(
-            (
-              log
-            ): log is ModelLog =>
-              log !== null
-          );
-
-      this.modelLogs.set(logs);
-
-    } catch {
-      this.modelLogs.set([]);
-    }
-  }
-
-
-  private async loadLog(
-    file: string
-  ): Promise<void> {
-    try {
-      const log =
-        await firstValueFrom(
-          this.http.get(
-            `/logs/${file}`,
-            {
-              responseType: 'text',
-            }
-          )
-        );
-
-      this.completeLog.set(log);
-
-      this.cdr.detectChanges();
-
-      this.scrollToHighlightedError();
-    } catch {
-      this.completeLog.set(
-        'Unable to load log file.'
-      );
-    }
-  }
-
-  private scrollToHighlightedError(): void {
-    const error =
-      this.highlightedError();
-
-    if (!error) {
-      return;
-    }
-
-    const element =
-      document.querySelector(
-        '.log-line--highlighted'
-      );
-
-    if (!element) {
-      return;
-    }
-
-    element.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center',
-    });
-  }
-
-
-  private isSuccessfulCalibrationProbe(
-    block: string
-  ): boolean {
-    return (
-      block.includes(
-        'Waiting for application startup.'
-      ) &&
-      block.includes(
-        'Application startup complete.'
-      ) &&
-      /"GET \/health HTTP\/1\.1"\s+200 OK/.test(
-        block
-      )
-    );
-  }
-
   private parseCalibrationResult(
     node: string,
     log: string
   ): NodeCalibrationResult {
+    const probeBlocks = log
+      .split(/(?=\s*Calibration probe\s*[—-])/)
+      .filter(block =>
+        /Calibration probe\s*[—-]/.test(block)
+      );
 
-    const probeBlocks =
-      log
-        .split(
-          /(?=\s*Calibration probe\s*[—-])/
+    const probes = probeBlocks.map(
+      (block, index) =>
+        this.parseCalibrationProbe(
+          index + 1,
+          block
         )
-        .filter(block =>
-          /Calibration probe\s*[—-]/
-            .test(block)
-        );
+    );
 
-    const probes: CalibrationProbeResult[] =
-      probeBlocks.map(
-        (block, index) =>
-          this.parseCalibrationProbe(
-            index + 1,
-            block
-          )
-      );
-
-    const attempts =
-      probes.length;
-
-    const successfulProbe =
-      probes.find(probe =>
-        probe.status === 'success'
-      );
+    const successfulProbe = probes.find(
+      probe => probe.status === 'success'
+    );
 
     if (successfulProbe) {
       return {
         node,
-        attempts,
+        attempts: probes.length,
         status: 'success',
         probes,
       };
     }
 
-    const failedProbe =
-      probes.find(probe =>
-        probe.status === 'failure'
-      );
+    const failedProbe = probes.find(
+      probe => probe.status === 'failure'
+    );
 
     return {
       node,
-      attempts,
-      status:
-        failedProbe
-          ? 'failure'
-          : attempts > 0
-            ? 'unknown'
-            : 'unknown',
+      attempts: probes.length,
+      status: failedProbe
+        ? 'failure'
+        : 'unknown',
       probes,
     };
   }
@@ -854,7 +776,6 @@ export class ModelErrorReport implements OnInit {
     probeNumber: number,
     block: string
   ): CalibrationProbeResult {
-
     const stages: CalibrationStageResult[] = [];
 
     let firstFailedStageIndex = -1;
@@ -864,13 +785,11 @@ export class ModelErrorReport implements OnInit {
       index < CALIBRATION_STAGES.length;
       index++
     ) {
-      const stage =
-        CALIBRATION_STAGES[index];
+      const stage = CALIBRATION_STAGES[index];
 
       const successful =
         stage.successPatterns.some(
-          pattern =>
-            pattern.test(block)
+          pattern => pattern.test(block)
         );
 
       if (successful) {
@@ -893,9 +812,10 @@ export class ModelErrorReport implements OnInit {
     }
 
     const deploymentSuccessful =
-      stages.some(stage =>
-        stage.name === 'Deployment Success' &&
-        stage.status === 'success'
+      stages.some(
+        stage =>
+          stage.name === 'Deployment Success' &&
+          stage.status === 'success'
       );
 
     if (deploymentSuccessful) {
@@ -934,45 +854,17 @@ export class ModelErrorReport implements OnInit {
     };
   }
 
-  isHighlightedLogLine(
-    line: string
-  ): boolean {
-    const error =
-      this.highlightedError();
-
-    const errorNode =
-      this.highlightedErrorNode();
-
-    const selectedNode =
-      this.selectedLogNode();
-
-    if (!error || !errorNode) {
-      return false;
-    }
-
-    if (errorNode !== selectedNode) {
-      return false;
-    }
-
-    return line.includes(error);
-  }
-
-
   private getCalibrationError(
     block: string
   ): string | undefined {
-    const lines =
-      block
-        .split('\n')
-        .filter(line =>
-          line.trim().length > 0
-        );
+    const lines = block
+      .split('\n')
+      .filter(line => line.trim().length > 0);
 
-    const errorLine =
-      lines.find(line =>
-        /\b(?:ERROR|Exception|Traceback|ValueError|RuntimeError|TypeError|KeyError|ImportError|AssertionError)\b/
-          .test(line)
-      );
+    const errorLine = lines.find(line =>
+      /\b(?:ERROR|Exception|Traceback|ValueError|RuntimeError|TypeError|KeyError|ImportError|AssertionError)\b/
+        .test(line)
+    );
 
     if (errorLine) {
       return errorLine;
@@ -984,43 +876,33 @@ export class ModelErrorReport implements OnInit {
   }
 
 
+  // ==========================================================================
+  // Checklist
+  // ==========================================================================
+
   private getCalibrationChecklistItems(
     processName: string
   ): ChecklistItem[] {
-
-    const results =
-      this.calibrationResults();
+    const results = this.calibrationResults();
 
     if (!results.length) {
       return [];
     }
 
+    const stages =
+      this.getStagesForProcess(processName);
+
     const items: ChecklistItem[] = [];
 
-    const stages =
-      CALIBRATION_STAGES.filter(stage => {
-        if (processName === 'Download') {
-          return (
-            stage.name === 'Model Identification' ||
-            stage.name === 'Model Download'
-          );
-        }
-
-        return (
-          stage.name !== 'Model Identification' &&
-          stage.name !== 'Model Download'
-        );
-      });
-
     for (const stage of stages) {
-
       const successfulNodes: string[] = [];
-
-      const failures =
-        new Map<string, string[]>();
+      const failedNodes: string[] = [];
+      const failures = new Map<
+        string,
+        string[]
+      >();
 
       for (const result of results) {
-
         const stageResults =
           result.probes
             .map(probe =>
@@ -1036,11 +918,6 @@ export class ModelErrorReport implements OnInit {
                 !!item
             );
 
-        /*
-        * Ein Node gilt für diese Stage als erfolgreich,
-        * wenn mindestens ein Probe diese Stage erfolgreich
-        * abgeschlossen hat.
-        */
         const successful =
           stageResults.some(
             stageResult =>
@@ -1052,9 +929,6 @@ export class ModelErrorReport implements OnInit {
           continue;
         }
 
-        /*
-        * Fehler dieser Stage sammeln.
-        */
         const failedStageResults =
           stageResults.filter(
             stageResult =>
@@ -1062,7 +936,6 @@ export class ModelErrorReport implements OnInit {
           );
 
         for (const stageResult of failedStageResults) {
-
           const error =
             stageResult.errorMessage ??
             'Unknown calibration error';
@@ -1072,56 +945,65 @@ export class ModelErrorReport implements OnInit {
 
           nodes.push(result.node);
 
-          failures.set(
-            error,
-            nodes
-          );
+          failures.set(error, nodes);
+          failedNodes.push(result.node);
         }
       }
 
-      /*
-      * SUCCESS
-      *
-      * Immer einen Success-Eintrag erzeugen,
-      * wenn mindestens ein Node erfolgreich war.
-      */
-      if (successfulNodes.length > 0) {
-        items.push({
-          name: stage.name,
-          status: 'success',
-          scope: {
-            type: 'node',
-            nodes: [
-              ...new Set(successfulNodes),
-            ],
-          },
-        });
-      }
+      const uniqueSuccessfulNodes = [
+        ...new Set(successfulNodes),
+      ];
 
-      /*
-      * FAILURE
-      *
-      * Fehler unabhängig vom Success-Eintrag hinzufügen.
-      */
-      for (const [
-        errorMessage,
-        nodes,
-      ] of failures) {
+      const uniqueFailedNodes = [
+        ...new Set(failedNodes),
+      ];
 
+      if (uniqueFailedNodes.length > 0) {
         items.push({
           name: stage.name,
           status: 'failure',
           scope: {
             type: 'node',
-            nodes: [
-              ...new Set(nodes),
-            ],
+            nodes: uniqueFailedNodes,
           },
-          errorMessage,
+          errorMessage:
+            [...failures.keys()][0] ??
+            'Unknown calibration error',
+        });
+
+        continue;
+      }
+
+      if (uniqueSuccessfulNodes.length > 0) {
+        items.push({
+          name: stage.name,
+          status: 'success',
+          scope: {
+            type: 'node',
+            nodes: uniqueSuccessfulNodes,
+          },
         });
       }
     }
 
     return items;
+  }
+
+  private getStagesForProcess(
+    processName: string
+  ): readonly CalibrationStage[] {
+    if (processName === 'Download') {
+      return CALIBRATION_STAGES.filter(
+        stage =>
+          stage.name === 'Model Identification' ||
+          stage.name === 'Model Download'
+      );
+    }
+
+    return CALIBRATION_STAGES.filter(
+      stage =>
+        stage.name !== 'Model Identification' &&
+        stage.name !== 'Model Download'
+    );
   }
 }

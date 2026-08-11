@@ -277,18 +277,16 @@
 
                 <select
                   class="log-selector__select"
-                  [value]="selectedLogNode()"
                   (change)="selectedLogNode.set($any($event.target).value)"
                 >
-
                   @for (log of availableLogs(); track log.node) {
-
-                    <option [value]="log.node">
+                    <option
+                      [value]="log.node"
+                      [selected]="log.node === selectedLogNode()"
+                    >
                       {{ log.node }}
                     </option>
-
                   }
-
                 </select>
 
               </div>
