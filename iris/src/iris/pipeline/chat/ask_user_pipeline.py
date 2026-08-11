@@ -57,9 +57,13 @@ class AskUserPipeline(
     guide_prompt_template: Any
     verdict_dependent_template: Any
 
-    def __init__(self):
+    def __init__(self, local: bool = False):
         """
         Initialize the ask-user agent pipeline.
+
+        Args:
+            local: Whether to resolve models against the local/self-hosted
+                configuration instead of the cloud configuration.
         """
         super().__init__(implementation_id="ask_user_chat_pipeline")
 
@@ -68,7 +72,7 @@ class AskUserPipeline(
             v for v in self.get_variants() if v.variant_id == "default"
         )
         self.assess_user_answer_pipeline = AssessUserAnswerPipeline(
-            model=default_variant.agent_model
+            model=default_variant.model("chat", local)
         )
         self.verdict = None
 
@@ -299,6 +303,7 @@ class AskUserPipeline(
         except Exception as e:
             logger.error("Error in pre agent hook", exc_info=e)
             state.callback.fail("Error in processing response")
+            raise
 
     def post_agent_hook(
         self,
@@ -497,6 +502,7 @@ class AskUserPipeline(
         except Exception as e:
             logger.error("Error assessing answer", exc_info=e)
             state.callback.fail("Assessing answer failed.")
+            raise
 
     def assemble_prompt_with_history(
         self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
@@ -545,7 +551,8 @@ class AskUserPipeline(
             )
 
             # Delegate to parent class for standardized execution
-            super().__call__(dto, variant, callback)
+            local = dto.settings is not None and dto.settings.is_local()
+            super().__call__(dto, variant, callback, local=local)
 
         except Exception as e:
             logger.error("Error in ask-user pipeline", exc_info=e)

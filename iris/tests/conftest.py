@@ -15,9 +15,22 @@ from testcontainers.core.container import DockerContainer
 
 ROOT = Path(__file__).resolve().parent.parent
 
+
+def _config_path(local_name: str, example_name: str) -> Path:
+    """Prefer a developer's untracked local config; fall back to the tracked,
+    test-safe example config so a clean checkout (no *.local.yml) can still
+    run the test suite."""
+    local_path = ROOT / local_name
+    return local_path if local_path.exists() else ROOT / example_name
+
+
 # Set config paths before imports trigger Settings loading.
-os.environ["APPLICATION_YML_PATH"] = str(ROOT / "application.local.yml")
-os.environ["LLM_CONFIG_PATH"] = str(ROOT / "llm_config.local.yml")
+os.environ["APPLICATION_YML_PATH"] = str(
+    _config_path("application.local.yml", "application.example.yml")
+)
+os.environ["LLM_CONFIG_PATH"] = str(
+    _config_path("llm_config.local.yml", "llm_config.example.yml")
+)
 
 TEST_WEAVIATE_HOST = "localhost"
 TEST_WEAVIATE_HTTP_PORT = 8001

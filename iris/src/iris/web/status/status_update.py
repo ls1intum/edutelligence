@@ -538,11 +538,14 @@ class AutonomousTutorCallback(StatusCallback):
 class AskUserStatusCallback(StatusCallback):
     """Status callback for ask-user pipelines."""
 
+    # Inherits the base class's _TRANSIENT_RESULT_FIELDS = ("result", ...).
     # The ask-user pipeline delivers its answer via a RUNNING update() ahead of
-    # the pipeline's terminal finish(), but that answer must still be present
-    # on the final FINISHED payload. Unlike other pipelines, "result" is
-    # therefore not treated as a single-update-only transient field here.
-    _TRANSIENT_RESULT_FIELDS: tuple[str, ...] = ()
+    # the pipeline's terminal finish(). Once that update() is delivered
+    # successfully, "result" must be cleared from the reusable status DTO like
+    # any other transient field — otherwise the subsequent finish() re-sends the
+    # same answer a second time on the FINISHED payload. If the update() send
+    # fails, the base class leaves "result" in place so the terminal finish()
+    # still carries it, giving the answer one last chance at delivery.
 
     def __init__(self, run_id: str, base_url: str, event: str | None = None, **_kwargs):
         url = f"{base_url}/{self.api_url}/ask-user/runs/{run_id}/status"

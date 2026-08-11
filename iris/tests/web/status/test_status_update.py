@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import requests
+
 from iris.domain.data.verdict_dto import VerdictDTO
 from iris.web.status.status_update import AskUserStatusCallback
 
@@ -65,10 +67,10 @@ def test_update_forwards_verdict_and_tokens_fields():
     assert payload["tokens"] == []
 
 
-def test_update_does_not_clear_result_field_afterwards():
-    # Unlike the base StatusCallback, ask-user's "result" must survive to the
-    # pipeline's terminal finish(), so it must not be cleared as a transient
-    # field after a successful update() the way it is for other pipelines.
+def test_update_clears_result_field_after_successful_delivery():
+    # Once the answer-bearing update() is delivered successfully, "result" must
+    # be cleared like any other transient field so it is not re-sent by a later
+    # heartbeat.
     cb = _callback()
     with patch("requests.post", return_value=_ok()):
         cb.update(result="Here is your question.")
@@ -77,7 +79,45 @@ def test_update_does_not_clear_result_field_afterwards():
         assert cb.update() is True
 
     payload = post.call_args.kwargs["json"]
+    assert payload["result"] is None
+
+
+def test_finish_does_not_resend_result_after_successful_update():
+    # Regression test: a successfully delivered answer must not be sent again
+    # by the pipeline's terminal finish() call.
+    cb = _callback()
+    with patch("requests.post", return_value=_ok()):
+        cb.update(result="Here is your question.")
+
+    with patch("requests.post", return_value=_ok()) as post:
+        assert cb.finish() is True
+
+    payload = post.call_args.kwargs["json"]
+    assert payload["result"] is None
+    assert payload["runState"] == "FINISHED"
+
+
+class _FailedResponse:
+    status_code = 500
+
+    def raise_for_status(self):
+        raise requests.exceptions.RequestException("boom")
+
+
+def test_finish_still_carries_result_if_prior_update_failed():
+    # If the answer-bearing update() failed to send, "result" must be preserved
+    # on the reusable status DTO so the terminal finish() gets one more chance
+    # to deliver it, instead of silently dropping the answer.
+    cb = _callback()
+    with patch("requests.post", return_value=_FailedResponse()):
+        assert cb.update(result="Here is your question.") is False
+
+    with patch("requests.post", return_value=_ok()) as post:
+        assert cb.finish() is True
+
+    payload = post.call_args.kwargs["json"]
     assert payload["result"] == "Here is your question."
+    assert payload["runState"] == "FINISHED"
 
 
 def test_fail_sends_failed_state():

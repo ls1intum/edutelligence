@@ -366,7 +366,8 @@ def run_prompt_user_pipeline_worker(
 
     try:
         variant = find_variant(AskUserPipeline.get_variants(), variant_id)
-        pipeline = AskUserPipeline()
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = AskUserPipeline(local=is_local)
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
 
     except Exception as e:

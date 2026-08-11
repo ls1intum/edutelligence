@@ -26,6 +26,7 @@ from ...web.status.status_update import StatusCallback
 from ..prompts.assess_user_answer_prompt import (
     assess_user_answer_prompt,
     between_min_max_questions_rules,
+    exercise_data_prompt,
     over_equal_max_questions_rules,
     under_min_questions_rules,
 )
@@ -100,11 +101,22 @@ class AssessUserAnswerPipeline(SubPipeline):
             for message in history[-4:]
         ]
 
+        # Prompt injection: task_template/task_description/student_submission are
+        # student- and exercise-controlled content, so they must not be interpolated
+        # into the system message (the model's highest-authority channel) — a student
+        # could plant fake instructions in a file name or comment to steer the
+        # verdict. They are instead rendered into a separate, clearly delimited
+        # "human" message (see exercise_data_prompt) that the system prompt above
+        # explicitly instructs the model to treat as inert data only.
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
                     assess_user_answer_prompt,
+                ),
+                (
+                    "human",
+                    exercise_data_prompt,
                 ),
                 *chat_history_messages,
             ]

@@ -20,6 +20,7 @@ def _make_dto(
     exercise_title="Bubble Sort",
     lang_key="en",
     submission=None,
+    settings=None,
 ):
     return SimpleNamespace(
         programming_exercise=SimpleNamespace(
@@ -31,6 +32,7 @@ def _make_dto(
         programming_exercise_submission=submission,
         user=SimpleNamespace(id=1, lang_key=lang_key),
         chat_history=[],
+        settings=settings,
     )
 
 
@@ -57,6 +59,40 @@ def test_get_variants_returns_default_and_advanced():
     assert variants[0].agent_model == "oai-gpt-5-mini"
     assert variants[1].agent_model == "oai-gpt-52"
     assert variants[1].guide_model == "oai-gpt-5-mini"
+
+
+# --------------------------------------------------------------------------
+# __init__ / model resolution
+# --------------------------------------------------------------------------
+
+
+def _variant_with_distinct_models():
+    variant = MagicMock()
+    variant.variant_id = "default"
+    variant.model.side_effect = lambda role, local: (
+        f"{role}-{'local' if local else 'cloud'}"
+    )
+    return variant
+
+
+def test_init_resolves_assess_pipeline_model_for_cloud():
+    with patch.object(
+        AskUserPipeline, "get_variants", return_value=[_variant_with_distinct_models()]
+    ):
+        pipeline = AskUserPipeline(local=False)
+
+    model_id = pipeline.assess_user_answer_pipeline.llm.request_handler.model_id
+    assert model_id == "chat-cloud"
+
+
+def test_init_resolves_assess_pipeline_model_for_local():
+    with patch.object(
+        AskUserPipeline, "get_variants", return_value=[_variant_with_distinct_models()]
+    ):
+        pipeline = AskUserPipeline(local=True)
+
+    model_id = pipeline.assess_user_answer_pipeline.llm.request_handler.model_id
+    assert model_id == "chat-local"
 
 
 # --------------------------------------------------------------------------
@@ -240,7 +276,8 @@ def test_pre_agent_hook_reports_error_on_exception():
     callback = MagicMock()
     state = _make_state(callback=callback)
 
-    pipeline.pre_agent_hook(state)
+    with pytest.raises(RuntimeError, match="boom"):
+        pipeline.pre_agent_hook(state)
 
     callback.fail.assert_called_once()
 
@@ -485,7 +522,8 @@ def test_assess_answer_replaces_verdict_placeholder_with_escaped_braces():
 def test_assess_answer_reports_error_on_malformed_json():
     pipeline, state, _msg, callback = _assess_answer_state("not json at all")
 
-    pipeline._assess_answer(state)
+    with pytest.raises(Exception):
+        pipeline._assess_answer(state)
 
     callback.fail.assert_called_once_with("Assessing answer failed.")
     assert pipeline.verdict is None
@@ -567,7 +605,35 @@ def test_call_sets_chat_history_needed_per_event(event, expected_chat_history_ne
 
     assert pipeline.event == event
     assert pipeline.chat_history_needed == expected_chat_history_needed
-    super_call.assert_called_once_with(dto, variant, callback)
+    super_call.assert_called_once_with(dto, variant, callback, local=False)
+
+
+def test_call_derives_local_true_from_dto_settings():
+    pipeline = _make_pipeline()
+    dto = _make_dto(settings=SimpleNamespace(is_local=lambda: True))
+    variant = MagicMock()
+    callback = MagicMock()
+
+    with patch(
+        "iris.pipeline.abstract_agent_pipeline.AbstractAgentPipeline.__call__"
+    ) as super_call:
+        pipeline(dto, variant, callback, None)
+
+    super_call.assert_called_once_with(dto, variant, callback, local=True)
+
+
+def test_call_defaults_local_to_false_without_settings():
+    pipeline = _make_pipeline()
+    dto = _make_dto(settings=None)
+    variant = MagicMock()
+    callback = MagicMock()
+
+    with patch(
+        "iris.pipeline.abstract_agent_pipeline.AbstractAgentPipeline.__call__"
+    ) as super_call:
+        pipeline(dto, variant, callback, None)
+
+    super_call.assert_called_once_with(dto, variant, callback, local=False)
 
 
 def test_call_reports_error_when_super_call_raises():

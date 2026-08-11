@@ -10,11 +10,12 @@ from iris.web.routers.pipelines import (
 )
 
 
-def _dto(variant="default"):
+def _dto(variant="default", selection="CLOUD_AI"):
     settings = PipelineExecutionSettingsDTO(
         authenticationToken="token-1",
         artemisBaseUrl="https://artemis.example",
         variant=variant,
+        selection=selection,
     )
     return SimpleNamespace(settings=settings)
 
@@ -132,7 +133,7 @@ def test_worker_runs_pipeline_with_resolved_variant_on_success():
     finally:
         patcher.stop()
 
-    pipeline_cls.assert_called_once_with()
+    pipeline_cls.assert_called_once_with(local=False)
     call_kwargs = pipeline_instance.call_args.kwargs
     assert call_kwargs["dto"] is dto
     assert call_kwargs["callback"] is callback
@@ -140,6 +141,24 @@ def test_worker_runs_pipeline_with_resolved_variant_on_success():
     # AskUserVariant has no __eq__, so the resolved variant is compared by id.
     assert call_kwargs["variant"].id == "advanced"
     assert call_kwargs["variant"].agent_model == "oai-gpt-52"
+    callback.fail.assert_not_called()
+
+
+def test_worker_constructs_pipeline_with_local_flag_for_local_ai_selection():
+    dto = _dto(selection="LOCAL_AI")
+    callback = MagicMock()
+    pipeline_instance = MagicMock()
+
+    patcher, pipeline_cls = _patch_ask_user_pipeline_class(pipeline_instance)
+    try:
+        with patch(
+            "iris.web.routers.pipelines.AskUserStatusCallback", return_value=callback
+        ):
+            run_prompt_user_pipeline_worker(dto, "default", "FIRST_QUESTION", "req-1")
+    finally:
+        patcher.stop()
+
+    pipeline_cls.assert_called_once_with(local=True)
     callback.fail.assert_not_called()
 
 

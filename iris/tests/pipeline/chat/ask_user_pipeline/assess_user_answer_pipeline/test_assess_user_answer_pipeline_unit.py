@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate
+
 from iris.common.pipeline_enum import PipelineEnum
 from iris.pipeline.chat.assess_user_answer_pipeline import AssessUserAnswerPipeline
 from iris.pipeline.prompts.assess_user_answer_prompt import (
@@ -123,3 +126,58 @@ def test_tracks_token_usage_pipeline_enum_and_returns_response():
 
     assert response == RESPONSE_TEXT
     assert pipeline.tokens.pipeline == PipelineEnum.IRIS_ASSESS_USER_ANSWER
+
+
+# --------------------------------------------------------------------------
+# prompt injection: exercise/submission data must not land in the system message
+# --------------------------------------------------------------------------
+
+
+def test_exercise_data_is_a_separate_human_message_not_in_the_system_message():
+    """Student-controlled submission content (and the exercise template/description)
+    must not be interpolated into the system message, since that is the model's
+    highest-authority channel and a student could plant fake instructions in a file
+    name or comment. It must instead be a separate, clearly delimited human message
+    placed after the system message."""
+    dto = _make_dto(questions_asked=3, min_questions=2, max_questions=5)
+
+    pipeline = AssessUserAnswerPipeline()
+    pipeline.llm = MagicMock()
+    pipeline.llm.tokens = SimpleNamespace(pipeline=None)
+    pipeline.pipeline = MagicMock()
+
+    # Capture the *first* ChatPromptTemplate.from_messages(...) call (the one built
+    # from the raw templates), while still using the real implementation so the
+    # templates are genuinely rendered below - only the final LLM call is mocked.
+    real_from_messages = ChatPromptTemplate.from_messages
+    captured = {}
+
+    def _capture(messages, *args, **kwargs):
+        template = real_from_messages(messages, *args, **kwargs)
+        captured.setdefault("first", template)
+        return template
+
+    with patch(
+        "iris.pipeline.chat.assess_user_answer_pipeline.ChatPromptTemplate.from_messages",
+        side_effect=_capture,
+    ):
+        pipeline(dto)
+
+    rendered = captured["first"].format_messages(
+        template="TEMPLATE_MARKER",
+        task="TASK_MARKER",
+        files="FILES_MARKER",
+        decision_rules="RULES_MARKER",
+    )
+
+    assert isinstance(rendered[0], SystemMessage)
+    assert "FILES_MARKER" not in rendered[0].content
+    assert "TEMPLATE_MARKER" not in rendered[0].content
+    assert "TASK_MARKER" not in rendered[0].content
+    assert "RULES_MARKER" in rendered[0].content
+
+    assert isinstance(rendered[1], HumanMessage)
+    assert "FILES_MARKER" in rendered[1].content
+    assert "TEMPLATE_MARKER" in rendered[1].content
+    assert "TASK_MARKER" in rendered[1].content
+    assert "<exercise_data>" in rendered[1].content
