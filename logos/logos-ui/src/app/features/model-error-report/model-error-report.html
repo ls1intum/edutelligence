@@ -6,7 +6,6 @@
     Model Management
   </a>
 
-
   <!-- Page State -->
   @if (loading()) {
 
@@ -24,7 +23,6 @@
 
   } @else if (model(); as model) {
 
-
     <!-- Header -->
     <header class="model-header">
 
@@ -41,7 +39,6 @@
       </div>
 
     </header>
-
 
     <!-- Navigation Tabs -->
     <nav
@@ -66,166 +63,159 @@
 
     </nav>
 
-
     <!-- Tab Content -->
     <section class="tab-content">
 
-
       @switch (activeTab()) {
-
 
         <!-- Error Report -->
         @case ('error_report') {
 
-          <app-data-table
-            [columns]="['', 'PROCESS', 'STATUS']"
-            gridCols="40px 220fr 120fr"
-            [loading]="processesLoading()"
-            [empty]="processes().length === 0"
-            emptyMessage="No process information available."
-          >
+          @if (hasCompleteLogs()) {
 
-            @for (process of processes(); track process.id) {
+            <app-data-table
+              [columns]="['', 'PROCESS', 'STATUS']"
+              gridCols="40px 220fr 120fr"
+              [loading]="processesLoading()"
+              [empty]="processes().length === 0"
+              emptyMessage="No process information available."
+            >
 
+              @for (process of processes(); track process.id) {
 
-              <!-- Process Row -->
-              <div
-                class="table-row"
-                [class.table-row--expanded]="isExpanded(process.id)"
-              >
+                <!-- Process Row -->
+                <div
+                  class="table-row"
+                  [class.table-row--expanded]="isExpanded(process.id)"
+                >
 
-                <div class="col-chevron">
+                  <div class="col-chevron">
 
-                  <button
-                    type="button"
-                    class="btn-chevron"
-                    [class.btn-chevron--open]="isExpanded(process.id)"
-                    [attr.aria-label]="'Expand ' + process.process"
-                    (click)="toggleProcess(process.id)"
-                  >
-                    <i class="pi pi-chevron-right"></i>
-                  </button>
+                    <button
+                      type="button"
+                      class="btn-chevron"
+                      [class.btn-chevron--open]="isExpanded(process.id)"
+                      [attr.aria-label]="'Expand ' + process.process"
+                      (click)="toggleProcess(process.id)"
+                    >
+                      <i class="pi pi-chevron-right"></i>
+                    </button>
+
+                  </div>
+
+                  <div class="col-process">
+
+                    <span class="process-name">
+                      {{ process.process }}
+                    </span>
+
+                  </div>
+
+                  <div class="col-status">
+
+                    <span
+                      class="status-badge"
+                      [class.status-badge--success]="process.status === 'success'"
+                      [class.status-badge--failure]="process.status === 'failure'"
+                    >
+                      {{ process.status === 'success'
+                        ? 'Success'
+                        : 'Failure'
+                      }}
+                    </span>
+
+                  </div>
 
                 </div>
 
+                <!-- Expanded Details -->
+                @if (isExpanded(process.id)) {
 
-                <div class="col-process">
+                  <div class="expanded-row">
 
-                  <span class="process-name">
-                    {{ process.process }}
-                  </span>
+                    <div class="expanded-content">
 
-                </div>
+                      <div class="checklist-box">
 
+                        <header class="expanded-header">
+                          <span class="expanded-title">
+                            Checklist
+                          </span>
+                        </header>
 
-                <div class="col-status">
+                        <div class="checklist">
 
-                  <span
-                    class="status-badge"
-                    [class.status-badge--success]="process.status === 'success'"
-                    [class.status-badge--failure]="process.status === 'failure'"
-                  >
-                    {{ process.status === 'success'
-                      ? 'Success'
-                      : 'Failure'
-                    }}
-                  </span>
+                          @for (item of process.items; track item.name) {
 
-                </div>
-
-              </div>
-
-
-              <!-- Expanded Details -->
-              @if (isExpanded(process.id)) {
-
-                <div class="expanded-row">
-
-                  <div class="expanded-content">
-
-                    <div class="checklist-box">
-
-
-                      <header class="expanded-header">
-
-                        <span class="expanded-title">
-
-                          Checklist
-
-                        </span>
-
-                      </header>
-
-
-                      <div class="checklist">
-
-                        @for (item of process.items; track item.name) {
-
-
-                          <div class="check-row">
-
-
-                            <span
-                              class="check-icon"
-                              [class.check-icon--success]="item.status === 'success'"
-                              [class.check-icon--failed]="item.status === 'failure'"
-                            >
-
-                              @if (item.status === 'success') {
-                                ✓
-                              } @else {
-                                !
-                              }
-
-                            </span>
-
-
-                            <span class="check-name">
-                              {{ item.name }}
-                            </span>
-
-
-                            @if (item.status === 'failure' && item.scope) {
+                            <div class="check-row">
 
                               <span
-                                class="scope-badge"
-                                [class.scope-badge--global]="item.scope.type === 'global'"
-                                [class.scope-badge--node]="item.scope.type === 'node'"
+                                class="check-icon"
+                                [class.check-icon--success]="item.status === 'success'"
+                                [class.check-icon--failed]="item.status === 'failure'"
                               >
-                                {{ getScopeLabel(item.scope) }}
+                                @if (item.status === 'success') {
+                                  ✓
+                                } @else {
+                                  !
+                                }
                               </span>
+
+                              <span class="check-name">
+                                {{ item.name }}
+                              </span>
+
+                              @if (item.status === 'failure' && item.scope) {
+                                <span
+                                  class="scope-badge"
+                                  [class.scope-badge--global]="item.scope.type === 'global'"
+                                  [class.scope-badge--node]="item.scope.type === 'node'"
+                                >
+                                  {{ getScopeLabel(item.scope) }}
+                                </span>
+                              }
+
+                            </div>
+
+                            @if (item.errorMessage) {
+
+                              <section class="error-box">
+
+                                <h3 class="error-box-title">
+                                  Error Details
+                                </h3>
+
+                                @if (item.scope) {
+                                  <div class="error-scope">
+                                    <strong>Scope:</strong>
+
+                                    @if (item.scope.type === 'global') {
+                                      <span>Global</span>
+                                    } @else {
+                                      <div class="scope-nodes">
+                                        @for (node of item.scope.nodes ?? []; track node) {
+                                          <button
+                                            type="button"
+                                            class="scope-node-button"
+                                            (click)="openNodeLog(node, item.errorMessage)"
+                                          >
+                                            {{ node }}
+                                          </button>
+                                        }
+                                      </div>
+                                    }
+                                  </div>
+                                }
+
+                                <pre>{{ item.errorMessage }}</pre>
+
+                              </section>
 
                             }
 
-                          </div>
-
-
-                          @if (item.errorMessage) {
-
-                            <section class="error-box">
-
-                              <h3 class="error-box-title">
-                                Error Details
-                              </h3>
-
-
-                              @if (item.scope) {
-
-                                <div class="error-scope">
-                                  <strong>Scope:</strong>
-                                  {{ getScopeLabel(item.scope) }}
-                                </div>
-
-                              }
-
-
-                              <pre>{{ item.errorMessage }}</pre>
-
-                            </section>
-
                           }
 
-                        }
+                        </div>
 
                       </div>
 
@@ -233,50 +223,99 @@
 
                   </div>
 
-                </div>
+                }
 
               }
 
+            </app-data-table>
 
-            }
+          } @else {
 
-          </app-data-table>
+            <div class="empty-state">
+
+              <h2>
+                No logs available
+              </h2>
+
+              <p>
+                No log files are available for this model.
+                The error report cannot be generated.
+              </p>
+
+            </div>
+
+          }
 
         }
-
 
         <!-- Logs -->
         @case ('complete_logs') {
 
-          <div class="logs-panel">
+          @if (hasCompleteLogs()) {
 
-            <div class="log-selector">
-              <select
-                class="log-selector__select"
-                [value]="selectedLogNode()"
-                (change)="selectedLogNode.set($any($event.target).value)"
-              >
-                @for (log of availableLogs(); track log.node) {
-                  <option [value]="log.node">
-                    {{ log.node }}
-                  </option>
+            <div class="logs-panel">
+
+              <div class="log-selector">
+
+                <select
+                  class="log-selector__select"
+                  [value]="selectedLogNode()"
+                  (change)="selectedLogNode.set($any($event.target).value)"
+                >
+
+                  @for (log of availableLogs(); track log.node) {
+
+                    <option [value]="log.node">
+                      {{ log.node }}
+                    </option>
+
+                  }
+
+                </select>
+
+              </div>
+
+              @if (calibrationResult()?.status === 'success') {
+
+                <div class="calibration-success">
+                  ✓ Success
+                </div>
+
+              }
+
+              <div class="log-viewer">
+
+                @for (line of logLines(); track $index) {
+
+                  <div
+                    #logLine
+                    class="log-line"
+                    [class.log-line--highlighted]="isHighlightedLogLine(line)"
+                  >
+
+                    <span class="log-line-number">
+                      {{ $index + 1 }}
+                    </span>
+
+                    <span class="log-line-content">
+                      {{ line }}
+                    </span>
+
+                  </div>
+
                 }
-              </select>
+
+              </div>
+
             </div>
 
-            <pre class="log-viewer">
-              {{ completeLog() }}
-            </pre>
-
-          </div>
+          }
 
         }
-
 
       }
 
     </section>
-
 
   }
 

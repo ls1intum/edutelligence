@@ -352,43 +352,84 @@
 
 
 // ==========================================================================
-// Scope Badges
+// Scope
 // ==========================================================================
 
 .scope-badge {
   display: inline-flex;
   align-items: center;
 
-  padding: 0.25rem 0.65rem;
-
-  border-radius: 999px;
+  padding: 0;
 
   font-size: 0.75rem;
   font-weight: 600;
 }
 
-
 .scope-badge--global {
   color: rgb(129 140 248);
-
-  background:
-    rgb(99 102 241 / 0.15);
-
-  border:
-    1px solid rgb(129 140 248 / 0.4);
 }
-
 
 .scope-badge--node {
   color: rgb(96 165 250);
+}
+
+.scope-nodes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.scope-node-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 0.25rem 0.65rem;
 
   background:
     rgb(59 130 246 / 0.15);
 
   border:
     1px solid rgb(96 165 250 / 0.4);
-}
 
+  border-radius: 999px;
+
+  color: rgb(96 165 250);
+
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+
+  cursor: pointer;
+
+  transition:
+    background-color 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+
+  &:hover {
+    color: rgb(147 197 253);
+
+    background:
+      rgb(59 130 246 / 0.25);
+
+    border-color:
+      rgb(147 197 253 / 0.6);
+  }
+
+  &:active {
+    background:
+      rgb(59 130 246 / 0.3);
+  }
+
+  &:focus-visible {
+    outline: 2px solid
+      rgb(96 165 250 / 0.5);
+
+    outline-offset: 2px;
+  }
+}
 
 // ==========================================================================
 // Error Details
@@ -494,26 +535,147 @@
 
 .log-viewer {
   margin: 0;
+  padding: 0;
+  overflow: auto;
 
-  padding: 12px;
+  background: rgb(var(--color-surface-0));
+  color: rgb(var(--color-typography-100));
 
-  max-height: 70vh;
-
-  overflow-y: auto;
-  overflow-x: auto;
-
-  white-space: pre;
-
-  background: transparent;
-
-  border-radius: 0;
-
-  font-family: 'JetBrains Mono', monospace;
+  font-family: monospace;
   font-size: var(--font-size-sm);
-  line-height: 1.55;
+  line-height: var(--line-height-normal);
+}
 
+.log-line {
+  display: grid;
+  grid-template-columns: 56px minmax(max-content, 1fr);
+  min-width: max-content;
+}
+
+.log-line-number {
+  padding: 0 12px;
+
+  color: rgb(var(--color-typography-700));
+  text-align: right;
+  user-select: none;
+
+  background: rgb(var(--color-surface-50));
+  border-right: 1px solid rgb(var(--color-outline-100) / var(--opacity-border));
+}
+
+.log-line-content {
+  padding: 0 12px;
+  white-space: pre;
+}
+
+.calibration-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+  background: var(--surface-card);
+}
+
+.calibration-status__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-weight: 700;
+}
+
+.calibration-status__label {
+  color: var(--text-color-secondary);
+}
+
+.calibration-status__value {
+  font-weight: 600;
+}
+
+.calibration-status__attempts {
+  margin-left: auto;
+  color: var(--text-color-secondary);
+  font-size: 0.875rem;
+}
+
+.calibration-status--success {
+  border-color: #86efac;
+  background: #f0fdf4;
+
+  .calibration-status__icon {
+    color: #15803d;
+    background: #dcfce7;
+  }
+
+  .calibration-status__value {
+    color: #15803d;
+  }
+}
+
+.calibration-status--failure {
+  border-color: #fca5a5;
+  background: #fef2f2;
+
+  .calibration-status__icon {
+    color: #dc2626;
+    background: #fee2e2;
+  }
+
+  .calibration-status__value {
+    color: #dc2626;
+  }
+}
+
+.calibration-status--unknown {
+  .calibration-status__icon {
+    color: #6b7280;
+    background: #f3f4f6;
+  }
+}
+
+.log-line--error {
+  background:
+    rgb(239 68 68 / 0.18);
+
+  border-left:
+    3px solid rgb(239 68 68);
+}
+
+.log-line--error .log-line-content {
   color:
-    rgb(var(--color-typography-700));
+    rgb(254 202 202);
+
+  font-weight: 600;
+}
+
+.log-line--error .log-line-number {
+  color:
+    rgb(248 113 113);
+
+  background:
+    rgb(239 68 68 / 0.12);
+
+  border-right-color:
+    rgb(239 68 68 / 0.35);
+}
+
+.log-line--highlighted {
+  background: rgb(239 68 68 / 0.18);
+
+  .log-line-number {
+    background: rgb(239 68 68 / 0.12);
+    color: rgb(248 113 113);
+  }
+
+  .log-line-content {
+    color: rgb(254 202 202);
+    font-weight: 600;
+  }
 }
 
 // ==========================================================================
