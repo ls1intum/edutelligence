@@ -4,233 +4,97 @@ title: RAG Pipeline
 
 # RAG Pipeline
 
-Iris uses Retrieval-Augmented Generation (RAG) to ground LLM responses in actual course content. This page covers the ingestion and retrieval pipelines that power lecture and FAQ content lookup.
+Iris uses retrieval-augmented generation (RAG) to ground lecture and FAQ responses in course content. This page describes Iris's content collections and processing. It does not describe Memiris memory schemas, which are separate tenant-aware storage owned by the [Memiris library](https://github.com/ls1intum/edutelligence/tree/main/memiris).
 
-## Architecture Overview
+Model roles, providers, and local/cloud selection belong in [LLM configuration](../admin/llm-configuration.md), the [variant system](./variant-system.md), and [developer configuration](./configuration.md), rather than this execution reference.
 
-The RAG system has two phases:
+## Architecture overview
 
-1. **Ingestion** — Course content (lecture PDFs, transcriptions, FAQs) is processed, chunked, and stored as vectors in Weaviate.
-2. **Retrieval** — At query time, the student's question is used to find relevant content, which is then provided to the LLM agent as tool output.
+The RAG lifecycle has two separate phases:
 
-```
-Ingestion Phase:
-  Artemis → Iris API → Ingestion Pipeline → Weaviate
-
-Retrieval Phase:
-  Student Query → Query Rewriting → Vector Search → Reranking → Agent Context
+```text
+Ingestion: Artemis webhook -> Iris ingestion pipeline -> Iris Weaviate collections
+Retrieval: user query -> rewrite/HyDE -> vector retrieval -> reranking -> agent tool result -> optional citations
 ```
 
-## Weaviate Collections
+Ingestion callbacks report processing state to Artemis. Retrieval classes are internal `SubPipeline` implementations: the owning chat or global-search-answer pipeline decides when to invoke them and owns the final callback.
 
-The vector database stores content in five collections, each defined as a schema in `src/iris/vector_database/`:
+## Iris content collections
 
-| Collection              | Schema File                         | Content                                           |
-| ----------------------- | ----------------------------------- | ------------------------------------------------- |
-| `Lectures`              | `lecture_unit_page_chunk_schema.py` | Chunked text from lecture PDF pages               |
-| `LectureTranscriptions` | `lecture_transcription_schema.py`   | Lecture video/audio transcriptions                |
-| `LectureUnitSegments`   | `lecture_unit_segment_schema.py`    | Summaries combining slide + transcription content |
-| `LectureUnits`          | `lecture_unit_schema.py`            | Lecture unit metadata                             |
-| `FAQs`                  | `faq_schema.py`                     | FAQ question-answer pairs                         |
+`VectorDatabase` initializes five Iris-specific collections. They are distinct from Artemis Global Search and Memiris data.
 
-Each collection stores:
+| Collection              | Content                                                     |
+| ----------------------- | ----------------------------------------------------------- |
+| `Lectures`              | Page-level chunks extracted from lecture-unit PDF material. |
+| `LectureTranscriptions` | Time-aware lecture transcription content.                   |
+| `LectureUnitSegments`   | Segment-level slide/transcription material.                 |
+| `LectureUnits`          | Lecture-unit metadata.                                      |
+| `Faqs`                  | Course FAQ question-and-answer content.                     |
 
-- **Vector embeddings** — Generated using an embedding model (e.g., `text-embedding-3-small`).
-- **Text content** — The original text for display in responses.
-- **Metadata** — Course ID, lecture ID, page numbers, etc., used for filtering.
+The collections retain course and lecture/unit metadata so ingestion, deletion, and retrieval can remain scoped to the requested content.
 
-### Schema Example
+## Ingestion and deletion
 
-From `lecture_unit_page_chunk_schema.py`:
+### Lecture PDFs
 
-```python
-class LectureUnitPageChunkSchema(Enum):
-    COLLECTION_NAME = "Lectures"
-    COURSE_ID = "course_id"
-    COURSE_LANGUAGE = "course_language"
-    LECTURE_ID = "lecture_id"
-    LECTURE_UNIT_ID = "lecture_unit_id"
-    PAGE_TEXT_CONTENT = "page_text_content"
-    PAGE_NUMBER = "page_number"
-    BASE_URL = "base_url"
-    PAGE_VERSION = "attachment_version"
-```
+`LectureIngestionUpdatePipeline` coordinates the lecture-unit update flow. The PDF ingestion path extracts lecture-page content, processes relevant visual material, chunks text, vectorizes it, and writes `Lectures` records with their metadata. It also updates the related lecture-unit representation used by retrieval. The incoming lecture-unit webhook runs on a thread through `IngestionJobHandler`; its duplicate-job suppression is only for the same course, lecture, and lecture-unit identity.
 
-## Ingestion Pipelines
+For an updated attachment, `LectureUnitPageIngestionPipeline` performs the following source-backed sequence:
 
-### Lecture PDF Ingestion
+1. decode the base64 PDF into a temporary file and open it with PyMuPDF;
+2. extract page text and render relevant page imagery;
+3. interpret visual content and merge it with the extracted text where applicable;
+4. split the merged page content into chunks while retaining course, lecture, lecture-unit, page, URL, and attachment-version metadata;
+5. generate embeddings and batch-write the chunks to `Lectures`; and
+6. remove the temporary file and report token/status updates through the ingestion callback.
 
-**Pipeline:** `LectureUnitPageIngestionPipeline` (`src/iris/pipeline/lecture_ingestion_pipeline.py`)
+If the stored attachment version is already current, the pipeline can retain the existing chunks and restore display-page metadata instead of re-ingesting the PDF. Updated content is scoped and replaced before the new chunks are written.
 
-This is the most complex ingestion pipeline. The flow is:
+### Transcriptions and segments
 
-1. **Receive PDF** — Artemis sends a base64-encoded PDF via the webhook API.
-2. **Save to temp file** — The PDF is decoded and saved to a temporary file.
-3. **Extract pages** — [PyMuPDF](https://pymupdf.readthedocs.io/) (`fitz`) extracts text and images from each page.
-4. **Image interpretation** — If pages contain images, an LLM interprets the image content and merges it with the text.
-5. **Text chunking** — `RecursiveCharacterTextSplitter` from LangChain breaks large pages into smaller chunks.
-6. **Generate embeddings** — Each chunk is embedded using the configured embedding model.
-7. **Store in Weaviate** — Chunks are batch-inserted into the `Lectures` collection with metadata.
-8. **Cleanup** — The temporary PDF file is deleted.
+`TranscriptionIngestionPipeline` receives transcription input and stores transcription records. Lecture-unit segment processing combines the relevant slide and transcription material into `LectureUnitSegments`, retaining scalar source identifiers and page metadata. Cross-collection Weaviate reference creation is currently disabled. Transcription support includes the Iris transcription helpers for audio/video processing and alignment; the exact provider or model is configuration-dependent unless source code makes it an implementation constraint.
 
-The ingestion runs in a **separate process** managed by `IngestionJobHandler`. If the same lecture unit is re-ingested, the handler terminates the old process first:
+The unified update pipeline can generate a missing transcription, resume from a raw transcription, or ingest an already enriched transcription. It checkpoints raw and slide-aligned transcription data through the callback so Artemis can retain progress for retries, then ingests the resulting transcription and computes the lecture-unit summaries. Transcription-generation failures and later vector/PDF/summary failures are reported as distinct failure categories.
 
-```python
-class IngestionJobHandler:
-    def add_job(self, process, course_id, lecture_id, lecture_unit_id):
-        # If a job already exists for this lecture unit, terminate it
-        old_process = self.job_list.get(course_id, {}).get(lecture_id, {}).get(lecture_unit_id)
-        if old_process:
-            old_process.terminate()
-            old_process.join()
-        # Start the new process
-        process.start()
-```
+### FAQs and deletes
 
-### Transcription Ingestion
+`FaqIngestionPipeline` writes the FAQ representation to `Faqs` and can remove it by FAQ and course identity. FAQ ingestion/deletion, as well as lecture deletion, start raw worker threads directly; they are not deduplicated by `IngestionJobHandler`. `LectureUnitDeletionPipeline` removes stored lecture-unit data and reports its outcome through the deletion callback.
 
-**Pipeline:** `TranscriptionIngestionPipeline` (`src/iris/pipeline/transcription_ingestion_pipeline.py`)
+## Lecture retrieval
 
-Processes lecture video/audio transcriptions:
+`LectureRetrieval` is an internal `SubPipeline` used by relevant Iris agents. It assembles a `LectureRetrievalDTO` through these stages:
 
-1. Receives transcription text from Artemis.
-2. Segments and chunks the transcription.
-3. Generates embeddings and stores in the `LectureTranscriptions` collection.
+1. resolve lecture-unit context and detect whether matching transcription data exists;
+2. produce page-oriented and, when applicable, transcription-oriented rewritten queries and hypothetical answers in parallel;
+3. embed each distinct generated query once and reuse those vectors across the compatible retrieval stages;
+4. retrieve page chunks, transcriptions, and lecture-unit segments in parallel;
+5. fetch surrounding page/transcription content for matching segments and remove duplicates;
+6. rerank applicable page and transcription results; and
+7. assemble the typed `LectureRetrievalDTO` for the calling tool or agent.
 
-### FAQ Ingestion
+Because query embeddings are reused, the lecture, segment, and transcription retrieval configurations must resolve to the same embedding model. `LectureRetrieval` validates that invariant at construction instead of silently searching incompatible vector spaces.
 
-**Pipeline:** `FaqIngestionPipeline` (`src/iris/pipeline/faq_ingestion_pipeline.py`)
+The parallel sources have different roles:
 
-Ingests FAQ entries:
+| Retriever                       | Collection              | Result                          |
+| ------------------------------- | ----------------------- | ------------------------------- |
+| `LecturePageChunkRetrieval`     | `Lectures`              | Page chunks and page context.   |
+| `LectureTranscriptionRetrieval` | `LectureTranscriptions` | Matching transcription content. |
+| `LectureUnitSegmentRetrieval`   | `LectureUnitSegments`   | Combined segment material.      |
 
-1. Receives FAQ question-answer pairs from Artemis.
-2. Embeds the combined question + answer text.
-3. Stores in the `FAQs` collection.
+Retrieval requests carry course, lecture, lecture-unit, and Artemis-instance scope. On the current default branch, individual retrievers apply a subset of that scope rather than consistently composing every supplied identifier; callers must not treat lecture-unit isolation as guaranteed until the corresponding retrieval-filter change is merged. Reranking is an Iris stage over the applicable retrieved results; its configured provider and model must not be inferred from this page.
 
-### Lecture Update Ingestion
+## FAQ retrieval and citations
 
-**Pipeline:** `LectureIngestionUpdatePipeline` (`src/iris/pipeline/lecture_ingestion_update_pipeline.py`)
+`FaqRetrieval` searches the `Faqs` collection for a course-scoped FAQ context. Chat modes and tools decide whether FAQ retrieval is available for a particular request.
 
-Handles updates to already-ingested lectures:
+After a response uses lecture or FAQ material, the nested citation pipeline can generate source attribution for the parent response. Citation generation is post-processing inside the parent pipeline, not an independently callable Artemis endpoint.
 
-1. Deletes existing chunks for the lecture unit.
-2. Re-runs the full ingestion pipeline with the updated content.
+## Vector database lifecycle
 
-### Lecture Unit Deletion
+`VectorDatabase` owns the shared Iris Weaviate client. It creates the configured connection under a process-level lock, registers client cleanup, and initializes the five Iris collections once per process. Later `VectorDatabase` instances reuse both the client and collection handles. Individual schema initializers return existing collections when present, so service startup establishes the collection contract without recreating it for each request.
 
-**Pipeline:** `LectureUnitDeletionPipeline` (`src/iris/pipeline/delete_lecture_units_pipeline.py`)
+## Boundaries
 
-Removes all stored vectors for deleted lecture units.
-
-## Retrieval Pipeline
-
-### Lecture Content Retrieval
-
-**Location:** `src/iris/retrieval/lecture/lecture_retrieval.py`
-
-The `LectureRetrieval` class is a `SubPipeline` that orchestrates multi-source retrieval:
-
-```python
-class LectureRetrieval(SubPipeline):
-    def __call__(self, query, course_id, chat_history, ...) -> LectureRetrievalDTO:
-        # 1. Get lecture unit metadata
-        lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
-
-        # 2. Rewrite the student query for better retrieval
-        rewritten_query = self.rewrite_query(query, chat_history)
-
-        # 3. Retrieve from three sources in parallel
-        #    - Lecture page chunks
-        #    - Lecture transcriptions
-        #    - Lecture unit segments
-
-        # 4. Rerank results using Cohere
-        reranked_results = self.cohere_client.rerank(...)
-
-        # 5. Return combined results as LectureRetrievalDTO
-```
-
-The retrieval process has several stages:
-
-#### 1. Query Rewriting
-
-The student's query is rewritten by an LLM to be better suited for vector search. This uses prompts from `lecture_retrieval_prompts.py`:
-
-- **Standard rewriting** — Reformulates the question for semantic search.
-- **Hypothetical answer generation** — Generates a hypothetical answer that would appear in the lecture content (HyDE technique).
-
-#### 2. Multi-source Retrieval
-
-Three sub-retrievers run in parallel using `TracedThreadPoolExecutor`:
-
-| Retriever                       | Collection            | Returns                                |
-| ------------------------------- | --------------------- | -------------------------------------- |
-| `LecturePageChunkRetrieval`     | Lectures              | Page text chunks with page numbers     |
-| `LectureTranscriptionRetrieval` | LectureTranscriptions | Transcription segments                 |
-| `LectureUnitSegmentRetrieval`   | LectureUnitSegments   | Combined slide+transcription summaries |
-
-Each retriever performs vector similarity search filtered by `course_id` (and optionally `lecture_id` / `lecture_unit_id`).
-
-#### 3. Reranking
-
-Retrieved page chunks and transcriptions are reranked using **Cohere's reranker** (`rerank-multilingual-v3.5`) to improve relevance ordering. Lecture unit segments are retrieved separately and are not reranked. The reranker is configured in `llm_config.yml`:
-
-```yaml
-- id: cohere
-  name: Cohere Client V2
-  type: cohere_azure
-  model: "rerank-multilingual-v3.5"
-  endpoint: "your_cohere-endpoint"
-  api_key: "..."
-```
-
-#### 4. Result Assembly
-
-Results are assembled into a `LectureRetrievalDTO`:
-
-```python
-@dataclass
-class LectureRetrievalDTO:
-    lecture_unit_page_chunks: list[LectureUnitPageChunkRetrievalDTO]
-    lecture_transcriptions: list[LectureTranscriptionRetrievalDTO]
-    lecture_unit_segments: list[LectureUnitSegmentRetrievalDTO]
-```
-
-### FAQ Retrieval
-
-**Location:** `src/iris/retrieval/faq_retrieval.py`
-
-Similar to lecture retrieval but queries the `FAQs` collection. Used by the course chat and exercise chat pipelines when FAQ content is available.
-
-## Citation Generation
-
-After the agent produces a response using retrieved content, the `CitationPipeline` (`src/iris/pipeline/shared/citation_pipeline.py`) generates citations that link back to specific lecture slides or pages. This runs as a post-processing step to provide source attribution.
-
-## The VectorDatabase Class
-
-**Location:** `src/iris/vector_database/database.py`
-
-The `VectorDatabase` class manages the Weaviate connection as a singleton:
-
-```python
-class VectorDatabase:
-    _lock = threading.Lock()
-    static_client_instance = None
-
-    def __init__(self):
-        with VectorDatabase._lock:
-            if not VectorDatabase.static_client_instance:
-                VectorDatabase.static_client_instance = weaviate.connect_to_local(
-                    host=settings.weaviate.host,
-                    port=settings.weaviate.port,
-                    grpc_port=settings.weaviate.grpc_port,
-                )
-        self.client = VectorDatabase.static_client_instance
-        self.lectures = init_lecture_unit_page_chunk_schema(self.client)
-        self.transcriptions = init_lecture_transcription_schema(self.client)
-        self.lecture_segments = init_lecture_unit_segment_schema(self.client)
-        self.lecture_units = init_lecture_unit_schema(self.client)
-        self.faqs = init_faq_schema(self.client)
-```
-
-Collections are lazily initialized — schemas are created in Weaviate if they do not already exist.
+- **Artemis Global Search** has its own authorization model and schemas. Iris's global-search answer path may retrieve lecture content, but it does not merge the two storage systems.
+- **Memiris** uses separate learning, memory, and relationship schemas. Iris's wrapper, memory tools, and periodic sleep scheduling are documented in the [pipeline system](./pipeline-system.md); reusable library internals live in the Memiris README.

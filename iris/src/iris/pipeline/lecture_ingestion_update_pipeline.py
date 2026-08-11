@@ -18,6 +18,7 @@ from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+from iris.pipeline.lecture_update_lock import lecture_update_lock
 from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
@@ -137,6 +138,10 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
     @observe(name="Lecture Ingestion Update Pipeline")
     def __call__(self):
+        self._run()
+
+    def _run(self):
+        """Run preprocessing, then serialize the Weaviate mutation phase."""
         needs_generation = _needs_transcription_generation(self.dto)
         needs_slides = _needs_slide_detection(self.dto)
 
@@ -147,6 +152,20 @@ class LectureIngestionUpdatePipeline(Pipeline):
         )
 
         try:
+            # Snapshot before transcription/slide processing. Lightweight metadata
+            # webhooks may run during that expensive phase; the final replacement
+            # uses this baseline to recognize and preserve those newer values.
+            with lecture_update_lock(
+                self.dto.settings.artemis_base_url,
+                self.dto.lecture_unit.course_id,
+                self.dto.lecture_unit.lecture_id,
+                self.dto.lecture_unit.lecture_unit_id,
+            ):
+                initial_properties = LectureUnitPipeline.fetch_existing_properties(
+                    VectorDatabase().get_client(),
+                    self._build_lecture_unit_dto(),
+                )
+
             # ── Phase 1: Transcription generation (conditional) ──────────
             # Failures here get classified via the transcription error-code
             # translator (YouTubeDownloadError → structured code, else
@@ -171,7 +190,13 @@ class LectureIngestionUpdatePipeline(Pipeline):
             # ── Phase 2: Ingestion (existing logic) ──────────────────────
             # Ingestion-phase failures (vector DB, PDF, summary) are NOT
             # transcription failures and must not be labeled as such.
-            self._run_ingestion(callback)
+            with lecture_update_lock(
+                self.dto.settings.artemis_base_url,
+                self.dto.lecture_unit.course_id,
+                self.dto.lecture_unit.lecture_id,
+                self.dto.lecture_unit.lecture_unit_id,
+            ):
+                self._run_ingestion(callback, initial_properties)
 
         except Exception as e:
             logger.error(
@@ -348,7 +373,24 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
             self._update_dto_with_transcript(aligned_segments, existing.language)
 
-    def _run_ingestion(self, callback: IngestionStatusCallback) -> None:
+    def _build_lecture_unit_dto(self, language: str = "") -> LectureUnitDTO:
+        return LectureUnitDTO(
+            course_id=self.dto.lecture_unit.course_id,
+            course_name=self.dto.lecture_unit.course_name,
+            course_description=self.dto.lecture_unit.course_description,
+            course_language=language,
+            lecture_id=self.dto.lecture_unit.lecture_id,
+            lecture_name=self.dto.lecture_unit.lecture_name,
+            lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
+            lecture_unit_name=self.dto.lecture_unit.lecture_unit_name,
+            lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
+            video_link=self.dto.lecture_unit.video_link,
+            base_url=self.dto.settings.artemis_base_url,
+        )
+
+    def _run_ingestion(
+        self, callback: IngestionStatusCallback, initial_properties: dict
+    ) -> None:
         """Run the existing ingestion logic (PDF + transcription + summary)."""
         db = VectorDatabase()
         client = db.get_client()
@@ -393,22 +435,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
         # Lecture unit summary
         callback.update()
-        lecture_unit_dto = LectureUnitDTO(
-            course_id=self.dto.lecture_unit.course_id,
-            course_name=self.dto.lecture_unit.course_name,
-            course_description=self.dto.lecture_unit.course_description,
-            course_language=language,
-            lecture_id=self.dto.lecture_unit.lecture_id,
-            lecture_name=self.dto.lecture_unit.lecture_name,
-            lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
-            lecture_unit_name=self.dto.lecture_unit.lecture_unit_name,
-            lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
-            video_link=self.dto.lecture_unit.video_link,
-            base_url=self.dto.settings.artemis_base_url,
-        )
+        lecture_unit_dto = self._build_lecture_unit_dto(language)
 
         tokens += LectureUnitPipeline(local=is_local, callback=callback)(
-            lecture_unit=lecture_unit_dto
+            lecture_unit=lecture_unit_dto,
+            initial_properties=initial_properties,
         )
         callback.finish(
             display_page_numbers=self.dto.lecture_unit.display_page_numbers,

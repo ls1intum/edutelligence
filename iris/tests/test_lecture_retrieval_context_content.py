@@ -70,6 +70,7 @@ def _make_retrieval_pipeline() -> LectureRetrieval:
     pipeline = LectureRetrieval.__new__(LectureRetrieval)
     pipeline._fetch_page_chunks_by_page = MagicMock(return_value=[])
     pipeline._fetch_transcriptions_by_timestamp = MagicMock(return_value=[])
+    pipeline._is_lecture_unit_released = MagicMock(return_value=True)
     return pipeline
 
 
@@ -91,6 +92,29 @@ def test_fetch_context_content_returns_current_slide_and_transcript():
 
     assert [c.page_text_content for c in page_chunks] == ["Page 3 content"]
     assert [t.segment_text for t in transcriptions] == ["Transcript 45-55"]
+
+
+def test_fetch_context_content_suppresses_unreleased_unit():
+    pipeline = _make_retrieval_pipeline()
+    pipeline._is_lecture_unit_released.return_value = False
+    pipeline._fetch_page_chunks_by_page.return_value = [
+        _make_page_chunk(3, "Page 3 content")
+    ]
+    pipeline._fetch_transcriptions_by_timestamp.return_value = [
+        _make_transcription(45.0, 55.0, "Transcript 45-55")
+    ]
+
+    page_chunks, transcriptions = pipeline.fetch_context_content(
+        course_id=1,
+        base_url="http://example.com",
+        context_pages=[{"lecture_unit_id": 1, "page": 3}],
+        context_timestamps=[{"lecture_unit_id": 1, "timestamp": 50.0}],
+    )
+
+    assert page_chunks == []
+    assert transcriptions == []
+    pipeline._fetch_page_chunks_by_page.assert_not_called()
+    pipeline._fetch_transcriptions_by_timestamp.assert_not_called()
 
 
 def test_current_view_content_is_stored_for_citations():

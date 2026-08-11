@@ -2,6 +2,10 @@
 
 **Logos** is an LLM Engineering Platform that includes usage logging, billing, central resource management, policy-based model selection, scheduling, and monitoring.
 
+## Architecture documentation
+
+See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/README.md) for the classification, scheduling, context-resolution, LogosNode/HTTP forwarding, and completion boundaries.
+
 # Setup
 
 ## Prerequisites
@@ -113,19 +117,7 @@ To deploy Logos locally:
    git clone https://github.com/ls1intum/edutelligence/
    ```
 
-2. Insert initial Provider Configuration
-
-   In docker-compose.dev.yaml, adjust the environment section of the logos-orchestrator
-   container to specify the initial LLM provider that Logos should connect to after startup.
-
-   Example Configuration:
-      ```
-       environment:
-         PROVIDER_NAME: azure
-         BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/
-      ```
-
-3. Build and Run Logos
+2. Build and Run Logos Docker Container
 
    From the `logos/` directory:
 
@@ -133,11 +125,18 @@ To deploy Logos locally:
    docker compose -f docker-compose.dev.yaml up --build
    ```
 
-4. Log In
+    From the `logos/logos-ui/` directory:
+
+   ```bash
+   cd logos-ui/
+   ng serve
+   ```
+
+3. Log In
 
    Once running, open the UI at:
    ```
-   http://localhost:18081/
+   http://localhost:4200/
    ```
    and click **Sign in**. You'll be redirected to the local Keycloak instance
    (seeded from `keycloak/tum-realm.json`) to log in. A handful of dev accounts
@@ -171,7 +170,7 @@ To deploy Logos locally:
    To add more dev accounts, edit `keycloak/tum-realm.json` and restart the
    `keycloak` container.
 
-5. Explore the API
+4. Explore the API
 
    A full overview of available endpoints can be found at: https://logos.aet.cit.tum.de/docs
 

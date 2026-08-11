@@ -34,6 +34,18 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
 
     cost_per_million_input_token: float = 0
     cost_per_million_output_token: float = 0
+    # Whether the model exposes token-level log-probabilities. When True, a
+    # pipeline can request them via CompletionArguments.logprobs and derive a
+    # confidence score from the returned values. Defaults to False so models
+    # that do not support logprobs (e.g. Ollama) are never asked for them.
+    supports_logprobs: bool = False
+    # Whether the model additionally accepts the `top_logprobs` parameter
+    # (top-k alternative candidates per token, feeding the uncertainty
+    # confidence method). Separate from `supports_logprobs` because strict
+    # OpenAI-compatible backends reject unknown parameters with a 4xx rather
+    # than ignoring them — set this False for such backends so requests keep
+    # plain logprobs and confidence falls back to the mean-logprob strategy.
+    supports_top_logprobs: bool = False
 
     @classmethod
     def __subclasshook__(cls, subclass) -> bool:
