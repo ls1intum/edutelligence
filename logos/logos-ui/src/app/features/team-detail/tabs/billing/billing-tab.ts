@@ -67,7 +67,16 @@ interface BucketCol {
   total: number;
 }
 
-const KEY_COLORS = ['#7c3aed', '#06b6d4', '#22c55e', '#f59e0b', '#ec4899', '#f97316'] as const;
+// Active theme's own primary ramp (light to dark) — same mechanism as the
+// org-wide billing chart, follows whichever styles/_tokens-*.scss is active.
+const KEY_COLORS = [
+  'rgb(var(--color-primary-300))',
+  'rgb(var(--color-primary-400))',
+  'rgb(var(--color-primary-500))',
+  'rgb(var(--color-primary-600))',
+  'rgb(var(--color-primary-700))',
+  'rgb(var(--color-primary-800))',
+] as const;
 
 interface SvgRect {
   x: number;

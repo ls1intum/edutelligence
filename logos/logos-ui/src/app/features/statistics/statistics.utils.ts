@@ -12,7 +12,7 @@ export function deriveStage(item: PaginatedRequestItem): RequestStage {
 }
 
 export function getRequestBorderColor(stage: RequestStage, status: string): string {
-  if (stage === 'queued') return cssVar('--color-accent-purple');
+  if (stage === 'queued') return cssVar('--color-primary-500');
   if (stage === 'executing') return cssVar('--color-accent-cyan');
   switch (status.toLowerCase()) {
     case 'success': return cssVar('--color-success');

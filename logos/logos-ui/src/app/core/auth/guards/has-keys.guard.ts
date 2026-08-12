@@ -1,4 +1,4 @@
-import { inject } from '@angular/core';
+import { inject, effect } from '@angular/core';
 import { CanActivateFn, Router, UrlTree } from '@angular/router';
 import { MyKeysService } from '../../services/my-keys.service';
 import { AuthService } from '../services/auth.service';
@@ -10,7 +10,17 @@ import { HOME_ROUTE } from '../../../shared/constants/nav-items';
  * join), so a user removed from every team can still hold an orphaned active
  * key; team membership alone rules that case out.
  *
- * Fails closed: any fetch error is treated as "no keys", never as access.
+ * Reads MyKeysService.hasKeys — the same signal the Shell sidebar uses —
+ * instead of independently re-fetching /api/me/keys on every navigation.
+ * That signal only refreshes on team-membership change (join/leave flips key
+ * state server-side), so a key revoked without a membership change won't
+ * block this route until the next membership change re-resolves it; the
+ * actual data endpoints still enforce ownership server-side regardless, so
+ * this only affects how quickly the route stops being reachable, not real
+ * access to data.
+ *
+ * Fails closed: an unresolved/errored signal is treated as "no keys", never
+ * as access.
  *
  * app_admin/logos_admin always have other pages to fall back to, so a lack of
  * access sends them home instead of to /no-access, which is reserved for
@@ -23,14 +33,20 @@ export const hasKeysGuard: CanActivateFn = async (): Promise<boolean | UrlTree> 
 
   const hasTeams = (auth.currentUser()?.teams.length ?? 0) > 0;
 
-  let hasKeys = false;
-  try {
-    hasKeys = (await keysService.getMyKeys()).length > 0;
-  } catch {
-    hasKeys = false;
+  let resolved = keysService.hasKeys();
+  if (resolved === null) {
+    resolved = await new Promise<boolean>((resolve) => {
+      const ref = effect(() => {
+        const v = keysService.hasKeys();
+        if (v !== null) {
+          ref.destroy();
+          resolve(v);
+        }
+      });
+    });
   }
 
-  if (hasTeams && hasKeys) return true;
+  if (hasTeams && resolved) return true;
 
   const role = auth.role();
   if (role && role !== 'app_developer') return router.parseUrl(HOME_ROUTE[role]);

@@ -251,6 +251,138 @@ def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
     assert "--chat-template-kwargs" not in cmd
 
 
+# ---------------------------------------------------------------------------
+# Custom chat templates — resolved from the persistent template directory
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def chat_template_dir(monkeypatch, tmp_path: Path) -> Path:
+    """Relocate the persistent chat-template directory into a tmp_path."""
+    templates = tmp_path / "chat-templates"
+    templates.mkdir()
+    monkeypatch.setenv("LOGOS_CHAT_TEMPLATE_DIR", str(templates))
+    return templates
+
+
+def _handle_with_stub_binary(monkeypatch) -> VllmProcessHandle:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+    return handle
+
+
+def test_chat_template_dir_defaults_to_persistent_path(monkeypatch) -> None:
+    from logos_worker_node.vllm_process import _chat_template_dir
+
+    monkeypatch.delenv("LOGOS_CHAT_TEMPLATE_DIR", raising=False)
+    assert _chat_template_dir() == "/opt/logos-workernode/chat-templates"
+
+
+def test_build_cmd_resolves_chat_template_name(monkeypatch, chat_template_dir: Path) -> None:
+    template = chat_template_dir / "qwen3-tools.jinja"
+    template.write_text("{{ messages }}")
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template="qwen3-tools.jinja"),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--chat-template")
+    assert cmd[idx + 1] == str(template.resolve())
+
+
+def test_build_cmd_resolves_chat_template_in_subdirectory(monkeypatch, chat_template_dir: Path) -> None:
+    nested = chat_template_dir / "qwen"
+    nested.mkdir()
+    template = nested / "tools.jinja"
+    template.write_text("{{ messages }}")
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template="qwen/tools.jinja"),
+    )
+    cmd = handle._build_cmd(lane)
+    assert cmd[cmd.index("--chat-template") + 1] == str(template.resolve())
+
+
+def test_build_cmd_accepts_absolute_path_inside_template_dir(monkeypatch, chat_template_dir: Path) -> None:
+    template = chat_template_dir / "abs.jinja"
+    template.write_text("{{ messages }}")
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template=str(template)),
+    )
+    cmd = handle._build_cmd(lane)
+    assert cmd[cmd.index("--chat-template") + 1] == str(template.resolve())
+
+
+def test_build_cmd_omits_chat_template_when_unset(monkeypatch, chat_template_dir: Path) -> None:
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(model="Qwen/Qwen3-8B", vllm=True, vllm_config=VllmConfig())
+    assert "--chat-template" not in handle._build_cmd(lane)
+
+
+def test_build_cmd_rejects_missing_chat_template(monkeypatch, chat_template_dir: Path) -> None:
+    """A typo must fail the spawn, never silently fall back to the model default."""
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template="does-not-exist.jinja"),
+    )
+    with pytest.raises(RuntimeError, match="not found"):
+        handle._build_cmd(lane)
+
+
+def test_build_cmd_rejects_absolute_path_outside_template_dir(monkeypatch, chat_template_dir: Path, tmp_path) -> None:
+    outside = tmp_path / "elsewhere.jinja"
+    outside.write_text("{{ messages }}")
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template=str(outside)),
+    )
+    with pytest.raises(RuntimeError, match="outside the persistent chat-template directory"):
+        handle._build_cmd(lane)
+
+
+def test_build_cmd_rejects_symlink_escaping_template_dir(monkeypatch, chat_template_dir: Path, tmp_path) -> None:
+    """Symlinks are followed — a template must not live on ephemeral storage."""
+    outside = tmp_path / "ephemeral.jinja"
+    outside.write_text("{{ messages }}")
+    (chat_template_dir / "linked.jinja").symlink_to(outside)
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template="linked.jinja"),
+    )
+    with pytest.raises(RuntimeError, match="outside the persistent chat-template directory"):
+        handle._build_cmd(lane)
+
+
+def test_vllm_config_rejects_path_traversal() -> None:
+    with pytest.raises(ValueError, match="Path traversal"):
+        VllmConfig(chat_template="../../etc/passwd")
+
+
+def test_vllm_config_strips_chat_template_whitespace() -> None:
+    assert VllmConfig(chat_template="  tools.jinja  ").chat_template == "tools.jinja"
+    assert VllmConfig(chat_template="   ").chat_template == ""
+
+
 def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")

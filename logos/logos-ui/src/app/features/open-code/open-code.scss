@@ -228,14 +228,14 @@
   padding: 12px 16px;
   margin-bottom: 16px;
   border-radius: 8px;
-  background: rgb(var(--color-accent-orange) / var(--opacity-faint));
-  border: 1px solid rgb(var(--color-accent-orange) / var(--opacity-border));
+  background: rgb(var(--color-warning) / var(--opacity-faint));
+  border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
 
   i {
     flex-shrink: 0;
     margin-top: 2px;
     font-size: var(--font-size-base);
-    color: rgb(var(--color-accent-orange));
+    color: rgb(var(--color-warning));
   }
 
   p {

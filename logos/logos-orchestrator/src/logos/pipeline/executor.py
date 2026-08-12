@@ -13,6 +13,12 @@ from typing import Any, AsyncIterator, Callable, Dict, Optional
 import httpx
 
 from logos.errors import UpstreamStreamError, coerce_upstream_error
+from logos.request_content import (
+    force_non_streaming_payload,
+    httpx_multipart_parts,
+    is_multipart_payload,
+    set_payload_field,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +28,21 @@ class ExecutionResult:
     """Result of backend execution."""
 
     success: bool
-    response: Optional[Dict[str, Any]]
+    response: Any
     error: Optional[str]
     usage: Dict[str, int]
     is_streaming: bool
     headers: Optional[Dict[str, str]] = None
     status_code: Optional[int] = None
+    raw_body: Optional[bytes] = None
+    content_type: Optional[str] = None
+
+
+@dataclass
+class StreamingExecutionStatus:
+    """Mutable terminal status shared with a streaming response consumer."""
+
+    error: Optional[str] = None
 
 
 class Executor:
@@ -46,6 +61,7 @@ class Executor:
         payload: Dict[str, Any],
         on_headers: Optional[Callable[[Dict[str, str]], None]] = None,
         on_response_start: Optional[Callable[[int, Dict[str, str]], None]] = None,
+        status: Optional[StreamingExecutionStatus] = None,
     ) -> AsyncIterator[bytes]:
         """
         Execute streaming HTTP request and yield response chunks.
@@ -57,19 +73,32 @@ class Executor:
             on_headers: Optional callback invoked with response headers (headers dict only)
             on_response_start: Optional callback invoked with (status_code, headers) before
                 any chunks are yielded; allows callers to detect non-2xx early.
+            status: Optional mutable terminal status populated when a transport
+                failure occurs after response bytes have already been yielded.
 
         Yields:
-            Byte chunks of the response body (SSE format).  For non-2xx upstream
-            responses the generator emits a single OpenAI-spec error SSE frame
-            followed by ``data: [DONE]`` and then stops.
+            Upstream response bytes without reconstructing their framing.
+
+        Raises:
+            UpstreamStreamError: If the upstream returns a non-2xx status before
+                streaming begins.
+
+        A transport failure before any response bytes are received is re-raised
+        so callers can avoid committing an empty successful response. Once bytes
+        have been delivered, they cannot be retracted. For SSE responses, the
+        generator starts a new frame and emits a best-effort error followed by
+        ``data: [DONE]``; clients may still report the preceding partial upstream
+        event as malformed. Other streaming formats terminate without appending
+        foreign protocol bytes.
         """
         # Force streaming
         payload = self._streaming_payload(url, payload)
 
         logger.info(f"Streaming request to {url}")
 
+        request_kwargs = self._request_kwargs(payload)
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", url, headers=headers, json=payload) as resp:
+            async with client.stream("POST", url, headers=headers, **request_kwargs) as resp:
                 resp_headers = dict(resp.headers)
                 if on_response_start:
                     on_response_start(resp.status_code, resp_headers)
@@ -89,15 +118,32 @@ class Executor:
                     logger.error(f"Streaming request to {url} failed: " f"status={resp.status_code}, body={body}")
                     raise UpstreamStreamError(resp.status_code, body)
 
+                content_type = resp_headers.get("content-type", "")
+                media_type = content_type.split(";", 1)[0].strip().lower()
+                is_sse = media_type == "text/event-stream"
+                yielded_bytes = False
                 try:
-                    async for line in resp.aiter_lines():
-                        if line:
-                            yield (line + "\n").encode()
+                    # Preserve upstream byte framing. SSE uses blank lines to
+                    # delimit events, and local providers may stream NDJSON;
+                    # reconstructing either format line-by-line changes it.
+                    async for chunk in resp.aiter_bytes():
+                        if chunk:
+                            yielded_bytes = True
+                            yield chunk
                 except Exception as exc:
-                    # Mid-stream error: append an error SSE frame so clients
-                    # can detect the problem without a silent stream cut-off.
+                    # Before the first byte, propagate the failure so the caller
+                    # can still return an HTTP error. Afterwards, append only
+                    # protocol-compatible recovery frames; non-SSE streams
+                    # terminate without introducing foreign framing.
                     logger.error(f"Mid-stream error from {url}: {exc}")
+                    if not yielded_bytes:
+                        raise
+                    if status is not None:
+                        status.error = str(exc)
+                    if not is_sse:
+                        return
                     _, error_body = coerce_upstream_error(500, {"error": str(exc)})
+                    yield b"\n\n"
                     yield f"data: {json.dumps(error_body)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
 
@@ -113,13 +159,16 @@ class Executor:
         Args:
             url: Full URL to make request to
             headers: HTTP headers (including auth, content-type, etc.)
-            payload: Request body (will have stream=False injected)
+            payload: Request body (existing stream fields are forced to False)
 
         Returns:
             ExecutionResult containing response body, usage stats, and headers
         """
-        # Force non-streaming
-        payload = {**payload, "stream": False}
+        # This execution path is also used for async jobs, which cannot relay
+        # an upstream event stream. JSON requests always support the stream
+        # switch. Multipart operations differ: translations reject an unknown
+        # stream field, so only override one that the client actually sent.
+        payload = force_non_streaming_payload(payload)
 
         logger.info(f"Sync request to {url}")
 
@@ -128,32 +177,48 @@ class Executor:
                 response = await client.post(
                     url,
                     headers=headers,
-                    json=payload,
                     timeout=None,  # No timeout to handle long-running LLM requests and cold starts
+                    **self._request_kwargs(payload),
                 )
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
-            try:
-                body = response.json()
-            except json.JSONDecodeError:
-                logger.error(
-                    f"Failed to decode JSON from {url}, status={response.status_code}, text={response.text[:200]}"
-                )
-                return ExecutionResult(
-                    success=False,
-                    response=None,
-                    error=f"Invalid JSON response (status {response.status_code}): {response.text[:200]}",
-                    usage={},
-                    is_streaming=False,
-                    headers=dict(response.headers),
-                    status_code=response.status_code,
-                )
+            content_type = response.headers.get("content-type")
+            raw_body = None
+            is_successful_multipart = response.status_code < 400 and is_multipart_payload(payload)
+            media_type = (content_type or "").partition(";")[0].strip().lower()
+            is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
+            if is_successful_multipart and not is_json_response:
+                body = response.text
+                raw_body = response.content
+            else:
+                try:
+                    body = response.json()
+                except json.JSONDecodeError:
+                    if is_successful_multipart:
+                        body = response.text
+                        raw_body = response.content
+                    elif response.status_code < 400:
+                        logger.error(
+                            f"Failed to decode JSON from {url}, "
+                            f"status={response.status_code}, text={response.text[:200]}"
+                        )
+                        return ExecutionResult(
+                            success=False,
+                            response=None,
+                            error=f"Invalid JSON response (status {response.status_code}): {response.text[:200]}",
+                            usage={},
+                            is_streaming=False,
+                            headers=dict(response.headers),
+                            status_code=response.status_code,
+                        )
+                    else:
+                        body = {"error": response.text[:500]}
 
             usage = self._extract_usage(body)
 
             is_success = response.status_code < 400
-            error_msg = body.get("error") if not is_success else None
+            error_msg = body.get("error") if not is_success and isinstance(body, dict) else None
 
             if not is_success:
                 logger.error(f"Request to {url} failed: status={response.status_code}, body={body}")
@@ -166,6 +231,8 @@ class Executor:
                 is_streaming=False,
                 headers=dict(response.headers),
                 status_code=response.status_code,
+                raw_body=raw_body,
+                content_type=content_type,
             )
 
         except Exception as e:
@@ -189,9 +256,22 @@ class Executor:
         for ``/responses`` upstreams (both OpenAI ``/v1/responses`` and Azure
         ``/openai/responses``).
         """
-        if Executor._is_responses_url(url):
-            return {**payload, "stream": True}
+        if is_multipart_payload(payload) or Executor._is_responses_url(url):
+            return set_payload_field(payload, "stream", True)
         return {**payload, "stream": True, "stream_options": {"include_usage": True}}
+
+    @staticmethod
+    def _request_kwargs(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Build mutually exclusive ``httpx`` JSON or multipart arguments."""
+        if is_multipart_payload(payload):
+            data, files = httpx_multipart_parts(payload)
+            # Passing a list of tuples through httpx's ``data=`` uses a
+            # synchronous iterator, which AsyncClient rejects. Text form parts
+            # represented as filename-less ``files=`` tuples preserve duplicate
+            # OpenAI fields (e.g. timestamp_granularities[]) and remain async-safe.
+            form_parts = [(name, (None, value)) for name, value in data]
+            return {"files": [*form_parts, *files]}
+        return {"json": payload}
 
     @staticmethod
     def _is_responses_url(url: str) -> bool:
@@ -200,8 +280,10 @@ class Executor:
         return path.endswith("/responses")
 
     @staticmethod
-    def _extract_usage(response: Dict[str, Any]) -> Dict[str, int]:
+    def _extract_usage(response: Any) -> Dict[str, int]:
         """Extract usage tokens from response body."""
+        if not isinstance(response, dict):
+            return {}
         usage = response.get("usage", {})
         result = {}
         for key, value in usage.items():

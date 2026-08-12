@@ -63,25 +63,13 @@
 
   .wchip-val { font-weight: var(--font-weight-bold); }
 
-  &.wchip--latency {
-    background: rgb(var(--color-accent-cyan) / var(--opacity-soft));
-    color: rgb(var(--color-accent-cyan));
-    .wchip-val { color: rgb(var(--color-accent-cyan)); }
-  }
-  &.wchip--accuracy {
-    background: rgb(var(--color-accent-green) / var(--opacity-soft));
-    color: rgb(var(--color-accent-green));
-    .wchip-val { color: rgb(var(--color-accent-green)); }
-  }
-  &.wchip--cost {
-    background: rgb(var(--color-accent-orange) / var(--opacity-soft));
-    color: rgb(var(--color-accent-orange));
-    .wchip-val { color: rgb(var(--color-accent-orange)); }
-  }
+  &.wchip--latency,
+  &.wchip--accuracy,
+  &.wchip--cost,
   &.wchip--quality {
-    background: rgb(var(--color-accent-pink) / var(--opacity-soft));
-    color: rgb(var(--color-accent-pink));
-    .wchip-val { color: rgb(var(--color-accent-pink)); }
+    background: rgb(var(--color-outline-200) / var(--opacity-soft));
+    color: rgb(var(--color-typography-300));
+    .wchip-val { color: rgb(var(--color-typography-300)); }
   }
 
   &.wchip--null {
