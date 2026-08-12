@@ -227,9 +227,7 @@ async def test_cloud_streaming_response_returns_eur_cost_in_terminal_usage(monke
 
     body = await _read_stream_response(response)
     usage_event = next(
-        json.loads(line[6:])
-        for line in body.splitlines()
-        if line.startswith("data: {") and '"usage"' in line
+        json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: {") and '"usage"' in line
     )
     assert usage_event["usage"]["cost"] == 0.00000375
     assert usage_event["usage"]["cost_currency"] == "EUR"

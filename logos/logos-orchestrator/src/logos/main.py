@@ -1210,7 +1210,7 @@ class _StreamingCostEnricher:
         self.buffer += chunk.encode("utf-8") if isinstance(chunk, str) else chunk
         frames: list[bytes] = []
         while True:
-            delimiter = re.search(br"\r?\n\r?\n", self.buffer)
+            delimiter = re.search(rb"\r?\n\r?\n", self.buffer)
             if delimiter is None:
                 break
             end = delimiter.end()
