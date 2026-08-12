@@ -100,6 +100,40 @@ class PermissionControllerTest {
     }
 
     @Test
+    void appAdminTeamOwnerCanOverrideApiKeyPermissions() throws Exception {
+        mvc.perform(put("/admin/api-keys/3001/provider-permissions")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"provider_ids\":[6001]}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(put("/admin/api-keys/3001/model-permissions")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"model_ids\":[5001]}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(get("/admin/api-keys/3001/provider-permissions")
+                .with(TestJwt.adminUser()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[0]").value(6001));
+
+        mvc.perform(get("/admin/api-keys/3001/model-permissions")
+                .with(TestJwt.adminUser()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[0]").value(5001));
+    }
+
+    @Test
+    void appAdminCannotOverrideKeyOutsideOwnedTeam() throws Exception {
+        mvc.perform(put("/admin/api-keys/3001/model-permissions")
+                .with(TestJwt.forSeededUser(1006, "kcmember", "chair-member"))
+                .contentType("application/json")
+                .content("{\"model_ids\":[5001]}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
     void getTeamModelPermissions_emptyByDefault() throws Exception {
         mvc.perform(get("/admin/teams/2001/model-permissions")
                 .with(TestJwt.logosAdmin()))

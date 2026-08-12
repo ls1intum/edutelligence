@@ -568,7 +568,6 @@
   [teamId]="teamId"
   [canEdit]="canEdit"
   [team]="team"
-  [isLogosAdmin]="isLogosAdminSignal()"
   (closed)="keyModalOpen.set(false); selectedKey.set(null)"
   (saved)="keyModalOpen.set(false); selectedKey.set(null); refresh.emit()"
 />
