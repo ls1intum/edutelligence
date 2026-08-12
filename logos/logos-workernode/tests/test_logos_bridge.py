@@ -181,8 +181,10 @@ async def test_execute_infer_command_preserves_plain_text_that_is_valid_json(mon
 
     class _Resp:
         status_code = 200
-        headers = {"content-type": "text/plain; charset=utf-8"}
         text = "null"
+
+        def __init__(self):
+            self.headers = {"content-type": "text/plain; charset=utf-8"}
 
         @staticmethod
         def json():
@@ -238,9 +240,11 @@ async def test_execute_infer_command_base64_encodes_binary_multipart_response(mo
 
     class _Resp:
         status_code = 200
-        headers = {"content-type": "audio/mpeg"}
         content = b"\xff\x00ID3"
         text = "\ufffd\x00ID3"
+
+        def __init__(self):
+            self.headers = {"content-type": "audio/mpeg"}
 
         @staticmethod
         def json():
