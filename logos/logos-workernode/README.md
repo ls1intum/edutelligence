@@ -14,9 +14,36 @@ It does four things:
 |---|---|---|
 | `.env` | Credentials (`LOGOS_URL`, `LOGOS_API_KEY`) | GitHub secrets/variables |
 | `config.yml` | Hardware & tuning (capabilities, vLLM overrides, engine settings) | Ansible |
+| `chat-templates/` | Custom Jinja chat templates (see below) | Ansible |
 | `/app/data/` | Runtime state (lanes, model profiles) | Auto-managed (Docker volume) |
 
 No overlap. Credentials never go in `config.yml`. Hardware config never goes in `.env`.
+
+## Custom chat templates
+
+A model can be served with a chat template other than the one bundled with its
+tokenizer. Templates live in a persistent, operator-managed directory —
+`/opt/logos-workernode/chat-templates` on the host, bind-mounted read-only into
+the container at the *same* absolute path, so config, logs and the vLLM command
+line all name one path.
+
+```yaml
+engines:
+  vllm:
+    model_overrides:
+      Qwen/Qwen3-8B:
+        chat_template: qwen3-tools.jinja   # file name, not a path
+```
+
+The worker resolves the name against the template directory and passes the
+absolute path to vLLM as `--chat-template`. Values escaping the directory
+(`..`, absolute paths pointing elsewhere) are rejected, and a missing file
+fails the lane spawn with an explicit error instead of silently reverting to
+the model's built-in template.
+
+Adding or editing a template needs no redeploy — the deploy workflow only ships
+`docker-compose.yml` and `.env` — just drop the file on the host and restart the
+lane. Set `LOGOS_CHAT_TEMPLATE_DIR` to relocate the directory (local dev, tests).
 
 ## Storage layout
 

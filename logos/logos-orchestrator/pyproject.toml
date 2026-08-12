@@ -30,6 +30,7 @@ sentence-transformers = "^5.0.0"
 matplotlib = "^3.9.2"
 aiohttp = "^3.9.0"
 prometheus-client = "^0.21.0"
+python-multipart = ">=0.0.20"
 
 [tool.poetry]
 packages = [{ include = "logos", from = "src" }]

@@ -503,7 +503,8 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
         def get_all_deployments():
             return [
                 {"model_id": 30, "provider_id": 13, "type": "logosnode"},
-                {"model_id": 10, "provider_id": 1, "type": "azure"},
+                {"model_id": 10, "provider_id": 1, "type": "cloud"},
+                {"model_id": 20, "provider_id": 2, "type": "cloud"},
             ]
 
         @staticmethod
@@ -511,13 +512,24 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
             return {
                 30: {"id": 30, "name": "Qwen/Qwen2.5-Coder-7B-Instruct"},
                 10: {"id": 10, "name": "azure-gpt-4-omni"},
+                20: {"id": 20, "name": "whisper-1"},
             }[model_id]
 
         @staticmethod
         def get_provider(provider_id: int):
             return {
                 13: {"id": 13, "name": "hochbruegge-node", "base_url": ""},
-                1: {"id": 1, "name": "azure", "base_url": "https://azure.example"},
+                1: {
+                    "id": 1,
+                    "name": "azure",
+                    "base_url": "https://sample.openai.azure.com",
+                },
+                2: {
+                    "id": 2,
+                    "name": "openai",
+                    "base_url": "https://api.openai.com/v1",
+                    "cloud_provider_type": "openai",
+                },
             }[provider_id]
 
         @staticmethod
@@ -528,7 +540,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
 
         @staticmethod
         def get_endpoint_for_deployment(model_id: int, provider_id: int):  # noqa: ARG002
-            return "https://azure.example/openai/deployments/gpt-4o/chat/completions"
+            return "https://sample.openai.azure.com/openai/deployments/gpt-4o/chat/completions"
 
     class _FakeLogosNodeFacade:
         def __init__(self):
@@ -592,6 +604,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
     assert main_mod._pipeline.scheduler.model_registry == {
         (30, 13): "logosnode",
         (10, 1): "azure",
+        (20, 2): "cloud",
     }
     assert rebuilt == [True]
 

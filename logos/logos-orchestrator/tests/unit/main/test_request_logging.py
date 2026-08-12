@@ -1,4 +1,6 @@
+import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -67,12 +69,15 @@ def _make_pipeline(
     stream_chunks=None,
     completion_calls=None,
     release_calls=None,
+    sync_payloads=None,
 ):
     completion_calls = completion_calls if completion_calls is not None else []
     release_calls = release_calls if release_calls is not None else []
+    sync_payloads = sync_payloads if sync_payloads is not None else []
 
     class DummyExecutor:
         async def execute_sync(self, url, headers, payload):  # noqa: ARG002
+            sync_payloads.append(payload)
             return sync_result
 
         async def execute_streaming(self, url, headers, payload, on_headers=None):  # noqa: ARG002
@@ -338,6 +343,384 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-job")]
+
+
+@pytest.mark.asyncio
+async def test_sync_response_async_job_base64_encodes_binary_body(monkeypatch):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    pipeline, _, _ = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response=None,
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers={"content-type": "application/octet-stream"},
+            status_code=200,
+            raw_body=b"ID3",
+            content_type="audio/mpeg",
+        )
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    result = await main._sync_response(
+        SimpleNamespace(provider_type="cloud", forward_url="http://cloud"),
+        {"model": "audio-binary-model"},
+        58,
+        1,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=True,
+        request_path="v1/audio/transcriptions",
+    )
+
+    assert result == {
+        "status_code": 200,
+        "data": {
+            "content_base64": "SUQz",
+            "content_type": "audio/mpeg",
+            "encoding": "base64",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_sync_response_async_job_preserves_binary_logosnode_body(monkeypatch):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(
+            send_command=AsyncMock(
+                return_value={
+                    "status_code": 200,
+                    "body": None,
+                    "body_base64": "/wBJRDM=",
+                    "body_encoding": "base64",
+                    "headers": {"content-type": "audio/mpeg"},
+                }
+            )
+        ),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    result = await main._sync_response(
+        SimpleNamespace(
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="audio-binary-model",
+        ),
+        {
+            "model": "audio-binary-model",
+            "_logos_multipart": {
+                "fields": [["model", "audio-binary-model"]],
+                "files": [],
+            },
+        },
+        59,
+        12,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=True,
+        request_path="v1/audio/transcriptions",
+    )
+
+    assert result == {
+        "status_code": 200,
+        "data": {
+            "content_base64": "/wBJRDM=",
+            "content_type": "audio/mpeg",
+            "encoding": "base64",
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "binary_metadata",
+    [
+        {"body_encoding": "base64"},
+        {"body_encoding": "hex", "body_base64": "/wBJRDM="},
+    ],
+)
+async def test_sync_response_rejects_invalid_logosnode_binary_metadata(monkeypatch, binary_metadata):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(
+            send_command=AsyncMock(
+                return_value={
+                    "status_code": 200,
+                    "body": None,
+                    "headers": {"content-type": "audio/mpeg"},
+                    **binary_metadata,
+                }
+            )
+        ),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    result = await main._sync_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="audio-binary-model"),
+        {"model": "audio-binary-model"},
+        60,
+        12,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=True,
+        request_path="v1/audio/transcriptions",
+    )
+
+    assert result["status_code"] == 502
+    assert "invalid binary response metadata" in str(result["data"])
+
+
+@pytest.mark.asyncio
+async def test_sync_local_worker_translation_does_not_add_stream_field(monkeypatch):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    sent_params = None
+
+    async def send_command(**kwargs):
+        nonlocal sent_params
+        sent_params = kwargs["params"]
+        return {
+            "status_code": 200,
+            "body": {"text": "translated"},
+            "headers": {"content-type": "application/json"},
+        }
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_command=send_command),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    result = await main._sync_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="audio-translation-model"),
+        {
+            "model": "audio-translation-model",
+            "_logos_multipart": {
+                "fields": [["model", "audio-translation-model"]],
+                "files": [],
+            },
+        },
+        61,
+        12,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=True,
+        request_path="v1/audio/translations",
+    )
+
+    assert result == {"status_code": 200, "data": {"text": "translated"}}
+    assert sent_params is not None
+    assert "stream" not in sent_params["payload"]
+    assert all(field[0] != "stream" for field in sent_params["payload"]["_logos_multipart"]["fields"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async_job", [False, True])
+async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_async_job):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    sync_payloads = []
+    pipeline, _, _ = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response={
+                "text": "transcribed",
+                "duration": 1.25,
+                "segments": [{"start": 0, "end": 1.25, "text": "transcribed"}],
+            },
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers={"content-type": "application/json"},
+            status_code=200,
+        ),
+        sync_payloads=sync_payloads,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+    payload = {
+        "model": "whisper-1",
+        "response_format": "text",
+        "_logos_multipart": {
+            "fields": [["model", "whisper-1"], ["response_format", "text"]],
+            "files": [],
+        },
+    }
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="cloud", forward_url="http://cloud"),
+        payload,
+        57,
+        1,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=is_async_job,
+        request_path="v1/audio/transcriptions",
+    )
+
+    if is_async_job:
+        assert response == {"status_code": 200, "data": "transcribed"}
+    else:
+        assert response.body == b"transcribed"
+        assert response.headers["content-type"] == "text/plain; charset=utf-8"
+    assert sync_payloads[0]["response_format"] == "verbose_json"
+    assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
+    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async_job", [False, True])
+@pytest.mark.parametrize("response_format", [None, "json"])
+async def test_sync_whisper_json_uses_metered_verbose_response(monkeypatch, is_async_job, response_format):
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    sync_payloads = []
+    pipeline, _, _ = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response={"text": "transcribed", "duration": 1.25},
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers={"content-type": "application/json"},
+            status_code=200,
+        ),
+        sync_payloads=sync_payloads,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+    fields = [["model", "whisper-1"]]
+    payload = {
+        "model": "whisper-1",
+        "_logos_multipart": {"fields": fields, "files": []},
+    }
+    if response_format is not None:
+        payload["response_format"] = response_format
+        fields.append(["response_format", response_format])
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="cloud", forward_url="http://cloud"),
+        payload,
+        57,
+        1,
+        10,
+        -1,
+        {"classified": True},
+        is_async_job=is_async_job,
+        request_path="v1/audio/transcriptions",
+    )
+
+    if is_async_job:
+        assert response == {"status_code": 200, "data": {"text": "transcribed"}}
+    else:
+        assert json.loads(response.body) == {"text": "transcribed"}
+        assert response.headers["content-type"] == "application/json"
+    assert sync_payloads[0]["response_format"] == "verbose_json"
+    assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
+    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250}
+
+
+@pytest.mark.asyncio
+async def test_sync_whisper_rejects_unmetered_raw_upstream_response(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response="unmetered raw text",
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers={"content-type": "text/plain"},
+            status_code=200,
+            raw_body=b"unmetered raw text",
+            content_type="text/plain",
+        )
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="cloud", forward_url="http://cloud"),
+        {
+            "model": "whisper-1",
+            "response_format": "text",
+            "_logos_multipart": {
+                "fields": [["model", "whisper-1"], ["response_format", "text"]],
+                "files": [],
+            },
+        },
+        None,
+        1,
+        10,
+        -1,
+        {"classified": True},
+        request_path="v1/audio/transcriptions",
+    )
+
+    assert response.status_code == 502
+    assert "Expected a verbose JSON transcription response" in json.loads(response.body)["error"]["message"]
 
 
 @pytest.mark.asyncio
