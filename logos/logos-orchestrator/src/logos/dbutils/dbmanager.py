@@ -2108,6 +2108,81 @@ class DBManager:
         self.session.commit()
         return {"result": "response_payload set"}, 200
 
+    def get_usage_cost_micro_cents(
+        self,
+        model_id: int,
+        provider_id: int,
+        usage: Dict[str, int],
+    ) -> Optional[int]:
+        """Return the configured cloud cost for one response in micro-cents.
+
+        The lookup mirrors the ``budget_usage`` view: model/provider-specific
+        prices take precedence over generic prices and only prices valid at the
+        time of the response are considered. ``None`` identifies a local
+        provider; cloud providers without a matching price retain the existing
+        billing semantics and cost zero.
+        """
+        billable_usage = {
+            token_type: token_count
+            for token_type, token_count in usage.items()
+            if isinstance(token_type, str)
+            and isinstance(token_count, int)
+            and not isinstance(token_count, bool)
+            and token_count >= 0
+        }
+        if not billable_usage:
+            return None
+
+        row = self.session.execute(
+            text(
+                """
+                WITH response_usage AS (
+                    SELECT usage.key AS token_type,
+                           usage.value::BIGINT AS token_count
+                    FROM jsonb_each_text(CAST(:usage AS JSONB)) AS usage
+                ),
+                cloud_provider AS (
+                    SELECT id
+                    FROM providers
+                    WHERE id = :provider_id
+                      AND LOWER(provider_type::text) = 'cloud'
+                )
+                SELECT CASE
+                    WHEN EXISTS (SELECT 1 FROM cloud_provider)
+                    THEN COALESCE(SUM(
+                        CASE WHEN price.price_per_k_token IS NOT NULL
+                             THEN (ru.token_count * price.price_per_k_token / 1000)::BIGINT
+                             ELSE 0
+                        END
+                    ), 0)
+                    ELSE NULL
+                END AS cost_micro_cents
+                FROM response_usage ru
+                LEFT JOIN token_types tt ON tt.name = ru.token_type
+                LEFT JOIN LATERAL (
+                    SELECT tp.price_per_k_token
+                    FROM token_prices tp
+                    WHERE tp.type_id = tt.id
+                      AND (tp.model_id = :model_id OR tp.model_id IS NULL)
+                      AND (tp.provider_id = :provider_id OR tp.provider_id IS NULL)
+                      AND tp.valid_from <= NOW()
+                    ORDER BY (tp.model_id = :model_id) DESC NULLS LAST,
+                             (tp.provider_id = :provider_id) DESC NULLS LAST,
+                             tp.valid_from DESC
+                    LIMIT 1
+                ) price ON true
+                """
+            ),
+            {
+                "usage": json.dumps(billable_usage),
+                "model_id": int(model_id),
+                "provider_id": int(provider_id),
+            },
+        ).fetchone()
+        if row is None or row.cost_micro_cents is None:
+            return None
+        return int(row.cost_micro_cents)
+
     def check_authorization(self, logos_key: str):
         sql = text(
             """

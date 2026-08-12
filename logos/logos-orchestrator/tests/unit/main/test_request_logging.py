@@ -9,7 +9,7 @@ from logos import ExecutionResult
 from logos.errors import UpstreamStreamError
 
 
-def _make_dummy_db():
+def _make_dummy_db(cost_micro_cents=None):
     class DummyDB:
         ttft_calls = []
         payload_calls = []
@@ -50,6 +50,9 @@ def _make_dummy_db():
 
         def update_log_entry_metrics(self, **kwargs):
             self.metric_calls.append(kwargs)
+
+        def get_usage_cost_micro_cents(self, model_id, provider_id, usage):  # noqa: ARG002
+            return cost_micro_cents
 
     return DummyDB
 
@@ -188,6 +191,95 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
         }
     ]
     assert release_calls == [(27, 12, "logosnode", "req-stream")]
+
+
+@pytest.mark.asyncio
+async def test_cloud_streaming_response_returns_eur_cost_in_terminal_usage(monkeypatch):
+    dummy_db = _make_dummy_db(cost_micro_cents=375)
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    pipeline, _, _ = _make_pipeline(
+        stream_chunks=[
+            b'data: {"id":"chunk-1","choices":[{"delta":{"content":"ok"}}]}\n\n',
+            b'data: {"id":"chunk-1","choices":[],"usage":{"prompt_tokens":1',
+            b',"completion_tokens":2,"total_tokens":3}}\n\n',
+            b"data: [DONE]\n\n",
+        ],
+        stream_headers={"Content-Type": "text/event-stream"},
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="cloud", forward_url="https://provider.test/v1/chat/completions"),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        62,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+    )
+
+    body = await _read_stream_response(response)
+    usage_event = next(
+        json.loads(line[6:])
+        for line in body.splitlines()
+        if line.startswith("data: {") and '"usage"' in line
+    )
+    assert usage_event["usage"]["cost"] == 0.00000375
+    assert usage_event["usage"]["cost_currency"] == "EUR"
+    assert dummy_db.payload_calls[0]["payload"]["usage"]["cost"] == 0.00000375
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
+    dummy_db = _make_dummy_db(cost_micro_cents=12345)
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response={
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers=None,
+            status_code=200,
+        )
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="cloud", forward_url="https://provider.test/v1/chat/completions"),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        63,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+    )
+
+    body = json.loads(response.body)
+    assert body["usage"]["cost"] == 0.00012345
+    assert body["usage"]["cost_currency"] == "EUR"
+    assert dummy_db.payload_calls[0]["usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+    }
 
 
 @pytest.mark.asyncio

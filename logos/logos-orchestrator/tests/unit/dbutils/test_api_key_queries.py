@@ -92,6 +92,28 @@ def test_get_team_budget_usage_returns_int():
     assert db.get_team_budget_usage(1, "2026-05-01") == 12345
 
 
+def test_get_usage_cost_micro_cents_returns_cloud_billing_amount():
+    db = _db_fetchone({"cost_micro_cents": 4321})
+
+    result = db.get_usage_cost_micro_cents(
+        model_id=7,
+        provider_id=9,
+        usage={"prompt_tokens": 12, "completion_tokens": 3, "ignored": -1},
+    )
+
+    assert result == 4321
+    params = db.session.execute.call_args.args[1]
+    assert params["model_id"] == 7
+    assert params["provider_id"] == 9
+    assert params["usage"] == '{"prompt_tokens": 12, "completion_tokens": 3}'
+
+
+def test_get_usage_cost_micro_cents_returns_none_for_local_provider():
+    db = _db_fetchone({"cost_micro_cents": None})
+
+    assert db.get_usage_cost_micro_cents(7, 9, {"prompt_tokens": 12}) is None
+
+
 def _db_execute_many(return_values):
     db = DBManager.__new__(DBManager)
     session = MagicMock()
