@@ -28,30 +28,46 @@ export class MyKeysService {
    * of how long the request takes.
    */
   private keysInFlight: Promise<MyKey[]> | null = null;
+  /**
+   * Bumped by invalidateCache() so a request started before the invalidation
+   * can't write its (pre-mutation) result back into the cache after the fact
+   * -- without this, a still-in-flight promise reused by the code below would
+   * both be returned to the membership-change effect AND repopulate the
+   * cache with stale data once it resolved.
+   */
+  private keysGeneration = 0;
 
   getMyKeys(): Promise<MyKey[]> {
     if (this.cachedKeys && Date.now() - this.cachedAtMs < MyKeysService.CACHE_TTL_MS) {
       return Promise.resolve(this.cachedKeys);
     }
     if (this.keysInFlight) return this.keysInFlight;
-    this.keysInFlight = firstValueFrom(this.http.get<MyKey[]>('/api/me/keys'))
+    const generation = this.keysGeneration;
+    const request: Promise<MyKey[]> = firstValueFrom(this.http.get<MyKey[]>('/api/me/keys'))
       .then((keys) => {
-        this.cachedKeys = keys;
-        this.cachedAtMs = Date.now();
+        if (generation === this.keysGeneration) {
+          this.cachedKeys = keys;
+          this.cachedAtMs = Date.now();
+        }
         return keys;
       })
       .finally(() => {
-        this.keysInFlight = null;
+        if (this.keysInFlight === request) this.keysInFlight = null;
       });
-    return this.keysInFlight;
+    this.keysInFlight = request;
+    return request;
   }
 
   /**
    * The membership-change effect below must always see the post-mutation
-   * state, not a pre-mutation value still within the TTL window above.
+   * state, not a pre-mutation value still within the TTL window above. That
+   * means discarding any in-flight request too -- otherwise getMyKeys()
+   * would hand back a promise for a fetch that started before the mutation.
    */
   invalidateCache(): void {
+    this.keysGeneration++;
     this.cachedKeys = null;
+    this.keysInFlight = null;
   }
 
   setLogLevel(keyId: number, log: 'BILLING' | 'FULL'): Promise<{ result: string }> {

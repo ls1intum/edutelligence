@@ -33,10 +33,11 @@ RUN mkdir -p src/logos && echo '__version__ = "0.1.0"' > src/logos/__init__.py \
 # no GPU (see docker-compose.yaml — no device reservation for this service),
 # so pull the CPU-only build instead of PyPI's default CUDA wheels (which drag
 # in ~15 nvidia-cu12 packages and blow the install up from ~1 min to ~8 min).
+# torch is pinned to PyTorch's CPU-only wheel index via tool.uv.sources + an
+# explicit index in pyproject.toml, so no extra install-time flags are needed
+# here to steer it away from PyPI's default CUDA build.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install . \
-      --extra-index-url https://download.pytorch.org/whl/cpu \
-      --index-strategy unsafe-best-match
+    uv pip install .
 
 # ──────────────────────────────────────────────────────────
 # Stage 2: Runtime – slim image without compilers or build tools
