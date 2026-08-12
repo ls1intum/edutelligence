@@ -38,6 +38,7 @@ class ExecutionResult:
     content_type: Optional[str] = None
 
 
+
 @dataclass
 class StreamingExecutionStatus:
     """Mutable terminal status shared with a streaming response consumer."""
