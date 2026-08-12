@@ -695,6 +695,38 @@ class LogosBridgeClient:
         if len(lane_manager._event_log) > max_events:  # noqa: SLF001
             lane_manager._event_log = lane_manager._event_log[-max_events:]  # noqa: SLF001
 
+    def _record_calibration_probe_log(self, model_name: str, result: Any) -> None:
+        """Report the finalized per-model probe log to the orchestrator.
+
+        Fires once per model after ``calibrate_with_tp_escalation`` returns
+        (success or failure) — the model's ``{model}.log`` file is complete
+        for this session's attempt at that point. Rides the same event
+        channel as the other calibration events; the orchestrator upserts
+        this into ``calibration_probe_logs``, keyed on (node, model).
+        """
+        self._record_calibration_event(
+            "calibration_probe_log",
+            model=model_name,
+            details=json.dumps(
+                {
+                    "success": result.success,
+                    "probe_command": result.probe_command,
+                    "error": result.error,
+                    "unsupported_reason": result.unsupported_reason,
+                    "node_unhealthy_reason": result.node_unhealthy_reason,
+                    "tensor_parallel_size": result.tensor_parallel_size,
+                    "gpu_devices": result.gpu_devices,
+                    "kv_cache_sent_mb": round(result.kv_cache_sent_mb, 1),
+                    "base_residency_mb": round(result.base_residency_mb, 1),
+                    "loaded_vram_mb": round(result.loaded_vram_mb, 1),
+                    "sleeping_residual_mb": round(result.sleeping_residual_mb, 1),
+                    "min_kv_cache_mb": round(result.min_kv_cache_mb, 1),
+                    "max_kv_cache_mb": round(result.max_kv_cache_mb, 1),
+                    "max_model_len": result.max_model_len,
+                }
+            ),
+        )
+
     def _list_uncalibrated_models(self) -> list[str]:
         """Pick configured models that still need calibration.
 
@@ -965,6 +997,7 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"base_residency_mb={result.base_residency_mb:.0f}",
                     )
+                    self._record_calibration_probe_log(model_name, result)
                     # Dirty the lane manager's status revision so the next
                     # status push includes the updated model_profiles right
                     # away (instead of waiting the full status_refresh
@@ -1004,6 +1037,7 @@ class LogosBridgeClient:
                             else ""
                         ),
                     )
+                    self._record_calibration_probe_log(model_name, result)
 
                 session.current_model = None
         except asyncio.CancelledError:

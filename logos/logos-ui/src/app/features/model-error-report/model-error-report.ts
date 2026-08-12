@@ -255,8 +255,8 @@ export class ModelErrorReport implements OnInit {
   // ==========================================================================
 
   readonly tabs: readonly ModelErrorTab[] = [
-    'error_report',
     'complete_logs',
+    'error_report',
   ];
 
   readonly tabLabel: Record<ModelErrorTab, string> = {

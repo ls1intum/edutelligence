@@ -811,6 +811,29 @@ def _capture_logosnode_provider_snapshot(
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
 
 
+def _capture_calibration_probe_log(provider_id: int, event: Dict[str, Any]) -> None:
+    """Persist a worker's ``calibration_probe_log`` event into the DB.
+
+    Fired once per model per calibration attempt (see
+    ``LogosBridgeClient._record_calibration_probe_log`` on the worker side).
+    Keeps only the most recent row per (provider_id, model_name) via
+    ``upsert_calibration_probe_log``'s ON CONFLICT — mirrors how
+    ``upsert_model_profiles`` above keeps one row per (provider_id,
+    model_name).
+    """
+    model_name = str(event.get("model") or "").strip()
+    if not model_name:
+        return
+    recorded_at = _parse_iso_datetime(event.get("timestamp"))
+    details_raw = event.get("details")
+    payload = json.loads(details_raw) if isinstance(details_raw, str) and details_raw else {}
+    if not isinstance(payload, dict):
+        return
+
+    with DBManager() as db:
+        db.upsert_calibration_probe_log(provider_id, model_name, recorded_at, payload)
+
+
 def _merge_local_provider_vram_payload(
     logos_key: str,
     payload: Dict[str, Any],
@@ -3831,10 +3854,20 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 )
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
+                event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
-                    event=(payload.get("event") if isinstance(payload.get("event"), dict) else {}),
+                    event=event,
                 )
+                if event.get("event") == "calibration_probe_log":
+                    try:
+                        _capture_calibration_probe_log(ticket.provider_id, event)
+                    except Exception:
+                        logger.debug(
+                            "Failed to persist calibration probe log for provider %s",
+                            _resolve_provider_name(ticket.provider_id),
+                            exc_info=True,
+                        )
             elif msg_type == "heartbeat":
                 await _logosnode_registry.mark_heartbeat(ticket.provider_id)
             elif msg_type == "command_result":

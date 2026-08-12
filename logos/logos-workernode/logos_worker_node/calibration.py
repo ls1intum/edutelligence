@@ -1157,6 +1157,11 @@ class CalibrationResult:
     # model's state-cache pool was smaller than the default 1024. Persisted so
     # the lane spawner passes the same flag; 0 means no cap was needed.
     max_num_seqs: int = 0
+    # ``probe_command`` is the exact vLLM command line of the last probe
+    # spawned for this model (set in ``_try_start`` right after
+    # ``spawn_vllm``). Reported alongside the result so the orchestrator can
+    # persist what was actually run, not just the outcome.
+    probe_command: str = ""
 
 
 def _sample_host_ram_available_mb() -> float | None:
@@ -1514,7 +1519,7 @@ def calibrate_model(
                 else:
                     logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
             _ram_cached = True
-        proc, _ = spawn_vllm(
+        proc, cmd = spawn_vllm(
             planned,
             vllm_binary,
             host,
@@ -1524,6 +1529,7 @@ def calibrate_model(
             nccl_p2p_available=nccl_p2p_available,
             hf_home=hf_home,
         )
+        partial.probe_command = " ".join(cmd)
         logger.info(
             "        Trying kv_cache=%s (%.0f MB, timeout=%.0fs)...",
             kv_str,
@@ -2226,6 +2232,7 @@ def calibrate_model(
             kv_max_model_len_pairs=partial.kv_max_model_len_pairs,
             kv_max_model_len_parallelity_pairs=partial.kv_max_model_len_parallelity_pairs,
             max_num_seqs=partial.max_num_seqs,
+            probe_command=partial.probe_command,
         )
 
     finally:

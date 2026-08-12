@@ -1052,6 +1052,66 @@ class DBManager:
         self.session.commit()
         return count
 
+    def upsert_calibration_probe_log(
+        self,
+        provider_id: int,
+        model_name: str,
+        recorded_at: Optional[datetime.datetime],
+        payload: Dict[str, Any],
+    ) -> None:
+        """Upsert a calibration probe log from a worker's calibration_probe_log event.
+
+        Keeps only the most recent row per (provider_id, model_name) — same
+        ON CONFLICT DO UPDATE pattern as upsert_model_profiles above.
+
+        Args:
+            provider_id: Provider ID (FK to providers.id) — the worker node.
+            model_name: The model the probe attempted to load.
+            recorded_at: Timestamp the worker emitted the event, if known.
+            payload: Structured probe summary (see LogosBridgeClient.
+                _record_calibration_probe_log on the worker side for the
+                exact shape).
+        """
+        sql = text(
+            """
+            INSERT INTO calibration_probe_logs (
+                provider_id, model_name,
+                success, probe_command, error,
+                unsupported_reason, node_unhealthy_reason,
+                summary, recorded_at, updated_at
+            ) VALUES (
+                :provider_id, :model_name,
+                :success, :probe_command, :error,
+                :unsupported_reason, :node_unhealthy_reason,
+                :summary, :recorded_at, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                success = EXCLUDED.success,
+                probe_command = EXCLUDED.probe_command,
+                error = EXCLUDED.error,
+                unsupported_reason = EXCLUDED.unsupported_reason,
+                node_unhealthy_reason = EXCLUDED.node_unhealthy_reason,
+                summary = EXCLUDED.summary,
+                recorded_at = EXCLUDED.recorded_at,
+                updated_at = CURRENT_TIMESTAMP
+        """
+        )
+        self.session.execute(
+            sql,
+            {
+                "provider_id": provider_id,
+                "model_name": model_name,
+                "success": bool(payload.get("success", False)),
+                "probe_command": payload.get("probe_command") or None,
+                "error": payload.get("error") or None,
+                "unsupported_reason": payload.get("unsupported_reason"),
+                "node_unhealthy_reason": payload.get("node_unhealthy_reason"),
+                "summary": json.dumps(payload),
+                "recorded_at": recorded_at,
+            },
+        )
+        self.session.commit()
+
     def get_ollama_vram_stats(
         self,
         logos_key: str,
