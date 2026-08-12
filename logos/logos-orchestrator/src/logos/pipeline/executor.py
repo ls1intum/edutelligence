@@ -38,6 +38,13 @@ class ExecutionResult:
     content_type: Optional[str] = None
 
 
+@dataclass
+class StreamingExecutionStatus:
+    """Mutable terminal status shared with a streaming response consumer."""
+
+    error: Optional[str] = None
+
+
 class Executor:
     """
     Pure HTTP client for making requests to AI backends.
@@ -54,6 +61,7 @@ class Executor:
         payload: Dict[str, Any],
         on_headers: Optional[Callable[[Dict[str, str]], None]] = None,
         on_response_start: Optional[Callable[[int, Dict[str, str]], None]] = None,
+        status: Optional[StreamingExecutionStatus] = None,
     ) -> AsyncIterator[bytes]:
         """
         Execute streaming HTTP request and yield response chunks.
@@ -65,11 +73,23 @@ class Executor:
             on_headers: Optional callback invoked with response headers (headers dict only)
             on_response_start: Optional callback invoked with (status_code, headers) before
                 any chunks are yielded; allows callers to detect non-2xx early.
+            status: Optional mutable terminal status populated when a transport
+                failure occurs after response bytes have already been yielded.
 
         Yields:
-            Byte chunks of the response body (SSE format).  For non-2xx upstream
-            responses the generator emits a single OpenAI-spec error SSE frame
-            followed by ``data: [DONE]`` and then stops.
+            Upstream response bytes without reconstructing their framing.
+
+        Raises:
+            UpstreamStreamError: If the upstream returns a non-2xx status before
+                streaming begins.
+
+        A transport failure before any response bytes are received is re-raised
+        so callers can avoid committing an empty successful response. Once bytes
+        have been delivered, they cannot be retracted. For SSE responses, the
+        generator starts a new frame and emits a best-effort error followed by
+        ``data: [DONE]``; clients may still report the preceding partial upstream
+        event as malformed. Other streaming formats terminate without appending
+        foreign protocol bytes.
         """
         # Force streaming
         payload = self._streaming_payload(url, payload)
@@ -98,18 +118,32 @@ class Executor:
                     logger.error(f"Streaming request to {url} failed: " f"status={resp.status_code}, body={body}")
                     raise UpstreamStreamError(resp.status_code, body)
 
+                content_type = resp_headers.get("content-type", "")
+                media_type = content_type.split(";", 1)[0].strip().lower()
+                is_sse = media_type == "text/event-stream"
+                yielded_bytes = False
                 try:
-                    # Preserve upstream byte framing. In particular, SSE uses
-                    # blank lines to delimit events; aiter_lines() would discard
-                    # those separators and merge transcription events.
+                    # Preserve upstream byte framing. SSE uses blank lines to
+                    # delimit events, and local providers may stream NDJSON;
+                    # reconstructing either format line-by-line changes it.
                     async for chunk in resp.aiter_bytes():
                         if chunk:
+                            yielded_bytes = True
                             yield chunk
                 except Exception as exc:
-                    # Mid-stream error: append an error SSE frame so clients
-                    # can detect the problem without a silent stream cut-off.
+                    # Before the first byte, propagate the failure so the caller
+                    # can still return an HTTP error. Afterwards, append only
+                    # protocol-compatible recovery frames; non-SSE streams
+                    # terminate without introducing foreign framing.
                     logger.error(f"Mid-stream error from {url}: {exc}")
+                    if not yielded_bytes:
+                        raise
+                    if status is not None:
+                        status.error = str(exc)
+                    if not is_sse:
+                        return
                     _, error_body = coerce_upstream_error(500, {"error": str(exc)})
+                    yield b"\n\n"
                     yield f"data: {json.dumps(error_body)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
 

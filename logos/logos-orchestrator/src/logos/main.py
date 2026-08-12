@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+import codecs
 import datetime
 import hmac
 import json
@@ -10,7 +11,7 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
 import grpc
@@ -48,7 +49,7 @@ from logos.logosnode_registry import (
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.executor import ExecutionResult, Executor
+from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
@@ -1019,16 +1020,23 @@ class _StreamingLogAccumulator:
     # event carries the full response including usage).
     responses_final: Optional[Dict[str, Any]] = None
     _saw_responses_events: bool = False
+    _decoder: Any = field(
+        default_factory=lambda: codecs.getincrementaldecoder("utf-8")(errors="replace"),
+        repr=False,
+    )
 
     def feed(self, chunk: bytes | str) -> None:
         if isinstance(chunk, bytes):
-            text = chunk.decode("utf-8", errors="replace")
+            text = self._decoder.decode(chunk, final=False)
         else:
-            text = str(chunk)
+            text = self._decoder.decode(b"", final=True) + str(chunk)
+            self._decoder.reset()
         self.buffer += text
         self._consume_complete_lines()
 
     def finish(self) -> None:
+        self.buffer += self._decoder.decode(b"", final=True)
+        self._decoder.reset()
         if not self.buffer:
             return
         remainder = self.buffer
@@ -2169,8 +2177,9 @@ async def _streaming_response(
 
     Returns a ``JSONResponse`` when the upstream returns a non-2xx status code
     *before* emitting any SSE chunks so that clients receive the correct HTTP
-    status code.  Returns a ``StreamingResponse`` for normal 2xx streams;
-    mid-stream errors are appended as an OpenAI-spec SSE error frame.
+    status code. Returns a ``StreamingResponse`` for normal 2xx streams while
+    preserving the upstream content type. Mid-stream errors append an
+    OpenAI-spec error frame only for SSE responses.
     """
     from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -2180,7 +2189,10 @@ async def _streaming_response(
     # Prepare headers and payload using context resolver
     headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
+    upstream_stream_headers: dict[str, str] = {}
+
     def process_headers(hdrs: dict):
+        upstream_stream_headers.update({str(key).lower(): str(value) for key, value in hdrs.items()})
         try:
             _pipeline.update_provider_stats(model_id, provider_id, hdrs)
         except Exception:
@@ -2202,6 +2214,65 @@ async def _streaming_response(
                 )
             except Exception as _e:
                 logger.error(f"Failed to release scheduler resources: {_e}")
+
+    def _pre_stream_error_response(status_code: int, body: Any, error_message: str):
+        """Record an error that occurred before a streaming response was committed."""
+        corrected_sc, error_body = coerce_upstream_error(status_code, body)
+        _release()
+        if log_id:
+            try:
+                with DBManager() as db:
+                    db.set_response_payload(
+                        log_id,
+                        error_body,
+                        provider_id,
+                        model_id,
+                        {},
+                        policy_id,
+                        classification_stats,
+                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
+                        queue_depth_at_arrival=(
+                            scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
+                        ),
+                        utilization_at_arrival=(
+                            scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                        ),
+                    )
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        request_id=request_id,
+                        model_id=model_id,
+                        provider_id=provider_id,
+                        result_status="error",
+                        error_message=error_message,
+                        cold_start=(scheduling_stats.get("is_cold_start") if scheduling_stats else None),
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to record pre-stream error (log_id=%s, request_id=%s)",
+                    log_id,
+                    request_id,
+                )
+        if scheduling_stats:
+            _pipeline.record_completion(
+                request_id=scheduling_stats.get("request_id"),
+                result_status="error",
+                error_message=error_message,
+                cold_start=scheduling_stats.get("is_cold_start"),
+            )
+        _log_request_completion(
+            model_id=model_id,
+            request_id=request_id,
+            start_time=_req_start,
+            usage={},
+            status="error",
+            is_streaming=True,
+        )
+        return JSONResponse(
+            content=error_body,
+            status_code=corrected_sc,
+            headers=_decision_response_headers(request_id, scheduling_stats),
+        )
 
     # ── logosnode path ────────────────────────────────────────────────────
     # LogosNode streams come via WebSocket; status errors are raised as
@@ -2317,11 +2388,13 @@ async def _streaming_response(
         )
 
     # ── HTTP executor path ────────────────────────────────────────────────
+    stream_status = StreamingExecutionStatus()
     chunk_iter = _pipeline.executor.execute_streaming(
         context.forward_url,
         headers,
         prepared_payload,
         on_headers=process_headers,
+        status=stream_status,
     )
 
     # Peek at the first chunk.  This triggers the initial HTTP connection so
@@ -2330,29 +2403,29 @@ async def _streaming_response(
     try:
         first_chunk = await chunk_iter.__anext__()
     except UpstreamStreamError as exc:
-        corrected_sc, error_body = coerce_upstream_error(exc.status_code, exc.body)
         logger.error(
-            "Pre-stream error from upstream (model_id=%s, provider_id=%s): " "HTTP %s → %s",
+            "Pre-stream error from upstream (model_id=%s, provider_id=%s): HTTP %s",
             model_id,
             provider_id,
             exc.status_code,
-            corrected_sc,
         )
-        _release()
-        if scheduling_stats:
-            _pipeline.record_completion(
-                request_id=scheduling_stats.get("request_id"),
-                result_status="error",
-                error_message=str(exc),
-                cold_start=scheduling_stats.get("is_cold_start"),
-            )
-        return JSONResponse(
-            content=error_body,
-            status_code=corrected_sc,
-            headers=_decision_response_headers(request_id, scheduling_stats),
-        )
+        return _pre_stream_error_response(exc.status_code, exc.body, str(exc))
     except StopAsyncIteration:
         first_chunk = None
+    except Exception as exc:
+        logger.error(
+            "Pre-stream transport error from upstream (model_id=%s, provider_id=%s): %s: %s",
+            model_id,
+            provider_id,
+            type(exc).__name__,
+            exc,
+        )
+        return _pre_stream_error_response(502, {"error": str(exc)}, str(exc))
+
+    upstream_content_type = upstream_stream_headers.get("content-type", "")
+    upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
+    response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
+    response_headers["content-type"] = upstream_content_type or "text/event-stream"
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
@@ -2380,13 +2453,22 @@ async def _streaming_response(
                 stream_log.feed(chunk)
         except Exception as exc:
             error_message = str(exc)
-            # Mid-stream error: append error SSE frame before stopping
-            import json as _json
+            # Once bytes have reached the client, only SSE can carry the
+            # synthetic OpenAI error frame without corrupting its protocol.
+            if upstream_media_type == "text/event-stream":
+                import json as _json
 
-            _, error_body = coerce_upstream_error(500, {"error": str(exc)})
-            yield f"data: {_json.dumps(error_body)}\n\n".encode()
-            yield b"data: [DONE]\n\n"
+                _, error_body = coerce_upstream_error(500, {"error": str(exc)})
+                # The last upstream chunk may have ended inside an SSE event.
+                # Close it before emitting recovery frames so clients can parse
+                # the synthetic error independently.
+                yield b"\n\n"
+                yield f"data: {_json.dumps(error_body)}\n\n".encode()
+                yield b"data: [DONE]\n\n"
         finally:
+            if error_message is None:
+                error_message = stream_status.error
+            failed = error_message is not None
             stream_log.finish()
             response_payload = stream_log.response_payload()
             usage_tokens = _usage_tokens_from_payload(response_payload)
@@ -2408,6 +2490,15 @@ async def _streaming_response(
                             scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                         ),
                     )
+                    if failed:
+                        db.update_log_entry_metrics(
+                            log_id=log_id,
+                            request_id=request_id,
+                            model_id=model_id,
+                            provider_id=provider_id,
+                            result_status="error",
+                            error_message=error_message,
+                        )
             if rl_key:
                 from logos.rate_limiter import get_rate_limiter
 
@@ -2418,7 +2509,7 @@ async def _streaming_response(
             if scheduling_stats:
                 _pipeline.record_completion(
                     request_id=scheduling_stats.get("request_id"),
-                    result_status="error" if error_message else "success",
+                    result_status="error" if failed else "success",
                     error_message=error_message,
                     cold_start=scheduling_stats.get("is_cold_start"),
                 )
@@ -2427,15 +2518,14 @@ async def _streaming_response(
                 request_id=request_id,
                 start_time=_req_start,
                 usage=stream_log.usage(),
-                status="error" if error_message else "success",
+                status="error" if failed else "success",
                 is_streaming=True,
             )
             _release()
 
     return StreamingResponse(
         http_streamer(),
-        media_type="text/event-stream",
-        headers=_decision_response_headers(request_id, scheduling_stats),
+        headers=response_headers,
     )
 
 
@@ -2751,11 +2841,17 @@ def _proxy_streaming_response(
 
     async def streamer():
         stream_log = _StreamingLogAccumulator()
+        stream_status = StreamingExecutionStatus()
         ttft = None
         error_message = None
 
         try:
-            async for chunk in _pipeline.executor.execute_streaming(forward_url, proxy_headers, payload):
+            async for chunk in _pipeline.executor.execute_streaming(
+                forward_url,
+                proxy_headers,
+                payload,
+                status=stream_status,
+            ):
                 # Track time to first token
                 if ttft is None:
                     ttft = datetime.datetime.now(datetime.timezone.utc)
@@ -2770,6 +2866,9 @@ def _proxy_streaming_response(
             error_message = str(exc)
             raise
         finally:
+            if error_message is None:
+                error_message = stream_status.error
+            failed = error_message is not None
             # Log completion
             if log_id:
                 stream_log.finish()
@@ -2792,7 +2891,7 @@ def _proxy_streaming_response(
                         log_id=log_id,
                         provider_id=provider_id,
                         model_id=model_id,
-                        result_status="error" if error_message else "success",
+                        result_status="error" if failed else "success",
                         error_message=error_message,
                     )
 
