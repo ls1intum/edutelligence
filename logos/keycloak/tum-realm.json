@@ -106,6 +106,28 @@
       "realmRoles": []
     },
     {
+      "id": "9c047a78-46ed-4fbb-bc56-719c5733a1ee",
+      "username": "henriette.musterfrau",
+      "enabled": true,
+      "firstName": "Henriette",
+      "lastName": "Musterfrau",
+      "email": "henriette.musterfrau@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": []
+    },
+    {
+      "id": "fd264f65-aad9-44a3-b5a7-cbe65a97d501",
+      "username": "max.mustermann",
+      "enabled": true,
+      "firstName": "Max",
+      "lastName": "Mustermann",
+      "email": "max.mustermann@test.de",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["chair-member"]
+    },
+    {
       "username": "service-account-logos-sync",
       "enabled": true,
       "serviceAccountClientId": "logos-sync",

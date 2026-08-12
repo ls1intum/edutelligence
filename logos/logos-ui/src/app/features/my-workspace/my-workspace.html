@@ -25,7 +25,7 @@
           <!-- Team header -->
           <div class="card-header">
             <div class="header-left">
-              <app-icon-tile [label]="(ws.team.name.charAt(0) || '?').toUpperCase()" [seed]="ws.team.name" [size]="36" />
+              <app-icon-tile [label]="(ws.team.name.charAt(0) || '?').toUpperCase()" [size]="36" />
               <span class="team-name">{{ ws.team.name }}</span>
               <span class="role-badge" [class.role-badge--owner]="ws.team.is_caller_owner">
                 {{ ws.team.is_caller_owner ? 'Owner' : 'Member' }}

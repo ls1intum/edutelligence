@@ -36,13 +36,8 @@
   border-radius: 8px;
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
-  background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
-  color: rgb(var(--color-accent-cyan));
-
-  &--local {
-    background: rgb(var(--color-accent-green)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-green));
-  }
+  background: rgb(var(--color-outline-200)  / var(--opacity-soft));
+  color: rgb(var(--color-typography-300));
 }
 
 .privacy-text, .url-text {

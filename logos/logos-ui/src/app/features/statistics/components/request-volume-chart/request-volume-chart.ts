@@ -153,6 +153,7 @@ export class RequestVolumeChartComponent implements OnChanges {
   ];
 
   // ── Chart layout constants (exposed for template) ───────────────────────
+  readonly totalLineColor = CHART_ROLE.total;
   readonly CHART_W = CHART_W;
   readonly CHART_H = CHART_H;
   readonly CHART_PAD_LEFT = CHART_PAD_LEFT;

@@ -64,7 +64,7 @@
         @if (loading()) {
           <div class="kpi-skeleton" aria-hidden="true"></div>
         } @else if (trendPct() !== null) {
-          <div class="kpi-value" [class]="'kpi-value--' + (trendIsUp() ? 'up' : 'down')">
+          <div class="kpi-value">
             {{ trendIsUp() ? '+' : '' }}{{ trendPct()!.toFixed(1) }}%
           </div>
           <div class="kpi-sub">{{ trendIsUp() ? 'Increase' : 'Decrease' }}</div>
@@ -236,15 +236,11 @@
 
         <div class="btcol-trend" role="cell" [attr.data-label]="vsLabel()">
           @if (team.trendPct !== null) {
-            <span
-              class="trend-badge"
-              [class.trend-badge--up]="team.trendPct > 0"
-              [class.trend-badge--down]="team.trendPct < 0"
-            >
+            <span class="trend-badge">
               {{ team.trendPct > 0 ? '+' : '' }}{{ team.trendPct.toFixed(1) }}%
             </span>
           } @else {
-            <span class="trend-badge trend-badge--neutral">-</span>
+            <span class="trend-badge">-</span>
           }
         </div>
 

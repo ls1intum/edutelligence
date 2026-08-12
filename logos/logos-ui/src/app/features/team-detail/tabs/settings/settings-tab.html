@@ -1,5 +1,22 @@
 <div class="settings-tab">
 
+  <p class="section-label">OVERALL TEAM LIMITS</p>
+
+  <div class="settings-card">
+    <div class="settings-field">
+      <label class="field-label" for="s-team-budget">Team Monthly Budget (USD)</label>
+      <input
+        id="s-team-budget"
+        class="field-input"
+        type="text"
+        placeholder="e.g. 150.00, leave blank for unlimited"
+        [value]="teamBudget()"
+        (input)="teamBudget.set($any($event.target).value)"
+        [disabled]="!canEdit || saveLoading()"
+      />
+    </div>
+  </div>
+
   <p class="section-label">DEFAULT LIMITS</p>
   <p class="settings-hint">Fallback limits applied when no specific limits are set for a key or member.</p>
 
