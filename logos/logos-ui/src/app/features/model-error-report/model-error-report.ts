@@ -228,7 +228,7 @@ export class ModelErrorReport implements OnInit {
   readonly loading = signal(true);
   readonly loadError = signal(false);
 
-  readonly activeTab = signal<ModelErrorTab>('error_report');
+  readonly activeTab = signal<ModelErrorTab>('complete_logs');
 
   readonly expandedProcess = signal<number[]>([]);
 
