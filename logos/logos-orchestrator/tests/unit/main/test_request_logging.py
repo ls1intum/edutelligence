@@ -859,6 +859,7 @@ async def test_sync_local_worker_translation_does_not_add_stream_field(monkeypat
     )
 
     assert result == {"status_code": 200, "data": {"text": "translated"}}
+    assert sent_params is not None
     assert "stream" not in sent_params["payload"]
     assert all(field[0] != "stream" for field in sent_params["payload"]["_logos_multipart"]["fields"])
 

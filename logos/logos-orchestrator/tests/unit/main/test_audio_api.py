@@ -162,5 +162,6 @@ async def test_audio_translation_job_does_not_add_stream_field(monkeypatch):
     )
 
     assert result == {"status_code": 200, "data": {"text": "translated"}}
+    assert isinstance(captured_body, dict)
     assert "stream" not in captured_body
     assert all(field[0] != "stream" for field in captured_body["_logos_multipart"]["fields"])
