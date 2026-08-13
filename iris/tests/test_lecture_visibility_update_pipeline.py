@@ -42,7 +42,6 @@ from iris.vector_database.lecture_unit_segment_schema import (
 )
 from iris.vector_database.write_retry import (
     WeaviateRateLimitExhausted,
-    WeaviateRateLimitGate,
     WeaviateWriteRetry,
 )
 from iris.web.routers.webhooks import lecture_visibility_webhook
@@ -319,11 +318,8 @@ def test_visibility_pipeline_retries_rate_limited_final_parent_update():
         now[0] += delay
 
     writer = WeaviateWriteRetry(
-        deadline=8.0,
-        clock=lambda: now[0],
         sleep=sleep,
         jitter=lambda _lower, upper: upper,
-        gate=WeaviateRateLimitGate(),
     )
 
     result = LectureVisibilityUpdatePipeline(
@@ -335,12 +331,43 @@ def test_visibility_pipeline_retries_rate_limited_final_parent_update():
 
     assert result.lecture_units_updated == 1
     assert unit_collection.data.update.call_count == 3
-    assert sleeps == pytest.approx([0.05])
+    assert sleeps == pytest.approx([0.25])
     assert unit_collection.data.update.call_args.kwargs["properties"] == {
         LectureUnitSchema.RELEASE_DATE.value: datetime(
             2026, 7, 4, 12, 0, tzinfo=timezone.utc
         )
     }
+
+
+def test_visibility_pipeline_retries_rate_limited_parent_barrier():
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(uuid="unit-uuid")
+    ]
+    unit_collection.data.update.side_effect = [rate_limit_error(), None, None]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = []
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
+    sleeps = []
+    writer = WeaviateWriteRetry(
+        sleep=sleeps.append,
+        jitter=lambda _lower, upper: upper,
+    )
+
+    result = LectureVisibilityUpdatePipeline(
+        page_collection,
+        unit_collection,
+        segment_collection,
+        write_retry_factory=lambda: writer,
+    )(visibility_dto())
+
+    assert result.lecture_units_updated == 1
+    assert unit_collection.data.update.call_count == 3
+    assert sleeps == pytest.approx([0.25])
+    assert unit_collection.data.update.call_args_list[1].kwargs["properties"][
+        LectureUnitSchema.RELEASE_DATE.value
+    ] == datetime.max.replace(tzinfo=timezone.utc)
 
 
 def test_visibility_pipeline_keeps_parent_barrier_after_rate_limit_exhaustion():
@@ -356,11 +383,9 @@ def test_visibility_pipeline_keeps_parent_barrier_after_rate_limit_exhaustion():
     segment_collection = Mock()
     now = [0.0]
     writer = WeaviateWriteRetry(
-        deadline=0.04,
-        clock=lambda: now[0],
+        retry_wait_budget=0.1,
         sleep=lambda delay: now.__setitem__(0, now[0] + delay),
         jitter=lambda _lower, upper: upper,
-        gate=WeaviateRateLimitGate(),
     )
 
     with pytest.raises(WeaviateRateLimitExhausted):
