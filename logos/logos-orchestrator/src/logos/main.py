@@ -829,9 +829,13 @@ def _capture_calibration_probe_log(provider_id: int, event: Dict[str, Any]) -> N
     payload = json.loads(details_raw) if isinstance(details_raw, str) and details_raw else {}
     if not isinstance(payload, dict):
         return
+    # Pop out before it goes into `summary` below — otherwise the (large,
+    # deliberately un-truncated) raw log text would be duplicated into both
+    # the dedicated `log_text` column and the JSONB summary blob.
+    log_text = payload.pop("log_text", None)
 
     with DBManager() as db:
-        db.upsert_calibration_probe_log(provider_id, model_name, recorded_at, payload)
+        db.upsert_calibration_probe_log(provider_id, model_name, recorded_at, payload, log_text)
 
 
 def _merge_local_provider_vram_payload(
@@ -1596,6 +1600,30 @@ async def internal_model_context_windows(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     return {"windows": _served_context_windows()}
+
+
+@app.get("/internal/calibration_probe_logs", tags=["admin"])
+async def internal_calibration_probe_logs(model_name: str, request: Request):
+    """Every node's most recent calibration probe log for one model.
+
+    Backs the webservice's model-error-report page (Complete Logs tab) —
+    it resolves a model id to a model name, then asks here for what every
+    provider that has calibrated it reported.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    with DBManager() as db:
+        rows = db.get_calibration_probe_logs_by_model(model_name)
+    return {"logs": rows}
 
 
 class _InternalCalibrateRequest(BaseModel):

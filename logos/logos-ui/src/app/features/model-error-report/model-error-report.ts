@@ -1,10 +1,8 @@
 import {
   ChangeDetectionStrategy,
-  ChangeDetectorRef,
   Component,
   OnInit,
   computed,
-  effect,
   inject,
   signal,
 } from '@angular/core';
@@ -86,8 +84,18 @@ interface NodeCalibrationResult {
 
 interface ModelLog {
   readonly node: string;
-  readonly file: string;
   readonly modelName: string;
+}
+
+interface BackendCalibrationLog {
+  readonly provider_id: number;
+  readonly provider_name: string;
+  readonly success: boolean;
+  readonly probe_command: string | null;
+  readonly error: string | null;
+  readonly log_text: string | null;
+  readonly recorded_at: string | null;
+  readonly updated_at: string;
 }
 
 
@@ -215,7 +223,6 @@ export class ModelErrorReport implements OnInit {
   private readonly route = inject(ActivatedRoute);
   private readonly modelService = inject(ModelManagementService);
   private readonly http = inject(HttpClient);
-  private readonly cdr = inject(ChangeDetectorRef);
 
 
   // ==========================================================================
@@ -234,7 +241,8 @@ export class ModelErrorReport implements OnInit {
 
   readonly selectedLogNode = signal<string | null>(null);
 
-  readonly completeLog = signal('');
+  private readonly rawLogsByNode =
+    signal<ReadonlyMap<string, string>>(new Map());
 
   private readonly modelLogs =
     signal<readonly ModelLog[]>([]);
@@ -268,17 +276,13 @@ export class ModelErrorReport implements OnInit {
     computed<readonly ModelErrorTab[]>(() =>
       this.hasCompleteLogs()
         ? this.tabs
-        : ['error_report']
+        : ['complete_logs']
     );
 
 
   // ==========================================================================
   // Logs
   // ==========================================================================
-
-  readonly logLines = computed(() =>
-    this.completeLog().split('\n')
-  );
 
   readonly availableLogs = computed(() => {
     const currentModel = this.model();
@@ -306,6 +310,18 @@ export class ModelErrorReport implements OnInit {
       logs[0]
     );
   });
+
+  readonly completeLog = computed(() => {
+    const node = this.selectedLog()?.node;
+    if (!node) {
+      return '';
+    }
+    return this.rawLogsByNode().get(node) ?? '';
+  });
+
+  readonly logLines = computed(() =>
+    this.completeLog().split('\n')
+  );
 
   readonly hasCompleteLogs = computed(() => {
     return this.availableLogs().length > 0;
@@ -369,16 +385,6 @@ export class ModelErrorReport implements OnInit {
   // Lifecycle
   // ==========================================================================
 
-  constructor() {
-    effect(() => {
-      const log = this.selectedLog();
-
-      if (log) {
-        void this.loadLog(log.file);
-      }
-    });
-  }
-
   async ngOnInit(): Promise<void> {
     const id = Number(
       this.route.snapshot.paramMap.get('id')
@@ -413,11 +419,9 @@ export class ModelErrorReport implements OnInit {
 
       this.model.set(foundModel);
 
-      await this.loadLogIndex();
+      await this.loadCalibrationLogs(foundModel.name);
 
       const logs = this.availableLogs();
-
-      await this.loadAllCalibrationLogs(logs);
 
       if (logs.length > 0) {
         this.selectedLogNode.set(logs[0].node);
@@ -432,88 +436,39 @@ export class ModelErrorReport implements OnInit {
     }
   }
 
-  private async loadLogIndex(): Promise<void> {
+  private async loadCalibrationLogs(modelName: string): Promise<void> {
     try {
-      const files =
+      const response =
         await firstValueFrom(
-          this.http.get<string[]>(
-            '/logs/index.json'
+          this.http.post<{ logs: BackendCalibrationLog[] }>(
+            '/api/logosdb/get_model_calibration_logs',
+            { id: this.modelId() }
           )
         );
 
-      const logs = files
-        .map(file => this.parseLogFilename(file))
-        .filter(
-          (log): log is ModelLog =>
-            log !== null
-        );
+      const logs = response.logs ?? [];
 
-      this.modelLogs.set(logs);
+      this.modelLogs.set(
+        logs.map(log => ({
+          node: log.provider_name,
+          modelName,
+        }))
+      );
+
+      this.rawLogsByNode.set(
+        new Map(logs.map(log => [log.provider_name, log.log_text ?? '']))
+      );
+
+      this.calibrationResults.set(
+        logs.map(log =>
+          this.parseCalibrationResult(log.provider_name, log.log_text ?? '')
+        )
+      );
 
     } catch {
       this.modelLogs.set([]);
-    }
-  }
-
-  private async loadAllCalibrationLogs(
-    logs: readonly ModelLog[]
-  ): Promise<void> {
-    const results = await Promise.all(
-      logs.map(async log => {
-        try {
-          const content =
-            await firstValueFrom(
-              this.http.get(
-                `/logs/${log.file}`,
-                {
-                  responseType: 'text',
-                }
-              )
-            );
-
-          return this.parseCalibrationResult(
-            log.node,
-            content
-          );
-
-        } catch {
-          return null;
-        }
-      })
-    );
-
-    this.calibrationResults.set(
-      results.filter(
-        (
-          result
-        ): result is NodeCalibrationResult =>
-          result !== null
-      )
-    );
-  }
-
-  private async loadLog(file: string): Promise<void> {
-    try {
-      const log =
-        await firstValueFrom(
-          this.http.get(
-            `/logs/${file}`,
-            {
-              responseType: 'text',
-            }
-          )
-        );
-
-      this.completeLog.set(log);
-
-      this.cdr.detectChanges();
-
-      this.scrollToHighlightedError();
-
-    } catch {
-      this.completeLog.set(
-        'Unable to load log file.'
-      );
+      this.rawLogsByNode.set(new Map());
+      this.calibrationResults.set([]);
     }
   }
 
@@ -706,26 +661,6 @@ export class ModelErrorReport implements OnInit {
   // ==========================================================================
   // Log Parsing
   // ==========================================================================
-
-  private parseLogFilename(
-    file: string
-  ): ModelLog | null {
-    const match = file.match(
-      /^(.+)-node(\d+)\.log$/
-    );
-
-    if (!match) {
-      return null;
-    }
-
-    const [, modelName, nodeNumber] = match;
-
-    return {
-      file,
-      modelName,
-      node: `Node ${nodeNumber}`,
-    };
-  }
 
   private parseCalibrationResult(
     node: string,
