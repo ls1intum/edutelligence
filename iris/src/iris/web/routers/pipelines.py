@@ -71,7 +71,7 @@ router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = get_logger(__name__)
 
 _global_search_executor = TracedThreadPoolExecutor(max_workers=100)
-_prompt_user_executor = TracedThreadPoolExecutor(max_workers=1)
+_ask_user_executor = TracedThreadPoolExecutor(max_workers=1)
 
 
 def run_chat_pipeline_worker(
@@ -345,7 +345,7 @@ def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDTO):
     thread.start()
 
 
-def run_prompt_user_pipeline_worker(
+def run_ask_user_pipeline_worker(
     dto: AskUserPipelineExecutionDTO,
     variant_id: str,
     event: str | None,
@@ -380,7 +380,7 @@ def run_prompt_user_pipeline_worker(
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_prompt_user_pipeline(
+def run_ask_user_pipeline(
     event: str | None = Query(None, description="Event query parameter"),
     dto: AskUserPipelineExecutionDTO = Body(
         description="Ask-user Pipeline Execution DTO"
@@ -388,8 +388,8 @@ def run_prompt_user_pipeline(
 ):
     variant = validate_pipeline_variant(dto.settings, AskUserPipeline)
     request_id = get_request_id()
-    _prompt_user_executor.submit(
-        run_prompt_user_pipeline_worker,
+    _ask_user_executor.submit(
+        run_ask_user_pipeline_worker,
         dto,
         variant,
         event,
@@ -531,7 +531,7 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
             return get_available_variants(
                 safe_get_variants(AutonomousTutorPipeline.get_variants), available_llms
             )
-        case "PROMPT_USER":
+        case "ASK_USER":
             return get_available_variants(
                 safe_get_variants(AskUserPipeline.get_variants),
                 available_llms,
