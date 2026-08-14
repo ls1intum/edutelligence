@@ -785,10 +785,15 @@ export class ModelErrorReport implements OnInit {
     ) {
       const stage = CALIBRATION_STAGES[index];
 
-      const successful =
+      const patternMatched =
         stage.successPatterns.some(
           pattern => pattern.test(block)
         );
+
+      const successful =
+        stage.name === 'Deployment Success'
+          ? success && patternMatched
+          : patternMatched;
 
       if (successful) {
         stages.push({
