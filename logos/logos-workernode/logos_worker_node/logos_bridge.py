@@ -39,6 +39,8 @@ _INFERENCE_RELAY_TIMEOUT = httpx.Timeout(
     pool=10.0,
 )
 
+_MAX_CALIBRATION_LOG_TEXT_BYTES = 512 * 1024
+
 
 class _CalibrationSession:
     """Worker-driven calibration loop state.
@@ -711,6 +713,27 @@ class LogosBridgeClient:
         except OSError:
             return ""
 
+    @staticmethod
+    def _truncate_calibration_log_text(text: str, max_bytes: int = _MAX_CALIBRATION_LOG_TEXT_BYTES) -> str:
+        """Cap ``text`` to at most ``max_bytes`` UTF-8 bytes, trimming the head.
+
+        The on-disk log is append-mode across every probe attempt in a
+        session and can grow to several hundred KB (see
+        ``_read_calibration_log_text``); without a cap the encoded
+        ``calibration_probe_log`` event — and the DB row it lands in — would
+        be unbounded. Keeps the tail (most recent output, where failures
+        typically surface) and prefixes a truncation marker inside the limit.
+        """
+        encoded = text.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            return text
+
+        omitted = len(encoded) - max_bytes
+        marker = f"... [truncated, {omitted} bytes omitted] ...\n"
+        budget = max(0, max_bytes - len(marker.encode("utf-8")))
+        tail = encoded[-budget:].decode("utf-8", errors="ignore")
+        return marker + tail
+
     def _record_calibration_probe_log(self, model_name: str, result: Any, log_text: str) -> None:
         """Report the finalized per-model probe log to the orchestrator.
 
@@ -742,7 +765,7 @@ class LogosBridgeClient:
                     "min_kv_cache_mb": round(result.min_kv_cache_mb, 1),
                     "max_kv_cache_mb": round(result.max_kv_cache_mb, 1),
                     "max_model_len": result.max_model_len,
-                    "log_text": log_text,
+                    "log_text": self._truncate_calibration_log_text(log_text),
                 }
             ),
         )

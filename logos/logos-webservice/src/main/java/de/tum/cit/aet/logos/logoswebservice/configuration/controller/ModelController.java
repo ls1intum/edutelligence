@@ -88,6 +88,7 @@ public class ModelController {
     }
 
     @PostMapping("/get_model_calibration_logs")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> getModelCalibrationLogs(
             @RequestBody GetModelRequestDTO req) {
         if (req.id() == null) return ResponseEntity.badRequest().body(Map.of("error", "id is required"));

@@ -5,8 +5,13 @@ import {
   computed,
   inject,
   signal,
+  viewChild,
 } from '@angular/core';
 import { NgClass } from '@angular/common';
+import {
+  CdkVirtualScrollViewport,
+  ScrollingModule,
+} from '@angular/cdk/scrolling';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
@@ -213,6 +218,7 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
   imports: [
     RouterLink,
     NgClass,
+    ScrollingModule,
     ErrorMessageComponent,
     DataTableComponent,
   ],
@@ -331,6 +337,21 @@ export class ModelErrorReport implements OnInit {
   readonly logLines = computed(() =>
     this.completeLog().split('\n')
   );
+
+  readonly highlightedLogLineIndex = computed(() => {
+    const error = this.highlightedError();
+    const errorNode = this.highlightedErrorNode();
+    const selectedNode = this.selectedLogNode();
+
+    if (!error || !errorNode || errorNode !== selectedNode) {
+      return -1;
+    }
+
+    return this.logLines().findIndex(line => line.includes(error));
+  });
+
+  readonly logViewport =
+    viewChild(CdkVirtualScrollViewport);
 
   readonly hasCompleteLogs = computed(() => {
     return this.availableLogs().length > 0;
@@ -646,42 +667,16 @@ export class ModelErrorReport implements OnInit {
   // Log Highlighting
   // ==========================================================================
 
-  isHighlightedLogLine(line: string): boolean {
-    const error = this.highlightedError();
-    const errorNode = this.highlightedErrorNode();
-    const selectedNode = this.selectedLogNode();
-
-    if (!error || !errorNode) {
-      return false;
-    }
-
-    if (errorNode !== selectedNode) {
-      return false;
-    }
-
-    return line.includes(error);
-  }
-
   private scrollToHighlightedError(): void {
-    if (!this.highlightedError()) {
+    const index = this.highlightedLogLineIndex();
+
+    if (index < 0) {
       return;
     }
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const element =
-          document.querySelector(
-            '.log-line--highlighted'
-          );
-
-        if (!element) {
-          return;
-        }
-
-        element.scrollIntoView({
-          behavior: 'smooth',
-          block: 'center',
-        });
+        this.logViewport()?.scrollToIndex(index, 'smooth');
       });
     });
   }

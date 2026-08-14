@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional, Set
 
 import grpc
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -1618,12 +1619,12 @@ async def internal_calibration_probe_logs(model_name: str, request: Request):
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     with DBManager() as db:
         rows = db.get_calibration_probe_logs_by_model(model_name)
-    return {"logs": rows}
+    return JSONResponse(status_code=200, content=jsonable_encoder({"logs": rows}))
 
 
 class _InternalCalibrateRequest(BaseModel):
@@ -3889,7 +3890,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 )
                 if event.get("event") == "calibration_probe_log":
                     try:
-                        _capture_calibration_probe_log(ticket.provider_id, event)
+                        await asyncio.to_thread(_capture_calibration_probe_log, ticket.provider_id, event)
                     except Exception:
                         logger.debug(
                             "Failed to persist calibration probe log for provider %s",

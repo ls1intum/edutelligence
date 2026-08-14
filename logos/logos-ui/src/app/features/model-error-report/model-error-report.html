@@ -308,13 +308,18 @@
         <!-- Logs -->
         @case ('complete_logs') {
 
-          @if (hasCompleteLogs()) {
+          @if (hasAnyLogText()) {
 
             <div class="logs-panel">
 
               <div class="log-selector">
 
+                <label class="log-selector__label" for="log-selector-node">
+                  Node
+                </label>
+
                 <select
+                  id="log-selector-node"
                   class="log-selector__select"
                   (change)="selectedLogNode.set($any($event.target).value)"
                 >
@@ -340,16 +345,19 @@
 
                 } @else {
 
-                  @for (line of logLines(); track $index) {
+                  <cdk-virtual-scroll-viewport
+                    class="log-viewer__viewport"
+                    itemSize="18"
+                  >
 
                     <div
-                      #logLine
+                      *cdkVirtualFor="let line of logLines(); let i = index"
                       class="log-line"
-                      [class.log-line--highlighted]="isHighlightedLogLine(line)"
+                      [class.log-line--highlighted]="i === highlightedLogLineIndex()"
                     >
 
                       <span class="log-line-number">
-                        {{ $index + 1 }}
+                        {{ i + 1 }}
                       </span>
 
                       <span class="log-line-content">
@@ -358,7 +366,7 @@
 
                     </div>
 
-                  }
+                  </cdk-virtual-scroll-viewport>
 
                 }
 
