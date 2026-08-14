@@ -71,7 +71,21 @@
         <!-- Error Report -->
         @case ('error_report') {
 
-          @if (hasCompleteLogs()) {
+          @if (hasCompleteLogs() && !hasParseableCalibrationData()) {
+
+            <div class="empty-state">
+
+              <h2>
+                No logs available
+              </h2>
+
+              <p>
+                No log files are available for this model. The error report cannot be generated.
+              </p>
+
+            </div>
+
+          } @else if (hasCompleteLogs()) {
 
             <app-data-table
               [columns]="['', 'PROCESS']"
@@ -163,6 +177,7 @@
 
                             @if (
                               item.name === 'Deployment Success' &&
+                              item.status === 'success' &&
                               item.scope?.nodes?.length
                             ) {
 
@@ -320,7 +335,7 @@
                 @if (!completeLog()) {
 
                   <p class="log-viewer__empty">
-                    No log could be loaded for this node.
+                    No log found for this node.
                   </p>
 
                 } @else {

@@ -243,7 +243,7 @@ export class ModelErrorReport implements OnInit {
   readonly loading = signal(true);
   readonly loadError = signal(false);
 
-  readonly activeTab = signal<ModelErrorTab>('complete_logs');
+  readonly activeTab = signal<ModelErrorTab>('error_report');
 
   readonly expandedProcess = signal<number[]>([]);
 
@@ -273,8 +273,8 @@ export class ModelErrorReport implements OnInit {
   // ==========================================================================
 
   readonly tabs: readonly ModelErrorTab[] = [
-    'complete_logs',
     'error_report',
+    'complete_logs',
   ];
 
   readonly tabLabel: Record<ModelErrorTab, string> = {
@@ -282,11 +282,15 @@ export class ModelErrorReport implements OnInit {
     complete_logs: 'Complete Logs',
   };
 
+  readonly hasAnyLogText = computed(() => {
+    return [...this.rawLogsByNode().values()].some(text => text.length > 0);
+  });
+
   readonly visibleTabs =
     computed<readonly ModelErrorTab[]>(() =>
-      this.hasCompleteLogs()
+      this.hasAnyLogText()
         ? this.tabs
-        : ['complete_logs']
+        : ['error_report']
     );
 
 
@@ -335,6 +339,10 @@ export class ModelErrorReport implements OnInit {
 
   readonly hasCompleteLogs = computed(() => {
     return this.availableLogs().length > 0;
+  });
+
+  readonly hasParseableCalibrationData = computed(() => {
+    return this.calibrationResults().some(result => result.attempts > 0);
   });
 
 
@@ -867,7 +875,7 @@ export class ModelErrorReport implements OnInit {
       .filter(line => line.trim().length > 0);
 
     const errorIndex = lines.findIndex(line =>
-      /\b(?:ERROR|Exception|Traceback|ValueError|RuntimeError|TypeError|KeyError|ImportError|AssertionError)\b/
+      /\b(?:ERROR|CRITICAL|FATAL|Exception|Traceback|ValueError|RuntimeError|TypeError|KeyError|ImportError|AssertionError)\b/
         .test(line)
     );
 
