@@ -225,7 +225,31 @@
                                   </div>
                                 }
 
-                                <pre>{{ item.errorMessage }}</pre>
+                                @if (item.errorDetail && item.errorDetail !== item.errorMessage) {
+
+                                  <button
+                                    type="button"
+                                    class="error-toggle"
+                                    (click)="toggleError(item.name)"
+                                  >
+                                    <i
+                                      class="pi pi-chevron-right"
+                                      [class.error-toggle__icon--open]="isErrorExpanded(item.name)"
+                                    ></i>
+                                    {{ isErrorExpanded(item.name) ? 'Hide full error' : 'Show full error' }}
+                                  </button>
+
+                                  @if (isErrorExpanded(item.name)) {
+                                    <pre>{{ item.errorDetail }}</pre>
+                                  } @else {
+                                    <pre>{{ item.errorMessage }}</pre>
+                                  }
+
+                                } @else {
+
+                                  <pre>{{ item.errorMessage }}</pre>
+
+                                }
 
                               </section>
 
@@ -293,23 +317,33 @@
 
               <div class="log-viewer">
 
-                @for (line of logLines(); track $index) {
+                @if (!completeLog()) {
 
-                  <div
-                    #logLine
-                    class="log-line"
-                    [class.log-line--highlighted]="isHighlightedLogLine(line)"
-                  >
+                  <p class="log-viewer__empty">
+                    No log could be loaded for this node.
+                  </p>
 
-                    <span class="log-line-number">
-                      {{ $index + 1 }}
-                    </span>
+                } @else {
 
-                    <span class="log-line-content">
-                      {{ line }}
-                    </span>
+                  @for (line of logLines(); track $index) {
 
-                  </div>
+                    <div
+                      #logLine
+                      class="log-line"
+                      [class.log-line--highlighted]="isHighlightedLogLine(line)"
+                    >
+
+                      <span class="log-line-number">
+                        {{ $index + 1 }}
+                      </span>
+
+                      <span class="log-line-content">
+                        {{ line }}
+                      </span>
+
+                    </div>
+
+                  }
 
                 }
 

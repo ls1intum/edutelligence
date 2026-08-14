@@ -629,6 +629,38 @@
   color: rgb(var(--color-typography-300));
 }
 
+.error-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+
+  margin-bottom: 0.5rem;
+
+  padding: 0;
+
+  background: none;
+  border: none;
+
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+
+  color: rgb(var(--color-error));
+
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.error-toggle__icon--open {
+  transform: rotate(90deg);
+}
+
+.error-toggle i {
+  transition: transform 0.18s ease;
+}
+
 // ==========================================================================
 // Logs
 // ==========================================================================
@@ -713,6 +745,14 @@
   font-family: 'JetBrains Mono', monospace;
   font-size: var(--font-size-sm);
   line-height: var(--line-height-normal);
+}
+
+.log-viewer__empty {
+  margin: 0;
+  padding: 1rem 12px;
+
+  color: rgb(var(--color-typography-700));
+  font-style: italic;
 }
 
 .log-line {

@@ -40,6 +40,7 @@ interface ChecklistItem {
   readonly name: string;
   readonly status: 'success' | 'failure';
   readonly errorMessage?: string;
+  readonly errorDetail?: string;
   readonly scope?: ErrorScope;
 }
 
@@ -66,6 +67,7 @@ interface CalibrationStageResult {
   readonly name: string;
   readonly status: CalibrationStatus;
   readonly errorMessage?: string;
+  readonly errorDetail?: string;
 }
 
 interface CalibrationProbeResult {
@@ -73,6 +75,12 @@ interface CalibrationProbeResult {
   readonly status: CalibrationStatus;
   readonly stages: readonly CalibrationStageResult[];
   readonly errorMessage?: string;
+  readonly errorDetail?: string;
+}
+
+interface CalibrationError {
+  readonly summary: string;
+  readonly detail: string;
 }
 
 interface NodeCalibrationResult {
@@ -238,6 +246,8 @@ export class ModelErrorReport implements OnInit {
   readonly activeTab = signal<ModelErrorTab>('complete_logs');
 
   readonly expandedProcess = signal<number[]>([]);
+
+  private readonly expandedErrors = signal<ReadonlySet<string>>(new Set());
 
   readonly selectedLogNode = signal<string | null>(null);
 
@@ -461,7 +471,7 @@ export class ModelErrorReport implements OnInit {
 
       this.calibrationResults.set(
         logs.map(log =>
-          this.parseCalibrationResult(log.provider_name, log.log_text ?? '')
+          this.parseCalibrationResult(log.provider_name, log.log_text ?? '', log.success)
         )
       );
 
@@ -495,6 +505,22 @@ export class ModelErrorReport implements OnInit {
 
   isExpanded(id: number): boolean {
     return this.expandedProcess().includes(id);
+  }
+
+  toggleError(name: string): void {
+    this.expandedErrors.update(current => {
+      const next = new Set(current);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
+      return next;
+    });
+  }
+
+  isErrorExpanded(name: string): boolean {
+    return this.expandedErrors().has(name);
   }
 
   openNodeLog(
@@ -664,7 +690,8 @@ export class ModelErrorReport implements OnInit {
 
   private parseCalibrationResult(
     node: string,
-    log: string
+    log: string,
+    success: boolean
   ): NodeCalibrationResult {
     const probeBlocks = log
       .split(/(?=\s*Calibration probe\s*[—-])/)
@@ -672,11 +699,46 @@ export class ModelErrorReport implements OnInit {
         /Calibration probe\s*[—-]/.test(block)
       );
 
+    if (probeBlocks.length === 0) {
+      // Nothing matches the expected "Calibration probe — ..." format
+      // (log format changed, or log_text is empty/unexpected) — fall
+      // back to the calibration's actual recorded outcome.
+      if (success) {
+        return { node, attempts: 0, status: 'success', probes: [] };
+      }
+      const error = this.getCalibrationError(log);
+      const errorMessage =
+        error?.summary ??
+        'Calibration failed — log format not recognized, see Complete Logs for details.';
+      return {
+        node,
+        attempts: 0,
+        status: 'failure',
+        probes: [
+          {
+            probe: 1,
+            status: 'failure',
+            errorMessage,
+            errorDetail: error?.detail,
+            stages: [
+              {
+                name: CALIBRATION_STAGES[0].name,
+                status: 'failure',
+                errorMessage,
+                errorDetail: error?.detail,
+              },
+            ],
+          },
+        ],
+      };
+    }
+
     const probes = probeBlocks.map(
       (block, index) =>
         this.parseCalibrationProbe(
           index + 1,
-          block
+          block,
+          success
         )
     );
 
@@ -709,7 +771,8 @@ export class ModelErrorReport implements OnInit {
 
   private parseCalibrationProbe(
     probeNumber: number,
-    block: string
+    block: string,
+    success: boolean
   ): CalibrationProbeResult {
     const stages: CalibrationStageResult[] = [];
 
@@ -747,6 +810,7 @@ export class ModelErrorReport implements OnInit {
     }
 
     const deploymentSuccessful =
+      success &&
       stages.some(
         stage =>
           stage.name === 'Deployment Success' &&
@@ -762,8 +826,7 @@ export class ModelErrorReport implements OnInit {
     }
 
     if (firstFailedStageIndex !== -1) {
-      const errorMessage =
-        this.getCalibrationError(block);
+      const error = this.getCalibrationError(block);
 
       const failedStage =
         stages[firstFailedStageIndex];
@@ -771,14 +834,16 @@ export class ModelErrorReport implements OnInit {
       stages[firstFailedStageIndex] = {
         ...failedStage,
         status: 'failure',
-        errorMessage,
+        errorMessage: error?.summary,
+        errorDetail: error?.detail,
       };
 
       return {
         probe: probeNumber,
         status: 'failure',
         stages,
-        errorMessage,
+        errorMessage: error?.summary,
+        errorDetail: error?.detail,
       };
     }
 
@@ -791,23 +856,29 @@ export class ModelErrorReport implements OnInit {
 
   private getCalibrationError(
     block: string
-  ): string | undefined {
+  ): CalibrationError | undefined {
     const lines = block
       .split('\n')
       .filter(line => line.trim().length > 0);
 
-    const errorLine = lines.find(line =>
+    const errorIndex = lines.findIndex(line =>
       /\b(?:ERROR|Exception|Traceback|ValueError|RuntimeError|TypeError|KeyError|ImportError|AssertionError)\b/
         .test(line)
     );
 
-    if (errorLine) {
-      return errorLine;
-    }
+    const index =
+      errorIndex !== -1
+        ? errorIndex
+        : lines.findIndex(line => /\berror\s*:/i.test(line));
 
-    return lines.find(line =>
-      /\berror\s*:/i.test(line)
-    );
+    if (index === -1) {
+      return undefined;
+    }
+    
+    return {
+      summary: lines[index],
+      detail: lines.slice(index).join('\n'),
+    };
   }
 
 
@@ -834,7 +905,7 @@ export class ModelErrorReport implements OnInit {
       const failedNodes: string[] = [];
       const failures = new Map<
         string,
-        string[]
+        { nodes: string[]; detail?: string }
       >();
 
       for (const result of results) {
@@ -875,12 +946,12 @@ export class ModelErrorReport implements OnInit {
             stageResult.errorMessage ??
             'Unknown calibration error';
 
-          const nodes =
-            failures.get(error) ?? [];
+          const entry =
+            failures.get(error) ?? { nodes: [], detail: stageResult.errorDetail };
 
-          nodes.push(result.node);
+          entry.nodes.push(result.node);
 
-          failures.set(error, nodes);
+          failures.set(error, entry);
           failedNodes.push(result.node);
         }
       }
@@ -894,6 +965,9 @@ export class ModelErrorReport implements OnInit {
       ];
 
       if (uniqueFailedNodes.length > 0) {
+        const [firstError, firstEntry] =
+          [...failures.entries()][0] ?? [];
+
         items.push({
           name: stage.name,
           status: 'failure',
@@ -901,9 +975,8 @@ export class ModelErrorReport implements OnInit {
             type: 'node',
             nodes: uniqueFailedNodes,
           },
-          errorMessage:
-            [...failures.keys()][0] ??
-            'Unknown calibration error',
+          errorMessage: firstError ?? 'Unknown calibration error',
+          errorDetail: firstEntry?.detail,
         });
 
         continue;
