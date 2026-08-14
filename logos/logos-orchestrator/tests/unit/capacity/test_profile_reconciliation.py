@@ -205,3 +205,83 @@ def test_inconsistency_serialises():
         model_name="m", kind="k", severity="high", detail="d", provider_ids=[1, 2], evidence={"a": 1}
     )
     assert finding.to_dict()["provider_ids"] == [1, 2]
+
+
+# ----------------------------------------------------------------------
+# Review follow-ups
+# ----------------------------------------------------------------------
+
+
+def test_kv_signature_is_found_when_it_sits_in_a_middle_pair():
+    """Comparing only the extremes would miss it and report the weaker finding.
+
+    Three nodes at 10, 20 and 40 GB: the 20/10 pair carries the KV-inclusion
+    signature (20 - 10 = 10, matching the 20 GB node's KV budget), while the
+    extremes 40/10 do not.
+    """
+    findings = reconcile_model(
+        [
+            profile(15, "mid/model", 10_240.0, kv=1_024.0),
+            profile(16, "mid/model", 20_480.0, kv=10_240.0),
+            profile(22, "mid/model", 40_960.0, kv=2_048.0),
+        ]
+    )
+    assert [f.kind for f in findings] == ["kv_inclusion_skew"]
+    assert set(findings[0].provider_ids) == {15, 16}
+
+
+def test_footprints_are_compared_per_accelerator():
+    """Different tensor-parallel degrees are not a disagreement.
+
+    A model sharded over two accelerators is reported at twice the per-device
+    footprint of the same model on one.  That is arithmetic, not a conflict, and
+    must not be flagged.
+    """
+    findings = reconcile_model(
+        [
+            profile(15, "tp/model", 20_000.0, kv=4_000.0, tensor_parallel_size=1),
+            profile(22, "tp/model", 40_000.0, kv=8_000.0, tensor_parallel_size=2),
+        ]
+    )
+    assert findings == []
+
+
+def test_kv_signature_survives_a_tensor_parallel_difference():
+    """Per accelerator: (92000 - 60000)/2 = 16000, matching the 16000 reported
+    by a node running the same model unsharded."""
+    findings = reconcile_model(
+        [
+            profile(15, "tpkv/model", 16_000.0, kv=2_000.0, tensor_parallel_size=1),
+            profile(22, "tpkv/model", 92_000.0, kv=60_000.0, tensor_parallel_size=2),
+        ]
+    )
+    assert [f.kind for f in findings] == ["kv_inclusion_skew"]
+    assert findings[0].evidence["normalised_per_accelerator"] is True
+
+
+def test_uncalibrated_majority_fires_on_a_majority_not_only_on_none():
+    """One measured node out of three still leaves two placing on defaults."""
+    findings = reconcile_model(
+        [
+            profile(15, "mostly/unmeasured", 10_000.0, kv=2_000.0),
+            profile(16, "mostly/unmeasured", None, residency_source="cached", measurement_count=0),
+            profile(22, "mostly/unmeasured", None, residency_source="cached", measurement_count=0),
+        ]
+    )
+    kinds = [f.kind for f in findings]
+    assert "uncalibrated_majority" in kinds
+    finding = next(f for f in findings if f.kind == "uncalibrated_majority")
+    assert finding.evidence["unmeasured_nodes"] == 2
+    assert finding.evidence["measured_nodes"] == 1
+    assert set(finding.provider_ids) == {16, 22}
+
+
+def test_a_measured_minority_does_not_trigger_the_majority_finding():
+    findings = reconcile_model(
+        [
+            profile(15, "mostly/measured", 10_000.0, kv=2_000.0),
+            profile(16, "mostly/measured", 10_000.0, kv=2_000.0),
+            profile(22, "mostly/measured", None, residency_source="cached", measurement_count=0),
+        ]
+    )
+    assert [f.kind for f in findings if f.kind == "uncalibrated_majority"] == []

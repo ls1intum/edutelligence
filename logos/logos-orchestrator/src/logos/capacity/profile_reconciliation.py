@@ -98,6 +98,29 @@ class Inconsistency:
         }
 
 
+def _tp(profile: NodeProfile) -> int:
+    """Tensor-parallel degree, defaulting to 1 when a node does not report it."""
+    tp = profile.tensor_parallel_size
+    return tp if tp and tp > 0 else 1
+
+
+def _normalised_base_mb(profile: NodeProfile) -> float:
+    """Base residency per accelerator.
+
+    Nodes report the footprint for the sharding they run, so a model served with
+    tensor parallelism of two on one node and one on another is described by two
+    figures that differ by construction rather than by disagreement.  Comparing
+    per accelerator removes that difference; what remains is a real conflict.
+    """
+    base = profile.base_residency_mb
+    return 0.0 if base is None else float(base) / _tp(profile)
+
+
+def _normalised_kv_mb(profile: NodeProfile) -> float:
+    kv = profile.kv_budget_mb
+    return 0.0 if kv is None else float(kv) / _tp(profile)
+
+
 def _usable(profile: NodeProfile) -> bool:
     base = profile.base_residency_mb
     return base is not None and base >= MIN_MEANINGFUL_MB
@@ -106,26 +129,30 @@ def _usable(profile: NodeProfile) -> bool:
 def _kv_inclusion_match(high: NodeProfile, low: NodeProfile) -> Optional[float]:
     """Return the relative error if ``high`` looks like ``low`` plus its KV budget.
 
+    Both sides are normalised per accelerator first, so the identity is tested
+    on comparable quantities even when the two nodes shard the model differently.
+
     ``None`` when the identity does not hold, when the KV budget is unknown, or
     when it is too small to explain the gap.
     """
-    if high.kv_budget_mb is None or high.kv_budget_mb <= 0:
-        return None
-    if high.base_residency_mb is None or low.base_residency_mb is None:
+    kv = _normalised_kv_mb(high)
+    if kv <= 0:
         return None
 
-    implied = high.base_residency_mb - high.kv_budget_mb
+    high_base = _normalised_base_mb(high)
+    low_base = _normalised_base_mb(low)
+    if high_base <= 0 or low_base <= 0:
+        return None
+
+    implied = high_base - kv
     if implied <= 0:
         return None
-    reference = low.base_residency_mb
-    if reference <= 0:
-        return None
-    return abs(implied - reference) / reference
+    return abs(implied - low_base) / low_base
 
 
 def reconcile_model(profiles: Iterable[NodeProfile]) -> List[Inconsistency]:
     """Compare every node's declaration for a single model."""
-    profiles = [p for p in profiles]
+    profiles = list(profiles)
     if len(profiles) < 2:
         return []
 
@@ -133,58 +160,96 @@ def reconcile_model(profiles: Iterable[NodeProfile]) -> List[Inconsistency]:
     findings: List[Inconsistency] = []
 
     measured = [p for p in profiles if p.is_measured and _usable(p)]
-    if len(measured) < 2:
-        if profiles and not any(p.is_measured for p in profiles):
-            findings.append(
-                Inconsistency(
-                    model_name=model_name,
-                    kind="uncalibrated_majority",
-                    severity="low",
-                    detail=(f"no node hosting {model_name} has measured it; " "placement decisions rest on defaults"),
-                    provider_ids=sorted(p.provider_id for p in profiles),
-                    evidence={"hosting_nodes": len(profiles), "measured_nodes": 0},
-                )
+
+    # Flag a knowledge base resting mostly on defaults.  The check is on the
+    # *share* of unmeasured profiles, not on their total absence: a model
+    # measured on one node out of three is still being placed on two nodes
+    # using figures nobody measured.
+    unmeasured = [p for p in profiles if not p.is_measured]
+    if len(unmeasured) * 2 > len(profiles):
+        findings.append(
+            Inconsistency(
+                model_name=model_name,
+                kind="uncalibrated_majority",
+                severity="low",
+                detail=(
+                    f"{len(unmeasured)} of {len(profiles)} nodes hosting {model_name} have never "
+                    "measured it; placement decisions on those nodes rest on defaults"
+                ),
+                provider_ids=sorted(p.provider_id for p in unmeasured),
+                evidence={
+                    "hosting_nodes": len(profiles),
+                    "measured_nodes": len(profiles) - len(unmeasured),
+                    "unmeasured_nodes": len(unmeasured),
+                },
             )
+        )
+
+    if len(measured) < 2:
         return findings
 
-    ordered = sorted(measured, key=lambda p: float(p.base_residency_mb or 0.0))
-    lowest, highest = ordered[0], ordered[-1]
-    low_mb = float(lowest.base_residency_mb or 0.0)
-    high_mb = float(highest.base_residency_mb or 0.0)
-    if low_mb <= 0:
-        return findings
+    ordered = sorted(measured, key=lambda p: _normalised_base_mb(p))
 
-    ratio = high_mb / low_mb
-    if ratio <= DISAGREEMENT_RATIO:
-        return findings
+    # Examine every ordered pair whose residency ratio is too large to explain,
+    # not only the extremes.  With three nodes at 10, 20 and 40 GB the
+    # KV-inclusion signature may sit in the middle pair, and comparing only
+    # min against max would miss it and report the weaker finding instead.
+    best_match = None
+    for i, low in enumerate(ordered):
+        low_mb = _normalised_base_mb(low)
+        if low_mb <= 0:
+            continue
+        for high in ordered[i + 1 :]:
+            high_mb = _normalised_base_mb(high)
+            if high_mb / low_mb <= DISAGREEMENT_RATIO:
+                continue
+            relative_error = _kv_inclusion_match(high, low)
+            if relative_error is None or relative_error > KV_INCLUSION_TOLERANCE:
+                continue
+            if best_match is None or relative_error < best_match[0]:
+                best_match = (relative_error, low, high, high_mb / low_mb)
 
-    relative_error = _kv_inclusion_match(highest, lowest)
-    if relative_error is not None and relative_error <= KV_INCLUSION_TOLERANCE:
+    if best_match is not None:
+        relative_error, low, high, ratio = best_match
+        low_mb, high_mb = _normalised_base_mb(low), _normalised_base_mb(high)
+        kv_mb = _normalised_kv_mb(high)
         findings.append(
             Inconsistency(
                 model_name=model_name,
                 kind="kv_inclusion_skew",
                 severity="high",
                 detail=(
-                    f"provider {highest.provider_id} reports {high_mb:.0f} MB base residency for "
-                    f"{model_name} while provider {lowest.provider_id} reports {low_mb:.0f} MB; "
-                    f"the difference matches provider {highest.provider_id}'s KV budget "
-                    f"({highest.kv_budget_mb:.0f} MB), so one build includes the KV cache in the "
-                    "residency figure and the other does not"
+                    f"provider {high.provider_id} reports {high_mb:.0f} MB base residency for "
+                    f"{model_name} while provider {low.provider_id} reports {low_mb:.0f} MB "
+                    f"(both per-accelerator); the difference matches provider "
+                    f"{high.provider_id}'s KV budget ({kv_mb:.0f} MB), so one build includes "
+                    "the KV cache in the residency figure and the other does not"
                 ),
-                provider_ids=[lowest.provider_id, highest.provider_id],
+                provider_ids=[low.provider_id, high.provider_id],
                 evidence={
-                    "high_provider": highest.provider_id,
+                    "high_provider": high.provider_id,
                     "high_base_mb": high_mb,
-                    "high_kv_budget_mb": highest.kv_budget_mb,
-                    "low_provider": lowest.provider_id,
+                    "high_kv_budget_mb": kv_mb,
+                    "high_tp": high.tensor_parallel_size,
+                    "low_provider": low.provider_id,
                     "low_base_mb": low_mb,
-                    "implied_after_removing_kv_mb": high_mb - float(highest.kv_budget_mb or 0.0),
+                    "low_tp": low.tensor_parallel_size,
+                    "implied_after_removing_kv_mb": high_mb - kv_mb,
                     "relative_error": relative_error,
                     "ratio": ratio,
+                    "normalised_per_accelerator": True,
                 },
             )
         )
+        return findings
+
+    lowest, highest = ordered[0], ordered[-1]
+    low_mb = _normalised_base_mb(lowest)
+    high_mb = _normalised_base_mb(highest)
+    if low_mb <= 0:
+        return findings
+    ratio = high_mb / low_mb
+    if ratio <= DISAGREEMENT_RATIO:
         return findings
 
     findings.append(
