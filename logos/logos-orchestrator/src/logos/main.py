@@ -811,18 +811,35 @@ def _capture_logosnode_provider_snapshot(
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
 
 
-def _record_placement_event(**fields) -> None:
-    """Sink for the capacity planner's placement telemetry.
-
-    Opens its own short-lived session so a slow write cannot hold a connection
-    the request path needs, and swallows everything: telemetry must never be
-    able to fail a placement.
-    """
+def _write_placement_event(fields: dict) -> None:
+    """Blocking write, run off the event loop by _record_placement_event."""
     try:
         with DBManager() as db:
             db.record_placement_event(**fields)
     except Exception:
         logger.debug("Could not record placement event", exc_info=True)
+
+
+def _record_placement_event(**fields) -> None:
+    """Sink for the capacity planner's placement telemetry.
+
+    The planner calls this from the event loop, so the database write must not
+    happen inline: a slow or blocked write would stall every coroutine on the
+    loop, including the request path.  The work goes to the default executor and
+    the caller returns immediately.
+
+    Falls back to a direct write only when no loop is running (tests, scripts).
+    Telemetry must never be able to fail a placement, so everything is swallowed.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _write_placement_event(fields)
+        return
+    try:
+        loop.run_in_executor(None, _write_placement_event, fields)
+    except Exception:
+        logger.debug("Could not schedule placement event write", exc_info=True)
 
 
 def _merge_local_provider_vram_payload(

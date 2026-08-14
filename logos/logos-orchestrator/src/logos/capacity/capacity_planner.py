@@ -244,6 +244,8 @@ class CapacityPlanner:
         # behaves exactly as before, which keeps the recorder out of every
         # test that constructs a planner.
         self._placement_recorder = placement_recorder
+        # Set by the escalation path so the recorded action reflects what ran.
+        self._escalated_action: Optional[str] = None
         self._facade = logosnode_facade
         self._registry = logosnode_registry
         self._demand = demand_tracker
@@ -6424,6 +6426,7 @@ class CapacityPlanner:
         started = time.monotonic()
         confirmed = False
         error_class: Optional[str] = None
+        self._escalated_action = None
         try:
             confirmed = await self._execute_action_uninstrumented(action, timeout_seconds)
             return confirmed
@@ -6453,7 +6456,7 @@ class CapacityPlanner:
         if recorder is None:
             return
         try:
-            capacity = self._facade.get_capacity(action.provider_id)
+            capacity = self._facade.get_capacity_info(action.provider_id)
             declared_free = float(getattr(capacity, "available_vram_mb", 0.0) or 0.0)
         except Exception:
             declared_free = None
@@ -6467,7 +6470,7 @@ class CapacityPlanner:
             recorder(
                 provider_id=action.provider_id,
                 model_name=action.model_name,
-                action=action.action,
+                action=getattr(self, "_escalated_action", None) or action.action,
                 declared_free_vram_mb=declared_free,
                 declared_footprint_mb=footprint,
                 gpu_devices=(action.params or {}).get("gpu_devices"),
@@ -6621,7 +6624,13 @@ class CapacityPlanner:
                         # the case the safety valve exists to handle.
                         bypass_load_cooldown=True,
                     )
-                    return await self._execute_action_with_confirmation(stop_action, timeout_seconds)
+                    # Run the escalated stop *uninstrumented*: the outer call is
+                    # already inside the telemetry wrapper, so recursing through
+                    # it would write a second row carrying the stop's outcome
+                    # under the original action's label.  One placement attempt,
+                    # one row -- the escalation shows in the recorded action.
+                    self._escalated_action = "sleep_to_stop"
+                    return await self._execute_action_uninstrumented(stop_action, timeout_seconds)
 
                 # For request-time reclaim sleeps, mark the lane cold and drain
                 # active requests BEFORE sending the sleep command.  Without this,
