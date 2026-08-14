@@ -1100,6 +1100,9 @@ class DBManager:
                 log_text = EXCLUDED.log_text,
                 recorded_at = EXCLUDED.recorded_at,
                 updated_at = CURRENT_TIMESTAMP
+            WHERE calibration_probe_logs.recorded_at IS NULL
+               OR EXCLUDED.recorded_at IS NULL
+               OR EXCLUDED.recorded_at > calibration_probe_logs.recorded_at
         """
         )
         self.session.execute(
