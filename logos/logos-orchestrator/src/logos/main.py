@@ -1604,7 +1604,7 @@ async def internal_model_context_windows(request: Request):
 
 
 @app.get("/internal/calibration_probe_logs", tags=["admin"])
-async def internal_calibration_probe_logs(model_name: str, request: Request):
+def internal_calibration_probe_logs(model_name: str, request: Request):
     """Every node's most recent calibration probe log for one model.
 
     Backs the webservice's model-error-report page (Complete Logs tab) —

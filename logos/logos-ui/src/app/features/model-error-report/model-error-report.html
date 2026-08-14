@@ -321,12 +321,12 @@
                 <select
                   id="log-selector-node"
                   class="log-selector__select"
-                  (change)="selectedLogNode.set($any($event.target).value)"
+                  (change)="onLogSelectorChange($any($event.target).value)"
                 >
-                  @for (log of availableLogs(); track log.node) {
+                  @for (log of availableLogs(); track log.providerId) {
                     <option
-                      [value]="log.node"
-                      [selected]="log.node === selectedLogNode()"
+                      [value]="log.providerId"
+                      [selected]="log.providerId === selectedLogProviderId()"
                     >
                       {{ log.node }}
                     </option>

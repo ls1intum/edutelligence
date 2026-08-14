@@ -89,6 +89,7 @@ interface CalibrationError {
 }
 
 interface NodeCalibrationResult {
+  readonly providerId: number;
   readonly node: string;
   readonly status: CalibrationStatus;
   readonly attempts: number;
@@ -96,6 +97,7 @@ interface NodeCalibrationResult {
 }
 
 interface ModelLog {
+  readonly providerId: number;
   readonly node: string;
   readonly modelName: string;
 }
@@ -255,10 +257,10 @@ export class ModelErrorReport implements OnInit {
 
   private readonly expandedErrors = signal<ReadonlySet<string>>(new Set());
 
-  readonly selectedLogNode = signal<string | null>(null);
+  readonly selectedLogProviderId = signal<number | null>(null);
 
-  private readonly rawLogsByNode =
-    signal<ReadonlyMap<string, string>>(new Map());
+  private readonly rawLogsByProviderId =
+    signal<ReadonlyMap<number, string>>(new Map());
 
   private readonly modelLogs =
     signal<readonly ModelLog[]>([]);
@@ -270,7 +272,7 @@ export class ModelErrorReport implements OnInit {
     signal<string | undefined>(undefined);
 
   readonly highlightedErrorNode =
-    signal<string | null>(null);
+    signal<number | null>(null);
 
   readonly processesLoading = signal(false);
 
@@ -288,7 +290,7 @@ export class ModelErrorReport implements OnInit {
   };
 
   readonly hasAnyLogText = computed(() => {
-    return [...this.rawLogsByNode().values()].some(text => text.length > 0);
+    return [...this.rawLogsByProviderId().values()].some(text => text.length > 0);
   });
 
   readonly visibleTabs =
@@ -318,20 +320,20 @@ export class ModelErrorReport implements OnInit {
       return null;
     }
 
-    const selectedNode = this.selectedLogNode();
+    const selectedProviderId = this.selectedLogProviderId();
 
     return (
-      logs.find(log => log.node === selectedNode) ??
+      logs.find(log => log.providerId === selectedProviderId) ??
       logs[0]
     );
   });
 
   readonly completeLog = computed(() => {
-    const node = this.selectedLog()?.node;
-    if (!node) {
+    const providerId = this.selectedLog()?.providerId;
+    if (providerId == null) {
       return '';
     }
-    return this.rawLogsByNode().get(node) ?? '';
+    return this.rawLogsByProviderId().get(providerId) ?? '';
   });
 
   readonly logLines = computed(() =>
@@ -340,10 +342,10 @@ export class ModelErrorReport implements OnInit {
 
   readonly highlightedLogLineIndex = computed(() => {
     const error = this.highlightedError();
-    const errorNode = this.highlightedErrorNode();
-    const selectedNode = this.selectedLogNode();
+    const errorProviderId = this.highlightedErrorNode();
+    const selectedProviderId = this.selectedLogProviderId();
 
-    if (!error || !errorNode || errorNode !== selectedNode) {
+    if (!error || errorProviderId == null || errorProviderId !== selectedProviderId) {
       return -1;
     }
 
@@ -376,7 +378,7 @@ export class ModelErrorReport implements OnInit {
 
       return (
         this.calibrationResults().find(
-          result => result.node === selectedLog.node
+          result => result.providerId === selectedLog.providerId
         ) ?? null
       );
     });
@@ -458,7 +460,7 @@ export class ModelErrorReport implements OnInit {
       const logs = this.availableLogs();
 
       if (logs.length > 0) {
-        this.selectedLogNode.set(logs[0].node);
+        this.selectedLogProviderId.set(logs[0].providerId);
       }
 
       this.expandFailedProcesses();
@@ -484,24 +486,25 @@ export class ModelErrorReport implements OnInit {
 
       this.modelLogs.set(
         logs.map(log => ({
+          providerId: log.provider_id,
           node: log.provider_name,
           modelName,
         }))
       );
 
-      this.rawLogsByNode.set(
-        new Map(logs.map(log => [log.provider_name, log.log_text ?? '']))
+      this.rawLogsByProviderId.set(
+        new Map(logs.map(log => [log.provider_id, log.log_text ?? '']))
       );
 
       this.calibrationResults.set(
         logs.map(log =>
-          this.parseCalibrationResult(log.provider_name, log.log_text ?? '', log.success)
+          this.parseCalibrationResult(log.provider_id, log.provider_name, log.log_text ?? '', log.success)
         )
       );
 
     } catch {
       this.modelLogs.set([]);
-      this.rawLogsByNode.set(new Map());
+      this.rawLogsByProviderId.set(new Map());
       this.calibrationResults.set([]);
     }
   }
@@ -547,6 +550,13 @@ export class ModelErrorReport implements OnInit {
     return this.expandedErrors().has(name);
   }
 
+  onLogSelectorChange(value: string): void {
+    const providerId = Number(value);
+    if (!Number.isNaN(providerId)) {
+      this.selectedLogProviderId.set(providerId);
+    }
+  }
+
   openNodeLog(
     node: string,
     errorMessage?: string
@@ -560,9 +570,9 @@ export class ModelErrorReport implements OnInit {
     }
 
     this.highlightedError.set(errorMessage);
-    this.highlightedErrorNode.set(node);
+    this.highlightedErrorNode.set(log.providerId);
 
-    this.selectedLogNode.set(node);
+    this.selectedLogProviderId.set(log.providerId);
     this.activeTab.set('complete_logs');
 
     setTimeout(() => {
@@ -687,6 +697,7 @@ export class ModelErrorReport implements OnInit {
   // ==========================================================================
 
   private parseCalibrationResult(
+    providerId: number,
     node: string,
     log: string,
     success: boolean
@@ -702,13 +713,14 @@ export class ModelErrorReport implements OnInit {
       // (log format changed, or log_text is empty/unexpected) — fall
       // back to the calibration's actual recorded outcome.
       if (success) {
-        return { node, attempts: 0, status: 'success', probes: [] };
+        return { providerId, node, attempts: 0, status: 'success', probes: [] };
       }
       const error = this.getCalibrationError(log);
       const errorMessage =
         error?.summary ??
         'Calibration failed — log format not recognized, see Complete Logs for details.';
       return {
+        providerId,
         node,
         attempts: 0,
         status: 'failure',
@@ -746,6 +758,7 @@ export class ModelErrorReport implements OnInit {
 
     if (successfulProbe) {
       return {
+        providerId,
         node,
         attempts: probes.length,
         status: 'success',
@@ -758,6 +771,7 @@ export class ModelErrorReport implements OnInit {
     );
 
     return {
+      providerId,
       node,
       attempts: probes.length,
       status: failedProbe

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -699,19 +700,30 @@ class LogosBridgeClient:
             lane_manager._event_log = lane_manager._event_log[-max_events:]  # noqa: SLF001
 
     @staticmethod
-    async def _read_calibration_log_text(model_name: str, log_dir: Path) -> str:
-        """Read the full raw log for ``model_name``, off the event loop.
-
-        Runs in a worker thread via ``asyncio.to_thread`` — the file can be
-        multi-hundred-KB (append-mode across every probe attempt in the
-        session), and a synchronous read here would stall the bridge's
-        event loop (heartbeats, ``stop_calibration_session`` RPC).
-        """
+    async def _read_calibration_log_text(
+        model_name: str, log_dir: Path, max_bytes: int = _MAX_CALIBRATION_LOG_TEXT_BYTES
+    ) -> str:
         log_path = log_dir / f"{model_name.replace('/', '__')}.log"
         try:
-            return await asyncio.to_thread(log_path.read_text, encoding="utf-8", errors="replace")
+            return await asyncio.to_thread(LogosBridgeClient._read_calibration_log_tail, log_path, max_bytes)
         except OSError:
             return ""
+
+    @staticmethod
+    def _read_calibration_log_tail(log_path: Path, max_bytes: int) -> str:
+        with log_path.open("rb") as f:
+            file_size = f.seek(0, os.SEEK_END)
+            if file_size <= max_bytes:
+                f.seek(0)
+                return f.read().decode("utf-8", errors="replace")
+
+            omitted = file_size - max_bytes
+            marker = f"... [truncated, {omitted} bytes omitted] ...\n"
+            budget = max(0, max_bytes - len(marker.encode("utf-8")))
+
+            f.seek(-budget, os.SEEK_END)
+            tail = f.read().decode("utf-8", errors="ignore")
+            return marker + tail
 
     @staticmethod
     def _truncate_calibration_log_text(text: str, max_bytes: int = _MAX_CALIBRATION_LOG_TEXT_BYTES) -> str:
