@@ -1052,6 +1052,27 @@ class DBManager:
         self.session.commit()
         return count
 
+    def fetch_model_profiles_for_reconciliation(self) -> List[Dict[str, Any]]:
+        """Every node's declaration for every model, for cross-node comparison.
+
+        A single node cannot detect that its calibration disagrees with another
+        node's -- the disagreement only exists across rows.  This returns the
+        fields needed to compare them; see
+        ``logos.capacity.profile_reconciliation``.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT provider_id, model_name, base_residency_mb, kv_budget_mb,
+                       loaded_vram_mb, tensor_parallel_size, residency_source,
+                       measurement_count
+                FROM model_profiles
+                ORDER BY model_name, provider_id
+                """
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
     def get_ollama_vram_stats(
         self,
         logos_key: str,
