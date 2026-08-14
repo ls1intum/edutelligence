@@ -1065,7 +1065,7 @@ class DBManager:
                 """
                 SELECT provider_id, model_name, base_residency_mb, kv_budget_mb,
                        loaded_vram_mb, tensor_parallel_size, residency_source,
-                       measurement_count
+                       measurement_count, updated_at
                 FROM model_profiles
                 ORDER BY model_name, provider_id
                 """

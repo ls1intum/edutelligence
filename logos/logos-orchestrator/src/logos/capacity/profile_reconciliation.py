@@ -39,9 +39,10 @@ Detected conditions:
 
 from __future__ import annotations
 
+import datetime
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,15 @@ KV_INCLUSION_TOLERANCE = 0.10
 # Below this many megabytes the figures are too small for ratios to be meaningful.
 MIN_MEANINGFUL_MB = 256.0
 
+# A profile row survives its node.  Nodes leave a federation -- withdrawn after a
+# bad week, decommissioned, moved to another orchestrator -- and their rows stay
+# behind, so a naive comparison keeps reporting a conflict between one live node
+# and several that stopped serving months ago.  In the fleet this module was
+# written for, only 23 of 89 profiles belong to a node that served traffic
+# today.  Rows not refreshed within this window are treated as historical and
+# excluded from comparison.
+DEFAULT_MAX_PROFILE_AGE_DAYS = 30.0
+
 
 @dataclass(frozen=True)
 class NodeProfile:
@@ -70,6 +80,7 @@ class NodeProfile:
     tensor_parallel_size: Optional[int] = None
     residency_source: Optional[str] = None
     measurement_count: int = 0
+    updated_at: Optional[datetime.datetime] = None
 
     @property
     def is_measured(self) -> bool:
@@ -289,10 +300,50 @@ def reconcile_model(profiles: Iterable[NodeProfile]) -> List[Inconsistency]:
     return findings
 
 
-def reconcile(profiles: Iterable[NodeProfile]) -> List[Inconsistency]:
-    """Group declarations by model and reconcile each group."""
+def is_current(
+    profile: NodeProfile,
+    *,
+    now: Optional[datetime.datetime] = None,
+    max_age_days: float = DEFAULT_MAX_PROFILE_AGE_DAYS,
+    active_provider_ids: Optional[Set[int]] = None,
+) -> bool:
+    """Whether this row still describes a node the federation is using.
+
+    Two independent tests, because either alone leaves a gap.  A caller that
+    knows which providers are connected passes ``active_provider_ids`` and gets
+    an exact answer; otherwise the row's own freshness stands in, since a worker
+    that is still attached refreshes its profiles over the status channel.
+    """
+    if active_provider_ids is not None and profile.provider_id not in active_provider_ids:
+        return False
+    if profile.updated_at is None:
+        # No timestamp: fall back to trusting it, rather than silently
+        # discarding rows on databases that predate the column.
+        return True
+    reference = now or datetime.datetime.now(datetime.timezone.utc)
+    updated = profile.updated_at
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=datetime.timezone.utc)
+    return (reference - updated).total_seconds() <= max_age_days * 86_400.0
+
+
+def reconcile(
+    profiles: Iterable[NodeProfile],
+    *,
+    now: Optional[datetime.datetime] = None,
+    max_age_days: float = DEFAULT_MAX_PROFILE_AGE_DAYS,
+    active_provider_ids: Optional[Set[int]] = None,
+) -> List[Inconsistency]:
+    """Group current declarations by model and reconcile each group.
+
+    Historical rows are filtered out first: a disagreement between a live node
+    and one that left the federation months ago is not an operational signal,
+    and reporting it every ten minutes forever is worse than not reporting it.
+    """
     by_model: Dict[str, List[NodeProfile]] = {}
     for profile in profiles:
+        if not is_current(profile, now=now, max_age_days=max_age_days, active_provider_ids=active_provider_ids):
+            continue
         by_model.setdefault(profile.model_name, []).append(profile)
 
     findings: List[Inconsistency] = []
@@ -331,6 +382,7 @@ def rows_to_profiles(rows: Iterable[Any]) -> List[NodeProfile]:
                     tensor_parallel_size=_as_int(data.get("tensor_parallel_size")),
                     residency_source=data.get("residency_source"),
                     measurement_count=_as_int(data.get("measurement_count")) or 0,
+                    updated_at=data.get("updated_at"),
                 )
             )
         except (KeyError, TypeError, ValueError):

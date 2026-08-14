@@ -292,3 +292,105 @@ def test_a_measured_minority_does_not_trigger_the_majority_finding():
         ]
     )
     assert [f.kind for f in findings if f.kind == "uncalibrated_majority"] == []
+
+
+# ----------------------------------------------------------------------
+# Staleness: a profile row outlives the node that wrote it
+# ----------------------------------------------------------------------
+
+import datetime  # noqa: E402
+
+from logos.capacity.profile_reconciliation import is_current  # noqa: E402
+
+NOW = datetime.datetime(2026, 8, 14, tzinfo=datetime.timezone.utc)
+
+
+def aged(provider_id, model, base, kv, days_old, **kw):
+    return NodeProfile(
+        provider_id=provider_id,
+        model_name=model,
+        base_residency_mb=base,
+        kv_budget_mb=kv,
+        residency_source="calibrated",
+        measurement_count=1,
+        updated_at=NOW - datetime.timedelta(days=days_old),
+        **kw,
+    )
+
+
+def test_a_conflict_with_a_departed_node_is_not_reported():
+    """The fleet case: one live node, two that stopped serving ten weeks ago.
+
+    Reporting that disagreement every ten minutes forever is worse than not
+    reporting it -- the nodes are gone and no action can resolve it.
+    """
+    findings = reconcile(
+        [
+            aged(22, "google/gemma-4-E2B-it", 95_071.0, 77_824.0, days_old=0),
+            aged(15, "google/gemma-4-E2B-it", 17_539.0, 4_096.0, days_old=71),
+            aged(16, "google/gemma-4-E2B-it", 17_539.0, 4_096.0, days_old=70),
+        ],
+        now=NOW,
+    )
+    assert findings == []
+
+
+def test_the_same_conflict_is_reported_while_both_nodes_are_live():
+    """Identical figures, both rows fresh: this is the signal we want."""
+    findings = reconcile(
+        [
+            aged(22, "google/gemma-4-E2B-it", 95_071.0, 77_824.0, days_old=0),
+            aged(15, "google/gemma-4-E2B-it", 17_539.0, 4_096.0, days_old=2),
+        ],
+        now=NOW,
+    )
+    assert [f.kind for f in findings] == ["kv_inclusion_skew"]
+
+
+def test_an_explicit_active_provider_set_overrides_freshness():
+    """A caller that knows who is connected gets an exact answer."""
+    rows = [
+        aged(22, "m", 95_071.0, 77_824.0, days_old=0),
+        aged(15, "m", 17_539.0, 4_096.0, days_old=1),
+    ]
+    assert reconcile(rows, now=NOW, active_provider_ids={22}) == []
+    assert [f.kind for f in reconcile(rows, now=NOW, active_provider_ids={15, 22})] == ["kv_inclusion_skew"]
+
+
+def test_rows_without_a_timestamp_are_kept():
+    """Databases predating the column must not go silently unreconciled."""
+    p = NodeProfile(provider_id=1, model_name="m", base_residency_mb=1000.0, updated_at=None)
+    assert is_current(p, now=NOW) is True
+
+
+def test_the_age_window_is_configurable():
+    p = aged(1, "m", 1000.0, 100.0, days_old=45)
+    assert is_current(p, now=NOW) is False
+    assert is_current(p, now=NOW, max_age_days=90) is True
+
+
+def test_naive_timestamps_are_treated_as_utc():
+    p = NodeProfile(
+        provider_id=1,
+        model_name="m",
+        base_residency_mb=1000.0,
+        updated_at=datetime.datetime(2026, 8, 13),  # no tzinfo
+    )
+    assert is_current(p, now=NOW) is True
+
+
+def test_rows_to_profiles_carries_the_timestamp():
+    rows = [
+        {
+            "provider_id": 15,
+            "model_name": "x/y",
+            "base_residency_mb": 1.0,
+            "kv_budget_mb": None,
+            "loaded_vram_mb": None,
+            "tensor_parallel_size": 1,
+            "residency_source": "calibrated",
+            "measurement_count": 1,
+            "updated_at": NOW,
+        }
+    ]
+    assert rows_to_profiles(rows)[0].updated_at == NOW
