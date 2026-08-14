@@ -238,7 +238,12 @@ class CapacityPlanner:
         cycle_seconds: float = 10.0,
         enabled: bool = True,
         on_state_change: Optional[Any] = None,
+        placement_recorder: Optional[Any] = None,
     ) -> None:
+        # Optional sink for placement telemetry.  Left as None the planner
+        # behaves exactly as before, which keeps the recorder out of every
+        # test that constructs a planner.
+        self._placement_recorder = placement_recorder
         self._facade = logosnode_facade
         self._registry = logosnode_registry
         self._demand = demand_tracker
@@ -6404,6 +6409,78 @@ class CapacityPlanner:
     async def _execute_action_with_confirmation(
         self, action: CapacityPlanAction, timeout_seconds: float = 60.0
     ) -> bool:
+        """Execute a placement and record what it cost and whether it worked.
+
+        A placement is the only direct test of a worker's capacity declaration:
+        the planner commits memory on the strength of a figure the node
+        reported, and the placement either honours that figure or does not.
+        Wrapping the execution here rather than instrumenting each return path
+        means every outcome is recorded, including the ones that raise.
+
+        Telemetry never affects the result: a failure to record is logged and
+        swallowed.
+        """
+        started_at = datetime.now(timezone.utc)
+        started = time.monotonic()
+        confirmed = False
+        error_class: Optional[str] = None
+        try:
+            confirmed = await self._execute_action_uninstrumented(action, timeout_seconds)
+            return confirmed
+        except Exception as exc:
+            error_class = type(exc).__name__
+            raise
+        finally:
+            self._record_placement_event(
+                action,
+                confirmed=confirmed,
+                error_class=error_class,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                started_at=started_at,
+            )
+
+    def _record_placement_event(
+        self,
+        action: CapacityPlanAction,
+        *,
+        confirmed: bool,
+        error_class: Optional[str],
+        duration_ms: int,
+        started_at,
+    ) -> None:
+        """Persist one placement attempt.  Best effort; never raises."""
+        recorder = getattr(self, "_placement_recorder", None)
+        if recorder is None:
+            return
+        try:
+            capacity = self._facade.get_capacity(action.provider_id)
+            declared_free = float(getattr(capacity, "available_vram_mb", 0.0) or 0.0)
+        except Exception:
+            declared_free = None
+        try:
+            profile = self._facade.get_model_profiles(action.provider_id).get(action.model_name)
+            footprint = self._estimate_model_loaded_vram(profile) if profile is not None else None
+            tp = int(profile.tensor_parallel_size) if profile is not None and profile.tensor_parallel_size else None
+        except Exception:
+            footprint, tp = None, None
+        try:
+            recorder(
+                provider_id=action.provider_id,
+                model_name=action.model_name,
+                action=action.action,
+                declared_free_vram_mb=declared_free,
+                declared_footprint_mb=footprint,
+                gpu_devices=(action.params or {}).get("gpu_devices"),
+                tensor_parallel_size=tp,
+                outcome="confirmed" if confirmed else ("error" if error_class else "unconfirmed"),
+                error_class=error_class,
+                duration_ms=duration_ms,
+                started_at=started_at,
+            )
+        except Exception:
+            logger.debug("Failed to record placement event for lane %s", action.lane_id, exc_info=True)
+
+    async def _execute_action_uninstrumented(self, action: CapacityPlanAction, timeout_seconds: float = 60.0) -> bool:
         """Execute action and wait for worker status to confirm expected state.
 
         Returns True if confirmed, False if timeout.

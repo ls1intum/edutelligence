@@ -811,6 +811,20 @@ def _capture_logosnode_provider_snapshot(
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
 
 
+def _record_placement_event(**fields) -> None:
+    """Sink for the capacity planner's placement telemetry.
+
+    Opens its own short-lived session so a slow write cannot hold a connection
+    the request path needs, and swallows everything: telemetry must never be
+    able to fail a placement.
+    """
+    try:
+        with DBManager() as db:
+            db.record_placement_event(**fields)
+    except Exception:
+        logger.debug("Could not record placement event", exc_info=True)
+
+
 def _merge_local_provider_vram_payload(
     logos_key: str,
     payload: Dict[str, Any],
@@ -1852,6 +1866,7 @@ async def start_pipeline():
         demand_tracker=_demand_tracker,
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
+        placement_recorder=_record_placement_event,
     )
     _context_resolver = ContextResolver(
         logosnode_registry=_logosnode_registry,
