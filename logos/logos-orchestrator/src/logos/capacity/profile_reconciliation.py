@@ -104,21 +104,31 @@ def _tp(profile: NodeProfile) -> int:
     return tp if tp and tp > 0 else 1
 
 
-def _normalised_base_mb(profile: NodeProfile) -> float:
-    """Base residency per accelerator.
+def _total_base_mb(profile: NodeProfile) -> float:
+    """Base residency, in total-across-ranks units.
 
-    Nodes report the footprint for the sharding they run, so a model served with
-    tensor parallelism of two on one node and one on another is described by two
-    figures that differ by construction rather than by disagreement.  Comparing
-    per accelerator removes that difference; what remains is a real conflict.
+    The worker derives this from the summed per-process VRAM of every rank of
+    the lane, so it is already a total and needs no conversion.  Comparing
+    totals is also the right thing across differently sharded nodes: a model
+    served with tensor parallelism of two occupies roughly the same total
+    memory as the same model unsharded, plus communication buffers and the
+    duplicated embedding layers.  That overhead is real and modest, and the
+    disagreement ratio tolerates it.
     """
     base = profile.base_residency_mb
-    return 0.0 if base is None else float(base) / _tp(profile)
+    return 0.0 if base is None else float(base)
 
 
-def _normalised_kv_mb(profile: NodeProfile) -> float:
+def _total_kv_mb(profile: NodeProfile) -> float:
+    """KV budget, converted from per-rank to total-across-ranks.
+
+    Unlike the residency figure, this one is per rank: it comes from the
+    engine's ``kv_cache_memory_bytes`` setting, which every rank allocates in
+    full.  Mixing the two units is what makes the KV-inclusion identity fail on
+    a sharded lane, so the conversion happens here and nowhere else.
+    """
     kv = profile.kv_budget_mb
-    return 0.0 if kv is None else float(kv) / _tp(profile)
+    return 0.0 if kv is None else float(kv) * _tp(profile)
 
 
 def _usable(profile: NodeProfile) -> bool:
@@ -129,18 +139,18 @@ def _usable(profile: NodeProfile) -> bool:
 def _kv_inclusion_match(high: NodeProfile, low: NodeProfile) -> Optional[float]:
     """Return the relative error if ``high`` looks like ``low`` plus its KV budget.
 
-    Both sides are normalised per accelerator first, so the identity is tested
-    on comparable quantities even when the two nodes shard the model differently.
+    Both sides are expressed as totals across ranks first, so the identity holds
+    even when the two nodes shard the model differently.
 
     ``None`` when the identity does not hold, when the KV budget is unknown, or
     when it is too small to explain the gap.
     """
-    kv = _normalised_kv_mb(high)
+    kv = _total_kv_mb(high)
     if kv <= 0:
         return None
 
-    high_base = _normalised_base_mb(high)
-    low_base = _normalised_base_mb(low)
+    high_base = _total_base_mb(high)
+    low_base = _total_base_mb(low)
     if high_base <= 0 or low_base <= 0:
         return None
 
@@ -188,7 +198,7 @@ def reconcile_model(profiles: Iterable[NodeProfile]) -> List[Inconsistency]:
     if len(measured) < 2:
         return findings
 
-    ordered = sorted(measured, key=lambda p: _normalised_base_mb(p))
+    ordered = sorted(measured, key=lambda p: _total_base_mb(p))
 
     # Examine every ordered pair whose residency ratio is too large to explain,
     # not only the extremes.  With three nodes at 10, 20 and 40 GB the
@@ -196,11 +206,11 @@ def reconcile_model(profiles: Iterable[NodeProfile]) -> List[Inconsistency]:
     # min against max would miss it and report the weaker finding instead.
     best_match = None
     for i, low in enumerate(ordered):
-        low_mb = _normalised_base_mb(low)
+        low_mb = _total_base_mb(low)
         if low_mb <= 0:
             continue
         for high in ordered[i + 1 :]:
-            high_mb = _normalised_base_mb(high)
+            high_mb = _total_base_mb(high)
             if high_mb / low_mb <= DISAGREEMENT_RATIO:
                 continue
             relative_error = _kv_inclusion_match(high, low)
@@ -211,8 +221,8 @@ def reconcile_model(profiles: Iterable[NodeProfile]) -> List[Inconsistency]:
 
     if best_match is not None:
         relative_error, low, high, ratio = best_match
-        low_mb, high_mb = _normalised_base_mb(low), _normalised_base_mb(high)
-        kv_mb = _normalised_kv_mb(high)
+        low_mb, high_mb = _total_base_mb(low), _total_base_mb(high)
+        kv_mb = _total_kv_mb(high)
         findings.append(
             Inconsistency(
                 model_name=model_name,
@@ -221,8 +231,9 @@ def reconcile_model(profiles: Iterable[NodeProfile]) -> List[Inconsistency]:
                 detail=(
                     f"provider {high.provider_id} reports {high_mb:.0f} MB base residency for "
                     f"{model_name} while provider {low.provider_id} reports {low_mb:.0f} MB "
-                    f"(both per-accelerator); the difference matches provider "
-                    f"{high.provider_id}'s KV budget ({kv_mb:.0f} MB), so one build includes "
+                    f"(both totals across ranks); the difference matches provider "
+                    f"{high.provider_id}'s KV budget ({kv_mb:.0f} MB across {_tp(high)} rank(s)), "
+                    "so one build includes "
                     "the KV cache in the residency figure and the other does not"
                 ),
                 provider_ids=[low.provider_id, high.provider_id],
@@ -237,15 +248,15 @@ def reconcile_model(profiles: Iterable[NodeProfile]) -> List[Inconsistency]:
                     "implied_after_removing_kv_mb": high_mb - kv_mb,
                     "relative_error": relative_error,
                     "ratio": ratio,
-                    "normalised_per_accelerator": True,
+                    "compared_in_total_units": True,
                 },
             )
         )
         return findings
 
     lowest, highest = ordered[0], ordered[-1]
-    low_mb = _normalised_base_mb(lowest)
-    high_mb = _normalised_base_mb(highest)
+    low_mb = _total_base_mb(lowest)
+    high_mb = _total_base_mb(highest)
     if low_mb <= 0:
         return findings
     ratio = high_mb / low_mb

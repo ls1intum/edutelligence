@@ -230,33 +230,40 @@ def test_kv_signature_is_found_when_it_sits_in_a_middle_pair():
     assert set(findings[0].provider_ids) == {15, 16}
 
 
-def test_footprints_are_compared_per_accelerator():
-    """Different tensor-parallel degrees are not a disagreement.
+def test_sharding_overhead_is_not_a_disagreement():
+    """Production figures: Qwen3-Embedding-8B at 21479 MB (tp=1) and 28292 (tp=2).
 
-    A model sharded over two accelerators is reported at twice the per-device
-    footprint of the same model on one.  That is arithmetic, not a conflict, and
-    must not be flagged.
+    Residency is a total across ranks, so a sharded lane costs roughly the same
+    total plus communication buffers and duplicated embedding layers -- here 32%
+    more.  That overhead is real and must not be reported as a conflict.  An
+    earlier revision of this module divided residency by the rank count, which
+    turned this pair into a 1.52x "disagreement" and would have flagged it.
     """
     findings = reconcile_model(
         [
-            profile(15, "tp/model", 20_000.0, kv=4_000.0, tensor_parallel_size=1),
-            profile(22, "tp/model", 40_000.0, kv=8_000.0, tensor_parallel_size=2),
+            profile(15, "Qwen/Qwen3-Embedding-8B", 21_479.0, kv=6_144.0, tensor_parallel_size=1),
+            profile(22, "Qwen/Qwen3-Embedding-8B", 28_292.0, kv=6_144.0, tensor_parallel_size=2),
         ]
     )
     assert findings == []
 
 
 def test_kv_signature_survives_a_tensor_parallel_difference():
-    """Per accelerator: (92000 - 60000)/2 = 16000, matching the 16000 reported
-    by a node running the same model unsharded."""
+    """The KV budget is per rank while residency is a total, so the identity
+    only closes once the budget is multiplied by the rank count.
+
+    Here: 76000 - (30000 x 2) = 16000, matching the 16000 total reported by a
+    node running the same model unsharded.  Dividing instead of multiplying --
+    as an earlier revision did -- leaves 76000 - 15000 = 61000 and misses it.
+    """
     findings = reconcile_model(
         [
             profile(15, "tpkv/model", 16_000.0, kv=2_000.0, tensor_parallel_size=1),
-            profile(22, "tpkv/model", 92_000.0, kv=60_000.0, tensor_parallel_size=2),
+            profile(22, "tpkv/model", 76_000.0, kv=30_000.0, tensor_parallel_size=2),
         ]
     )
     assert [f.kind for f in findings] == ["kv_inclusion_skew"]
-    assert findings[0].evidence["normalised_per_accelerator"] is True
+    assert findings[0].evidence["compared_in_total_units"] is True
 
 
 def test_uncalibrated_majority_fires_on_a_majority_not_only_on_none():
