@@ -243,7 +243,7 @@ export class ModelErrorReport implements OnInit {
   readonly loading = signal(true);
   readonly loadError = signal(false);
 
-  readonly activeTab = signal<ModelErrorTab>('error_report');
+  readonly activeTab = signal<ModelErrorTab>('complete_logs');
 
   readonly expandedProcess = signal<number[]>([]);
 
@@ -273,7 +273,6 @@ export class ModelErrorReport implements OnInit {
   // ==========================================================================
 
   readonly tabs: readonly ModelErrorTab[] = [
-    'error_report',
     'complete_logs',
   ];
 
@@ -287,11 +286,7 @@ export class ModelErrorReport implements OnInit {
   });
 
   readonly visibleTabs =
-    computed<readonly ModelErrorTab[]>(() =>
-      this.hasAnyLogText()
-        ? this.tabs
-        : ['error_report']
-    );
+    computed<readonly ModelErrorTab[]>(() => this.tabs);
 
 
   // ==========================================================================
