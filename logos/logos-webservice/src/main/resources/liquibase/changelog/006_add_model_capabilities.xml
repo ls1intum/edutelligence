@@ -9,19 +9,19 @@
         <createTable tableName="model_capabilities">
             <column name="id" type="INT" autoIncrement="true">
                 <constraints primaryKey="true" nullable="false"/>
-            </column> 
+            </column>
             <column name="model_id" type="INT">
                 <constraints nullable="false" unique="true"/>
             </column>
             <column name="supports_function_calling" type="BOOLEAN">
                 <constraints nullable="false"/>
-            </column> 
+            </column>
             <column name="supports_vision" type="BOOLEAN">
                 <constraints nullable="false"/>
-            </column> 
+            </column>
             <column name="supports_reasoning" type="BOOLEAN">
                 <constraints nullable="false"/>
-            </column> 
+            </column>
         </createTable>
     </changeSet>
 
