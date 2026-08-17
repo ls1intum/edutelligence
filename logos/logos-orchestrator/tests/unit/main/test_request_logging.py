@@ -51,7 +51,7 @@ def _make_dummy_db(cost_micro_cents=None):
         def update_log_entry_metrics(self, **kwargs):
             self.metric_calls.append(kwargs)
 
-        def get_usage_cost_micro_cents(self, model_id, provider_id, usage):  # noqa: ARG002
+        def get_usage_cost_micro_cents(self, model_id, provider_id, usage, response_at):  # noqa: ARG002
             return cost_micro_cents
 
     return DummyDB

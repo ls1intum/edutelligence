@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from unittest.mock import MagicMock
 
 from logos import DBManager
@@ -94,11 +95,13 @@ def test_get_team_budget_usage_returns_int():
 
 def test_get_usage_cost_micro_cents_returns_cloud_billing_amount():
     db = _db_fetchone({"cost_micro_cents": 4321})
+    response_at = datetime.datetime(2026, 8, 17, 20, 21, 52, tzinfo=datetime.timezone.utc)
 
     result = db.get_usage_cost_micro_cents(
         model_id=7,
         provider_id=9,
         usage={"prompt_tokens": 12, "completion_tokens": 3, "ignored": -1},
+        response_at=response_at,
     )
 
     assert result == 4321
@@ -106,12 +109,14 @@ def test_get_usage_cost_micro_cents_returns_cloud_billing_amount():
     assert params["model_id"] == 7
     assert params["provider_id"] == 9
     assert params["usage"] == '{"prompt_tokens": 12, "completion_tokens": 3}'
+    assert params["response_at"] == response_at
 
 
 def test_get_usage_cost_micro_cents_returns_none_for_local_provider():
     db = _db_fetchone({"cost_micro_cents": None})
 
-    assert db.get_usage_cost_micro_cents(7, 9, {"prompt_tokens": 12}) is None
+    response_at = datetime.datetime(2026, 8, 17, tzinfo=datetime.timezone.utc)
+    assert db.get_usage_cost_micro_cents(7, 9, {"prompt_tokens": 12}, response_at) is None
 
 
 def _db_execute_many(return_values):

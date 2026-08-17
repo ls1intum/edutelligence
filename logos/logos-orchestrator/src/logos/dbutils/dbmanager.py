@@ -2203,14 +2203,15 @@ class DBManager:
         model_id: int,
         provider_id: int,
         usage: Dict[str, int],
+        response_at: datetime.datetime,
     ) -> Optional[int]:
         """Return the configured cloud cost for one response in micro-cents.
 
         The lookup mirrors the ``budget_usage`` view: model/provider-specific
-        prices take precedence over generic prices and only prices valid at the
-        time of the response are considered. ``None`` identifies a local
-        provider; cloud providers without a matching price retain the existing
-        billing semantics and cost zero.
+        prices take precedence over generic prices and only prices valid at
+        ``response_at`` are considered. ``None`` identifies a local provider;
+        cloud providers without a matching price retain the existing billing
+        semantics and cost zero.
         """
         billable_usage = {
             token_type: token_count
@@ -2255,7 +2256,7 @@ class DBManager:
                     WHERE tp.type_id = tt.id
                       AND (tp.model_id = :model_id OR tp.model_id IS NULL)
                       AND (tp.provider_id = :provider_id OR tp.provider_id IS NULL)
-                      AND tp.valid_from <= NOW()
+                      AND tp.valid_from <= :response_at
                     ORDER BY (tp.model_id = :model_id) DESC NULLS LAST,
                              (tp.provider_id = :provider_id) DESC NULLS LAST,
                              tp.valid_from DESC
@@ -2267,6 +2268,7 @@ class DBManager:
                 "usage": json.dumps(billable_usage),
                 "model_id": int(model_id),
                 "provider_id": int(provider_id),
+                "response_at": response_at,
             },
         ).fetchone()
         if row is None or row.cost_micro_cents is None:

@@ -7,6 +7,7 @@ full response including usage). Both must yield usable usage + response
 payloads for request logging and rate limiting.
 """
 
+import datetime
 import json
 
 import logos as main
@@ -170,9 +171,10 @@ def test_responses_terminal_event_returns_eur_cost(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def get_usage_cost_micro_cents(self, model_id, provider_id, usage):
+        def get_usage_cost_micro_cents(self, model_id, provider_id, usage, response_at):
             assert (model_id, provider_id) == (27, 12)
             assert usage == {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10}
+            assert response_at.tzinfo == datetime.timezone.utc
             return 250
 
     monkeypatch.setattr(main, "DBManager", DummyDB)

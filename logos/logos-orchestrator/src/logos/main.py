@@ -1188,6 +1188,7 @@ def _response_with_cost(
     response_payload: Any,
     provider_id: Optional[int],
     model_id: Optional[int],
+    response_at: datetime.datetime,
 ) -> tuple[Any, bool]:
     """Add the configured EUR cost to a cloud response's usage object.
 
@@ -1207,7 +1208,12 @@ def _response_with_cost(
 
     try:
         with DBManager() as db:
-            cost_micro_cents = db.get_usage_cost_micro_cents(model_id, provider_id, usage_tokens)
+            cost_micro_cents = db.get_usage_cost_micro_cents(
+                model_id,
+                provider_id,
+                usage_tokens,
+                response_at,
+            )
     except Exception:
         logger.exception(
             "Failed to calculate response cost (model_id=%s, provider_id=%s)",
@@ -1272,7 +1278,12 @@ class _StreamingCostEnricher:
                 continue
 
             target = blob.get("response") if isinstance(blob.get("response"), dict) else blob
-            enriched_target, changed = _response_with_cost(target, self.provider_id, self.model_id)
+            enriched_target, changed = _response_with_cost(
+                target,
+                self.provider_id,
+                self.model_id,
+                datetime.datetime.now(datetime.timezone.utc),
+            )
             if not changed:
                 continue
             if target is blob:
@@ -2823,6 +2834,7 @@ async def _sync_response(
                 )
         else:
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+        response_at = datetime.datetime.now(datetime.timezone.utc)
 
         # Update rate limits from response headers
         if exec_result.headers:
@@ -2856,7 +2868,7 @@ async def _sync_response(
             )
 
         if exec_result.success and context.provider_type == "cloud":
-            response_payload, _ = _response_with_cost(response_payload, provider_id, model_id)
+            response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
 
         usage_tokens = _usage_tokens_from_payload(response_payload)
 
@@ -3102,12 +3114,13 @@ async def _proxy_sync_response(
     from fastapi.responses import JSONResponse
 
     exec_result = await _pipeline.executor.execute_sync(forward_url, proxy_headers, payload)
+    response_at = datetime.datetime.now(datetime.timezone.utc)
 
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
         response_payload = {"error": exec_result.error}
     if exec_result.success:
-        response_payload, _ = _response_with_cost(response_payload, provider_id, model_id)
+        response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
 
     if log_id:
         usage_tokens = _usage_tokens_from_payload(response_payload)
