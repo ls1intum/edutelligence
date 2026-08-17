@@ -394,3 +394,59 @@ def test_rows_to_profiles_carries_the_timestamp():
         }
     ]
     assert rows_to_profiles(rows)[0].updated_at == NOW
+
+
+def test_a_model_a_live_node_no_longer_serves_is_not_reported():
+    """The gap freshness cannot close.
+
+    An attached worker refreshes every profile row it has persisted, including
+    rows for models since dropped from its configuration. Those rows therefore
+    stay permanently fresh and pass both the age test and the active-provider
+    test, so a model one node stopped serving would disagree with a live node
+    forever. Only the worker's current model list settles it.
+    """
+    rows = [
+        aged(22, "google/gemma-4-E2B-it", 95_071.0, 77_824.0, days_old=0),
+        aged(15, "google/gemma-4-E2B-it", 17_539.0, 4_096.0, days_old=0),
+    ]
+
+    # Both nodes connected and both rows fresh: without the model list this is
+    # a finding, and it never expires.
+    assert [f.kind for f in reconcile(rows, now=NOW, active_provider_ids={15, 22})] == ["kv_inclusion_skew"]
+
+    # Node 15 has since dropped the model from its configuration.
+    assert (
+        reconcile(
+            rows,
+            now=NOW,
+            active_provider_ids={15, 22},
+            hosted_models={22: {"google/gemma-4-E2B-it"}, 15: {"some/other-model"}},
+        )
+        == []
+    )
+
+
+def test_the_conflict_survives_while_both_nodes_still_serve_the_model():
+    """The filter must not swallow the signal it was added to sharpen."""
+    rows = [
+        aged(22, "google/gemma-4-E2B-it", 95_071.0, 77_824.0, days_old=0),
+        aged(15, "google/gemma-4-E2B-it", 17_539.0, 4_096.0, days_old=0),
+    ]
+    findings = reconcile(
+        rows,
+        now=NOW,
+        hosted_models={22: {"google/gemma-4-E2B-it"}, 15: {"google/gemma-4-E2B-it"}},
+    )
+    assert [f.kind for f in findings] == ["kv_inclusion_skew"]
+
+
+def test_a_provider_missing_from_the_model_map_is_unknown_not_empty():
+    """Absence of information must not be read as "serves nothing".
+
+    A provider the caller could not query would otherwise have every one of its
+    rows discarded, silently disabling reconciliation for it.
+    """
+    p = aged(15, "m", 17_539.0, 4_096.0, days_old=0)
+    assert is_current(p, now=NOW, hosted_models={22: {"other"}}) is True
+    assert is_current(p, now=NOW, hosted_models={15: {"other"}}) is False
+    assert is_current(p, now=NOW, hosted_models={15: {"m"}}) is True

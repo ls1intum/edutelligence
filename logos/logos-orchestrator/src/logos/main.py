@@ -818,6 +818,29 @@ _PROFILE_RECONCILE_INTERVAL_S = 600.0
 _profile_reconcile_state: dict = {"last_run": 0.0, "reported": set()}
 
 
+def _currently_hosted_models() -> Optional[Dict[int, Set[str]]]:
+    """Which models each connected worker is configured to serve right now.
+
+    Reconciliation needs this because profile rows outlive the configuration
+    that produced them.  A worker refreshes every profile it has persisted,
+    including ones for models dropped from its config, so those rows never age
+    out and would disagree with a live node forever.  The configured-model list
+    comes from the worker's own status, so a model it stopped serving disappears
+    from it immediately.
+
+    Returns None when the facade is not up, which tells ``reconcile`` to skip
+    the test rather than treat an empty mapping as "no node serves anything".
+    """
+    facade = globals().get("_logosnode_facade")
+    if facade is None:
+        return None
+    try:
+        return {pid: set(facade.get_configured_models(pid)) for pid in facade.provider_ids()}
+    except Exception:
+        logger.debug("Could not read configured models for reconciliation", exc_info=True)
+        return None
+
+
 def _reconcile_model_profiles_across_nodes(db) -> None:
     """Compare what different nodes declare about the same model.
 
@@ -842,7 +865,10 @@ def _reconcile_model_profiles_across_nodes(db) -> None:
         return
 
     try:
-        findings = profile_reconciliation.reconcile(profile_reconciliation.rows_to_profiles(rows))
+        findings = profile_reconciliation.reconcile(
+            profile_reconciliation.rows_to_profiles(rows),
+            hosted_models=_currently_hosted_models(),
+        )
     except Exception:
         logger.debug("Model profile reconciliation failed", exc_info=True)
         return

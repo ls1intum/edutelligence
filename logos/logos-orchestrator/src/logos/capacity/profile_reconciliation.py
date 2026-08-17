@@ -306,16 +306,32 @@ def is_current(
     now: Optional[datetime.datetime] = None,
     max_age_days: float = DEFAULT_MAX_PROFILE_AGE_DAYS,
     active_provider_ids: Optional[Set[int]] = None,
+    hosted_models: Optional[Dict[int, Set[str]]] = None,
 ) -> bool:
-    """Whether this row still describes a node the federation is using.
+    """Whether this row still describes something the federation is serving.
 
-    Two independent tests, because either alone leaves a gap.  A caller that
-    knows which providers are connected passes ``active_provider_ids`` and gets
-    an exact answer; otherwise the row's own freshness stands in, since a worker
-    that is still attached refreshes its profiles over the status channel.
+    Three tests, because each closes a gap the others leave open.
+
+    ``active_provider_ids`` removes rows belonging to a node that left the
+    federation.  ``hosted_models`` removes rows for a model a *still-connected*
+    node no longer serves: an attached worker refreshes every profile it has
+    persisted, including ones for models since dropped from its configuration,
+    so those rows stay permanently fresh and would otherwise disagree with a
+    live node forever.  Freshness alone therefore cannot catch them.
+
+    The age test remains as the fallback for callers that know neither -- a
+    detached worker stops refreshing, so its rows do eventually age out.  Each
+    test is skipped when its argument is absent rather than guessed at, since a
+    caller without the information should not have rows discarded on a guess.
     """
     if active_provider_ids is not None and profile.provider_id not in active_provider_ids:
         return False
+    if hosted_models is not None:
+        serving = hosted_models.get(profile.provider_id)
+        # A provider absent from the mapping is unknown, not empty: only an
+        # explicit model list licenses dropping the row.
+        if serving is not None and profile.model_name not in serving:
+            return False
     if profile.updated_at is None:
         # No timestamp: fall back to trusting it, rather than silently
         # discarding rows on databases that predate the column.
@@ -333,16 +349,24 @@ def reconcile(
     now: Optional[datetime.datetime] = None,
     max_age_days: float = DEFAULT_MAX_PROFILE_AGE_DAYS,
     active_provider_ids: Optional[Set[int]] = None,
+    hosted_models: Optional[Dict[int, Set[str]]] = None,
 ) -> List[Inconsistency]:
     """Group current declarations by model and reconcile each group.
 
-    Historical rows are filtered out first: a disagreement between a live node
-    and one that left the federation months ago is not an operational signal,
-    and reporting it every ten minutes forever is worse than not reporting it.
+    Obsolete rows are filtered out first: a disagreement between a live node and
+    one that left the federation months ago -- or between a live node and a model
+    another node no longer serves -- is not an operational signal, and reporting
+    it every ten minutes forever is worse than not reporting it.
     """
     by_model: Dict[str, List[NodeProfile]] = {}
     for profile in profiles:
-        if not is_current(profile, now=now, max_age_days=max_age_days, active_provider_ids=active_provider_ids):
+        if not is_current(
+            profile,
+            now=now,
+            max_age_days=max_age_days,
+            active_provider_ids=active_provider_ids,
+            hosted_models=hosted_models,
+        ):
             continue
         by_model.setdefault(profile.model_name, []).append(profile)
 
