@@ -1052,6 +1052,72 @@ class DBManager:
         self.session.commit()
         return count
 
+    def record_placement_event(
+        self,
+        *,
+        provider_id: int,
+        model_name: str,
+        action: str,
+        outcome: str,
+        started_at: datetime.datetime,
+        declared_free_vram_mb: Optional[float] = None,
+        declared_footprint_mb: Optional[float] = None,
+        gpu_devices: Optional[str] = None,
+        tensor_parallel_size: Optional[int] = None,
+        error_class: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+    ) -> None:
+        """Record one placement attempt.
+
+        A placement -- a cold load, a wake, a sleep, an eviction -- is the only
+        direct test of a worker's capacity declaration, and until now the
+        platform recorded none of them.  Storing what the orchestrator believed
+        alongside what the placement actually did lets a wrong declaration be
+        detected directly, rather than inferred from a later failed request.
+
+        Best effort: telemetry must never take down a placement, so this
+        swallows its own errors after rolling back.
+        """
+        sql = text(
+            """
+            INSERT INTO placement_events (
+                provider_id, model_name, action,
+                declared_free_vram_mb, declared_footprint_mb,
+                gpu_devices, tensor_parallel_size,
+                outcome, error_class, duration_ms, started_at
+            ) VALUES (
+                :provider_id, :model_name, :action,
+                :declared_free_vram_mb, :declared_footprint_mb,
+                :gpu_devices, :tensor_parallel_size,
+                :outcome, :error_class, :duration_ms, :started_at
+            )
+            """
+        )
+        try:
+            self.session.execute(
+                sql,
+                {
+                    "provider_id": int(provider_id),
+                    "model_name": str(model_name),
+                    "action": str(action),
+                    "declared_free_vram_mb": declared_free_vram_mb,
+                    "declared_footprint_mb": declared_footprint_mb,
+                    "gpu_devices": gpu_devices,
+                    "tensor_parallel_size": tensor_parallel_size,
+                    "outcome": str(outcome),
+                    "error_class": error_class,
+                    "duration_ms": duration_ms,
+                    "started_at": started_at,
+                },
+            )
+            self.session.commit()
+        except Exception:
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
+            logger.debug("Failed to record placement event", exc_info=True)
+
     def get_ollama_vram_stats(
         self,
         logos_key: str,

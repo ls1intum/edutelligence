@@ -8,6 +8,7 @@ via LOGOS_CAPACITY_PLANNER_ENABLED=false.
 """
 
 import asyncio
+import contextvars
 import copy
 import logging
 import os
@@ -43,6 +44,16 @@ from .lane_comparator import best_lane
 from .vram_ledger import VRAMLedger
 
 logger = logging.getLogger(__name__)
+
+# Carries a placement's escalation label from the execution path back to the
+# telemetry wrapper.  A ContextVar rather than an attribute on the planner
+# because placements execute concurrently: asyncio copies the context per task,
+# so each placement reads only the label its own execution set, while an
+# instance attribute would let whichever coroutine escalated last relabel every
+# row currently in flight.
+_ESCALATED_ACTION: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "logos_placement_escalated_action", default=None
+)
 
 
 class CapacityPlanner:
@@ -238,7 +249,12 @@ class CapacityPlanner:
         cycle_seconds: float = 10.0,
         enabled: bool = True,
         on_state_change: Optional[Any] = None,
+        placement_recorder: Optional[Any] = None,
     ) -> None:
+        # Optional sink for placement telemetry.  Left as None the planner
+        # behaves exactly as before, which keeps the recorder out of every
+        # test that constructs a planner.
+        self._placement_recorder = placement_recorder
         self._facade = logosnode_facade
         self._registry = logosnode_registry
         self._demand = demand_tracker
@@ -6404,6 +6420,112 @@ class CapacityPlanner:
     async def _execute_action_with_confirmation(
         self, action: CapacityPlanAction, timeout_seconds: float = 60.0
     ) -> bool:
+        """Execute a placement and record what it cost and whether it worked.
+
+        A placement is the only direct test of a worker's capacity declaration:
+        the planner commits memory on the strength of a figure the node
+        reported, and the placement either honours that figure or does not.
+        Wrapping the execution here rather than instrumenting each return path
+        means every outcome is recorded, including the ones that raise.
+
+        Telemetry never affects the result: a failure to record is logged and
+        swallowed.
+        """
+        started_at = datetime.now(timezone.utc)
+        started = time.monotonic()
+        confirmed = False
+        error_class: Optional[str] = None
+
+        # Read the declared headroom *before* executing, because that is the
+        # figure the placement decision rested on. Reading it afterwards -- as
+        # the finally block would -- records the memory left once the placement
+        # already consumed it, which measures the outcome rather than the claim
+        # and makes the row useless for the question it exists to answer.
+        declared_free = self._declared_free_vram_mb(action.provider_id)
+
+        # Per-call, not per-instance: several placements execute concurrently,
+        # and an attribute on self would let one coroutine's escalation label
+        # another's row. A ContextVar is copied per task, so each placement sees
+        # only its own.
+        token = _ESCALATED_ACTION.set(None)
+        try:
+            confirmed = await self._execute_action_uninstrumented(action, timeout_seconds)
+            return confirmed
+        except Exception as exc:
+            error_class = type(exc).__name__
+            raise
+        finally:
+            self._record_placement_event(
+                action,
+                confirmed=confirmed,
+                error_class=error_class,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                started_at=started_at,
+                declared_free_vram_mb=declared_free,
+                escalated_action=_ESCALATED_ACTION.get(),
+            )
+            _ESCALATED_ACTION.reset(token)
+
+    def _declared_free_vram_mb(self, provider_id: int) -> Optional[float]:
+        """The headroom the provider currently declares, or None if unreadable.
+
+        Called before a placement executes: this is the claim the decision was
+        made against, and the whole point of recording it is to compare it later
+        with whether the placement held.
+        """
+        try:
+            capacity = self._facade.get_capacity_info(provider_id)
+        except Exception:
+            return None
+        if capacity is None:
+            return None
+        available = getattr(capacity, "available_vram_mb", None)
+        if available is None:
+            return None
+        try:
+            return float(available)
+        except (TypeError, ValueError):
+            return None
+
+    def _record_placement_event(
+        self,
+        action: CapacityPlanAction,
+        *,
+        confirmed: bool,
+        error_class: Optional[str],
+        duration_ms: int,
+        started_at,
+        declared_free_vram_mb: Optional[float],
+        escalated_action: Optional[str],
+    ) -> None:
+        """Persist one placement attempt.  Best effort; never raises."""
+        recorder = getattr(self, "_placement_recorder", None)
+        if recorder is None:
+            return
+        try:
+            profile = self._facade.get_model_profiles(action.provider_id).get(action.model_name)
+            footprint = self._estimate_model_loaded_vram(profile) if profile is not None else None
+            tp = int(profile.tensor_parallel_size) if profile is not None and profile.tensor_parallel_size else None
+        except Exception:
+            footprint, tp = None, None
+        try:
+            recorder(
+                provider_id=action.provider_id,
+                model_name=action.model_name,
+                action=escalated_action or action.action,
+                declared_free_vram_mb=declared_free_vram_mb,
+                declared_footprint_mb=footprint,
+                gpu_devices=(action.params or {}).get("gpu_devices"),
+                tensor_parallel_size=tp,
+                outcome="confirmed" if confirmed else ("error" if error_class else "unconfirmed"),
+                error_class=error_class,
+                duration_ms=duration_ms,
+                started_at=started_at,
+            )
+        except Exception:
+            logger.debug("Failed to record placement event for lane %s", action.lane_id, exc_info=True)
+
+    async def _execute_action_uninstrumented(self, action: CapacityPlanAction, timeout_seconds: float = 60.0) -> bool:
         """Execute action and wait for worker status to confirm expected state.
 
         Returns True if confirmed, False if timeout.
@@ -6544,7 +6666,13 @@ class CapacityPlanner:
                         # the case the safety valve exists to handle.
                         bypass_load_cooldown=True,
                     )
-                    return await self._execute_action_with_confirmation(stop_action, timeout_seconds)
+                    # Run the escalated stop *uninstrumented*: the outer call is
+                    # already inside the telemetry wrapper, so recursing through
+                    # it would write a second row carrying the stop's outcome
+                    # under the original action's label.  One placement attempt,
+                    # one row -- the escalation shows in the recorded action.
+                    _ESCALATED_ACTION.set("sleep_to_stop")
+                    return await self._execute_action_uninstrumented(stop_action, timeout_seconds)
 
                 # For request-time reclaim sleeps, mark the lane cold and drain
                 # active requests BEFORE sending the sleep command.  Without this,

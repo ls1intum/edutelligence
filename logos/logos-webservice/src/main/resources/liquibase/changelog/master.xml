@@ -11,5 +11,6 @@
     <include file="liquibase/changelog/003_provider_base_url_nullable.xml"/>
     <include file="liquibase/changelog/004_vram_snapshot_success_index.xml"/>
     <include file="liquibase/changelog/005_usage_billing_indexes.xml"/>
+    <include file="liquibase/changelog/006_placement_events.xml"/>
 
 </databaseChangeLog>
