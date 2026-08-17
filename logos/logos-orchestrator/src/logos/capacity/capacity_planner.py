@@ -8,6 +8,7 @@ via LOGOS_CAPACITY_PLANNER_ENABLED=false.
 """
 
 import asyncio
+import contextvars
 import copy
 import logging
 import os
@@ -43,6 +44,16 @@ from .lane_comparator import best_lane
 from .vram_ledger import VRAMLedger
 
 logger = logging.getLogger(__name__)
+
+# Carries a placement's escalation label from the execution path back to the
+# telemetry wrapper.  A ContextVar rather than an attribute on the planner
+# because placements execute concurrently: asyncio copies the context per task,
+# so each placement reads only the label its own execution set, while an
+# instance attribute would let whichever coroutine escalated last relabel every
+# row currently in flight.
+_ESCALATED_ACTION: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "logos_placement_escalated_action", default=None
+)
 
 
 class CapacityPlanner:
@@ -244,8 +255,6 @@ class CapacityPlanner:
         # behaves exactly as before, which keeps the recorder out of every
         # test that constructs a planner.
         self._placement_recorder = placement_recorder
-        # Set by the escalation path so the recorded action reflects what ran.
-        self._escalated_action: Optional[str] = None
         self._facade = logosnode_facade
         self._registry = logosnode_registry
         self._demand = demand_tracker
@@ -6426,7 +6435,19 @@ class CapacityPlanner:
         started = time.monotonic()
         confirmed = False
         error_class: Optional[str] = None
-        self._escalated_action = None
+
+        # Read the declared headroom *before* executing, because that is the
+        # figure the placement decision rested on. Reading it afterwards -- as
+        # the finally block would -- records the memory left once the placement
+        # already consumed it, which measures the outcome rather than the claim
+        # and makes the row useless for the question it exists to answer.
+        declared_free = self._declared_free_vram_mb(action.provider_id)
+
+        # Per-call, not per-instance: several placements execute concurrently,
+        # and an attribute on self would let one coroutine's escalation label
+        # another's row. A ContextVar is copied per task, so each placement sees
+        # only its own.
+        token = _ESCALATED_ACTION.set(None)
         try:
             confirmed = await self._execute_action_uninstrumented(action, timeout_seconds)
             return confirmed
@@ -6440,7 +6461,31 @@ class CapacityPlanner:
                 error_class=error_class,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 started_at=started_at,
+                declared_free_vram_mb=declared_free,
+                escalated_action=_ESCALATED_ACTION.get(),
             )
+            _ESCALATED_ACTION.reset(token)
+
+    def _declared_free_vram_mb(self, provider_id: int) -> Optional[float]:
+        """The headroom the provider currently declares, or None if unreadable.
+
+        Called before a placement executes: this is the claim the decision was
+        made against, and the whole point of recording it is to compare it later
+        with whether the placement held.
+        """
+        try:
+            capacity = self._facade.get_capacity_info(provider_id)
+        except Exception:
+            return None
+        if capacity is None:
+            return None
+        available = getattr(capacity, "available_vram_mb", None)
+        if available is None:
+            return None
+        try:
+            return float(available)
+        except (TypeError, ValueError):
+            return None
 
     def _record_placement_event(
         self,
@@ -6450,16 +6495,13 @@ class CapacityPlanner:
         error_class: Optional[str],
         duration_ms: int,
         started_at,
+        declared_free_vram_mb: Optional[float],
+        escalated_action: Optional[str],
     ) -> None:
         """Persist one placement attempt.  Best effort; never raises."""
         recorder = getattr(self, "_placement_recorder", None)
         if recorder is None:
             return
-        try:
-            capacity = self._facade.get_capacity_info(action.provider_id)
-            declared_free = float(getattr(capacity, "available_vram_mb", 0.0) or 0.0)
-        except Exception:
-            declared_free = None
         try:
             profile = self._facade.get_model_profiles(action.provider_id).get(action.model_name)
             footprint = self._estimate_model_loaded_vram(profile) if profile is not None else None
@@ -6470,8 +6512,8 @@ class CapacityPlanner:
             recorder(
                 provider_id=action.provider_id,
                 model_name=action.model_name,
-                action=getattr(self, "_escalated_action", None) or action.action,
-                declared_free_vram_mb=declared_free,
+                action=escalated_action or action.action,
+                declared_free_vram_mb=declared_free_vram_mb,
                 declared_footprint_mb=footprint,
                 gpu_devices=(action.params or {}).get("gpu_devices"),
                 tensor_parallel_size=tp,
@@ -6629,7 +6671,7 @@ class CapacityPlanner:
                     # it would write a second row carrying the stop's outcome
                     # under the original action's label.  One placement attempt,
                     # one row -- the escalation shows in the recorded action.
-                    self._escalated_action = "sleep_to_stop"
+                    _ESCALATED_ACTION.set("sleep_to_stop")
                     return await self._execute_action_uninstrumented(stop_action, timeout_seconds)
 
                 # For request-time reclaim sleeps, mark the lane cold and drain

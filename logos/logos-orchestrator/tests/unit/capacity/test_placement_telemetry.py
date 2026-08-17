@@ -12,7 +12,7 @@ import datetime
 
 import pytest
 
-from logos.capacity.capacity_planner import CapacityPlanner
+from logos.capacity.capacity_planner import _ESCALATED_ACTION, CapacityPlanner
 from logos.sdi.models import CapacityPlanAction
 
 
@@ -54,6 +54,8 @@ def test_records_a_confirmed_placement():
         error_class=None,
         duration_ms=1234,
         started_at=datetime.datetime.now(datetime.timezone.utc),
+        declared_free_vram_mb=None,
+        escalated_action=None,
     )
 
     assert len(recorder.events) == 1
@@ -71,9 +73,23 @@ def test_distinguishes_unconfirmed_from_error():
     planner = _planner(recorder)
     now = datetime.datetime.now(datetime.timezone.utc)
 
-    planner._record_placement_event(_action(), confirmed=False, error_class=None, duration_ms=1, started_at=now)
     planner._record_placement_event(
-        _action(), confirmed=False, error_class="TimeoutError", duration_ms=2, started_at=now
+        _action(),
+        confirmed=False,
+        error_class=None,
+        duration_ms=1,
+        started_at=now,
+        declared_free_vram_mb=None,
+        escalated_action=None,
+    )
+    planner._record_placement_event(
+        _action(),
+        confirmed=False,
+        error_class="TimeoutError",
+        duration_ms=2,
+        started_at=now,
+        declared_free_vram_mb=None,
+        escalated_action=None,
     )
 
     assert [e["outcome"] for e in recorder.events] == ["unconfirmed", "error"]
@@ -88,6 +104,8 @@ def test_no_recorder_configured_is_a_no_op():
         error_class=None,
         duration_ms=1,
         started_at=datetime.datetime.now(datetime.timezone.utc),
+        declared_free_vram_mb=None,
+        escalated_action=None,
     )  # must not raise
 
 
@@ -100,6 +118,8 @@ def test_a_broken_recorder_cannot_break_a_placement():
         error_class=None,
         duration_ms=1,
         started_at=datetime.datetime.now(datetime.timezone.utc),
+        declared_free_vram_mb=None,
+        escalated_action=None,
     )  # must not raise
 
 
@@ -160,22 +180,68 @@ def test_reads_declared_capacity_through_the_real_facade_method():
         def get_capacity_info(self, provider_id):
             return type("Cap", (), {"available_vram_mb": 4096.0})()
 
-        def get_model_profiles(self, provider_id):
-            return {}
-
-    recorder = _Recorder()
-    planner = _planner(recorder)
+    planner = _planner(_Recorder())
     planner._facade = _Facade()
 
-    planner._record_placement_event(
-        _action("load"),
-        confirmed=True,
-        error_class=None,
-        duration_ms=5,
-        started_at=datetime.datetime.now(datetime.timezone.utc),
-    )
+    assert planner._declared_free_vram_mb(15) == 4096.0
 
-    assert recorder.events[0]["declared_free_vram_mb"] == 4096.0
+
+def test_unreadable_capacity_is_none_rather_than_zero():
+    """A missing reading and a node with no memory left must stay distinct.
+
+    Coercing a failed read to 0.0 would enter the record as "this node declared
+    no headroom", which is a measurement the orchestrator never made.
+    """
+
+    class _Broken:
+        def get_capacity_info(self, provider_id):
+            raise RuntimeError("provider unreachable")
+
+    class _Silent:
+        def get_capacity_info(self, provider_id):
+            return None
+
+    for facade in (_Broken(), _Silent(), None):
+        planner = _planner(_Recorder())
+        planner._facade = facade
+        assert planner._declared_free_vram_mb(15) is None
+
+
+def test_declared_capacity_is_captured_before_the_placement_executes():
+    """The figure recorded must be the one the decision rested on.
+
+    Reading the capacity inside the ``finally`` block -- as the first version
+    did -- samples the provider *after* the placement already consumed the
+    memory. That records the outcome of the placement rather than the claim
+    that justified it, which inverts the meaning of the column: the whole
+    purpose of the row is to compare what a node declared beforehand against
+    whether the placement then held.
+    """
+
+    class _Facade:
+        """Reports whatever the node currently declares."""
+
+        def __init__(self) -> None:
+            self.available = 8192.0
+
+        def get_capacity_info(self, provider_id):
+            return type("Cap", (), {"available_vram_mb": self.available})()
+
+    facade = _Facade()
+    recorder = _Recorder()
+    planner = _planner(recorder)
+    planner._facade = facade
+
+    async def fake(action, timeout_seconds=60.0):
+        # The placement consumes the headroom it was granted, so a read taken
+        # after this point sees a different -- and wrong -- number.
+        facade.available = 512.0
+        return True
+
+    planner._execute_action_uninstrumented = fake
+    asyncio.run(CapacityPlanner._execute_action_with_confirmation(planner, _action("load")))
+
+    assert recorder.events[0]["declared_free_vram_mb"] == 8192.0
 
 
 def test_escalated_stop_is_recorded_once_under_its_own_label():
@@ -187,12 +253,11 @@ def test_escalated_stop_is_recorded_once_under_its_own_label():
     """
     recorder = _Recorder()
     planner = _planner(recorder)
-    planner._facade = None
 
     async def fake(action, timeout_seconds=60.0):
         # Simulate the escalation branch: it sets the label and runs the stop
         # through the uninstrumented path.
-        planner._escalated_action = "sleep_to_stop"
+        _ESCALATED_ACTION.set("sleep_to_stop")
         return True
 
     planner._execute_action_uninstrumented = fake
@@ -206,10 +271,9 @@ def test_escalated_stop_is_recorded_once_under_its_own_label():
 def test_escalation_label_does_not_leak_into_the_next_attempt():
     recorder = _Recorder()
     planner = _planner(recorder)
-    planner._facade = None
 
     async def escalating(action, timeout_seconds=60.0):
-        planner._escalated_action = "sleep_to_stop"
+        _ESCALATED_ACTION.set("sleep_to_stop")
         return True
 
     async def plain(action, timeout_seconds=60.0):
@@ -221,3 +285,37 @@ def test_escalation_label_does_not_leak_into_the_next_attempt():
     asyncio.run(CapacityPlanner._execute_action_with_confirmation(planner, _action("load")))
 
     assert [e["action"] for e in recorder.events] == ["sleep_to_stop", "load"]
+
+
+def test_concurrent_placements_do_not_share_an_escalation_label():
+    """Placements run concurrently, so the label cannot live on the planner.
+
+    With the label held as an instance attribute, an escalating placement
+    relabelled every other placement still in flight: the planner is one object
+    and ``self._escalated_action`` is one slot. Here a slow plain ``load`` is
+    interleaved with a fast escalating ``sleep_l2``; the load must still be
+    recorded as a load.
+    """
+    recorder = _Recorder()
+    planner = _planner(recorder)
+
+    async def dispatch(action, timeout_seconds=60.0):
+        if action.action == "sleep_l2":
+            _ESCALATED_ACTION.set("sleep_to_stop")
+            return True
+        # Yield twice so the escalating placement finishes in between.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return True
+
+    planner._execute_action_uninstrumented = dispatch
+
+    async def run_both():
+        await asyncio.gather(
+            CapacityPlanner._execute_action_with_confirmation(planner, _action("load")),
+            CapacityPlanner._execute_action_with_confirmation(planner, _action("sleep_l2")),
+        )
+
+    asyncio.run(run_both())
+
+    assert sorted(e["action"] for e in recorder.events) == ["load", "sleep_to_stop"]
