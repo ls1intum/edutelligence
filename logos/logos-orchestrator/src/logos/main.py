@@ -24,6 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
+from logos.capacity import profile_reconciliation
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
@@ -806,9 +807,83 @@ def _capture_logosnode_provider_snapshot(
                         _resolve_provider_name(provider_id),
                         exc_info=True,
                     )
+                else:
+                    _reconcile_model_profiles_across_nodes(db)
 
     sample["snapshot_id"] = snapshot_id
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
+
+
+_PROFILE_RECONCILE_INTERVAL_S = 600.0
+_profile_reconcile_state: dict = {"last_run": 0.0, "reported": set()}
+
+
+def _currently_hosted_models() -> Optional[Dict[int, Set[str]]]:
+    """Which models each connected worker is configured to serve right now.
+
+    Reconciliation needs this because profile rows outlive the configuration
+    that produced them.  A worker refreshes every profile it has persisted,
+    including ones for models dropped from its config, so those rows never age
+    out and would disagree with a live node forever.  The configured-model list
+    comes from the worker's own status, so a model it stopped serving disappears
+    from it immediately.
+
+    Returns None when the facade is not up, which tells ``reconcile`` to skip
+    the test rather than treat an empty mapping as "no node serves anything".
+    """
+    facade = globals().get("_logosnode_facade")
+    if facade is None:
+        return None
+    try:
+        return {pid: set(facade.get_configured_models(pid)) for pid in facade.provider_ids()}
+    except Exception:
+        logger.debug("Could not read configured models for reconciliation", exc_info=True)
+        return None
+
+
+def _reconcile_model_profiles_across_nodes(db) -> None:
+    """Compare what different nodes declare about the same model.
+
+    Worker nodes calibrate independently and are updated independently, so two
+    nodes can report the same field meaning different things -- in the fleet
+    this has produced base residencies differing five-fold for one model.  No
+    single node can detect that; only a comparison across nodes can.
+
+    This runs at most every ten minutes and logs a given finding once, so a
+    persistent disagreement does not flood the log.  It changes no placement
+    decision: it turns a silent inconsistency into an operational signal.
+    """
+    now = time.time()
+    if now - _profile_reconcile_state["last_run"] < _PROFILE_RECONCILE_INTERVAL_S:
+        return
+    _profile_reconcile_state["last_run"] = now
+
+    try:
+        rows = db.fetch_model_profiles_for_reconciliation()
+    except Exception:
+        logger.debug("Could not read model profiles for reconciliation", exc_info=True)
+        return
+
+    try:
+        findings = profile_reconciliation.reconcile(
+            profile_reconciliation.rows_to_profiles(rows),
+            hosted_models=_currently_hosted_models(),
+        )
+    except Exception:
+        logger.debug("Model profile reconciliation failed", exc_info=True)
+        return
+
+    fresh = []
+    seen = _profile_reconcile_state["reported"]
+    for finding in findings:
+        key = (finding.model_name, finding.kind, tuple(sorted(finding.provider_ids)))
+        if key in seen:
+            continue
+        seen.add(key)
+        fresh.append(finding)
+
+    if fresh:
+        profile_reconciliation.log_findings(fresh)
 
 
 def _merge_local_provider_vram_payload(
