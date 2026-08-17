@@ -20,6 +20,7 @@ from iris.domain.data.lecture_context_dto import (
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
     LectureTranscriptionRetrievalDTO,
+    LectureUnitSegmentRetrievalDTO,
 )
 from iris.domain.status.command_result_dto import CommandResultDTO
 from iris.tools.combined_view_point_out import create_tool_combined_view_point_out
@@ -60,10 +61,29 @@ def _transcription(start_time=42.0, end_time=52.0, page_number=3):
     )
 
 
-def _retrieval_tool(transcription, storage=None):
+def _unit_segment(page_number=4, display_page_number=6):
+    return LectureUnitSegmentRetrievalDTO(
+        uuid=str(uuid4()),
+        course_id=1,
+        course_name="Course",
+        course_description="Desc",
+        lecture_id=1,
+        lecture_name="Lecture",
+        lecture_unit_id=1,
+        lecture_unit_name="Unit",
+        lecture_unit_link="http://example.com/unit",
+        video_link="http://example.com/video",
+        page_number=page_number,
+        display_page_number=display_page_number,
+        segment_summary="what this part of the unit covers",
+        base_url="http://example.com",
+    )
+
+
+def _retrieval_tool(transcription, storage=None, segment=None):
     return create_tool_lecture_content_retrieval(
         lecture_retriever=lambda **_kwargs: LectureRetrievalDTO(
-            lecture_unit_segments=[],
+            lecture_unit_segments=[segment] if segment is not None else [],
             lecture_transcriptions=[transcription],
             lecture_unit_page_chunks=[],
         ),
@@ -111,6 +131,22 @@ def test_transcription_page_is_the_printed_number_not_a_point_out_id():
 
     assert "Page: 3, Video timestamp: 42s" in transcription_section
     assert "point-out id" not in transcription_section
+
+
+def test_unit_segment_page_is_the_printed_number_not_a_point_out_id():
+    """A segment summarizes a whole slide plus what was said over it — orientation, not a position.
+
+    It used to offer the deck index as a point-out id, which made the bulkiest section of the
+    results also the cheapest one to point at and crowded the video out of the agent's choice.
+    Pointing runs off the page chunks and the transcriptions instead; the printed number stays,
+    since that is what ties a summary back to the slide and to the passage covering it.
+    """
+    segment_section = _retrieval_tool(
+        _transcription(), segment=_unit_segment()
+    )().split("Lecture segment content:")[1]
+
+    assert "Page: 6" in segment_section
+    assert "point-out id" not in segment_section
 
 
 @pytest.mark.parametrize(

@@ -6,6 +6,7 @@ and/or video moment from those results, and this tool asks Artemis to move the s
 there and reports whether that worked.
 """
 
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from iris.domain.data.lecture_context_dto import CombinedViewContextDTO
@@ -72,6 +73,10 @@ def _find_retrieved_page(
     land in the wrong deck. Transcription segments are not consulted either — their ``page_number``
     is a printed number, not a deck index, and would resolve the wrong slide.
 
+    Unit segments no longer show a point-out id in the results but are still accepted here: their
+    page is a real page of this unit, so rejecting it would only fail a call that names a page the
+    agent legitimately read about.
+
     Returns:
         The matching page chunk or unit segment, or None when the page was not retrieved.
     """
@@ -104,6 +109,79 @@ def _timestamp_is_retrieved(
         and segment.segment_start_time <= timestamp < segment.segment_end_time
         for segment in lecture_content.lecture_transcriptions
     )
+
+
+@dataclass(frozen=True)
+class _Resolution:
+    """One pane's own answer to "should this move, and where to?".
+
+    Each pane is resolved without seeing the other, so a slide worth showing is no reason to leave
+    the video behind. The two answers are assembled into a single command afterwards: Artemis can
+    only reconcile a page with a timestamp when they arrive together.
+    """
+
+    # None means this pane stays put — nothing requested, refused, or already there.
+    target: Optional[float] = None
+    # Why the request was refused, phrased for the agent.
+    problem: Optional[str] = None
+    # Printed number of the slide moved to, for the chat-history chip. Slide side only.
+    display_page: Optional[int] = None
+
+
+def _resolve_slide(
+    lecture_content: LectureRetrievalDTO,
+    lecture_unit_id: Optional[int],
+    page: Optional[int],
+    current_page: Optional[int],
+) -> _Resolution:
+    """Decide on the slides alone, without consulting the video."""
+    if page is None:
+        return _Resolution()
+    target_page = _find_retrieved_page(lecture_content, lecture_unit_id, page)
+    if target_page is None:
+        return _Resolution(
+            problem=(
+                f"slide page {page} is not among the retrieved results for the lecture unit "
+                "the student is viewing"
+            )
+        )
+    if page == current_page:
+        return _Resolution()
+    return _Resolution(
+        target=page,
+        display_page=printed_page_number(
+            getattr(target_page, "display_page_number", None)
+        ),
+    )
+
+
+def _resolve_video(
+    lecture_content: LectureRetrievalDTO,
+    lecture_unit_id: Optional[int],
+    timestamp: Optional[float],
+    current_timestamp: Optional[float],
+) -> _Resolution:
+    """Decide on the video alone, without consulting the slides."""
+    if timestamp is None:
+        return _Resolution()
+    if not _timestamp_is_retrieved(lecture_content, lecture_unit_id, timestamp):
+        return _Resolution(
+            problem=(
+                f"the video timestamp {timestamp:g}s does not fall within any retrieved "
+                "video segment of the lecture unit the student is viewing"
+            )
+        )
+    # Compared against the requested moment itself, not against the interval of the segment it was
+    # resolved in: retrieved intervals may overlap and can be wide (ingestion groups every
+    # appearance of one slide into a single span, and semantic chunks share time ranges), so one of
+    # them covering both the student's position and the requested moment says nothing about the two
+    # being the same place in the video.
+    if (
+        current_timestamp is not None
+        and abs(current_timestamp - timestamp) <= _SAME_TIMESTAMP_TOLERANCE_SECONDS
+    ):
+        return _Resolution()
+    return _Resolution(target=timestamp)
 
 
 def create_tool_combined_view_point_out(
@@ -144,8 +222,10 @@ def create_tool_combined_view_point_out(
         Give a page, a timestamp, or both; values that do not appear in the results for the lecture
         unit the student is viewing are rejected.
 
-        Point out at most one position per answer. If the student is already at the position you
-        pass, their view is left untouched.
+        Call this tool at most once per answer. One call may name a slide and a video moment
+        together, and that counts as the one point-out, not as two — when the slides and the video
+        both have something to say about the question, showing both at once is better than picking
+        one. If the student is already at the position you pass, their view is left untouched.
 
         System notes in the chat history record where you pointed the student earlier in this
         conversation. They are a record of what happened, not a restriction: point to a spot again
@@ -180,41 +260,9 @@ def create_tool_combined_view_point_out(
                 "or timestamp from its results."
             )
 
-        # Page and timestamp are checked independently and reported together: neither one may hide
-        # the other's failure behind an early return, or a call that got both wrong would learn
-        # about them one retry at a time.
         # The unit the point-out will navigate in; retrieved results from other units cannot ground
         # a position here.
         lecture_unit_id = combined_context.lecture_unit_id
-
-        # Kept beyond the check: the matching result carries the printed page number sent below.
-        target_page = (
-            _find_retrieved_page(lecture_content, lecture_unit_id, page)
-            if page is not None
-            else None
-        )
-        problems = []
-        if page is not None and target_page is None:
-            problems.append(
-                f"slide page {page} is not among the retrieved results for the lecture unit "
-                "the student is viewing"
-            )
-
-        if timestamp is not None and not _timestamp_is_retrieved(
-            lecture_content, lecture_unit_id, timestamp
-        ):
-            problems.append(
-                f"the video timestamp {timestamp:g}s does not fall within any retrieved "
-                "video segment of the lecture unit the student is viewing"
-            )
-
-        if problems:
-            reason = " and ".join(problems)
-            return (
-                f"{reason[0].upper()}{reason[1:]}, so the student's view was not moved. Point "
-                "only to a page or timestamp that appears in the retrieved results."
-            )
-
         current_page = (
             combined_context.slides.page
             if combined_context.slides is not None
@@ -225,44 +273,38 @@ def create_tool_combined_view_point_out(
             if combined_context.video is not None
             else None
         )
-        same_page = page is not None and page == current_page
-        # Compared against the requested moment itself, not against the interval of the segment it
-        # was resolved in: retrieved intervals may overlap and can be wide (ingestion groups every
-        # appearance of one slide into a single span, and semantic chunks share time ranges), so
-        # one of them covering both the student's position and the requested moment says nothing
-        # about the two being the same place in the video.
-        same_timestamp = (
-            timestamp is not None
-            and current_timestamp is not None
-            and abs(current_timestamp - timestamp) <= _SAME_TIMESTAMP_TOLERANCE_SECONDS
+
+        # Each pane answers for itself, then one command is built from both answers.
+        slide = _resolve_slide(lecture_content, lecture_unit_id, page, current_page)
+        video = _resolve_video(
+            lecture_content, lecture_unit_id, timestamp, current_timestamp
         )
 
-        move_page = None if same_page else page
-        move_timestamp = None if same_timestamp else timestamp
+        # Both refusals are reported together: neither may hide the other behind an early return,
+        # or a call that got both wrong would learn about them one retry at a time.
+        problems = [p for p in (slide.problem, video.problem) if p is not None]
+        if problems:
+            reason = " and ".join(problems)
+            return (
+                f"{reason[0].upper()}{reason[1:]}, so the student's view was not moved. Point "
+                "only to a page or timestamp that appears in the retrieved results."
+            )
 
-        if move_page is None and move_timestamp is None:
+        if slide.target is None and video.target is None:
             # Case 1: the student is already exactly at the requested position.
             return (
                 "The student is already looking at that position, so their view was not moved. "
                 "Refer to it naturally in your answer."
             )
 
-        # Case 2/3: ask Artemis to move the student to the requested position.
+        # Case 2/3: both answers become one command; a pane that resolved to None is left out of it.
         result = callback.execute_command(
             PointOutCommandDTO(
                 parameters=PointOutParametersDTO(
                     lecture_unit_id=lecture_unit_id,
-                    page=move_page,
-                    timestamp=move_timestamp,
-                    # The printed number of the slide pointed at, so Artemis can label the
-                    # chat-history chip with the same number the agent names in its answer.
-                    display_page=(
-                        printed_page_number(
-                            getattr(target_page, "display_page_number", None)
-                        )
-                        if move_page is not None
-                        else None
-                    ),
+                    page=slide.target,
+                    timestamp=video.target,
+                    display_page=slide.display_page,
                 )
             )
         )
@@ -282,7 +324,7 @@ def create_tool_combined_view_point_out(
         # mix that produces an answer about the wrong view.
         if current_view_storage is not None:
             current_view_storage[MOVED_AWAY_KEY] = True
-        shown = _describe(move_page, move_timestamp)
+        shown = _describe(slide.target, video.target)
         # The system prompt describes where the student stood when this run started and cannot be
         # re-rendered mid-run. This message is the agent's last input before it answers, so it is
         # where that description gets superseded.

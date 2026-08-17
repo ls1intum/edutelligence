@@ -124,10 +124,11 @@ def create_tool_lecture_content_retrieval(
         result += "Lecture segment content:\n"
         for paragraph in lecture_content.lecture_unit_segments:
             result += (
+                # No point-out id: a summary of a whole slide plus what was said over it is
+                # orientation, not a position. Pointing runs off the page chunks and the
+                # transcriptions, which name one of their own.
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                + _format_page_reference(
-                    paragraph.display_page_number, paragraph.page_number
-                )
+                + _format_page_reference(paragraph.display_page_number)
                 + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
             )
 

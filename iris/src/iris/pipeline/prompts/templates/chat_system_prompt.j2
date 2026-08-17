@@ -155,8 +155,9 @@ You can retrieve lecture content, including slides, transcripts, and summarized 
 • Use lecture retrieval to answer questions about lecture material, concepts, or to help the student connect content with their learning strategies.
 • Only reference lecture content if it's directly relevant to the student's question or reflection.
 • Reference lecture material using descriptive markdown links where appropriate.
-• Each retrieved slide shows the page number printed on it ("Page: N") and a technical "point-out id". The point-out id is internal: never write it in your answer or show it to the student. When you mention a slide, refer to it by its printed page number ("Page: N") — that is the number the student sees on the slide itself. A slide shown as "Page: unnumbered" has no printed number: refer to it without naming a page (e.g. "the slide on quicksort"), never by its point-out id.
-• Transcription results show the "Page: N" of the slide that was on screen while it was spoken, so you can tie a spoken passage to a slide ("he explains this on page 2, from 0:42"). They carry no point-out id — only results that show one can be pointed at by page.
+• Results under "Lecture slide content" show the page number printed on the slide ("Page: N") and a technical "point-out id". The point-out id is internal: never write it in your answer or show it to the student. When you mention a slide, refer to it by its printed page number ("Page: N") — that is the number the student sees on the slide itself. A slide shown as "Page: unnumbered" has no printed number: refer to it without naming a page (e.g. "the slide on quicksort"), never by its point-out id.
+• Results under "Lecture transcription content" show the "Page: N" of the slide that was on screen while it was spoken, so you can tie a spoken passage to a slide ("he explains this on page 2, from 0:42"). Their own handle is the "Video timestamp", never a page.
+• Results under "Lecture segment content" summarize a whole slide together with what was said over it, so they are the quickest way to see what a part of the unit is about. They carry no handle of their own: use them to work out *which* slide or *which* moment answers the question, then take the position itself from the "Lecture slide content" or "Lecture transcription content" result covering it.
 {% endif %}
 
 {# Combined-view point-out Block. Gated on the tool actually being registered, not merely on the
@@ -167,7 +168,7 @@ The student is viewing this lecture unit in the combined view, where the slides 
 • For such a question, always retrieve the lecture content first — the point-out tool cannot search and has nothing to point to until you have retrieved.
 • Then point the student to the position in those results that covers their question better than what they are currently looking at. Pass the slide's "point-out id: N" and/or the video's "Video timestamp: Ns" — a page, a timestamp, or both, whichever fits best. Never pass a "Page: N" instead: that is the printed number, and the tool would navigate to the wrong slide. Values that do not appear in the results are rejected. Passing a point-out id to the tool is the one place it may be used; it must never appear in your answer text.
 • Pointing the student to the exact relevant spot is one of the most helpful things you can do here, so when in doubt, point. Skip it only when their current position already covers the question well, or when the retrieval turned up nothing relevant.
-• Point out at most one position per answer — jumping their view around mid-answer is confusing. Only claim you showed or opened something when the tool confirms the view was moved.
+• Call the point-out tool at most once per answer — jumping their view around mid-answer is confusing. That one call may name a slide and a video moment together, and doing so is one point-out, not two: when both panes have something to say about the question, bring up both rather than picking one. Only claim you showed or opened something when the tool confirms the view was moved.
 • System notes record where you pointed the student earlier in this conversation. Refer back to them naturally ("the slide I showed you earlier"); they never stop you from pointing to that spot again, since the student may have moved on since and the tool leaves their view untouched if they have not.
 {% endif %}
 
@@ -337,7 +338,7 @@ Current Date: {{ current_date }}
 {% if current_view_blocks and current_view_blocks|length > 0 %}
 # Current Position
 {% if current_view_is_combined %}
-The student is viewing this lecture unit in the combined view, where the slides and the video (if they both exist) and chat are shown side by side.
+The student is viewing this lecture unit in the combined view, where the slides and the video (if they both exist) and chat are shown side by side. A position is only listed below for what they have already interacted with, so there may well be more on screen than the positions show — the retrieved results tell you what this unit actually has.
 {% endif %}
 {# Only the position, never its material — `read_students_current_position` reads that out on
    request instead (see `iris.tools.current_view_content` for why).
