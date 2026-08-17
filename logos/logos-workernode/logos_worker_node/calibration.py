@@ -883,8 +883,8 @@ def spawn_vllm(
         env["CUDA_VISIBLE_DEVICES"] = gpu_devices
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    # Append mode — preserves logs from earlier calibration attempts so the
-    # full search history is visible in a single file, not just the last probe.
+    # Append mode — probes within the same calibration run share one file;
+    # _reset_calibration_log truncates it at the start of a new run.
     log_file = log_path.open("a", encoding="utf-8")
     try:
         kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
@@ -1157,6 +1157,11 @@ class CalibrationResult:
     # model's state-cache pool was smaller than the default 1024. Persisted so
     # the lane spawner passes the same flag; 0 means no cap was needed.
     max_num_seqs: int = 0
+    # ``probe_command`` is the exact vLLM command line of the last probe
+    # spawned for this model (set in ``_try_start`` right after
+    # ``spawn_vllm``). Reported alongside the result so the orchestrator can
+    # persist what was actually run, not just the outcome.
+    probe_command: str = ""
 
 
 def _sample_host_ram_available_mb() -> float | None:
@@ -1514,7 +1519,7 @@ def calibrate_model(
                 else:
                     logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
             _ram_cached = True
-        proc, _ = spawn_vllm(
+        proc, cmd = spawn_vllm(
             planned,
             vllm_binary,
             host,
@@ -1524,6 +1529,7 @@ def calibrate_model(
             nccl_p2p_available=nccl_p2p_available,
             hf_home=hf_home,
         )
+        partial.probe_command = " ".join(cmd)
         logger.info(
             "        Trying kv_cache=%s (%.0f MB, timeout=%.0fs)...",
             kv_str,
@@ -2226,6 +2232,7 @@ def calibrate_model(
             kv_max_model_len_pairs=partial.kv_max_model_len_pairs,
             kv_max_model_len_parallelity_pairs=partial.kv_max_model_len_parallelity_pairs,
             max_num_seqs=partial.max_num_seqs,
+            probe_command=partial.probe_command,
         )
 
     finally:
@@ -2413,6 +2420,15 @@ def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
     return 1 << (n.bit_length() - 1)
 
 
+def _reset_calibration_log(log_dir: Path, model_name: str) -> None:
+    log_path = log_dir / f"{model_name.replace('/', '__')}.log"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path.open("w", encoding="utf-8").close()
+    except OSError:
+        logger.debug("Could not reset calibration log for %s", model_name, exc_info=True)
+
+
 def _try_calibrate(
     plan: dict[str, Any],
     *,
@@ -2482,6 +2498,7 @@ def calibrate_with_tp_escalation(
     ``available_gpus`` defaults to the host's current GPU count.
     """
     model_name = plan["model"]
+    _reset_calibration_log(log_dir, model_name)
 
     if available_gpus is None:
         try:

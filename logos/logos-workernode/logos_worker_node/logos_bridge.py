@@ -6,9 +6,11 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
@@ -37,6 +39,8 @@ _INFERENCE_RELAY_TIMEOUT = httpx.Timeout(
     write=300.0,
     pool=10.0,
 )
+
+_MAX_CALIBRATION_LOG_TEXT_BYTES = 512 * 1024
 
 
 class _CalibrationSession:
@@ -695,6 +699,89 @@ class LogosBridgeClient:
         if len(lane_manager._event_log) > max_events:  # noqa: SLF001
             lane_manager._event_log = lane_manager._event_log[-max_events:]  # noqa: SLF001
 
+    @staticmethod
+    async def _read_calibration_log_text(
+        model_name: str, log_dir: Path, max_bytes: int = _MAX_CALIBRATION_LOG_TEXT_BYTES
+    ) -> str:
+        log_path = log_dir / f"{model_name.replace('/', '__')}.log"
+        try:
+            return await asyncio.to_thread(LogosBridgeClient._read_calibration_log_tail, log_path, max_bytes)
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _read_calibration_log_tail(log_path: Path, max_bytes: int) -> str:
+        with log_path.open("rb") as f:
+            file_size = f.seek(0, os.SEEK_END)
+            if file_size <= max_bytes:
+                f.seek(0)
+                return f.read().decode("utf-8", errors="replace")
+
+            omitted = file_size - max_bytes
+            marker = f"... [truncated, {omitted} bytes omitted] ...\n"
+            budget = max(0, max_bytes - len(marker.encode("utf-8")))
+
+            f.seek(-budget, os.SEEK_END)
+            tail = f.read().decode("utf-8", errors="ignore")
+            return marker + tail
+
+    @staticmethod
+    def _truncate_calibration_log_text(text: str, max_bytes: int = _MAX_CALIBRATION_LOG_TEXT_BYTES) -> str:
+        """Cap ``text`` to at most ``max_bytes`` UTF-8 bytes, trimming the head.
+
+        The on-disk log is append-mode across every probe attempt in a
+        session and can grow to several hundred KB (see
+        ``_read_calibration_log_text``); without a cap the encoded
+        ``calibration_probe_log`` event — and the DB row it lands in — would
+        be unbounded. Keeps the tail (most recent output, where failures
+        typically surface) and prefixes a truncation marker inside the limit.
+        """
+        encoded = text.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            return text
+
+        omitted = len(encoded) - max_bytes
+        marker = f"... [truncated, {omitted} bytes omitted] ...\n"
+        budget = max(0, max_bytes - len(marker.encode("utf-8")))
+        tail = encoded[-budget:].decode("utf-8", errors="ignore")
+        return marker + tail
+
+    def _record_calibration_probe_log(self, model_name: str, result: Any, log_text: str) -> None:
+        """Report the finalized per-model probe log to the orchestrator.
+
+        Fires once per model after ``calibrate_with_tp_escalation`` returns
+        (success or failure) — the model's ``{model}.log`` file is complete
+        for this session's attempt at that point. Rides the same event
+        channel as the other calibration events; the orchestrator upserts
+        this into ``calibration_probe_logs``, keyed on (node, model).
+        ``log_text`` is the caller's already-read file content (read off
+        the event loop — see the call sites) so this stays a cheap,
+        non-blocking, plain-sync call like the rest of the event helpers.
+        """
+        self._record_calibration_event(
+            "calibration_probe_log",
+            model=model_name,
+            details=json.dumps(
+                {
+                    "success": result.success,
+                    "probe_command": result.probe_command,
+                    "error": result.error,
+                    "unsupported_reason": result.unsupported_reason,
+                    "node_unhealthy_reason": result.node_unhealthy_reason,
+                    "tensor_parallel_size": result.tensor_parallel_size,
+                    "gpu_devices": result.gpu_devices,
+                    "kv_cache_sent_mb": round(result.kv_cache_sent_mb, 1),
+                    "base_residency_mb": round(result.base_residency_mb, 1),
+                    "loaded_vram_mb": round(result.loaded_vram_mb, 1),
+                    "sleeping_residual_mb": round(result.sleeping_residual_mb, 1),
+                    "min_kv_cache_mb": round(result.min_kv_cache_mb, 1),
+                    "max_kv_cache_mb": round(result.max_kv_cache_mb, 1),
+                    "max_model_len": result.max_model_len,
+                    "log_text": self._truncate_calibration_log_text(log_text),
+                }
+            ),
+        )
+
     def _list_uncalibrated_models(self) -> list[str]:
         """Pick configured models that still need calibration.
 
@@ -965,6 +1052,8 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"base_residency_mb={result.base_residency_mb:.0f}",
                     )
+                    log_text = await self._read_calibration_log_text(model_name, log_dir)
+                    self._record_calibration_probe_log(model_name, result, log_text)
                     # Dirty the lane manager's status revision so the next
                     # status push includes the updated model_profiles right
                     # away (instead of waiting the full status_refresh
@@ -1004,6 +1093,8 @@ class LogosBridgeClient:
                             else ""
                         ),
                     )
+                    log_text = await self._read_calibration_log_text(model_name, log_dir)
+                    self._record_calibration_probe_log(model_name, result, log_text)
 
                 session.current_model = None
         except asyncio.CancelledError:
