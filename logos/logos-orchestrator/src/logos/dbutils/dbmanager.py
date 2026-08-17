@@ -1052,6 +1052,96 @@ class DBManager:
         self.session.commit()
         return count
 
+    def upsert_calibration_probe_log(
+        self,
+        provider_id: int,
+        model_name: str,
+        recorded_at: Optional[datetime.datetime],
+        payload: Dict[str, Any],
+        log_text: Optional[str] = None,
+    ) -> None:
+        """Upsert a calibration probe log from a worker's calibration_probe_log event.
+
+        Keeps only the most recent row per (provider_id, model_name) — same
+        ON CONFLICT DO UPDATE pattern as upsert_model_profiles above.
+
+        Args:
+            provider_id: Provider ID (FK to providers.id) — the worker node.
+            model_name: The model the probe attempted to load.
+            recorded_at: Timestamp the worker emitted the event, if known.
+            payload: Structured probe summary (see LogosBridgeClient.
+                _record_calibration_probe_log on the worker side for the
+                exact shape) — must NOT contain "log_text" (caller pops it
+                before calling, so it isn't duplicated into the summary
+                JSONB column below).
+            log_text: Full raw calibration log for this (provider, model),
+                stored separately so it doesn't bloat/duplicate `summary`.
+        """
+        sql = text(
+            """
+            INSERT INTO calibration_probe_logs (
+                provider_id, model_name,
+                success, probe_command, error,
+                unsupported_reason, node_unhealthy_reason,
+                summary, log_text, recorded_at, updated_at
+            ) VALUES (
+                :provider_id, :model_name,
+                :success, :probe_command, :error,
+                :unsupported_reason, :node_unhealthy_reason,
+                :summary, :log_text, :recorded_at, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                success = EXCLUDED.success,
+                probe_command = EXCLUDED.probe_command,
+                error = EXCLUDED.error,
+                unsupported_reason = EXCLUDED.unsupported_reason,
+                node_unhealthy_reason = EXCLUDED.node_unhealthy_reason,
+                summary = EXCLUDED.summary,
+                log_text = EXCLUDED.log_text,
+                recorded_at = EXCLUDED.recorded_at,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE calibration_probe_logs.recorded_at IS NULL
+               OR EXCLUDED.recorded_at IS NULL
+               OR EXCLUDED.recorded_at > calibration_probe_logs.recorded_at
+        """
+        )
+        self.session.execute(
+            sql,
+            {
+                "provider_id": provider_id,
+                "model_name": model_name,
+                "success": bool(payload.get("success", False)),
+                "probe_command": payload.get("probe_command") or None,
+                "error": payload.get("error") or None,
+                "unsupported_reason": payload.get("unsupported_reason"),
+                "node_unhealthy_reason": payload.get("node_unhealthy_reason"),
+                "summary": json.dumps(payload),
+                "log_text": log_text or None,
+                "recorded_at": recorded_at,
+            },
+        )
+        self.session.commit()
+
+    def get_calibration_probe_logs_by_model(self, model_name: str) -> list[Dict[str, Any]]:
+        """Every node's most recent calibration probe log for one model.
+
+        Used by the webservice's model-error-report page to show real
+        per-node log text instead of mocked fixtures.
+        """
+        sql = text(
+            """
+            SELECT cpl.provider_id, p.name AS provider_name, cpl.success,
+                   cpl.probe_command, cpl.error, cpl.log_text,
+                   cpl.recorded_at, cpl.updated_at
+            FROM calibration_probe_logs cpl
+            JOIN providers p ON p.id = cpl.provider_id
+            WHERE cpl.model_name = :model_name
+            ORDER BY cpl.provider_id
+        """
+        )
+        rows = self.session.execute(sql, {"model_name": model_name}).fetchall()
+        return [dict(row._mapping) for row in rows]
+
     def get_ollama_vram_stats(
         self,
         logos_key: str,
