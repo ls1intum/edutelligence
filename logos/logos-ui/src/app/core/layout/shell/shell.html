@@ -6,8 +6,6 @@
     aria-hidden="true"
   ></div>
 
-  <app-orbs />
-
   <aside class="sidebar" id="sidebar" [class.sidebar--open]="isOpen()">
     <div class="sidebar-logo">
       <app-logo [size]="36" />
@@ -19,7 +17,7 @@
         <p class="nav-section-label">{{ section.label }}</p>
         @for (item of section.items; track item.path) {
           <a [routerLink]="item.path" routerLinkActive="nav-item--active" class="nav-item">
-            <app-icon-tile [icon]="item.piIcon" [color]="item.accentColor" [size]="28" />
+            <app-icon-tile [icon]="item.piIcon" [size]="28" />
             <span class="nav-label">{{ item.label }}</span>
           </a>
         }
@@ -30,7 +28,7 @@
 
     <div class="sidebar-footer">
       <button (click)="openLogoutModal()" class="user-info">
-        <app-icon-tile [label]="userInitials()" color="gradient" [size]="38" />
+        <app-icon-tile [label]="userInitials()" [size]="38" />
         <div class="user-text">
           <p class="user-name">{{ fullName() }}</p>
           <p class="user-role">{{ auth.currentUser()?.role }}</p>
@@ -69,7 +67,7 @@
       aria-modal="true"
       aria-labelledby="logout-modal-name"
     >
-      <app-icon-tile [label]="userInitials()" color="gradient" [size]="56" class="logout-modal__avatar" />
+      <app-icon-tile [label]="userInitials()" [size]="56" class="logout-modal__avatar" />
       <p class="logout-modal__name" id="logout-modal-name">{{ fullName() }}</p>
       <p class="logout-modal__email">{{ auth.currentUser()?.email }}</p>
       <p class="logout-modal__role">{{ auth.currentUser()?.role }}</p>

@@ -79,6 +79,12 @@ services:
       - ./data:/app/data
       - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
       - ./certs:/app/certs:ro
+      # Custom Jinja chat templates, referenced per model via
+      # engines.vllm.model_overrides.<model>.chat_template in config.yml.
+      # Mounted at the same absolute path inside the container as on the host
+      # (the compose directory IS /opt/logos-workernode) so config.yml,
+      # container logs and the vLLM command line all name the identical path.
+      - ./chat-templates:/opt/logos-workernode/chat-templates:ro
       # tmpfs RAM cache — size=0 when TMPFS_SIZE is unset (no-op mount)
       - type: tmpfs
         target: /mnt/ramcache

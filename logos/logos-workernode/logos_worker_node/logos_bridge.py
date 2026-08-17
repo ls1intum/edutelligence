@@ -26,9 +26,17 @@ except Exception:  # noqa: BLE001
 
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.models import LaneConfig, LaneEvent, LogosConfig, WorkerTransportStatus, model_can_sleep
+from logos_worker_node.request_content import MULTIPART_PAYLOAD_KEY, httpx_request_parts
 from logos_worker_node.runtime import build_runtime_status
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
+
+_INFERENCE_RELAY_TIMEOUT = httpx.Timeout(
+    connect=10.0,
+    read=3600.0,
+    write=300.0,
+    pool=10.0,
+)
 
 
 class _CalibrationSession:
@@ -1157,31 +1165,54 @@ class LogosBridgeClient:
         try:
             request_path = params.get("request_path")
             target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
-            async with httpx.AsyncClient(timeout=None) as client:
+            request_kwargs, request_headers = httpx_request_parts(payload)
+            async with httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT) as client:
                 upstream = await client.post(
                     target_url,
-                    headers={"Content-Type": "application/json"},
-                    json=payload,
+                    headers=request_headers,
+                    **request_kwargs,
                 )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Lane relay request failed for '{lane_id}': {exc}") from exc
         finally:
             await lane_manager.decrement_active_requests(lane_id)
 
-        try:
-            body = upstream.json()
-        except ValueError:
-            body = upstream.text
+        content_type = upstream.headers.get("content-type")
+        media_type = (content_type or "").partition(";")[0].strip().lower()
+        is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
+        is_successful_multipart = upstream.status_code < 400 and isinstance(payload.get(MULTIPART_PAYLOAD_KEY), dict)
+        is_text_response = media_type.startswith("text/") or media_type == "application/x-subrip"
+        body_base64 = None
+        if is_successful_multipart:
+            if is_text_response:
+                body = upstream.text
+            elif is_json_response:
+                try:
+                    body = upstream.json()
+                except ValueError:
+                    body = None
+                    body_base64 = base64.b64encode(upstream.content).decode("ascii")
+            else:
+                body = None
+                body_base64 = base64.b64encode(upstream.content).decode("ascii")
+        else:
+            try:
+                body = upstream.json()
+            except ValueError:
+                body = upstream.text
 
         headers = {}
-        content_type = upstream.headers.get("content-type")
         if content_type:
             headers["content-type"] = content_type
-        return {
+        result = {
             "status_code": int(upstream.status_code),
             "body": body,
             "headers": headers,
         }
+        if body_base64 is not None:
+            result["body_base64"] = body_base64
+            result["body_encoding"] = "base64"
+        return result
 
     async def _execute_stream_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:
         lane_manager = self._app.state.lane_manager
@@ -1217,16 +1248,17 @@ class LogosBridgeClient:
             )
             return
 
-        client = httpx.AsyncClient(timeout=None)
+        client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
         upstream = None
         try:
             request_path = params.get("request_path")
             target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
+            request_kwargs, request_headers = httpx_request_parts(payload)
             request = client.build_request(
                 "POST",
                 target_url,
-                headers={"Content-Type": "application/json"},
-                json=payload,
+                headers=request_headers,
+                **request_kwargs,
             )
             upstream = await client.send(request, stream=True)
 

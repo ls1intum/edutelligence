@@ -47,7 +47,6 @@ export class ApiKeyModalComponent implements OnChanges {
   @Input() key: TeamApiKey | null = null;
   @Input() teamId!: number;
   @Input() canEdit = false;
-  @Input() isLogosAdmin = false;
   @Input() team: TeamDetail | null = null;
 
   @Output() closed = new EventEmitter<void>();
@@ -261,9 +260,7 @@ export class ApiKeyModalComponent implements OnChanges {
     const ops: Promise<unknown>[] = [this.svc.updateApiKey(key.id, payload)];
 
     if (this.fCustom()) {
-      if (this.isLogosAdmin) {
-        ops.push(this.svc.setApiKeyProviderPermissions(key.id, [...this.selectedProviderIds()]));
-      }
+      ops.push(this.svc.setApiKeyProviderPermissions(key.id, [...this.selectedProviderIds()]));
       ops.push(this.svc.setApiKeyModelPermissions(key.id, [...this.selectedModelIds()]));
     }
 

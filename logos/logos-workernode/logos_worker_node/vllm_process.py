@@ -221,6 +221,49 @@ _DEFAULT_CHAT_TEMPLATE_KWARGS_RULES: tuple[tuple[str, dict[str, Any]], ...] = (
 )
 
 
+# Persistent, operator-managed directory holding custom Jinja chat templates.
+# It matches the host-side compose directory (/opt/logos-workernode) so the
+# same path is valid on the host and inside the container, and it is bind-
+# mounted read-only by docker-compose.yml. Overridable for local dev and tests.
+_DEFAULT_CHAT_TEMPLATE_DIR = "/opt/logos-workernode/chat-templates"
+
+
+def _chat_template_dir() -> str:
+    """Directory custom chat templates are resolved against."""
+    return (os.environ.get("LOGOS_CHAT_TEMPLATE_DIR") or "").strip() or _DEFAULT_CHAT_TEMPLATE_DIR
+
+
+def _resolve_chat_template(value: str) -> str:
+    """Resolve a configured chat template to an absolute file path.
+
+    ``value`` is a file name (optionally with subdirectories) relative to the
+    persistent chat-template directory; an absolute path is accepted only when
+    it points inside that directory. Symlinks are followed and the resolved
+    target must still be contained, so a template can never be served from a
+    location that a container restart would wipe.
+
+    Raises ``RuntimeError`` when the value escapes the directory or the file
+    does not exist — a lane must fail loudly rather than silently fall back to
+    the model's bundled template, which would change generation behaviour
+    without any visible error.
+    """
+    base = os.path.realpath(_chat_template_dir())
+    candidate = os.path.join(base, value) if not os.path.isabs(value) else value
+    resolved = os.path.realpath(candidate)
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise RuntimeError(
+            f"chat_template {value!r} resolves to {resolved!r}, which is outside the "
+            f"persistent chat-template directory {base!r}. Place the template there "
+            "and reference it by file name."
+        )
+    if not os.path.isfile(resolved):
+        raise RuntimeError(
+            f"chat_template {value!r} not found at {resolved!r}. Templates are read from "
+            f"{base!r} (bind-mounted from the host); add the file there and restart the lane."
+        )
+    return resolved
+
+
 def _infer_reasoning_parser(model: str) -> str | None:
     """Infer the vLLM --reasoning-parser value from the model name.
 
@@ -1313,6 +1356,13 @@ class VllmProcessHandle:
                 lane_config.model.replace("/", "__"),
             )
             cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
+        # Custom chat template: resolved against the persistent, operator-managed
+        # template directory. Passing the resolved absolute path (rather than the
+        # configured name) keeps the vLLM command line self-documenting in logs.
+        if vc.chat_template:
+            template_path = _resolve_chat_template(vc.chat_template)
+            logger.info("[%s] using custom chat template: %s", self.lane_id, template_path)
+            cmd.extend(["--chat-template", template_path])
         # Default chat-template-kwargs: start from inferred defaults for the
         # model family, then overlay explicit user-supplied keys (user wins
         # key-by-key; the entire dict is never replaced wholesale).
