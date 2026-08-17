@@ -78,6 +78,7 @@
         @if (mode() === 'provider' && totalLinePath()) {
           <path
             [attr.d]="totalLinePath()"
+            [attr.stroke]="totalLineColor"
             class="rv-total-line"
           />
         }

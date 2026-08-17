@@ -9,12 +9,7 @@
   align-items: center;
   justify-content: center;
 
-  background: linear-gradient(
-    135deg,
-    rgb(var(--shell-gradient-start)) 0%,
-    rgb(var(--shell-gradient-mid)) 45%,
-    rgb(var(--shell-gradient-end)) 100%
-  );
+  background: rgb(var(--shell-background));
 }
 
 // Login Card

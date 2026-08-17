@@ -1,4 +1,7 @@
 import asyncio
+import base64
+import binascii
+import codecs
 import datetime
 import hmac
 import json
@@ -8,14 +11,14 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
 import grpc
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
@@ -46,9 +49,22 @@ from logos.logosnode_registry import (
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.executor import ExecutionResult, Executor
+from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
+from logos.request_content import (
+    force_non_streaming_payload,
+    is_audio_upload_path,
+    is_multipart_payload,
+    is_whisper_payload,
+    metered_whisper_response_format,
+    parse_audio_upload,
+    payload_requests_streaming,
+    render_metered_whisper_response,
+    sanitized_headers_for_persistence,
+    sanitized_payload_for_logging,
+    set_payload_field,
+)
 from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
 from logos.role_auth import require_logos_admin_key
 from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
@@ -1004,16 +1020,23 @@ class _StreamingLogAccumulator:
     # event carries the full response including usage).
     responses_final: Optional[Dict[str, Any]] = None
     _saw_responses_events: bool = False
+    _decoder: Any = field(
+        default_factory=lambda: codecs.getincrementaldecoder("utf-8")(errors="replace"),
+        repr=False,
+    )
 
     def feed(self, chunk: bytes | str) -> None:
         if isinstance(chunk, bytes):
-            text = chunk.decode("utf-8", errors="replace")
+            text = self._decoder.decode(chunk, final=False)
         else:
-            text = str(chunk)
+            text = self._decoder.decode(b"", final=True) + str(chunk)
+            self._decoder.reset()
         self.buffer += text
         self._consume_complete_lines()
 
     def finish(self) -> None:
+        self.buffer += self._decoder.decode(b"", final=True)
+        self._decoder.reset()
         if not self.buffer:
             return
         remainder = self.buffer
@@ -1113,9 +1136,20 @@ def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
     if not isinstance(response_payload, dict):
         return {}
     usage = response_payload.get("usage")
-    if not isinstance(usage, dict):
-        return {}
-    return extract_token_usage(usage)
+    if isinstance(usage, dict):
+        extracted = extract_token_usage(usage)
+        if extracted:
+            return extracted
+    duration = response_payload.get("duration")
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+        return extract_token_usage({"seconds": duration})
+    if isinstance(duration, str):
+        try:
+            parsed_duration = float(duration)
+        except ValueError:
+            return {}
+        return extract_token_usage({"seconds": parsed_duration})
+    return {}
 
 
 @asynccontextmanager
@@ -1218,7 +1252,7 @@ def custom_openapi():
         routes=app.routes,
     )
     if _logos_domain == "localhost":
-        schema["servers"] = [{"url": "http://localhost:8080", "description": "Local dev"}]
+        schema["servers"] = [{"url": "/", "description": "Current local server"}]
     else:
         schema["servers"] = [
             {
@@ -1914,7 +1948,7 @@ async def _register_models_with_facades(
             provider_name = provider_info.get("name", f"provider-{provider_id}")
             provider_type = normalize_provider_type(deployment.get("type"))
             cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
-                deployment.get("type")
+                deployment.get("type"), base_url=provider_info.get("base_url")
             )
 
             # Provider-level SDI config (VRAM, admin URL, etc.)
@@ -1985,9 +2019,13 @@ def _build_model_registry() -> Dict[tuple[int, int], str]:
             provider_info = db.get_provider(provider_id) or {}
             provider_type = normalize_provider_type(deployment.get("type"))
             cloud_provider_type = provider_info.get("cloud_provider_type") or infer_cloud_provider_type(
-                deployment.get("type")
+                deployment.get("type"), base_url=provider_info.get("base_url")
             )
-            effective_type = cloud_provider_type if cloud_provider_type else provider_type
+            # Azure has a dedicated scheduling facade. Every other managed
+            # cloud provider (OpenAI, Anthropic, Gemini, etc.) shares the
+            # generic cloud scheduler path instead of becoming an unknown
+            # provider type such as "openai".
+            effective_type = "azure" if provider_type == "cloud" and cloud_provider_type == "azure" else provider_type
             if effective_type:
                 registry[(model_id, provider_id)] = effective_type
     return registry
@@ -2139,8 +2177,9 @@ async def _streaming_response(
 
     Returns a ``JSONResponse`` when the upstream returns a non-2xx status code
     *before* emitting any SSE chunks so that clients receive the correct HTTP
-    status code.  Returns a ``StreamingResponse`` for normal 2xx streams;
-    mid-stream errors are appended as an OpenAI-spec SSE error frame.
+    status code. Returns a ``StreamingResponse`` for normal 2xx streams while
+    preserving the upstream content type. Mid-stream errors append an
+    OpenAI-spec error frame only for SSE responses.
     """
     from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -2150,7 +2189,10 @@ async def _streaming_response(
     # Prepare headers and payload using context resolver
     headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
 
+    upstream_stream_headers: dict[str, str] = {}
+
     def process_headers(hdrs: dict):
+        upstream_stream_headers.update({str(key).lower(): str(value) for key, value in hdrs.items()})
         try:
             _pipeline.update_provider_stats(model_id, provider_id, hdrs)
         except Exception:
@@ -2173,16 +2215,76 @@ async def _streaming_response(
             except Exception as _e:
                 logger.error(f"Failed to release scheduler resources: {_e}")
 
+    def _pre_stream_error_response(status_code: int, body: Any, error_message: str):
+        """Record an error that occurred before a streaming response was committed."""
+        corrected_sc, error_body = coerce_upstream_error(status_code, body)
+        _release()
+        if log_id:
+            try:
+                with DBManager() as db:
+                    db.set_response_payload(
+                        log_id,
+                        error_body,
+                        provider_id,
+                        model_id,
+                        {},
+                        policy_id,
+                        classification_stats,
+                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
+                        queue_depth_at_arrival=(
+                            scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
+                        ),
+                        utilization_at_arrival=(
+                            scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                        ),
+                    )
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        request_id=request_id,
+                        model_id=model_id,
+                        provider_id=provider_id,
+                        result_status="error",
+                        error_message=error_message,
+                        cold_start=(scheduling_stats.get("is_cold_start") if scheduling_stats else None),
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to record pre-stream error (log_id=%s, request_id=%s)",
+                    log_id,
+                    request_id,
+                )
+        if scheduling_stats:
+            _pipeline.record_completion(
+                request_id=scheduling_stats.get("request_id"),
+                result_status="error",
+                error_message=error_message,
+                cold_start=scheduling_stats.get("is_cold_start"),
+            )
+        _log_request_completion(
+            model_id=model_id,
+            request_id=request_id,
+            start_time=_req_start,
+            usage={},
+            status="error",
+            is_streaming=True,
+        )
+        return JSONResponse(
+            content=error_body,
+            status_code=corrected_sc,
+            headers=_decision_response_headers(request_id, scheduling_stats),
+        )
+
     # ── logosnode path ────────────────────────────────────────────────────
     # LogosNode streams come via WebSocket; status errors are raised as
     # LogosNodeOfflineError / LogosNodeCommandError *before* streaming starts
     # (handled in _sync_response). Just wrap in StreamingResponse as before.
     if context.provider_type == "logosnode" and context.lane_id:
-        stream_payload = {
-            **prepared_payload,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
+        stream_payload = set_payload_field(prepared_payload, "stream", True)
+        if not is_audio_upload_path(request_path or ""):
+            stream_payload = {
+                **stream_payload,
+                "stream_options": {"include_usage": True},
+            }
 
         def _new_logosnode_chunk_iter():
             return _logosnode_registry.send_stream_command(
@@ -2286,11 +2388,13 @@ async def _streaming_response(
         )
 
     # ── HTTP executor path ────────────────────────────────────────────────
+    stream_status = StreamingExecutionStatus()
     chunk_iter = _pipeline.executor.execute_streaming(
         context.forward_url,
         headers,
         prepared_payload,
         on_headers=process_headers,
+        status=stream_status,
     )
 
     # Peek at the first chunk.  This triggers the initial HTTP connection so
@@ -2299,29 +2403,29 @@ async def _streaming_response(
     try:
         first_chunk = await chunk_iter.__anext__()
     except UpstreamStreamError as exc:
-        corrected_sc, error_body = coerce_upstream_error(exc.status_code, exc.body)
         logger.error(
-            "Pre-stream error from upstream (model_id=%s, provider_id=%s): " "HTTP %s → %s",
+            "Pre-stream error from upstream (model_id=%s, provider_id=%s): HTTP %s",
             model_id,
             provider_id,
             exc.status_code,
-            corrected_sc,
         )
-        _release()
-        if scheduling_stats:
-            _pipeline.record_completion(
-                request_id=scheduling_stats.get("request_id"),
-                result_status="error",
-                error_message=str(exc),
-                cold_start=scheduling_stats.get("is_cold_start"),
-            )
-        return JSONResponse(
-            content=error_body,
-            status_code=corrected_sc,
-            headers=_decision_response_headers(request_id, scheduling_stats),
-        )
+        return _pre_stream_error_response(exc.status_code, exc.body, str(exc))
     except StopAsyncIteration:
         first_chunk = None
+    except Exception as exc:
+        logger.error(
+            "Pre-stream transport error from upstream (model_id=%s, provider_id=%s): %s: %s",
+            model_id,
+            provider_id,
+            type(exc).__name__,
+            exc,
+        )
+        return _pre_stream_error_response(502, {"error": str(exc)}, str(exc))
+
+    upstream_content_type = upstream_stream_headers.get("content-type", "")
+    upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
+    response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
+    response_headers["content-type"] = upstream_content_type or "text/event-stream"
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
@@ -2349,13 +2453,22 @@ async def _streaming_response(
                 stream_log.feed(chunk)
         except Exception as exc:
             error_message = str(exc)
-            # Mid-stream error: append error SSE frame before stopping
-            import json as _json
+            # Once bytes have reached the client, only SSE can carry the
+            # synthetic OpenAI error frame without corrupting its protocol.
+            if upstream_media_type == "text/event-stream":
+                import json as _json
 
-            _, error_body = coerce_upstream_error(500, {"error": str(exc)})
-            yield f"data: {_json.dumps(error_body)}\n\n".encode()
-            yield b"data: [DONE]\n\n"
+                _, error_body = coerce_upstream_error(500, {"error": str(exc)})
+                # The last upstream chunk may have ended inside an SSE event.
+                # Close it before emitting recovery frames so clients can parse
+                # the synthetic error independently.
+                yield b"\n\n"
+                yield f"data: {_json.dumps(error_body)}\n\n".encode()
+                yield b"data: [DONE]\n\n"
         finally:
+            if error_message is None:
+                error_message = stream_status.error
+            failed = error_message is not None
             stream_log.finish()
             response_payload = stream_log.response_payload()
             usage_tokens = _usage_tokens_from_payload(response_payload)
@@ -2377,6 +2490,15 @@ async def _streaming_response(
                             scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                         ),
                     )
+                    if failed:
+                        db.update_log_entry_metrics(
+                            log_id=log_id,
+                            request_id=request_id,
+                            model_id=model_id,
+                            provider_id=provider_id,
+                            result_status="error",
+                            error_message=error_message,
+                        )
             if rl_key:
                 from logos.rate_limiter import get_rate_limiter
 
@@ -2387,7 +2509,7 @@ async def _streaming_response(
             if scheduling_stats:
                 _pipeline.record_completion(
                     request_id=scheduling_stats.get("request_id"),
-                    result_status="error" if error_message else "success",
+                    result_status="error" if failed else "success",
                     error_message=error_message,
                     cold_start=scheduling_stats.get("is_cold_start"),
                 )
@@ -2396,15 +2518,14 @@ async def _streaming_response(
                 request_id=request_id,
                 start_time=_req_start,
                 usage=stream_log.usage(),
-                status="error" if error_message else "success",
+                status="error" if failed else "success",
                 is_streaming=True,
             )
             _release()
 
     return StreamingResponse(
         http_streamer(),
-        media_type="text/event-stream",
-        headers=_decision_response_headers(request_id, scheduling_stats),
+        headers=response_headers,
     )
 
 
@@ -2429,15 +2550,23 @@ async def _sync_response(
     _req_start = time.perf_counter()
 
     try:
+        raw_audio_format = metered_whisper_response_format(
+            payload,
+            request_path or "",
+            resolved_model_name=getattr(context, "model_name", None),
+        )
+        upstream_payload = (
+            set_payload_field(payload, "response_format", "verbose_json") if raw_audio_format else payload
+        )
         # Prepare headers and payload using context resolver
-        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
+        headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, upstream_payload)
 
         timed_out = False
         error_message = None
         status_override = None
 
         if context.provider_type == "logosnode" and context.lane_id:
-            sync_payload = {**prepared_payload, "stream": False}
+            sync_payload = force_non_streaming_payload(prepared_payload)
             try:
                 rpc_result = await _logosnode_registry.send_command(
                     provider_id=provider_id,
@@ -2451,9 +2580,36 @@ async def _sync_response(
                 )
                 status_override = int(rpc_result.get("status_code", 200))
                 response_payload = rpc_result.get("body")
-                if response_payload is None:
-                    response_payload = {}
-                if not isinstance(response_payload, dict):
+                rpc_headers = rpc_result.get("headers") if isinstance(rpc_result.get("headers"), dict) else {}
+                rpc_content_type = rpc_headers.get("content-type")
+                has_binary_marker = "body_encoding" in rpc_result or "body_base64" in rpc_result
+                encoded_rpc_body = rpc_result.get("body_base64")
+                if has_binary_marker and (
+                    rpc_result.get("body_encoding") != "base64" or not isinstance(encoded_rpc_body, str)
+                ):
+                    raise LogosNodeCommandError("logosnode infer returned invalid binary response metadata")
+                binary_rpc_response = status_override < 400 and has_binary_marker
+                raw_audio_response = False
+                if binary_rpc_response:
+                    try:
+                        rpc_raw_body = base64.b64decode(encoded_rpc_body, validate=True)
+                    except (ValueError, binascii.Error) as exc:
+                        raise LogosNodeCommandError("logosnode infer returned invalid base64 response data") from exc
+                    response_payload = {
+                        "binary_response": True,
+                        "content_type": rpc_content_type or "application/octet-stream",
+                        "size": len(rpc_raw_body),
+                    }
+                else:
+                    if response_payload is None:
+                        response_payload = {}
+                    raw_audio_response = (
+                        status_override < 400
+                        and isinstance(response_payload, str)
+                        and is_multipart_payload(sync_payload)
+                    )
+                    rpc_raw_body = response_payload.encode("utf-8") if raw_audio_response else None
+                if not isinstance(response_payload, dict) and not raw_audio_response:
                     response_payload = {"response": response_payload}
                 rpc_error = str(rpc_result.get("error") or "").strip() or None
                 if status_override >= 400 and rpc_error is None:
@@ -2464,7 +2620,9 @@ async def _sync_response(
                     error=rpc_error,
                     usage={},
                     is_streaming=False,
-                    headers=(rpc_result.get("headers") if isinstance(rpc_result.get("headers"), dict) else None),
+                    headers=rpc_headers,
+                    raw_body=rpc_raw_body,
+                    content_type=rpc_content_type,
                 )
             except LogosNodeOfflineError as exc:
                 status_override = 503
@@ -2503,6 +2661,17 @@ async def _sync_response(
                 pass
 
         response_payload = exec_result.response
+        if exec_result.success and raw_audio_format:
+            try:
+                exec_result.raw_body, exec_result.content_type = render_metered_whisper_response(
+                    response_payload, raw_audio_format
+                )
+            except ValueError as exc:
+                exec_result.success = False
+                exec_result.error = str(exc)
+                exec_result.status_code = 502
+                response_payload = {"error": str(exc)}
+                status_override = 502
         if not exec_result.success:
             if not response_payload and exec_result.error:
                 response_payload = {"error": exec_result.error}
@@ -2596,13 +2765,48 @@ async def _sync_response(
 
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
-            return {"status_code": status_code, "data": response_payload}
+            if exec_result.raw_body is not None and exec_result.success:
+                media_type = (exec_result.content_type or "").partition(";")[0].strip().lower()
+                is_text_body = (
+                    bool(raw_audio_format)
+                    or media_type.startswith("text/")
+                    or media_type
+                    in {
+                        "application/json",
+                        "application/x-subrip",
+                    }
+                )
+                if not is_text_body:
+                    job_data = {
+                        "content_base64": base64.b64encode(exec_result.raw_body).decode("ascii"),
+                        "content_type": exec_result.content_type or "application/octet-stream",
+                        "encoding": "base64",
+                    }
+                else:
+                    try:
+                        decoded_body = exec_result.raw_body.decode("utf-8")
+                    except UnicodeDecodeError:
+                        job_data = {
+                            "content_base64": base64.b64encode(exec_result.raw_body).decode("ascii"),
+                            "content_type": exec_result.content_type or "application/octet-stream",
+                            "encoding": "base64",
+                        }
+                    else:
+                        job_data = json.loads(decoded_body) if raw_audio_format == "json" else decoded_body
+            else:
+                job_data = response_payload
+            return {"status_code": status_code, "data": job_data}
         else:
-            return JSONResponse(
-                content=response_payload,
-                status_code=status_code,
-                headers=_decision_response_headers(request_id, scheduling_stats),
-            )
+            response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
+            if exec_result.raw_body is not None and exec_result.success:
+                if exec_result.content_type:
+                    response_headers["content-type"] = exec_result.content_type
+                return Response(
+                    content=exec_result.raw_body,
+                    status_code=status_code,
+                    headers=response_headers,
+                )
+            return JSONResponse(content=response_payload, status_code=status_code, headers=response_headers)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -2637,11 +2841,17 @@ def _proxy_streaming_response(
 
     async def streamer():
         stream_log = _StreamingLogAccumulator()
+        stream_status = StreamingExecutionStatus()
         ttft = None
         error_message = None
 
         try:
-            async for chunk in _pipeline.executor.execute_streaming(forward_url, proxy_headers, payload):
+            async for chunk in _pipeline.executor.execute_streaming(
+                forward_url,
+                proxy_headers,
+                payload,
+                status=stream_status,
+            ):
                 # Track time to first token
                 if ttft is None:
                     ttft = datetime.datetime.now(datetime.timezone.utc)
@@ -2656,6 +2866,9 @@ def _proxy_streaming_response(
             error_message = str(exc)
             raise
         finally:
+            if error_message is None:
+                error_message = stream_status.error
+            failed = error_message is not None
             # Log completion
             if log_id:
                 stream_log.finish()
@@ -2678,7 +2891,7 @@ def _proxy_streaming_response(
                         log_id=log_id,
                         provider_id=provider_id,
                         model_id=model_id,
-                        result_status="error" if error_message else "success",
+                        result_status="error" if failed else "success",
                         error_message=error_message,
                     )
 
@@ -2803,7 +3016,7 @@ async def _execute_proxy_mode(
         )
 
     # Ensure payload model matches DB name (avoid user-supplied mismatch)
-    body = {**body, "model": model_name}
+    body = set_payload_field(body, "model", model_name)
 
     # Narrow deployments to the requested model to preserve provider metadata
     model_deployments = [d for d in deployments if d["model_id"] == model_id]
@@ -2974,7 +3187,12 @@ async def _execute_resource_mode(
             )
         else:
             # Sync endpoints support streaming
-            if body.get("stream"):
+            # whisper-1 ignores stream=true and returns a normal JSON/text
+            # response. Keep it on the synchronous response path so Logos
+            # preserves the upstream content type instead of framing it as SSE.
+            resolved_model_name = getattr(result.execution_context, "model_name", "") or ""
+            resolved_whisper_model = "whisper" in resolved_model_name.lower()
+            if payload_requests_streaming(body) and not (is_whisper_payload(body) or resolved_whisper_model):
                 return await _streaming_response(
                     result.execution_context,
                     body,
@@ -3204,26 +3422,29 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
         HTTPException(400): Invalid JSON body
         HTTPException(401): Missing or invalid authentication
     """
-    # Parse body
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    # Authenticate before parsing multipart bodies. This prevents unauthenticated
+    # callers from consuming the audio upload/base64 memory budget.
+    headers = dict(request.headers)
+    client_ip = get_client_ip(request)
+    auth = authenticate_api_key(headers) if use_profile_auth else None
+
+    # OpenAI-compatible audio uploads use multipart/form-data. Other inference
+    # operations retain the existing JSON request contract.
+    if is_audio_upload_path(request.url.path):
+        body = await parse_audio_upload(request)
+    else:
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
     if body is None:
         body = {}
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="JSON payload must be an object")
 
-    # Extract headers and client IP
-    headers = dict(request.headers)
-    client_ip = get_client_ip(request)
-
-    # Authenticate
     if use_profile_auth:
         import datetime
-
-        auth = authenticate_api_key(headers)
 
         month_start = datetime.date.today().replace(day=1).isoformat()
         with DBManager() as db:
@@ -3294,8 +3515,8 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
                 environment=auth.environment,
                 log_level=auth.log_level,
                 client_ip=client_ip,
-                input_payload=body,
-                headers=headers,
+                input_payload=sanitized_payload_for_logging(body),
+                headers=sanitized_headers_for_persistence(headers),
             )
             if c_log == 200:
                 log_id = int(r_log["log-id"])
@@ -3326,8 +3547,8 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
     job_payload = JobSubmission(
         path=path,
         method=request.method,
-        headers=headers,
-        body=json_data,
+        headers=sanitized_headers_for_persistence(headers),
+        body=sanitized_payload_for_logging(json_data),
         client_ip=client_ip,
         api_key_id=auth.api_key_id,
         team_id=auth.team_id,
@@ -3432,8 +3653,8 @@ async def execute_proxy_job(
         _, err_body = coerce_upstream_error(400, {"error": str(e)})
         return {"status_code": 400, "data": err_body}
 
-    # Force non-streaming for jobs
-    json_data["stream"] = False
+    # Force non-streaming for jobs without adding unsupported multipart fields.
+    json_data = force_non_streaming_payload(json_data)
 
     # Route and execute request
     return await route_and_execute(
@@ -4118,6 +4339,98 @@ async def retrieve_model(model_id: str, request: Request):
 # ============================================================================
 # MAIN API ENDPOINTS
 # ============================================================================
+
+
+_AUDIO_BASE_PROPERTIES = {
+    "file": {"type": "string", "format": "binary"},
+    "model": {"type": "string"},
+    "prompt": {"type": "string"},
+    "response_format": {
+        "type": "string",
+        "enum": ["json", "text", "srt", "verbose_json", "vtt"],
+        "default": "json",
+    },
+    "temperature": {"type": "number", "minimum": 0, "maximum": 1},
+}
+
+_TRANSCRIPTION_UPLOAD_REQUEST_SCHEMA = {
+    "required": True,
+    "content": {
+        "multipart/form-data": {
+            "schema": {
+                "type": "object",
+                "required": ["file", "model"],
+                "properties": {
+                    **_AUDIO_BASE_PROPERTIES,
+                    "language": {"type": "string", "description": "ISO-639-1 language code"},
+                    "timestamp_granularities[]": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["word", "segment"]},
+                        "description": "whisper-1 with response_format=verbose_json only",
+                    },
+                    "stream": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Ignored by whisper-1; supported by newer transcription models",
+                    },
+                },
+            }
+        }
+    },
+}
+
+_TRANSLATION_UPLOAD_REQUEST_SCHEMA = {
+    "required": True,
+    "content": {
+        "multipart/form-data": {
+            "schema": {
+                "type": "object",
+                "required": ["file", "model"],
+                "description": "OpenAI translations currently support the whisper-1 model",
+                "properties": _AUDIO_BASE_PROPERTIES,
+            }
+        }
+    },
+}
+
+_AUDIO_UPLOAD_RESPONSES = {
+    200: {
+        "description": "Transcription result in the requested response format",
+        "content": {
+            "application/json": {},
+            "text/plain": {},
+            "text/vtt": {},
+            "application/x-subrip": {},
+            "text/event-stream": {},
+        },
+    }
+}
+
+
+@app.post(
+    "/v1/audio/transcriptions",
+    tags=["audio"],
+    summary="Create an audio transcription",
+    response_class=Response,
+    responses=_AUDIO_UPLOAD_RESPONSES,
+    openapi_extra={"requestBody": _TRANSCRIPTION_UPLOAD_REQUEST_SCHEMA},
+)
+async def create_audio_transcription(request: Request):
+    """Transcribe an uploaded audio file through an authorized model."""
+    return await handle_sync_request("v1/audio/transcriptions", request)
+
+
+@app.post(
+    "/v1/audio/translations",
+    tags=["audio"],
+    summary="Create an English audio translation",
+    response_class=Response,
+    responses=_AUDIO_UPLOAD_RESPONSES,
+    openapi_extra={"requestBody": _TRANSLATION_UPLOAD_REQUEST_SCHEMA},
+)
+async def create_audio_translation(request: Request):
+    """Transcribe and translate an uploaded audio file into English."""
+    return await handle_sync_request("v1/audio/translations", request)
 
 
 @app.post("/v1/{path:path}", tags=["user-facing"])
