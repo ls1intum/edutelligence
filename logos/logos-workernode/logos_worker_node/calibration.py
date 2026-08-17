@@ -883,8 +883,8 @@ def spawn_vllm(
         env["CUDA_VISIBLE_DEVICES"] = gpu_devices
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    # Append mode — preserves logs from earlier calibration attempts so the
-    # full search history is visible in a single file, not just the last probe.
+    # Append mode — probes within the same calibration run share one file;
+    # _reset_calibration_log truncates it at the start of a new run.
     log_file = log_path.open("a", encoding="utf-8")
     try:
         kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
@@ -2420,6 +2420,15 @@ def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
     return 1 << (n.bit_length() - 1)
 
 
+def _reset_calibration_log(log_dir: Path, model_name: str) -> None:
+    log_path = log_dir / f"{model_name.replace('/', '__')}.log"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path.open("w", encoding="utf-8").close()
+    except OSError:
+        logger.debug("Could not reset calibration log for %s", model_name, exc_info=True)
+
+
 def _try_calibrate(
     plan: dict[str, Any],
     *,
@@ -2489,6 +2498,7 @@ def calibrate_with_tp_escalation(
     ``available_gpus`` defaults to the host's current GPU count.
     """
     model_name = plan["model"]
+    _reset_calibration_log(log_dir, model_name)
 
     if available_gpus is None:
         try:
