@@ -31,6 +31,7 @@ from iris.vector_database.lecture_unit_schema import init_lecture_unit_schema
 from iris.vector_database.lecture_unit_segment_schema import (
     init_lecture_unit_segment_schema,
 )
+from iris.vector_database.write_retry import WeaviateRateLimitExhausted
 from iris.web.utils import validate_pipeline_variant
 
 from ...domain.ingestion.deletion_pipeline_execution_dto import (
@@ -228,23 +229,40 @@ def lecture_metadata_webhook(dto: LectureUnitMetadataUpdateDTO):
     responses={
         status.HTTP_404_NOT_FOUND: {
             "description": "Lecture unit has not been ingested",
-        }
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "Weaviate remained rate-limited past the request budget",
+        },
     },
     dependencies=[Depends(TokenValidator())],
 )
 @observe(name="POST /webhooks/lectures/visibility")
 def lecture_visibility_webhook(dto: LectureUnitVisibilityUpdateDTO):
     """Update release and slide visibility without reprocessing content."""
-    with lecture_update_lock(
-        dto.base_url, dto.course_id, dto.lecture_id, dto.lecture_unit_id
-    ):
-        db = VectorDatabase()
-        client = db.get_client()
-        result = LectureVisibilityUpdatePipeline(
-            init_lecture_unit_page_chunk_schema(client),
-            init_lecture_unit_schema(client),
-            init_lecture_unit_segment_schema(client),
-        )(dto)
+    try:
+        with lecture_update_lock(
+            dto.base_url, dto.course_id, dto.lecture_id, dto.lecture_unit_id
+        ):
+            db = VectorDatabase()
+            client = db.get_client()
+            result = LectureVisibilityUpdatePipeline(
+                init_lecture_unit_page_chunk_schema(client),
+                init_lecture_unit_schema(client),
+                init_lecture_unit_segment_schema(client),
+            )(dto)
+    except WeaviateRateLimitExhausted as error:
+        logger.error(
+            "Weaviate remained rate-limited during a lecture visibility update | "
+            "lecture_unit_id=%s attempts=%s",
+            dto.lecture_unit_id,
+            error.attempts,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "errorMessage": "Weaviate is temporarily rate-limited; retry later"
+            },
+        ) from error
     if result.lecture_units_updated == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
