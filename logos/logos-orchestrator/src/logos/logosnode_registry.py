@@ -246,6 +246,15 @@ def _render_lane_diff(old: dict[str, Any], new: dict[str, Any], *, indent: str =
     return lines
 
 
+# Worker-emitted calibration session lifecycle events. The worker records
+# these itself, so they are the only signal that covers every way a session
+# can start — the nightly CalibrationOrchestrator tick *and* the admin
+# calibrate_uncalibrated endpoints, which send start_calibration_session
+# straight through the registry and never touch the orchestrator's slot.
+CALIBRATION_SESSION_STARTED_EVENT = "calibration_session_started"
+TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -280,6 +289,12 @@ class ProviderSession:
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
     max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
+    # True between the worker's calibration_session_started event and its
+    # terminal event. A calibrating worker tears down every lane to free VRAM
+    # for its probes, so it looks like an empty, attractive node to the
+    # capacity planner — placing a lane there steals the VRAM the probes need
+    # and every following kv-cache size fails with a bogus OOM.
+    calibrating: bool = False
 
     def is_stale(self, stale_after_seconds: int) -> bool:
         return (_utc_now() - self.last_heartbeat) > timedelta(seconds=stale_after_seconds)
@@ -719,6 +734,7 @@ class LogosNodeRuntimeRegistry:
         if isinstance(event, dict):
             session.latest_events.append(event)
             session.latest_events = session.latest_events[-500:]
+            self._track_calibration_state(session, event)
             for subscriber in tuple(self._event_subscribers):
                 try:
                     subscriber(provider_id, event)
@@ -728,6 +744,40 @@ class LogosNodeRuntimeRegistry:
                         provider_id,
                         event.get("event"),
                     )
+
+    def _track_calibration_state(self, session: ProviderSession, event: dict[str, Any]) -> None:
+        """Flip ``session.calibrating`` on the worker's session lifecycle events.
+
+        Driven by the worker rather than by whoever sent
+        ``start_calibration_session``: the admin calibrate_uncalibrated
+        endpoints bypass the CalibrationOrchestrator's slot entirely, so its
+        ``_active_provider_id`` is not a complete picture. On reconnect the
+        worker replays its event log from seq 0, which restores the flag for a
+        session that is still running.
+        """
+        event_name = str(event.get("event", "")).strip()
+        if event_name == CALIBRATION_SESSION_STARTED_EVENT:
+            was = session.calibrating
+            session.calibrating = True
+            if not was:
+                logger.info(
+                    "provider=%s entered calibration — excluded from lane placement " "until the session ends",
+                    session.worker_id or str(session.provider_id),
+                )
+        elif event_name in TERMINAL_CALIBRATION_SESSION_EVENTS:
+            was = session.calibrating
+            session.calibrating = False
+            if was:
+                logger.info(
+                    "provider=%s left calibration (%s) — eligible for lane placement again",
+                    session.worker_id or str(session.provider_id),
+                    event_name,
+                )
+
+    def is_calibrating(self, provider_id: int) -> bool:
+        """Return True while the worker is running a calibration session."""
+        session = self._sessions.get(int(provider_id))
+        return session is not None and session.calibrating
 
     def subscribe_to_events(self, callback: Callable[[int, dict[str, Any]], None]) -> None:
         """Register a callback fired for every worker event.

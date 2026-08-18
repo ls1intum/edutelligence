@@ -509,6 +509,27 @@ class CapacityPlanner:
                 pass  # Periodic tick — normal path.
             self._tick_event.clear()
 
+    def _is_plannable(self, provider_id: int) -> bool:
+        """Return True when this cycle may act on *provider_id*.
+
+        Two exclusions, both about acting on state that is transient by
+        design:
+
+        * No first status since connect — we don't know which lanes are
+          already loaded, and acting on empty state can destroy them.
+        * A calibration session is running — the worker destroys every lane
+          up front to free VRAM for its probes, so it presents as an empty
+          node with plenty of headroom, exactly what makes the planner want
+          to load a model onto it. That lane then holds the VRAM the probes
+          need and the whole kv-cache search fails with bogus OOMs (see the
+          deimama Qwen3.8-27B session on 2026-08-18).
+        """
+        if self._registry is None:
+            return True
+        if not self._registry.has_received_first_status(provider_id):
+            return False
+        return not self._registry.is_calibrating(provider_id)
+
     async def _run_cycle(self) -> None:
         """Execute one planner cycle."""
         cycle_start = time.time()
@@ -573,9 +594,7 @@ class CapacityPlanner:
         # because it was iterated first.
         best_provider_for_model: Optional[dict[str, int]] = None
         if self._cross_provider_best_first:
-            ready_provider_ids = [
-                pid for pid in provider_ids if self._registry is None or self._registry.has_received_first_status(pid)
-            ]
+            ready_provider_ids = [pid for pid in provider_ids if self._is_plannable(pid)]
             best_provider_for_model = self._rank_providers_for_demanded_models(
                 ready_provider_ids,
                 self._demand.get_ranked_models(),
@@ -596,9 +615,9 @@ class CapacityPlanner:
             # Skip providers that haven't sent their first status yet —
             # we don't know what lanes are already loaded and acting on
             # stale/empty state can destroy existing lanes.
-            if self._registry and not self._registry.has_received_first_status(provider_id):
+            if not self._is_plannable(provider_id):
                 logger.debug(
-                    "Skipping worker=%s: waiting for first status report after connect",
+                    "Skipping worker=%s: not plannable this cycle",
                     self._facade.get_provider_name(provider_id) or provider_id,
                 )
                 continue
