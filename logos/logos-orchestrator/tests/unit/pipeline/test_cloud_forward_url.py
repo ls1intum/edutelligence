@@ -70,14 +70,39 @@ def test_matching_operation_left_untouched():
 
 
 def test_non_swappable_operations_left_untouched():
-    # Embeddings (and audio/images) endpoints are never re-targeted, even for
-    # a mismatched inbound path — that is a client error for Azure to report.
+    # Embeddings/images and cross-family operations are never re-targeted.
     embeddings = (
         "https://ase-se01.openai.azure.com/openai/deployments/"
         "text-embedding-3-large/embeddings?api-version=2024-02-01"
     )
     assert ContextResolver._cloud_forward_url(AZURE_BASE, "v1/responses", embeddings) == embeddings
     assert ContextResolver._cloud_forward_url(AZURE_BASE, "v1/embeddings", AZURE_ENDPOINT) == AZURE_ENDPOINT
+
+
+def test_inbound_translation_path_retargets_azure_whisper_endpoint():
+    transcription_endpoint = (
+        "https://ase-se01.openai.azure.com/openai/deployments/"
+        "whisper/audio/transcriptions?api-version=2025-04-01-preview"
+    )
+    assert ContextResolver._cloud_forward_url(
+        AZURE_BASE,
+        "v1/audio/translations",
+        transcription_endpoint,
+    ) == (
+        "https://ase-se01.openai.azure.com/openai/deployments/"
+        "whisper/audio/translations?api-version=2025-04-01-preview"
+    )
+
+
+def test_inbound_transcription_path_does_not_retarget_unrelated_azure_endpoint():
+    assert (
+        ContextResolver._cloud_forward_url(
+            AZURE_BASE,
+            "v1/audio/transcriptions",
+            AZURE_ENDPOINT,
+        )
+        == AZURE_ENDPOINT
+    )
 
 
 def test_openai_shaped_upstream_forwards_responses_like_for_like():

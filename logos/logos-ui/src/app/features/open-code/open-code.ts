@@ -161,10 +161,12 @@ export class OpenCode implements OnInit {
     try {
       const keys = await this.myKeysService.getMyKeys();
       this.keys.set(keys);
+      this.keysLoading.set(false);
+      // pickKey's own modelsLoading covers the (slower, orchestrator-dependent)
+      // model fetch — keysLoading shouldn't stay true waiting on that too.
       if (keys.length > 0) await this.pickKey(keys[0]);
     } catch {
       this.keysError.set(true);
-    } finally {
       this.keysLoading.set(false);
     }
   }

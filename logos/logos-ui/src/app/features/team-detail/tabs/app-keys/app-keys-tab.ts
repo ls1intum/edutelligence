@@ -9,7 +9,6 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { TeamApiKey, TeamDetail, CreateApiKeyPayload } from '../../../../shared/models/team.model';
-import { AuthService } from '../../../../core/auth/services/auth.service';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { DataTableComponent } from '../../../../shared/components/data-table/data-table';
 import { ApiKeyModalComponent } from '../../api-key-modal/api-key-modal';
@@ -43,10 +42,8 @@ export class AppKeysTabComponent {
   @Input() canEdit = false;
   @Input() team: TeamDetail | null = null;
 
-  private auth = inject(AuthService);
   private svc = inject(TeamManagementService);
 
-  isLogosAdmin = computed(() => this.auth.currentUser()?.role === 'logos_admin');
   appKeys = computed(() => this.apiKeys.filter((k) => k.key_type !== 'developer'));
 
   @Output() refresh = new EventEmitter<void>();

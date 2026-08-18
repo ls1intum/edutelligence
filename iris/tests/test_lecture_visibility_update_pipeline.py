@@ -7,12 +7,13 @@ from threading import Event, Thread
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from weaviate.classes.config import Property
 from weaviate.collections.classes.config import DataType
-from weaviate.exceptions import WeaviateInvalidInputError
+from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateInvalidInputError
 
 from iris.domain.ingestion.lecture_visibility_update_dto import (
     LectureUnitVisibilityUpdateDTO,
@@ -39,6 +40,10 @@ from iris.vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
     init_lecture_unit_segment_schema,
 )
+from iris.vector_database.write_retry import (
+    WeaviateRateLimitExhausted,
+    WeaviateWriteRetry,
+)
 from iris.web.routers.webhooks import lecture_visibility_webhook
 
 
@@ -58,6 +63,14 @@ def visibility_dto() -> LectureUnitVisibilityUpdateDTO:
             ],
         }
     )
+
+
+def rate_limit_error() -> UnexpectedStatusCodeError:
+    response = httpx.Response(
+        429,
+        request=httpx.Request("PATCH", "https://weaviate.example/v1/objects/id"),
+    )
+    return UnexpectedStatusCodeError("Object was not updated", response)
 
 
 def test_visibility_update_dto_accepts_artemis_aliases():
@@ -90,6 +103,9 @@ def test_visibility_webhook_route_documents_missing_ingestion():
     route = next(route for route in router.routes if route.path.endswith("/visibility"))
 
     assert route.responses[404]["description"] == "Lecture unit has not been ingested"
+    assert route.responses[503]["description"] == (
+        "Weaviate remained rate-limited past the request budget"
+    )
 
 
 def test_visibility_schema_fields_are_defined():
@@ -276,6 +292,108 @@ def test_visibility_pipeline_keeps_unit_denied_when_slide_update_fails():
     with pytest.raises(RuntimeError, match="Weaviate write failed"):
         LectureVisibilityUpdatePipeline(
             page_collection, unit_collection, segment_collection
+        )(visibility_dto())
+
+    assert unit_collection.data.update.call_count == 1
+    assert unit_collection.data.update.call_args.kwargs["properties"][
+        LectureUnitSchema.RELEASE_DATE.value
+    ] == datetime.max.replace(tzinfo=timezone.utc)
+
+
+def test_visibility_pipeline_retries_rate_limited_final_parent_update():
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(uuid="unit-uuid")
+    ]
+    unit_collection.data.update.side_effect = [None, rate_limit_error(), None]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = []
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
+    now = [0.0]
+    sleeps = []
+
+    def sleep(delay):
+        sleeps.append(delay)
+        now[0] += delay
+
+    writer = WeaviateWriteRetry(
+        sleep=sleep,
+        jitter=lambda _lower, upper: upper,
+    )
+
+    result = LectureVisibilityUpdatePipeline(
+        page_collection,
+        unit_collection,
+        segment_collection,
+        write_retry_factory=lambda: writer,
+    )(visibility_dto())
+
+    assert result.lecture_units_updated == 1
+    assert unit_collection.data.update.call_count == 3
+    assert sleeps == pytest.approx([0.25])
+    assert unit_collection.data.update.call_args.kwargs["properties"] == {
+        LectureUnitSchema.RELEASE_DATE.value: datetime(
+            2026, 7, 4, 12, 0, tzinfo=timezone.utc
+        )
+    }
+
+
+def test_visibility_pipeline_retries_rate_limited_parent_barrier():
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(uuid="unit-uuid")
+    ]
+    unit_collection.data.update.side_effect = [rate_limit_error(), None, None]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = []
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
+    sleeps = []
+    writer = WeaviateWriteRetry(
+        sleep=sleeps.append,
+        jitter=lambda _lower, upper: upper,
+    )
+
+    result = LectureVisibilityUpdatePipeline(
+        page_collection,
+        unit_collection,
+        segment_collection,
+        write_retry_factory=lambda: writer,
+    )(visibility_dto())
+
+    assert result.lecture_units_updated == 1
+    assert unit_collection.data.update.call_count == 3
+    assert sleeps == pytest.approx([0.25])
+    assert unit_collection.data.update.call_args_list[1].kwargs["properties"][
+        LectureUnitSchema.RELEASE_DATE.value
+    ] == datetime.max.replace(tzinfo=timezone.utc)
+
+
+def test_visibility_pipeline_keeps_parent_barrier_after_rate_limit_exhaustion():
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(uuid="unit-uuid")
+    ]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(uuid="page-uuid")
+    ]
+    page_collection.data.update.side_effect = rate_limit_error()
+    segment_collection = Mock()
+    now = [0.0]
+    writer = WeaviateWriteRetry(
+        retry_wait_budget=0.1,
+        sleep=lambda delay: now.__setitem__(0, now[0] + delay),
+        jitter=lambda _lower, upper: upper,
+    )
+
+    with pytest.raises(WeaviateRateLimitExhausted):
+        LectureVisibilityUpdatePipeline(
+            page_collection,
+            unit_collection,
+            segment_collection,
+            write_retry_factory=lambda: writer,
         )(visibility_dto())
 
     assert unit_collection.data.update.call_count == 1
@@ -630,6 +748,27 @@ def test_visibility_endpoint_returns_not_found_when_ingestion_has_not_created_un
 
     assert exc_info.value.status_code == 404
     database.assert_called_once_with()
+
+
+def test_visibility_endpoint_returns_service_unavailable_after_rate_limit_budget():
+    with (
+        patch("iris.web.routers.webhooks.VectorDatabase"),
+        patch("iris.web.routers.webhooks.init_lecture_unit_page_chunk_schema"),
+        patch("iris.web.routers.webhooks.init_lecture_unit_schema"),
+        patch("iris.web.routers.webhooks.init_lecture_unit_segment_schema"),
+        patch("iris.web.routers.webhooks.LectureVisibilityUpdatePipeline") as pipeline,
+    ):
+        pipeline.return_value.side_effect = WeaviateRateLimitExhausted(
+            1, rate_limit_error()
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            lecture_visibility_webhook(visibility_dto())
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {
+        "errorMessage": "Weaviate is temporarily rate-limited; retry later"
+    }
 
 
 def test_visibility_webhook_route_matches_artemis_contract():

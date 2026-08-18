@@ -89,14 +89,10 @@
   border-radius: 8px;
   padding: 2px 6px;
 
-  &--vllm {
-    background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-purple));
-  }
-
+  &--vllm,
   &--ollama {
-    background: rgb(var(--color-accent-orange)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-orange));
+    background: rgb(var(--color-outline-200)  / var(--opacity-soft));
+    color: rgb(var(--color-typography-300));
   }
 }
 

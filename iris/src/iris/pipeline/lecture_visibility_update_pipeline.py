@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from iris.vector_database.lecture_unit_page_chunk_schema import (
 )
 from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 from iris.vector_database.lecture_unit_segment_schema import LectureUnitSegmentSchema
+from iris.vector_database.write_retry import WeaviateWriteRetry
 
 
 @dataclass(frozen=True)
@@ -32,14 +34,19 @@ class LectureVisibilityUpdatePipeline:
         page_chunk_collection: Collection,
         lecture_unit_collection: Collection,
         lecture_unit_segment_collection: Collection,
+        write_retry_factory: Callable[
+            [], WeaviateWriteRetry
+        ] = WeaviateWriteRetry.for_request,
     ):
         self.page_chunk_collection = page_chunk_collection
         self.lecture_unit_collection = lecture_unit_collection
         self.lecture_unit_segment_collection = lecture_unit_segment_collection
+        self.write_retry_factory = write_retry_factory
 
     def __call__(
         self, dto: LectureUnitVisibilityUpdateDTO
     ) -> LectureVisibilityUpdateResult:
+        write_retry = self.write_retry_factory()
         with batch_update_lock:
             units = self._find_units(dto)
             if not units:
@@ -54,6 +61,7 @@ class LectureVisibilityUpdatePipeline:
                     ),
                     LectureUnitSchema.SLIDE_VISIBILITY.value: snapshot,
                 },
+                write_retry,
             )
             page_count = 0
             segment_count = 0
@@ -63,15 +71,19 @@ class LectureVisibilityUpdatePipeline:
                     LectureUnitPageChunkSchema,
                     dto,
                     slide,
+                    write_retry,
                 )
                 segment_count += self._update_slide_visibility(
                     self.lecture_unit_segment_collection,
                     LectureUnitSegmentSchema,
                     dto,
                     slide,
+                    write_retry,
                 )
             self._update_units(
-                units, {LectureUnitSchema.RELEASE_DATE.value: dto.release_date}
+                units,
+                {LectureUnitSchema.RELEASE_DATE.value: dto.release_date},
+                write_retry,
             )
         return LectureVisibilityUpdateResult(len(units), page_count, segment_count)
 
@@ -109,9 +121,15 @@ class LectureVisibilityUpdatePipeline:
             limit=100,
         ).objects
 
-    def _update_units(self, units, properties: dict) -> None:
+    def _update_units(
+        self,
+        units,
+        properties: dict,
+        write_retry: WeaviateWriteRetry,
+    ) -> None:
         for obj in units:
-            self.lecture_unit_collection.data.update(
+            write_retry.update(
+                self.lecture_unit_collection,
                 uuid=str(obj.uuid),
                 properties=properties,
             )
@@ -122,13 +140,15 @@ class LectureVisibilityUpdatePipeline:
         schema: type[LectureUnitPageChunkSchema] | type[LectureUnitSegmentSchema],
         dto: LectureUnitVisibilityUpdateDTO,
         slide: SlideVisibilityDTO,
+        write_retry: WeaviateWriteRetry,
     ) -> int:
         objects = collection.query.fetch_objects(
             filters=LectureVisibilityUpdatePipeline._slide_filter(schema, dto, slide),
             limit=10_000,
         ).objects
         for obj in objects:
-            collection.data.update(
+            write_retry.update(
+                collection,
                 uuid=str(obj.uuid),
                 properties={schema.HIDDEN_UNTIL.value: slide.hidden_until},
             )

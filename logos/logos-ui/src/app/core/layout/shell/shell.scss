@@ -6,13 +6,7 @@
   height: 100vh;
   overflow: hidden;
 
-  background:
-    linear-gradient(
-      135deg,
-      rgb(var(--shell-gradient-start)) 0%,
-      rgb(var(--shell-gradient-mid)) 45%,
-      rgb(var(--shell-gradient-end)) 100%
-    );
+  background: rgb(var(--shell-background));
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -270,14 +264,12 @@
   inset: 0;
   z-index: 24;
   background: transparent;
-  backdrop-filter: blur(0);
   pointer-events: none;
-  transition: background-color 0.3s ease, backdrop-filter 0.3s ease;
+  transition: background-color 0.3s ease;
 }
 
 .sidebar-backdrop--visible {
   background: rgb(var(--shadow-color) / var(--opacity-overlay));
-  backdrop-filter: blur(2px);
   pointer-events: auto;
 }
 

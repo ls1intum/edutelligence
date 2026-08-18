@@ -24,18 +24,16 @@ import { isInteractiveClick } from '../../shared/utils/interactive-click';
 
 const MICRO_CENTS_PER_DOLLAR = 100_000_000;
 
-// Plotly palette + colour assignment ported from the React budget-history-chart:
-// each team is hashed by name onto a fixed 8-colour palette so a given team keeps
-// the same colour regardless of sort order.
+// Each team is hashed by name onto the active theme's own primary ramp
+// (light to dark) so a given team keeps the same colour regardless of sort
+// order, and the chart follows whichever styles/_tokens-*.scss is active.
 const PALETTE = [
-  '#F29C6E',
-  '#3BE9DE',
-  '#9D4EDD',
-  '#06FFA5',
-  '#EC4899',
-  '#6366F1',
-  '#F59E0B',
-  '#14B8A6',
+  'rgb(var(--color-primary-300))',
+  'rgb(var(--color-primary-400))',
+  'rgb(var(--color-primary-500))',
+  'rgb(var(--color-primary-600))',
+  'rgb(var(--color-primary-700))',
+  'rgb(var(--color-primary-800))',
 ] as const;
 
 function paletteColorForName(name: string): string {

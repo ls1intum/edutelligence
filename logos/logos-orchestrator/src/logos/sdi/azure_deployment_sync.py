@@ -37,7 +37,7 @@ DEPLOYMENTS_LIST_API_VERSION = os.getenv("LOGOS_AZURE_DEPLOYMENTS_API_VERSION", 
 _CHAT_API_VERSION = os.getenv("LOGOS_AZURE_CHAT_API_VERSION", "2025-01-01-preview")
 _RESPONSES_API_VERSION = os.getenv("LOGOS_AZURE_RESPONSES_API_VERSION", "2025-04-01-preview")
 _EMBEDDINGS_API_VERSION = os.getenv("LOGOS_AZURE_EMBEDDINGS_API_VERSION", "2024-02-01")
-_AUDIO_API_VERSION = os.getenv("LOGOS_AZURE_AUDIO_API_VERSION", "2024-06-01")
+_AUDIO_API_VERSION = os.getenv("LOGOS_AZURE_AUDIO_API_VERSION", "2025-04-01-preview")
 _IMAGE_API_VERSION = os.getenv("LOGOS_AZURE_IMAGE_API_VERSION", "2024-02-01")
 
 # Operation suffix -> api-version, for callers that need to re-target a stored
@@ -47,6 +47,8 @@ AZURE_OPERATION_API_VERSIONS: Dict[str, str] = {
     "chat/completions": _CHAT_API_VERSION,
     "responses": _RESPONSES_API_VERSION,
     "embeddings": _EMBEDDINGS_API_VERSION,
+    "audio/transcriptions": _AUDIO_API_VERSION,
+    "audio/translations": _AUDIO_API_VERSION,
 }
 
 SYNC_INTERVAL_S = int(os.getenv("LOGOS_AZURE_SYNC_INTERVAL_S", str(24 * 60 * 60)))
