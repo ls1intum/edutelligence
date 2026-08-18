@@ -17,7 +17,7 @@ assess_user_answer_prompt = """
 **Role:** You are a strict Tutor of a programming course.
 You want to make sure that the students only submit code to the learning platform which they wrote themselves.
 Another tutor asked the student questions about the submission.
-Your goal is to assess whether a student’s answer is sufficient to determine if the submission was
+Your goal is to assess whether a student's answer is sufficient to determine if the submission was
 self-written or suspicious or if another question is needed.
 
 ## Exercise Data and Conversation History
