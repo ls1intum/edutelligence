@@ -1195,6 +1195,18 @@ async def test_a_finished_session_does_not_keep_refusing():
     assert added == ["lane-a"]
 
 
+def _event_stub(event_id: str, name: str):
+    return SimpleNamespace(
+        event_id=event_id,
+        model_dump=lambda mode="json", _n=name: {"event": _n},
+    )
+
+
+def _bridge_client(app) -> LogosBridgeClient:
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    return LogosBridgeClient(app, cfg)
+
+
 @pytest.mark.asyncio
 async def test_event_loop_flags_only_the_backlog_that_existed_at_connect():
     """The first drain runs a second after the connect, so it carries both the
@@ -1203,14 +1215,12 @@ async def test_event_loop_flags_only_the_backlog_that_existed_at_connect():
     dismissing it as backlog would leave the provider excluded from lane
     placement with no further event coming to release it."""
     app = _DummyApp()
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
-    client = LogosBridgeClient(app, cfg)
+    client = _bridge_client(app)
 
-    def _event(name: str):
-        return SimpleNamespace(model_dump=lambda mode="json", _n=name: {"event": _n})
-
-    # One event predates the connection; the session then ends before the drain.
-    log = [_event("calibration_session_finished"), _event("calibration_session_cancelled")]
+    log = [_event_stub("evt-1", "calibration_session_finished")]
+    replay_ids = frozenset({"evt-1"})
+    # The session ends between the connect and the drain.
+    log.append(_event_stub("calib-9", "calibration_session_cancelled"))
     app.state.lane_manager = SimpleNamespace(event_log=log)
 
     sent: list[dict] = []
@@ -1222,7 +1232,7 @@ async def test_event_loop_flags_only_the_backlog_that_existed_at_connect():
 
     client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
 
-    await client._event_loop(object(), replay_boundary=1)  # noqa: SLF001
+    await client._event_loop(object(), replay_event_ids=replay_ids)  # noqa: SLF001
 
     assert [p["event"]["event"] for p in sent] == [
         "calibration_session_finished",
@@ -1232,21 +1242,59 @@ async def test_event_loop_flags_only_the_backlog_that_existed_at_connect():
 
 
 @pytest.mark.asyncio
-async def test_event_loop_marks_later_drains_live():
-    """Only the first drain can reach below the boundary."""
+async def test_a_live_event_in_a_full_log_is_not_mistaken_for_backlog():
+    """The log is capped and trims from the front, so on a full log a live event
+    lands at a position the backlog used to occupy. Keyed on position it would
+    be sent as replay, the server would ignore it, and a terminal event lost
+    that way leaves the provider excluded with nothing left to release it."""
     app = _DummyApp()
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
-    client = LogosBridgeClient(app, cfg)
+    client = _bridge_client(app)
 
-    backlog = [SimpleNamespace(model_dump=lambda mode="json": {"event": "lane_started"})]
-    live = backlog + [SimpleNamespace(model_dump=lambda mode="json": {"event": "calibration_session_finished"})]
+    cap = 500
+    backlog = [_event_stub(f"evt-{n}", "lane_started") for n in range(1, cap + 1)]
+    replay_ids = frozenset(event.event_id for event in backlog)
+
+    # A live terminal event arrives; the append trims the oldest entry, so the
+    # log length is unchanged and the new event sits at the last position.
+    full_log = backlog[1:] + [_event_stub("calib-1", "calibration_session_finished")]
+    assert len(full_log) == cap
+    app.state.lane_manager = SimpleNamespace(event_log=full_log)
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if payload["event"]["event"] == "calibration_session_finished":
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object(), replay_event_ids=replay_ids)  # noqa: SLF001
+
+    terminal = [p for p in sent if p["event"]["event"] == "calibration_session_finished"]
+    assert terminal, "the live terminal event must be forwarded"
+    assert terminal[0]["replay"] is False
+
+
+@pytest.mark.asyncio
+async def test_event_loop_keeps_forwarding_once_the_log_is_full():
+    """A positional cursor equals the log length once the log is full and never
+    advances again, so no further event would reach the server at all."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    cap = 500
+    log = [_event_stub(f"evt-{n}", "lane_started") for n in range(1, cap + 1)]
     drains = {"count": 0}
 
     class _LaneManager:
         @property
         def event_log(self):
             drains["count"] += 1
-            return backlog if drains["count"] == 1 else live
+            if drains["count"] == 1:
+                return list(log)
+            # Second drain: one new event, oldest trimmed — same length.
+            return log[1:] + [_event_stub("evt-501", "lane_stopped")]
 
     app.state.lane_manager = _LaneManager()
 
@@ -1254,25 +1302,55 @@ async def test_event_loop_marks_later_drains_live():
 
     async def _send_json(_ws, payload):
         sent.append(payload)
-        if len(sent) == 2:
+        if payload["event"]["event"] == "lane_stopped":
             client._stopping.set()  # noqa: SLF001
 
     client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
 
-    await client._event_loop(object(), replay_boundary=1)  # noqa: SLF001
+    await client._event_loop(object())  # noqa: SLF001
 
-    assert [p["replay"] for p in sent] == [True, False]
+    assert len(sent) == cap + 1, "the event added to a full log must still be forwarded"
+    assert sent[-1]["event"]["event"] == "lane_stopped"
 
 
-def test_replay_boundary_is_snapshotted_before_the_first_drain():
-    """The boundary has to come from the connect path, not from the loop: by the
-    time the first drain runs the log may already have grown."""
+@pytest.mark.asyncio
+async def test_event_loop_does_not_resend_events_it_already_forwarded():
     app = _DummyApp()
-    app.state.lane_manager = SimpleNamespace(event_log=[1, 2, 3])
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
-    client = LogosBridgeClient(app, cfg)
+    client = _bridge_client(app)
 
-    assert client._current_event_log_length() == 3  # noqa: SLF001
+    log = [_event_stub("evt-1", "lane_started")]
+    drains = {"count": 0}
+
+    class _LaneManager:
+        @property
+        def event_log(self):
+            drains["count"] += 1
+            if drains["count"] >= 2:
+                client._stopping.set()  # noqa: SLF001
+            return list(log)
+
+    app.state.lane_manager = _LaneManager()
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object())  # noqa: SLF001
+
+    assert len(sent) == 1
+
+
+def test_current_event_ids_snapshots_the_log():
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        event_log=[_event_stub("evt-1", "lane_started"), _event_stub("calib-1", "calibration_session_started")]
+    )
+    client = _bridge_client(app)
+
+    assert client._current_event_ids() == frozenset({"evt-1", "calib-1"})  # noqa: SLF001
 
     app.state.lane_manager = None
-    assert client._current_event_log_length() == 0  # noqa: SLF001
+    assert client._current_event_ids() == frozenset()  # noqa: SLF001
