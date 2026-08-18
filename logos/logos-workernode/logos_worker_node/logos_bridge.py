@@ -1168,8 +1168,7 @@ class LogosBridgeClient:
         # the signature so the next push goes out regardless.
         self._last_runtime_signature = None
         logger.info(
-            "[Calibration] Announcing %d newly calibrated model(s) to Logos: %s "
-            "(capabilities now: %d model(s))",
+            "[Calibration] Announcing %d newly calibrated model(s) to Logos: %s (now: %d model(s))",
             len(pending),
             pending,
             len(self._cfg.capabilities_models),
