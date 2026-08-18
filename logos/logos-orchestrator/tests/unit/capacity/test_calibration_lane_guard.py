@@ -279,3 +279,73 @@ def test_cycle_drops_an_action_whose_provider_started_calibrating():
     asyncio.run(planner._run_cycle())
 
     assert executed == ["lane-0"], "the second action must be dropped, not executed"
+
+
+# ---------------------------------------------------------------------------
+# Registry: the dispatch of start_calibration_session marks the provider
+# ---------------------------------------------------------------------------
+
+
+def _registry_answering_start(provider_id: int = 1, reply: dict | None = None):
+    """A registry whose websocket answers `start_calibration_session` with
+    *reply* as the command payload, plus a probe that records whether the
+    provider was already excluded when the command hit the wire."""
+    registry, session = _registry_with_session(provider_id)
+    session.first_status_received = True
+    planner = _planner_with_registry(registry)
+    seen_plannable: list[bool] = []
+
+    async def _send_json(message):
+        seen_plannable.append(planner._is_plannable(provider_id))
+        cmd_id = message["cmd_id"]
+        fut = session.pending_commands[cmd_id]
+        fut.set_result({"cmd_id": cmd_id, "success": True, "result": reply if reply is not None else {"ok": True}})
+
+    session.websocket.send_json = _send_json
+    return registry, session, seen_plannable
+
+
+def test_dispatching_a_start_excludes_the_provider_before_the_worker_confirms():
+    """The worker's started event is forwarded by a one-second poll loop, so
+    waiting for it leaves a window in which a cycle can still place a lane."""
+    registry, _session, seen_plannable = _registry_answering_start()
+
+    result = asyncio.run(registry.send_command(1, "start_calibration_session", params={"sleep_level": 1}))
+
+    assert result == {"ok": True}
+    assert seen_plannable == [False], "provider must be excluded before the command is sent"
+    assert registry.is_calibrating(1) is True
+
+
+def test_a_refused_start_releases_the_provider_again():
+    """The worker reports a refusal as a successful command carrying ok=False,
+    so the mark has to be undone on that payload — otherwise a worker that
+    never starts a session stays excluded forever."""
+    registry, _session, _ = _registry_answering_start(reply={"ok": False, "error": "node is in a degraded state"})
+
+    asyncio.run(registry.send_command(1, "start_calibration_session"))
+
+    assert registry.is_calibrating(1) is False
+
+
+def test_a_refused_start_keeps_an_already_running_session_excluded():
+    """The worker refuses a second start while one is in progress. Undoing must
+    restore the previous value, not clear it — clearing would hand the running
+    session's VRAM to the planner."""
+    registry, session, _ = _registry_answering_start(
+        reply={"ok": False, "error": "calibration session already in progress"}
+    )
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    assert registry.is_calibrating(1) is True
+
+    asyncio.run(registry.send_command(1, "start_calibration_session"))
+
+    assert registry.is_calibrating(1) is True
+
+
+def test_an_unrelated_command_does_not_touch_the_flag():
+    registry, session, _ = _registry_answering_start(reply={"ok": True})
+
+    asyncio.run(registry.send_command(1, "wake_lane", params={"lane_id": "lane-0"}))
+
+    assert registry.is_calibrating(1) is False

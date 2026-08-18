@@ -252,6 +252,10 @@ def _render_lane_diff(old: dict[str, Any], new: dict[str, Any], *, indent: str =
 # calibrate_uncalibrated endpoints, which send start_calibration_session
 # straight through the registry without touching the orchestrator's slot.
 CALIBRATION_SESSION_STARTED_EVENT = "calibration_session_started"
+# The command that starts a session. send_command marks the provider
+# calibrating the moment it dispatches this, rather than waiting for the
+# worker's started event — see send_command for why.
+START_CALIBRATION_SESSION_ACTION = "start_calibration_session"
 TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
 
@@ -898,11 +902,33 @@ class LogosNodeRuntimeRegistry:
             "action": action,
             "params": params or {},
         }
+
+        # Starting a session is the one command whose effect the planner must
+        # see before the worker confirms it. The worker's started event is
+        # forwarded by a one-second poll loop, and within that second the
+        # provider still looks plannable — long enough for a cycle to place a
+        # lane on the VRAM the probes are about to claim. Marking it here, on
+        # the only path all three callers use (nightly tick and both admin
+        # calibrate_uncalibrated endpoints), closes the window. The worker's
+        # own events remain the authority for the rest of the session.
+        calibration_start = action == START_CALIBRATION_SESSION_ACTION
+        was_calibrating = session.calibrating
+        if calibration_start:
+            self._set_calibrating(session, True, "start_calibration_session dispatched")
+
+        def _undo_optimistic_calibration_mark() -> None:
+            # Restore rather than clear: the worker refuses a start while a
+            # session is already running, and clearing would then release a
+            # live session for lane placement.
+            if calibration_start:
+                self._set_calibrating(session, was_calibrating, "start_calibration_session refused")
+
         try:
             async with session.send_lock:
                 await session.websocket.send_json(message)
         except Exception as exc:  # noqa: BLE001
             session.pending_commands.pop(cmd_id, None)
+            _undo_optimistic_calibration_mark()
             raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
 
         try:
@@ -920,11 +946,22 @@ class LogosNodeRuntimeRegistry:
                 timeout_seconds=int(max(1, timeout_seconds)),
                 cooldown_seconds=5.0,
             )
+            # Deliberately not undone here: a timeout leaves it unknown whether
+            # the session started, and releasing a running one is the failure
+            # this guard exists to prevent. The worker's terminal event, or its
+            # hello on the next connect, settles the flag either way.
             raise LogosNodeOfflineError("Command timeout waiting for worker response") from exc
 
         if not bool(result.get("success", False)):
+            _undo_optimistic_calibration_mark()
             raise LogosNodeCommandError(str(result.get("error", "unknown worker command error")))
-        return result.get("result", {})
+        payload = result.get("result", {})
+        # A refused start (session already running, node unhealthy) comes back
+        # as a successful command carrying ok=False, not as an error — so the
+        # check above does not see it.
+        if calibration_start and isinstance(payload, dict) and payload.get("ok") is False:
+            _undo_optimistic_calibration_mark()
+        return payload
 
     async def send_stream_command(
         self,
