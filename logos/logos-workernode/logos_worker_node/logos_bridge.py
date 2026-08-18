@@ -59,6 +59,13 @@ class _CalibrationSession:
         # Updated by the session driver as it walks the model list — surfaced
         # so a future status RPC could inspect what's running without polling.
         self.current_model: str | None = None
+        # Models that finished calibrating during this session and are not in
+        # capabilities_models yet. Held back until the session ends so the
+        # server's capacity planner cannot place a lane on this worker while
+        # the remaining models are still probing the GPU — a lane loaded
+        # mid-session steals the VRAM every subsequent probe needs and turns
+        # the whole KV search into a wall of false OOM failures.
+        self.pending_capabilities: list[str] = []
 
 
 # ANSI color codes for structured log output
@@ -1032,15 +1039,21 @@ class LogosBridgeClient:
                     save_profiles(profiles_path, existing)
                     model_profiles._load_persisted()  # noqa: SLF001
                     # Models that were pruned from capabilities at startup
-                    # because they had no profile must be re-announced now
-                    # that they're calibrated; otherwise the server never
-                    # learns the worker can serve them.
-                    if model_name not in self._cfg.capabilities_models:
-                        self._cfg.capabilities_models = list(self._cfg.capabilities_models) + [model_name]
+                    # because they had no profile must be re-announced once
+                    # they're calibrated; otherwise the server never learns
+                    # the worker can serve them. Queue the announce instead of
+                    # applying it right away — see pending_capabilities.
+                    already_queued = (
+                        model_name in self._cfg.capabilities_models or model_name in session.pending_capabilities
+                    )
+                    if not already_queued:
+                        session.pending_capabilities.append(model_name)
                         logger.info(
-                            "[Calibration] Re-announcing %s to Logos (capabilities now: %d model(s))",
+                            "[Calibration] Announce of %s deferred until session ends "
+                            "(%d model(s) queued) — a lane started now would steal VRAM "
+                            "from the remaining probes",
                             model_name,
-                            len(self._cfg.capabilities_models),
+                            len(session.pending_capabilities),
                         )
                     logger.info(
                         "[Calibration] Completed model=%s base_residency=%.0f MB",
@@ -1108,6 +1121,11 @@ class LogosBridgeClient:
             terminal_event = "calibration_session_cancelled"
         finally:
             session.current_model = None
+            # Publish before the terminal event: the orchestrator frees its
+            # active-provider slot on that event and the planner may act on
+            # the very next status push, so the capability list must already
+            # be complete by then.
+            self._publish_pending_capabilities(session)
             self._record_calibration_event(
                 terminal_event,
                 details=f"sleep_level={session.sleep_level}",
@@ -1120,6 +1138,42 @@ class LogosBridgeClient:
             if self._active_calibration_session is session:
                 self._active_calibration_session = None
             logger.info("[Calibration] Session ended (%s)", terminal_event)
+
+    def _publish_pending_capabilities(self, session: _CalibrationSession) -> None:
+        """Merge models calibrated during *session* into capabilities_models.
+
+        Called once the session is over — including the cancelled path, where
+        the models that did complete are fully calibrated and persisted, so
+        holding them back any longer would only delay serving them until the
+        next worker restart.
+
+        Announcing mid-session is what this defers: the server reacts to a new
+        capability by placing a lane, and a lane loaded while the session is
+        still probing occupies the VRAM the probes need. Every following
+        kv-cache size then fails with "Free memory on device cuda:0 ... is less
+        than desired GPU memory utilization", the tp escalation reads that as
+        "model doesn't fit", and calibration gives up on a model that was
+        working minutes earlier.
+        """
+        pending = [m for m in session.pending_capabilities if m not in self._cfg.capabilities_models]
+        session.pending_capabilities = []
+        if not pending:
+            return
+        self._cfg.capabilities_models = list(self._cfg.capabilities_models) + pending
+        # capabilities_models rides alongside the runtime payload but is not
+        # part of the dedupe signature. At session end every lane is already
+        # torn down, so the runtime payload is frequently byte-identical to
+        # the previous one and the push would be suppressed — dropping the
+        # announce until some unrelated lane change happens to occur. Clear
+        # the signature so the next push goes out regardless.
+        self._last_runtime_signature = None
+        logger.info(
+            "[Calibration] Announcing %d newly calibrated model(s) to Logos: %s "
+            "(capabilities now: %d model(s))",
+            len(pending),
+            pending,
+            len(self._cfg.capabilities_models),
+        )
 
     async def _maybe_convert_sharded_checkpoint(
         self,
