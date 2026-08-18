@@ -43,6 +43,11 @@ _INFERENCE_RELAY_TIMEOUT = httpx.Timeout(
 _MAX_CALIBRATION_LOG_TEXT_BYTES = 512 * 1024
 
 
+# Commands that can grow this node's VRAM footprint. Refused while a
+# calibration session holds the GPU — see _execute_command.
+_VRAM_GROWING_ACTIONS = frozenset({"add_lane", "apply_lanes", "wake_lane", "reconfigure_lane"})
+
+
 class _CalibrationSession:
     """Worker-driven calibration loop state.
 
@@ -308,6 +313,12 @@ class LogosBridgeClient:
                 last_refresh = now
 
     async def _event_loop(self, ws) -> None:
+        # The first drain after a connect is a replay of the whole log, so it
+        # can carry lifecycle events from sessions that ended long ago. They
+        # are flagged: the server takes its calibration state from the hello
+        # instead of inferring it from a backlog whose order says nothing about
+        # what is running now.
+        replay = True
         while not self._stopping.is_set():
             await asyncio.sleep(1)
             events = self._app.state.lane_manager.event_log
@@ -318,9 +329,11 @@ class LogosBridgeClient:
                         "type": "event",
                         "worker_id": self.worker_id,
                         "event": event.model_dump(mode="json"),
+                        "replay": replay,
                     },
                 )
             self._last_event_seq = len(events)
+            replay = False
 
     async def _send_hello(self, ws) -> None:
         max_lanes = 0
@@ -540,6 +553,32 @@ class LogosBridgeClient:
     async def _execute_command(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         lane_manager = self._app.state.lane_manager
 
+        if action in _VRAM_GROWING_ACTIONS and self._calibration_session_is_live():
+            # Last line of defence, at the resource itself. The server excludes
+            # a calibrating worker from lane placement, but every mechanism it
+            # has for knowing lags reality by some amount — an event in flight,
+            # a plan made a moment ago — and a lane placed here takes the VRAM
+            # the probes need, which fails the kv-cache search at sizes that
+            # would otherwise fit. Refusing locally makes those races harmless.
+            #
+            # The session's own lane work does not come through here: it drives
+            # the lane manager directly (destroy_all) and runs its probes on
+            # _CALIBRATION_PORT. The server re-spawns lanes via apply_lanes once
+            # the session ends, which is why that command in particular has to
+            # be refused while it is still running.
+            logger.warning(
+                "[Calibration] refusing %s: a calibration session is running and holds this node's VRAM",
+                action,
+            )
+            return {
+                "ok": False,
+                "error": (
+                    f"'{action}' is refused while a calibration session is running: "
+                    f"the session has freed this node's VRAM for its probes."
+                ),
+                "calibrating": True,
+            }
+
         if action == "infer":
             return await self._execute_infer_command(params)
         if action == "get_runtime":
@@ -583,6 +622,18 @@ class LogosBridgeClient:
             return await self._handle_stop_calibration_session()
 
         raise ValueError(f"Unsupported bridge command '{action}'")
+
+    def _calibration_session_is_live(self) -> bool:
+        """True while a calibration session is actually running.
+
+        A finished session can linger in ``_active_calibration_session`` until
+        the next start clears it, so the task state is what counts.
+        """
+        session = self._active_calibration_session
+        if session is None:
+            return False
+        task = session.task
+        return task is None or not task.done()
 
     async def _handle_start_calibration_session(self, params: dict[str, Any]) -> dict[str, Any]:
         """Start a worker-driven calibration session.

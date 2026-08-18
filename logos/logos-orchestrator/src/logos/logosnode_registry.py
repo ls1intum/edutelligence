@@ -739,7 +739,7 @@ class LogosNodeRuntimeRegistry:
             result.append(dict(sample))
         return result
 
-    async def append_event(self, provider_id: int, event: dict[str, Any]) -> None:
+    async def append_event(self, provider_id: int, event: dict[str, Any], replay: bool = False) -> None:
         session = await self._get_session(provider_id)
         if session is None:
             return
@@ -747,7 +747,8 @@ class LogosNodeRuntimeRegistry:
         if isinstance(event, dict):
             session.latest_events.append(event)
             session.latest_events = session.latest_events[-500:]
-            self._track_calibration_state(session, event)
+            if not replay:
+                self._track_calibration_state(session, event)
             for subscriber in tuple(self._event_subscribers):
                 try:
                     subscriber(provider_id, event)
@@ -764,11 +765,14 @@ class LogosNodeRuntimeRegistry:
         Driven by the worker rather than by whoever sent
         ``start_calibration_session``: the admin calibrate_uncalibrated
         endpoints bypass the CalibrationOrchestrator's slot entirely, so its
-        ``_active_provider_id`` is not a complete picture. On reconnect the
-        worker replays its event log from seq 0, so a session that is still
-        running re-marks the fresh ProviderSession — but the replay is best
-        effort (the log is capped and arrives after the first status), so the
-        authoritative value for a fresh session comes from ``hello``.
+        ``_active_provider_id`` is not a complete picture.
+
+        Only live events reach this. The worker's post-connect replay is
+        excluded by ``append_event``, because a backlog's order says nothing
+        about what is running now: the log still holds the terminal event of an
+        earlier session, and replaying it would clear the flag that ``hello``
+        had just set correctly for the session actually in progress. ``hello``
+        is the authority at connect, these events for everything after.
         """
         event_name = str(event.get("event", "")).strip()
         if event_name == CALIBRATION_SESSION_STARTED_EVENT:

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from logos_worker_node.logos_bridge import LogosBridgeClient
+from logos_worker_node.logos_bridge import LogosBridgeClient, _CalibrationSession
 from logos_worker_node.models import LaneStatus, LogosConfig, ProcessState, ProcessStatus
 
 
@@ -1113,3 +1113,126 @@ async def test_stream_200_with_no_output_fails_clean_without_start(monkeypatch):
     assert [f["type"] for f in frames] == ["stream_end"]
     assert frames[-1]["success"] is False
     assert "stream_start" not in [f["type"] for f in frames]
+
+
+# ---------------------------------------------------------------------------
+# VRAM-growing commands are refused while a calibration session holds the GPU
+# ---------------------------------------------------------------------------
+
+
+def _client_with_calibration_session(session_done: bool = False) -> LogosBridgeClient:
+    app = _DummyApp()
+    app.state.lane_manager = object()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    session = _CalibrationSession(sleep_level=1)
+    session.task = SimpleNamespace(done=lambda: session_done)
+    client._active_calibration_session = session  # noqa: SLF001
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["add_lane", "apply_lanes", "wake_lane", "reconfigure_lane"])
+async def test_vram_growing_commands_are_refused_during_calibration(action):
+    """The session freed this node's VRAM for its probes. A lane placed now
+    takes the memory they need and the kv-cache search fails at sizes that
+    would otherwise fit — so the node refuses locally, whatever the server
+    currently believes."""
+    client = _client_with_calibration_session()
+
+    result = await client._execute_command(action, {"lane_id": "lane-a"})  # noqa: SLF001
+
+    assert result["ok"] is False
+    assert result["calibrating"] is True
+    assert action in result["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["delete_lane", "sleep_lane"])
+async def test_vram_freeing_commands_are_still_accepted_during_calibration(action):
+    """Only growth is refused — the guard must not block the server from
+    freeing memory the session could use."""
+    client = _client_with_calibration_session()
+    calls: list[str] = []
+
+    async def _remove_lane(lane_id):
+        calls.append(f"remove:{lane_id}")
+
+    async def _sleep_lane(lane_id, level=1, mode="wait"):  # noqa: ARG001
+        calls.append(f"sleep:{lane_id}")
+        return _make_lane_status()
+
+    client._app.state.lane_manager = SimpleNamespace(  # noqa: SLF001
+        remove_lane=_remove_lane,
+        sleep_lane=_sleep_lane,
+    )
+
+    await client._execute_command(action, {"lane_id": "lane-a"})  # noqa: SLF001
+
+    assert calls, f"{action} must reach the lane manager"
+
+
+@pytest.mark.asyncio
+async def test_a_finished_session_does_not_keep_refusing():
+    """_active_calibration_session lingers until the next start clears it, so
+    the task state is what decides — otherwise the node would refuse lanes
+    forever after its first session."""
+    client = _client_with_calibration_session(session_done=True)
+    added: list[str] = []
+
+    async def _add_lane(lane_config):
+        added.append(lane_config.lane_id)
+        return _make_lane_status()
+
+    client._app.state.lane_manager = SimpleNamespace(add_lane=_add_lane)  # noqa: SLF001
+
+    await client._execute_command(  # noqa: SLF001
+        "add_lane",
+        {"lane_id": "lane-a", "model": "qwen2.5-coder:32b"},
+    )
+
+    assert added == ["lane-a"]
+
+
+@pytest.mark.asyncio
+async def test_event_loop_flags_the_post_connect_replay():
+    """The first drain after a connect replays the whole log, which can hold
+    lifecycle events from sessions that ended long ago. The server needs to
+    tell those apart from live ones, because a backlog's order says nothing
+    about what is running now."""
+    app = _DummyApp()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    def _event(name: str):
+        return SimpleNamespace(model_dump=lambda mode="json", _n=name: {"event": _n})
+
+    backlog = [_event("calibration_session_finished")]
+    live = backlog + [_event("calibration_session_started")]
+    drains = {"count": 0}
+
+    class _LaneManager:
+        @property
+        def event_log(self):
+            drains["count"] += 1
+            return backlog if drains["count"] == 1 else live
+
+    app.state.lane_manager = _LaneManager()
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if len(sent) == 2:
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object())  # noqa: SLF001
+
+    assert [p["event"]["event"] for p in sent] == [
+        "calibration_session_finished",
+        "calibration_session_started",
+    ]
+    assert [p["replay"] for p in sent] == [True, False]

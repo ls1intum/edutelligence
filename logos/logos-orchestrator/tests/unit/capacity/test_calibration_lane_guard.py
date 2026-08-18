@@ -81,19 +81,40 @@ def test_unrelated_events_do_not_clear_the_flag():
         assert registry.is_calibrating(1) is True, f"{name} must not end the session"
 
 
-def test_flag_is_restored_when_the_worker_replays_events_after_reconnect():
-    """The worker resets _last_event_seq to 0 on reconnect and replays its
-    log, so a session that is still running re-marks the fresh session."""
-    registry, _ = _registry_with_session()
-    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+def test_replayed_events_do_not_move_the_flag():
+    """The post-connect replay is a backlog whose order says nothing about what
+    is running now — hello owns the state at connect (see the hello tests)."""
+    registry, session = _registry_with_session()
 
-    # Reconnect: attach_session builds a brand new ProviderSession.
-    _, fresh = _registry_with_session()
-    registry._sessions[1] = fresh  # noqa: SLF001
+    asyncio.run(registry.append_event(1, _event("calibration_session_started"), replay=True))
     assert registry.is_calibrating(1) is False
 
-    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    session.calibrating = True
+    asyncio.run(registry.append_event(1, _event("calibration_session_finished"), replay=True))
     assert registry.is_calibrating(1) is True
+
+
+def test_a_stale_terminal_event_in_the_replay_cannot_clear_the_hello_state():
+    """The concrete reconnect case: the log still holds the terminal event of an
+    earlier session, and it is replayed *before* the current session's started
+    event. Acting on it would clear the flag hello had just set correctly."""
+    registry, session = _registry_with_session()
+    session.first_status_received = True
+    planner = _planner_with_registry(registry)
+
+    # Reconnect mid-session: hello reports the truth.
+    asyncio.run(registry.on_hello(provider_id=1, worker_id="worker-a", calibrating=True))
+
+    # Replay: previous session's terminal event, then the current session's start.
+    asyncio.run(registry.append_event(1, _event("calibration_session_finished"), replay=True))
+    assert planner._is_plannable(1) is False, "a stale terminal event must not open a placement window"
+
+    asyncio.run(registry.append_event(1, _event("calibration_session_started"), replay=True))
+    assert registry.is_calibrating(1) is True
+
+    # Live events still end the session normally.
+    asyncio.run(registry.append_event(1, _event("calibration_session_finished")))
+    assert planner._is_plannable(1) is True
 
 
 def test_is_calibrating_is_false_for_unknown_provider():

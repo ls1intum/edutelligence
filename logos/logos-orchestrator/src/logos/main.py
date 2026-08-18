@@ -3890,6 +3890,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
                     event=event,
+                    replay=bool(payload.get("replay", False)),
                 )
                 if event.get("event") == "calibration_probe_log":
                     try:
