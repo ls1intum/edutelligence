@@ -33,6 +33,16 @@ logger.setLevel(logging.INFO)
 
 
 # This class tests the relation of multiple generated questions within one session.
+#
+# Marked "integration" and excluded from the default pytest run (see the
+# addopts/markers config in pyproject.toml): setUpClass below drives the real
+# AskUserPipeline, which invokes the LLMs configured in llm_config.yml, and
+# test_LLM_repeating_topics invokes another LLM to judge the results. Those
+# executions invoke configured LLMs and therefore make the default suite
+# depend on external credentials/network access, incur model usage, and fail
+# in the clean CI configuration whose example model entries have no API
+# keys. Run explicitly with `pytest -m integration`.
+@pytest.mark.integration
 class TestAskUserMultipleQuestions(unittest.TestCase):
 
     @classmethod

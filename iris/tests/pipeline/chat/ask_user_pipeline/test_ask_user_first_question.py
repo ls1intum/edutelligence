@@ -2,6 +2,8 @@ import copy
 import logging
 import unittest
 
+import pytest
+
 from iris.pipeline.chat.ask_user_pipeline import AskUserPipeline
 from tests.pipeline.chat.ask_user_pipeline.helper.helper import (
     extract_keywords,
@@ -30,6 +32,16 @@ logger.setLevel(logging.INFO)
 # generated questions are only about correct parts of submission.
 # For this to happen, ResultDTO literal in DTO would have to be extended with feedback and the
 # test data with a test repository
+#
+# Marked "integration" and excluded from the default pytest run (see the
+# addopts/markers config in pyproject.toml): setUpClass below drives the real
+# AskUserPipeline, which invokes the LLMs configured in llm_config.yml, and
+# test_LLM_evaluation invokes another LLM to judge the results. Those
+# executions invoke configured LLMs and therefore make the default suite
+# depend on external credentials/network access, incur model usage, and fail
+# in the clean CI configuration whose example model entries have no API
+# keys. Run explicitly with `pytest -m integration`.
+@pytest.mark.integration
 class TestAskUserFirstQuestion(unittest.TestCase):
 
     @classmethod

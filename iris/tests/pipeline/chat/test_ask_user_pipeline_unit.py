@@ -116,6 +116,22 @@ def test_init_resolves_assess_pipeline_model_for_local():
     assert model_id == "chat-local"
 
 
+def test_init_binds_advanced_assessment_model_for_advanced_cloud_request():
+    # Regression test: previously __init__ always resolved the assessment
+    # model from the "default" variant, so an advanced-variant request would
+    # silently assess answers with the smaller default chat model instead of
+    # the advanced one.
+    advanced_variant = next(
+        v for v in AskUserPipeline.get_variants() if v.variant_id == "advanced"
+    )
+
+    pipeline = AskUserPipeline(local=False, variant=advanced_variant)
+
+    model_id = pipeline.assess_user_answer_pipeline.llm.request_handler.model_id
+    assert model_id == advanced_variant.agent_model
+    assert model_id == "oai-gpt-52"
+
+
 # --------------------------------------------------------------------------
 # memiris hooks
 # --------------------------------------------------------------------------

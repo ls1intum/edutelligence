@@ -57,22 +57,26 @@ class AskUserPipeline(
     guide_prompt_template: Any
     verdict_dependent_template: Any
 
-    def __init__(self, local: bool = False):
+    def __init__(self, local: bool = False, variant: AskUserVariant | None = None):
         """
         Initialize the ask-user agent pipeline.
 
         Args:
             local: Whether to resolve models against the local/self-hosted
                 configuration instead of the cloud configuration.
+            variant: The variant selected for this request. Determines which
+                assessment model is bound (e.g. "advanced" resolves to a
+                larger model than "default"). Falls back to the "default"
+                variant when not provided.
         """
         super().__init__(implementation_id="ask_user_chat_pipeline")
 
         # Create the assessment pipeline and its result variable
-        default_variant = next(
+        selected_variant = variant or next(
             v for v in self.get_variants() if v.variant_id == "default"
         )
         self.assess_user_answer_pipeline = AssessUserAnswerPipeline(
-            model=default_variant.model("chat", local)
+            model=selected_variant.model("chat", local)
         )
         self.verdict = None
 

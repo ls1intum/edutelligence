@@ -196,12 +196,15 @@ def test_worker_runs_pipeline_with_resolved_variant_on_success():
     finally:
         patcher.stop()
 
-    pipeline_cls.assert_called_once_with(local=False)
+    # AskUserVariant has no __eq__, so the resolved variant is compared by id.
+    init_kwargs = pipeline_cls.call_args.kwargs
+    assert init_kwargs["local"] is False
+    assert init_kwargs["variant"].id == "advanced"
+    assert init_kwargs["variant"].agent_model == "oai-gpt-52"
     call_kwargs = pipeline_instance.call_args.kwargs
     assert call_kwargs["dto"] is dto
     assert call_kwargs["callback"] is callback
     assert call_kwargs["event"] == "FIRST_QUESTION"
-    # AskUserVariant has no __eq__, so the resolved variant is compared by id.
     assert call_kwargs["variant"].id == "advanced"
     assert call_kwargs["variant"].agent_model == "oai-gpt-52"
     callback.fail.assert_not_called()
@@ -221,7 +224,9 @@ def test_worker_constructs_pipeline_with_local_flag_for_local_ai_selection():
     finally:
         patcher.stop()
 
-    pipeline_cls.assert_called_once_with(local=True)
+    init_kwargs = pipeline_cls.call_args.kwargs
+    assert init_kwargs["local"] is True
+    assert init_kwargs["variant"].id == "default"
     callback.fail.assert_not_called()
 
 

@@ -87,6 +87,12 @@ show_missing = true
 [tool.coverage.html]
 directory = "htmlcov"
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that invoke a real, configured LLM (network access, API keys, model usage); excluded from the default run, opt in with `pytest -m integration`",
+]
+addopts = "-m 'not integration'"
+
 [virtualenvs]
 create = true
 in-project = true

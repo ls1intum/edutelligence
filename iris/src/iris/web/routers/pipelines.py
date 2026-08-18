@@ -372,7 +372,7 @@ def run_ask_user_pipeline_worker(
     try:
         variant = find_variant(AskUserPipeline.get_variants(), variant_id)
         is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
-        pipeline = AskUserPipeline(local=is_local)
+        pipeline = AskUserPipeline(local=is_local, variant=variant)
         pipeline(dto=dto, variant=variant, callback=callback, event=event)
 
     except Exception as e:

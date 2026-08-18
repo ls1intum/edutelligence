@@ -3,6 +3,8 @@ import json
 import logging
 import unittest
 
+import pytest
+
 from iris.pipeline.chat.assess_user_answer_pipeline import AssessUserAnswerPipeline
 from tests.pipeline.chat.ask_user_pipeline.helper.helper import (
     get_pass_ratio,
@@ -19,6 +21,16 @@ logger.setLevel(logging.INFO)
 
 
 # This class tests the decision process of assessing a student's answer to a given question.
+#
+# Marked "integration" and excluded from the default pytest run (see the
+# addopts/markers config in pyproject.toml): setUpClass below constructs a
+# real AssessUserAnswerPipeline, and every test method drives it to invoke
+# the LLM configured in llm_config.yml. Those executions invoke configured
+# LLMs and therefore make the default suite depend on external
+# credentials/network access, incur model usage, and fail in the clean CI
+# configuration whose example model entries have no API keys. Run explicitly
+# with `pytest -m integration`.
+@pytest.mark.integration
 class TestAssessUserAnswer(unittest.TestCase):
 
     # Helper function to run assessment pipeline with given parameters
