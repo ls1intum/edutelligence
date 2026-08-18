@@ -161,6 +161,11 @@ class LogosBridgeClient:
                     self._last_connected_at = datetime.now(timezone.utc)
                     self._consecutive_failures = 0
                     self._last_event_seq = 0
+                    # Everything already in the log at this moment is a
+                    # backlog the server has no use for; anything appended
+                    # from here on is live. The first drain carries both, and
+                    # only this boundary can tell them apart — see _event_loop.
+                    replay_boundary = self._current_event_log_length()
                     self._last_runtime_signature = None
                     self._last_runtime_payload = {}
                     caps = list(self._cfg.capabilities_models) if self._cfg.capabilities_models else []
@@ -176,7 +181,10 @@ class LogosBridgeClient:
                     await self._send_runtime_status(ws, force=True)
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws), name="logos-bridge-heartbeat")
                     status_task = asyncio.create_task(self._status_refresh_loop(ws), name="logos-bridge-status")
-                    event_task = asyncio.create_task(self._event_loop(ws), name="logos-bridge-events")
+                    event_task = asyncio.create_task(
+                        self._event_loop(ws, replay_boundary=replay_boundary),
+                        name="logos-bridge-events",
+                    )
                     try:
                         while not self._stopping.is_set():
                             raw = await ws.recv()
@@ -312,28 +320,35 @@ class LogosBridgeClient:
                 await self._send_runtime_status(ws, force=False)
                 last_refresh = now
 
-    async def _event_loop(self, ws) -> None:
-        # The first drain after a connect is a replay of the whole log, so it
-        # can carry lifecycle events from sessions that ended long ago. They
-        # are flagged: the server takes its calibration state from the hello
-        # instead of inferring it from a backlog whose order says nothing about
-        # what is running now.
-        replay = True
+    async def _event_loop(self, ws, replay_boundary: int = 0) -> None:
+        # Events below *replay_boundary* were already in the log when this
+        # connection came up: a backlog that can hold lifecycle events from
+        # sessions long finished, in an order that says nothing about what is
+        # running now. They are flagged so the server keeps taking its
+        # calibration state from the hello instead.
+        #
+        # The boundary is a count, not a wall-clock cut: the first drain runs a
+        # second after the connect, and a session that ends inside that second
+        # produces a live terminal event which must not be dismissed as
+        # backlog — doing so would leave the provider excluded from lane
+        # placement with no further event coming to release it.
         while not self._stopping.is_set():
             await asyncio.sleep(1)
             events = self._app.state.lane_manager.event_log
-            for event in events[self._last_event_seq :]:
+            # The log is capped, so it can shrink from the front; clamping keeps
+            # the boundary from reaching past it and mislabelling live events.
+            boundary = min(replay_boundary, len(events))
+            for index, event in enumerate(events[self._last_event_seq :], start=self._last_event_seq):
                 await self._send_json(
                     ws,
                     {
                         "type": "event",
                         "worker_id": self.worker_id,
                         "event": event.model_dump(mode="json"),
-                        "replay": replay,
+                        "replay": index < boundary,
                     },
                 )
             self._last_event_seq = len(events)
-            replay = False
 
     async def _send_hello(self, ws) -> None:
         max_lanes = 0
@@ -622,6 +637,15 @@ class LogosBridgeClient:
             return await self._handle_stop_calibration_session()
 
         raise ValueError(f"Unsupported bridge command '{action}'")
+
+    def _current_event_log_length(self) -> int:
+        lane_manager = getattr(self._app.state, "lane_manager", None)
+        if lane_manager is None:
+            return 0
+        try:
+            return len(lane_manager.event_log)
+        except Exception:  # noqa: BLE001
+            return 0
 
     def _calibration_session_is_live(self) -> bool:
         """True while a calibration session is actually running.

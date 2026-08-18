@@ -1196,11 +1196,12 @@ async def test_a_finished_session_does_not_keep_refusing():
 
 
 @pytest.mark.asyncio
-async def test_event_loop_flags_the_post_connect_replay():
-    """The first drain after a connect replays the whole log, which can hold
-    lifecycle events from sessions that ended long ago. The server needs to
-    tell those apart from live ones, because a backlog's order says nothing
-    about what is running now."""
+async def test_event_loop_flags_only_the_backlog_that_existed_at_connect():
+    """The first drain runs a second after the connect, so it carries both the
+    backlog and anything created in that second. Only the backlog is history:
+    a session ending inside that second produces a live terminal event, and
+    dismissing it as backlog would leave the provider excluded from lane
+    placement with no further event coming to release it."""
     app = _DummyApp()
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
@@ -1208,8 +1209,37 @@ async def test_event_loop_flags_the_post_connect_replay():
     def _event(name: str):
         return SimpleNamespace(model_dump=lambda mode="json", _n=name: {"event": _n})
 
-    backlog = [_event("calibration_session_finished")]
-    live = backlog + [_event("calibration_session_started")]
+    # One event predates the connection; the session then ends before the drain.
+    log = [_event("calibration_session_finished"), _event("calibration_session_cancelled")]
+    app.state.lane_manager = SimpleNamespace(event_log=log)
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if len(sent) == 2:
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object(), replay_boundary=1)  # noqa: SLF001
+
+    assert [p["event"]["event"] for p in sent] == [
+        "calibration_session_finished",
+        "calibration_session_cancelled",
+    ]
+    assert [p["replay"] for p in sent] == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_event_loop_marks_later_drains_live():
+    """Only the first drain can reach below the boundary."""
+    app = _DummyApp()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    backlog = [SimpleNamespace(model_dump=lambda mode="json": {"event": "lane_started"})]
+    live = backlog + [SimpleNamespace(model_dump=lambda mode="json": {"event": "calibration_session_finished"})]
     drains = {"count": 0}
 
     class _LaneManager:
@@ -1229,10 +1259,20 @@ async def test_event_loop_flags_the_post_connect_replay():
 
     client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
 
-    await client._event_loop(object())  # noqa: SLF001
+    await client._event_loop(object(), replay_boundary=1)  # noqa: SLF001
 
-    assert [p["event"]["event"] for p in sent] == [
-        "calibration_session_finished",
-        "calibration_session_started",
-    ]
     assert [p["replay"] for p in sent] == [True, False]
+
+
+def test_replay_boundary_is_snapshotted_before_the_first_drain():
+    """The boundary has to come from the connect path, not from the loop: by the
+    time the first drain runs the log may already have grown."""
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(event_log=[1, 2, 3])
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    assert client._current_event_log_length() == 3  # noqa: SLF001
+
+    app.state.lane_manager = None
+    assert client._current_event_log_length() == 0  # noqa: SLF001

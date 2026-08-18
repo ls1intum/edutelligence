@@ -747,8 +747,16 @@ class LogosNodeRuntimeRegistry:
         if isinstance(event, dict):
             session.latest_events.append(event)
             session.latest_events = session.latest_events[-500:]
-            if not replay:
-                self._track_calibration_state(session, event)
+            if replay:
+                # A replayed event is history, and every consumer of these
+                # events reads them as live state. CalibrationOrchestrator
+                # frees its cluster-wide slot on any terminal session event
+                # from the active provider, so a stale one in the backlog
+                # would release the slot mid-session and let the next tick
+                # start a second worker calibrating. The backlog stays in
+                # latest_events for history and diagnostics.
+                return
+            self._track_calibration_state(session, event)
             for subscriber in tuple(self._event_subscribers):
                 try:
                     subscriber(provider_id, event)
@@ -808,6 +816,9 @@ class LogosNodeRuntimeRegistry:
 
         Called synchronously inside ``append_event`` so subscribers must do
         cheap work (e.g. mutate in-memory state) and never block on I/O.
+
+        Live events only — the worker's post-connect replay is not delivered,
+        because subscribers read these events as the current state of the node.
         """
         if callback not in self._event_subscribers:
             self._event_subscribers.append(callback)

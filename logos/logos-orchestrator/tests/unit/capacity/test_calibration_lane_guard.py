@@ -353,7 +353,7 @@ def test_a_refused_start_keeps_an_already_running_session_excluded():
     """The worker refuses a second start while one is in progress. Undoing must
     restore the previous value, not clear it — clearing would hand the running
     session's VRAM to the planner."""
-    registry, session, _ = _registry_answering_start(
+    registry, _session, _ = _registry_answering_start(
         reply={"ok": False, "error": "calibration session already in progress"}
     )
     asyncio.run(registry.append_event(1, _event("calibration_session_started")))
@@ -365,8 +365,33 @@ def test_a_refused_start_keeps_an_already_running_session_excluded():
 
 
 def test_an_unrelated_command_does_not_touch_the_flag():
-    registry, session, _ = _registry_answering_start(reply={"ok": True})
+    registry, _session, _ = _registry_answering_start(reply={"ok": True})
 
     asyncio.run(registry.send_command(1, "wake_lane", params={"lane_id": "lane-0"}))
 
     assert registry.is_calibrating(1) is False
+
+
+def test_replayed_events_are_not_delivered_to_subscribers():
+    """Subscribers read these events as the node's current state.
+    CalibrationOrchestrator frees its cluster-wide slot on any terminal event
+    from the active provider, so a stale one in the backlog would release the
+    slot mid-session and let the next tick start a second worker calibrating."""
+    registry, _session = _registry_with_session()
+    seen: list[str] = []
+    registry.subscribe_to_events(lambda _pid, event: seen.append(event["event"]))
+
+    asyncio.run(registry.append_event(1, _event("calibration_session_finished"), replay=True))
+    assert seen == []
+
+    asyncio.run(registry.append_event(1, _event("calibration_session_finished")))
+    assert seen == ["calibration_session_finished"]
+
+
+def test_a_replayed_event_is_still_recorded_in_the_session_history():
+    """Filtering is about live state, not about dropping the backlog."""
+    registry, session = _registry_with_session()
+
+    asyncio.run(registry.append_event(1, _event("calibration_session_finished"), replay=True))
+
+    assert [e["event"] for e in session.latest_events] == ["calibration_session_finished"]
