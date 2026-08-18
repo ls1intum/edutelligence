@@ -670,6 +670,20 @@ class CapacityPlanner:
                 # Acquire per-lane lock so concurrent operations on the same
                 # lane are serialized, but unrelated lanes remain unblocked.
                 async with self._lane_lock(action.provider_id, action.lane_id):
+                    # Re-check under the lock: actions execute sequentially and
+                    # a cold load takes ~90s, so a calibration session can start
+                    # after this action was planned. Acting on the stale verdict
+                    # would place the very lane the guard exists to prevent.
+                    if not self._is_plannable(action.provider_id):
+                        logger.info(
+                            "Dropping planned %s on worker=%s model=%s lane=%s: "
+                            "provider became unplannable after planning",
+                            action.action,
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                            action.model_name,
+                            action.lane_id,
+                        )
+                        continue
                     await self._execute_action_with_confirmation(action)
                 prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(action=action.action).inc()
             except Exception:
@@ -3490,6 +3504,11 @@ class CapacityPlanner:
 
         Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM=false`` (the default).
 
+        Candidate workers pass through ``_is_plannable`` for the same
+        reasons the main demand pass does — a replica is a plain ``load``,
+        so it would take the VRAM a calibration session reserved for its
+        probes just as readily.
+
         Models that already had an action emitted this cycle (in
         ``cycle_planned_models``) are skipped — the main demand pass
         already handles them.
@@ -3511,7 +3530,7 @@ class CapacityPlanner:
                 continue
 
             for pid in provider_ids:
-                if self._registry is not None and not self._registry.has_received_first_status(pid):
+                if not self._is_plannable(pid):
                     continue
                 try:
                     lanes = self._facade.get_all_provider_lane_signals(pid)

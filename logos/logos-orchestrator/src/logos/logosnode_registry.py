@@ -290,8 +290,10 @@ class ProviderSession:
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
     max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
     # True between the worker's calibration_session_started event and its
-    # terminal event. A calibrating worker has freed all VRAM for its probes,
-    # so its idle lanes and free VRAM are reserved rather than available.
+    # terminal event, and seeded from the worker's hello so a reconnect
+    # mid-session is correct before the first status arrives. A calibrating
+    # worker has freed all VRAM for its probes, so its idle lanes and free
+    # VRAM are reserved rather than available.
     calibrating: bool = False
 
     def is_stale(self, stale_after_seconds: int) -> bool:
@@ -578,6 +580,7 @@ class LogosNodeRuntimeRegistry:
         capabilities_models: list[str] | None = None,
         max_lanes: int = 0,
         configured_models: list[str] | None = None,
+        calibrating: bool | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -585,6 +588,14 @@ class LogosNodeRuntimeRegistry:
         session.worker_id = worker_id or session.worker_id
         session.last_heartbeat = _utc_now()
         session.max_lanes = max_lanes
+        # Hello arrives before the first status, so this settles `calibrating`
+        # before `_is_plannable` can ever say yes for this session. Without it
+        # a reconnect mid-session would open a placement window: the fresh
+        # session starts non-calibrating and the event replay that would mark
+        # it only arrives after the first status. None = worker predates the
+        # field; leave the replay as the only source in that case.
+        if calibrating is not None:
+            self._set_calibrating(session, bool(calibrating), "hello")
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:
@@ -751,26 +762,33 @@ class LogosNodeRuntimeRegistry:
         endpoints bypass the CalibrationOrchestrator's slot entirely, so its
         ``_active_provider_id`` is not a complete picture. On reconnect the
         worker replays its event log from seq 0, so a session that is still
-        running re-marks the fresh ProviderSession.
+        running re-marks the fresh ProviderSession — but the replay is best
+        effort (the log is capped and arrives after the first status), so the
+        authoritative value for a fresh session comes from ``hello``.
         """
         event_name = str(event.get("event", "")).strip()
         if event_name == CALIBRATION_SESSION_STARTED_EVENT:
-            was = session.calibrating
-            session.calibrating = True
-            if not was:
-                logger.info(
-                    "provider=%s entered calibration — excluded from lane placement " "until the session ends",
-                    session.worker_id or str(session.provider_id),
-                )
+            self._set_calibrating(session, True, event_name)
         elif event_name in TERMINAL_CALIBRATION_SESSION_EVENTS:
-            was = session.calibrating
-            session.calibrating = False
-            if was:
-                logger.info(
-                    "provider=%s left calibration (%s) — eligible for lane placement again",
-                    session.worker_id or str(session.provider_id),
-                    event_name,
-                )
+            self._set_calibrating(session, False, event_name)
+
+    def _set_calibrating(self, session: ProviderSession, calibrating: bool, source: str) -> None:
+        """Set ``session.calibrating``, logging only actual transitions."""
+        if session.calibrating == calibrating:
+            return
+        session.calibrating = calibrating
+        if calibrating:
+            logger.info(
+                "provider=%s entered calibration (%s) — excluded from lane placement until the session ends",
+                session.worker_id or str(session.provider_id),
+                source,
+            )
+        else:
+            logger.info(
+                "provider=%s left calibration (%s) — eligible for lane placement again",
+                session.worker_id or str(session.provider_id),
+                source,
+            )
 
     def is_calibrating(self, provider_id: int) -> bool:
         """Return True while the worker is running a calibration session."""

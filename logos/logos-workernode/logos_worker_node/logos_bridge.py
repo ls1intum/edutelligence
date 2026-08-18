@@ -338,6 +338,13 @@ class LogosBridgeClient:
                 "configured_models": self._cfg.configured_models,
                 "max_lanes": max_lanes,
                 "static_lane_ids": static_lane_ids,
+                # Authoritative calibration state at connect time. The server
+                # excludes calibrating workers from lane placement; it cannot
+                # derive that from the replayed event log alone, because the
+                # log is in-memory, capped, and only reaches the server a
+                # moment after the first status has already made this worker
+                # look plannable.
+                "calibrating": self._active_calibration_session is not None,
                 "actions": [
                     "infer",
                     "infer_stream",
