@@ -2047,13 +2047,29 @@ _QWEN38_FLOOR_OK = (
 )
 
 
+# vLLM prints its init summary BEFORE capturing CUDA graphs, then emits
+# hundreds of warmup lines. Measured on the deimama log: the concurrency line
+# sits 137-241 lines from the end of its probe segment. Any tail window applied
+# to parser input therefore loses it.
+_QWEN38_WARMUP_LINE_COUNT = 200
+
+
+def _qwen38_warmup_noise(lines: int = _QWEN38_WARMUP_LINE_COUNT) -> str:
+    """Post-init CUDA-graph warmup chatter, as it follows every real start."""
+    return "".join(
+        f"(EngineCore pid=112949) INFO 08-18 08:13:3{i % 10} [backends.py:634] "
+        f"Capturing CUDA graphs (decode, PIECEWISE): batch {i}\n"
+        for i in range(lines)
+    )
+
+
 def _qwen38_full_context_ok(kv_mb: float, conc: float) -> str:
     """A probe that starts unshrunken and serves the model's full context."""
     return (
         f"(EngineCore pid=112949) INFO 08-18 08:13:33 [kv_cache_utils.py:2236] Maximum concurrency "
         f"for 262,144 tokens per request: {conc:.2f}x\n"
         f"(EngineCore pid=112949) INFO 08-18 08:13:33 [core.py:100] init engine, max_model_len=262144\n"
-    )
+    ) + _qwen38_warmup_noise()
 
 
 def test_kv_starved_floor_probe_does_not_flatten_curve(tmp_path: Path):
@@ -2083,7 +2099,9 @@ def test_kv_starved_floor_probe_does_not_flatten_curve(tmp_path: Path):
         kv_calls.append((kv_mb, pinned))
         if kv_mb <= 1024.0:
             # Floor: reject unshrunken, succeed once --max-model-len is pinned.
-            log_path.open("a", encoding="utf-8").write(_QWEN38_FLOOR_OK if pinned else _QWEN38_FLOOR_REJECT)
+            log_path.open("a", encoding="utf-8").write(
+                (_QWEN38_FLOOR_OK + _qwen38_warmup_noise()) if pinned else _QWEN38_FLOOR_REJECT
+            )
         else:
             log_path.open("a", encoding="utf-8").write(_qwen38_full_context_ok(kv_mb, conc_by_kv.get(kv_mb, 1.50)))
         mock_proc = MagicMock()
@@ -2132,3 +2150,16 @@ def test_kv_starved_floor_probe_does_not_flatten_curve(tmp_path: Path):
     assert all(mml == 262144 for mml in big.values()), f"large-KV points not at full context: {big}"
     # The curve must RISE — a flat curve is what made the planner pick min_kv.
     assert pairs[1024] < max(pairs.values())
+
+    # Concurrency must survive the warmup chatter that follows vLLM's init
+    # summary, otherwise the planner cannot tell 10G/1.22x from 17G/>2x and
+    # settles for the cheapest full-context point.
+    triples = result.kv_max_model_len_parallelity_pairs or []
+    par_by_kv = {round(kv): par for kv, _, par in triples}
+    assert par_by_kv.get(1024) == pytest.approx(1.00), par_by_kv
+    for kv_mb, expected in conc_by_kv.items():
+        if round(kv_mb) in par_by_kv:
+            assert par_by_kv[round(kv_mb)] == pytest.approx(
+                expected
+            ), f"kv={kv_mb} lost its concurrency annotation: {par_by_kv}"
+    assert any(p is not None and p > 2.0 for p in par_by_kv.values()), par_by_kv

@@ -66,6 +66,7 @@ _CALIBRATION_PORT = 11499
 _KV_CACHE_MIN_STEP_MB = 1024.0  # sweep step and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
 _FINAL_MEASUREMENT_RETRIES = 3  # retries for the final VRAM measurement startup
+_LOG_DIAGNOSTIC_TAIL_LINES = 80  # lines of probe log echoed into worker logs on failure
 _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 _SUCCEEDED_COMMANDS_FILE = "calibration_succeeded_commands.txt"
 _UNSUPPORTED_MODELS_FILE = "calibration_unsupported_models.txt"
@@ -995,15 +996,29 @@ def _log_size(log_path: Path) -> int:
         return 0
 
 
-def _read_log_since(log_path: Path, offset: int, max_lines: int = 80) -> str:
-    """Read the last *max_lines* of the log written AFTER *offset* bytes.
+def _tail_lines(text: str, max_lines: int) -> str:
+    """Last *max_lines* lines of *text* — for display only, never for parsing."""
+    lines = text.splitlines()
+    return "\n".join(lines[-max_lines:] if len(lines) > max_lines else lines)
+
+
+def _read_log_since(log_path: Path, offset: int, max_lines: int | None = None) -> str:
+    """Read the log written AFTER *offset* bytes — the whole probe segment.
 
     Reading the tail of the whole file (as this used to do) spans probe
-    boundaries, because all probes of a run append to one file. A successful
-    start emits hundreds of warmup lines, pushing that probe's own
-    "Maximum concurrency for N tokens per request" line out of an 80-line
-    window while stale lines from an EARLIER probe stay in it. Slicing from the
-    pre-spawn offset makes every extraction refer to the probe being parsed.
+    boundaries, because all probes of a run append to one file. Slicing from
+    the pre-spawn offset makes every extraction refer to the probe being parsed.
+
+    Returns the segment COMPLETE by default. A line cap must not be applied to
+    parser input: vLLM prints its init summary — including "Maximum concurrency
+    for N tokens per request", the only authoritative record of the context a
+    probe served — BEFORE the CUDA-graph warmup, which then emits hundreds of
+    lines. In the deimama Qwen3.8-27B log that line sits 137-241 lines from the
+    end of its segment, so an 80-line tail dropped it from 6 of 7 probes and
+    left every curve point without its concurrency annotation.
+
+    Pass *max_lines* only for human-facing diagnostics, where the newest lines
+    carry the failure and unbounded output would flood the logs.
     """
     try:
         with log_path.open("rb") as f:
@@ -1011,7 +1026,10 @@ def _read_log_since(log_path: Path, offset: int, max_lines: int = 80) -> str:
             chunk = f.read()
     except OSError:
         return ""
-    lines = chunk.decode("utf-8", errors="replace").splitlines()
+    text = chunk.decode("utf-8", errors="replace")
+    if max_lines is None:
+        return text
+    lines = text.splitlines()
     tail = lines[-max_lines:] if len(lines) > max_lines else lines
     return "\n".join(tail)
 
@@ -1636,17 +1654,18 @@ def calibrate_model(
                 stop_vllm(proc)
                 time.sleep(_VRAM_SETTLE_S)
                 return None
-            log_tail = _read_log_since(log_path, _spawn_log_offset)
+            # Parse the COMPLETE probe segment; echo only its tail to the logs.
+            probe_log = _read_log_since(log_path, _spawn_log_offset)
             logger.warning(
                 "        FAIL kv_cache=%s: %s",
                 kv_str,
                 exc,
             )
-            if log_tail:
+            if probe_log:
                 logger.warning(
                     "  -- vLLM log tail --\n%s%s%s\n  -- end vLLM log tail --",
                     _C_DIM,
-                    log_tail,
+                    _tail_lines(probe_log, _LOG_DIAGNOSTIC_TAIL_LINES),
                     _C_RESET,
                 )
             stop_vllm(proc)
@@ -1661,7 +1680,7 @@ def calibrate_model(
             # reads the partial result, surfaces ``node_unhealthy_reason``
             # into the runtime status, and the master orchestrator skips
             # this worker until the node recovers.
-            node_pattern = _classify_node_transient_error(log_tail)
+            node_pattern = _classify_node_transient_error(probe_log)
             if node_pattern is not None:
                 if not _node_unhealthy_box:
                     _node_unhealthy_box.append(node_pattern)
@@ -1686,7 +1705,7 @@ def calibrate_model(
             # with --max-model-len injected. The new fingerprint differs
             # (carries --max-model-len) so the blacklist check sees it as a
             # fresh attempt.
-            suggested_max_len = _extract_vllm_max_model_len_suggestion(log_tail)
+            suggested_max_len = _extract_vllm_max_model_len_suggestion(probe_log)
             if suggested_max_len is not None:
                 # This rejection is the one place where vLLM states the model's
                 # OWN limits ("max seq len (262144), 8.16 GiB KV cache is
@@ -1696,10 +1715,10 @@ def calibrate_model(
                 # caller keeps the sweep's cap and KV->context rate anchored to
                 # the model instead of to our own shrink.
                 if plan_overrides is not None:
-                    _obs_seq_len = _extract_vllm_max_seq_len(log_tail, allow_config_fallback=False)
+                    _obs_seq_len = _extract_vllm_max_seq_len(probe_log, allow_config_fallback=False)
                     if _obs_seq_len:
                         plan_overrides["_observed_model_max_seq_len"] = _obs_seq_len
-                    _obs_kv_gib = _extract_vllm_kv_gib_needed_for_full(log_tail)
+                    _obs_kv_gib = _extract_vllm_kv_gib_needed_for_full(probe_log)
                     if _obs_kv_gib:
                         plan_overrides["_observed_kv_gib_for_full"] = _obs_kv_gib
                 attempts_used = int(planned.get("_max_model_len_retry_count") or 0)
@@ -1736,7 +1755,7 @@ def calibrate_model(
             # blacklisting the command. The resolved value is captured from the
             # successful probe and persisted so the lane spawner can reuse it —
             # otherwise the lane reverts to 1024 and crashes identically at runtime.
-            suggested_max_seqs = _extract_vllm_max_num_seqs_suggestion(log_tail)
+            suggested_max_seqs = _extract_vllm_max_num_seqs_suggestion(probe_log)
             if suggested_max_seqs is not None:
                 ns_attempts_used = int(planned.get("_max_num_seqs_retry_count") or 0)
                 current_seqs = planned.get("max_num_seqs")
@@ -1781,7 +1800,7 @@ def calibrate_model(
             # line. Persist into the model-level unsupported list and
             # latch ``_unsupported_box`` so the search loops bail without
             # spawning vLLM again.
-            fatal_pattern = _classify_fatal_load_error(log_tail)
+            fatal_pattern = _classify_fatal_load_error(probe_log)
             if fatal_pattern is not None and not _unsupported_box:
                 _record_unsupported_model(
                     unsupported_path,
@@ -1851,14 +1870,14 @@ def calibrate_model(
                 )
                 return None
             _probes[kv_mb] = "ok"
-            # Read only what THIS probe wrote. Reading the whole file's tail
-            # mixes in the previous probe's lines and drops this one's own
-            # init summary behind the warmup output.
-            log_tail = _read_log_since(log_path, _last_probe_log_offset[0])
-            _conc = _extract_vllm_max_concurrency(log_tail)
+            # Read the COMPLETE segment THIS probe wrote. Reading the whole
+            # file's tail mixes in the previous probe's lines, and any line cap
+            # drops this probe's init summary behind its warmup output.
+            probe_log = _read_log_since(log_path, _last_probe_log_offset[0])
+            _conc = _extract_vllm_max_concurrency(probe_log)
             if _conc is not None:
                 anchors_parallelity[kv_mb] = _conc
-            suggested_mml = _extract_vllm_max_model_len_suggestion(log_tail)
+            suggested_mml = _extract_vllm_max_model_len_suggestion(probe_log)
             # Model-level truths seen while this probe was still being rejected
             # (captured in _try_start, where they are guaranteed to be in view).
             _injected_max_len = bool(probe_overrides.get("_max_model_len_retry_count") or 0)
@@ -1872,15 +1891,17 @@ def calibrate_model(
                 # Only consult the config dump when we did NOT inject a
                 # --max-model-len for this probe; otherwise it echoes our own
                 # shrunken value back as if it were the model's default.
-                model_default_max_len = _extract_vllm_max_seq_len(log_tail, allow_config_fallback=not _injected_max_len)
+                model_default_max_len = _extract_vllm_max_seq_len(
+                    probe_log, allow_config_fallback=not _injected_max_len
+                )
             if kv_needed_for_full_mb is None:
-                _gib = _extract_vllm_kv_gib_needed_for_full(log_tail)
+                _gib = _extract_vllm_kv_gib_needed_for_full(probe_log)
                 if _gib:
                     kv_needed_for_full_mb = _gib * 1024.0
             # What the engine ACTUALLY loaded wins over everything inferred: a
             # probe that started without an injected --max-model-len serves the
             # model default, which may be far above the floor probe's ceiling.
-            resolved_mml = int(_extract_vllm_served_context(log_tail) or 0)
+            resolved_mml = int(_extract_vllm_served_context(probe_log) or 0)
             if resolved_mml <= 0:
                 resolved_mml = int(probe_overrides.get("_resolved_max_model_len") or 0)
             if resolved_mml <= 0:
