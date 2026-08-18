@@ -29,7 +29,7 @@ export interface MyKey {
 
 export interface ModelAccess {
   model_name: string;
-  provider_name: string;
+  provider_name?: string;
   provider_type: string;
   /** Served context window in tokens; null when no worker reports one. */
   context_window: number | null;
