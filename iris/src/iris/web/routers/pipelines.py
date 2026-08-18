@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sentry_sdk import capture_exception
 
 from iris.common.logging_config import get_logger, get_request_id, set_request_id
+from iris.config import settings as app_settings
 from iris.dependencies import TokenValidator
 from iris.domain import (
     ChatPipelineExecutionDTO,
@@ -71,7 +72,11 @@ router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = get_logger(__name__)
 
 _global_search_executor = TracedThreadPoolExecutor(max_workers=100)
-_ask_user_executor = TracedThreadPoolExecutor(max_workers=1)
+# Bounded so one slow LLM call can't serialize every concurrent quiz session
+# behind it; tune via pipelines.ask_user_max_workers in application.yml.
+_ask_user_executor = TracedThreadPoolExecutor(
+    max_workers=app_settings.pipelines.ask_user_max_workers
+)
 
 
 def run_chat_pipeline_worker(

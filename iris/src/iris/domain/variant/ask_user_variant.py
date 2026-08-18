@@ -1,3 +1,5 @@
+from iris.config import settings
+
 from .variant import Variant
 
 
@@ -15,8 +17,18 @@ class AskUserVariant(Variant):
         local_guide_model: str | None = None,
     ):
         guide_model = guide_model or agent_model
-        local_agent_model = local_agent_model or agent_model
-        local_guide_model = local_guide_model or guide_model
+
+        # Mirror resolve_model()'s deployment-wide kill switch: when local LLM
+        # support is disabled outright, "local" must resolve to the cloud id
+        # rather than silently falling back to a distinct local_*_model that
+        # was only ever meant to be used when local LLMs are actually served.
+        if settings.local_llm_enabled:
+            local_agent_model = local_agent_model or agent_model
+            local_guide_model = local_guide_model or guide_model
+        else:
+            local_agent_model = agent_model
+            local_guide_model = guide_model
+
         role_models = {
             "chat": {
                 "local": local_agent_model,

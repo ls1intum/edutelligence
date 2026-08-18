@@ -113,6 +113,9 @@ class AskUserPipeline(
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
                 agent_model="oai-gpt-5-mini",
+                # Self-hosted counterpart, so LOCAL_AI actually stays on-prem
+                # instead of silently falling back to the cloud OpenAI id.
+                local_agent_model="gpt-oss",
             ),
             AskUserVariant(
                 variant_id="advanced",
@@ -120,6 +123,11 @@ class AskUserPipeline(
                 description="Uses a larger chat model, balancing speed and quality.",
                 agent_model="oai-gpt-52",
                 guide_model="oai-gpt-5-mini",
+                # gpt-oss is the only self-hosted chat model available; used
+                # for both roles so LOCAL_AI never leaks student data to a
+                # cloud provider.
+                local_agent_model="gpt-oss",
+                local_guide_model="gpt-oss",
             ),
         ]
 

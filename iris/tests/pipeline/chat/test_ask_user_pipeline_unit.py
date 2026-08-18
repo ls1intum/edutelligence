@@ -62,6 +62,26 @@ def test_get_variants_returns_default_and_advanced():
     assert variants[1].guide_model == "oai-gpt-5-mini"
 
 
+def test_get_variants_local_ai_resolves_to_distinct_self_hosted_models():
+    """Regression test: LOCAL_AI must not silently resolve to the same
+    cloud OpenAI id as CLOUD_AI, or student data leaves the deployment
+    despite the user having selected local processing."""
+    variants = AskUserPipeline.get_variants()
+    default_variant, advanced_variant = variants
+
+    for variant in (default_variant, advanced_variant):
+        cloud_chat = variant.model("chat", local=False)
+        local_chat = variant.model("chat", local=True)
+        assert local_chat != cloud_chat
+        assert local_chat == "gpt-oss"
+
+    assert advanced_variant.model("guide", local=False) == "oai-gpt-5-mini"
+    assert advanced_variant.model("guide", local=True) == "gpt-oss"
+    assert advanced_variant.model("guide", local=True) != advanced_variant.model(
+        "guide", local=False
+    )
+
+
 # --------------------------------------------------------------------------
 # __init__ / model resolution
 # --------------------------------------------------------------------------
