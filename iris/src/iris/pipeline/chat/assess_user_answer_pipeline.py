@@ -43,15 +43,17 @@ def _render_conversation_history(history: List[PyrisMessage]) -> str:
     context-switch markers) is not part of the Q&A and is dropped."""
     turns: list[str] = []
     for message in history:
-        if not message.contents:
-            continue
-        content = message.contents[0]
-        if not isinstance(content, TextMessageContentDTO):
+        text_content = "\n".join(
+            content.text_content
+            for content in message.contents
+            if isinstance(content, TextMessageContentDTO)
+        )
+        if not text_content:
             continue
         if message.sender == IrisMessageRole.USER:
-            turns.append(f"<student_answer>\n{content.text_content}\n</student_answer>")
+            turns.append(f"<student_answer>\n{text_content}\n</student_answer>")
         elif message.sender == IrisMessageRole.ASSISTANT:
-            turns.append(f"<tutor_question>\n{content.text_content}\n</tutor_question>")
+            turns.append(f"<tutor_question>\n{text_content}\n</tutor_question>")
     return "\n".join(turns) if turns else "(no prior conversation)"
 
 
