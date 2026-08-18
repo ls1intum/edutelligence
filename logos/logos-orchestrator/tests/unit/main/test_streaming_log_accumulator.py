@@ -35,6 +35,19 @@ def test_chat_completions_stream_accumulates_text_and_usage():
     assert payload["usage"]["total_tokens"] == 5
 
 
+def test_stream_decodes_utf8_code_points_split_across_byte_chunks():
+    event = {"id": "c1", "choices": [{"delta": {"content": "Grüße 👋"}}]}
+    raw = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+    acc = _StreamingLogAccumulator()
+
+    for byte in raw:
+        acc.feed(bytes([byte]))
+    acc.finish()
+
+    assert acc.full_text == "Grüße 👋"
+    assert "�" not in acc.response_payload()["choices"][0]["delta"]["content"]
+
+
 def test_responses_stream_uses_terminal_event():
     final_response = {
         "id": "resp_1",

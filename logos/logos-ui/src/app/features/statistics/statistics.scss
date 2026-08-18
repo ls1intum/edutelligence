@@ -196,13 +196,13 @@
   }
 }
 
-// ── Chart hover tooltip (portalled here so backdrop-filter on glass panels doesn't trap it) ──
+// ── Chart hover tooltip (portalled here so it isn't clipped by chart panels) ──
 .stats-chart-tooltip {
   position: fixed;
   pointer-events: none;
   z-index: 9999;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: rgb(var(--color-surface-0));
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
   border-radius: 8px;
   padding: 8px 12px;
   box-sizing: border-box;
@@ -211,8 +211,6 @@
   max-height: 260px;
   overflow-y: auto;
   font-size: var(--font-size-sm);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   box-shadow: 0 4px 20px rgb(var(--shadow-color) / 0.35);
   white-space: nowrap;
 }

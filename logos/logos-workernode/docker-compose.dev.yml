@@ -65,6 +65,8 @@ services:
       - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
       - ./certs:/app/certs:ro
       - ./logos_worker_node:/app/logos_worker_node:ro
+      # Same custom chat-template directory as production — see docker-compose.yml.
+      - ./chat-templates:/opt/logos-workernode/chat-templates:ro
     healthcheck:
       test:
         [

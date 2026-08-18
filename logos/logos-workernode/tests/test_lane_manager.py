@@ -18,6 +18,7 @@ from logos_worker_node.models import (
     ProcessState,
     ProcessStatus,
     VllmConfig,
+    VllmEngineConfig,
 )
 
 
@@ -1840,3 +1841,19 @@ async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     assert (
         manager._crash_restart_counts.get(lane_id, -1) == 0
     ), "Counter must reset to 0 after a successful restart"  # noqa: SLF001
+
+
+def test_model_overrides_can_set_chat_template() -> None:
+    """config.yml model_overrides is the primary way an operator pins a template."""
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(model_overrides={"Qwen/Qwen3-8B": {"chat_template": "qwen3-tools.jinja"}}),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(model="Qwen/Qwen3-8B", vllm=True, vllm_config=VllmConfig())
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None
+    assert merged.vllm_config.chat_template == "qwen3-tools.jinja"

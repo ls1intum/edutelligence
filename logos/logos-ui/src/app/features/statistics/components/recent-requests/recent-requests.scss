@@ -192,34 +192,14 @@
   padding: 2px 6px;
 }
 
-.rr-badge--cloud {
-  background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
-  color: rgb(var(--color-accent-cyan));
-}
-
-.rr-badge--local {
-  background: rgb(var(--color-accent-orange)  / var(--opacity-soft));
-  color: rgb(var(--color-accent-orange));
-}
-
-.rr-badge--queued {
-  background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
-  color: rgb(var(--color-accent-purple));
-}
-
-.rr-badge--running {
-  background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
-  color: rgb(var(--color-accent-cyan));
-}
-
-.rr-badge--cold {
-  background: rgb(var(--color-primary-500)  / var(--opacity-soft));
-  color: rgb(var(--color-text-accent));
-}
-
+.rr-badge--cloud,
+.rr-badge--local,
+.rr-badge--queued,
+.rr-badge--running,
+.rr-badge--cold,
 .rr-badge--hot {
-  background: rgb(var(--color-accent-orange)  / var(--opacity-soft));
-  color: rgb(var(--color-accent-orange));
+  background: rgb(var(--color-outline-200)  / var(--opacity-soft));
+  color: rgb(var(--color-typography-300));
 }
 
 // ── Pagination ───────────────────────────────────────────────────────────────
