@@ -1,23 +1,14 @@
 """The planner must leave a calibrating worker alone.
 
-Background (deimama, 2026-08-18): a calibration session destroys every lane up
-front to free VRAM for its probes. That makes the worker look like an empty
-node with 96 GB of headroom — exactly the node the capacity planner wants to
-load a model onto. The lane it placed mid-session then held 21.5 GB on cuda:0,
-and every following kv-cache probe died with
+A calibration session frees all VRAM for its probes, so the worker presents as
+an idle node with a lot of headroom — precisely the node the capacity planner
+wants to load a model onto. A lane placed there holds the memory the probes
+need, and the kv-cache search fails at sizes that would otherwise fit.
 
-    Free memory on device cuda:0 (25.49/47.37 GiB) on startup is less than
-    desired GPU memory utilization (0.92, 43.58 GiB)
-
-including the 18G/17G/16G sizes that had passed minutes earlier at the same
-tp. The tp escalation read that as "model doesn't fit", fell back to tp=1, and
-gave up on a model that calibrates fine on identical hardware.
-
-The state is tracked from the *worker's* own session events rather than from
-CalibrationOrchestrator._active_provider_id, because the admin
-calibrate_uncalibrated endpoints send start_calibration_session straight
-through the registry and never set that slot — which is how the incident above
-was triggered.
+The state is tracked from the worker's own session events rather than from
+CalibrationOrchestrator._active_provider_id: the admin calibrate_uncalibrated
+endpoints send start_calibration_session straight through the registry and
+never set that slot, so it does not see every session.
 """
 
 from __future__ import annotations
@@ -39,7 +30,7 @@ def _registry_with_session(provider_id: int = 1) -> tuple[LogosNodeRuntimeRegist
     registry = LogosNodeRuntimeRegistry()
     session = ProviderSession(
         provider_id=provider_id,
-        worker_id="deimama",
+        worker_id="worker-a",
         websocket=MagicMock(),
     )
     registry._sessions[provider_id] = session  # noqa: SLF001

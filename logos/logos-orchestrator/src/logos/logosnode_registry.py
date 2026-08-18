@@ -247,10 +247,10 @@ def _render_lane_diff(old: dict[str, Any], new: dict[str, Any], *, indent: str =
 
 
 # Worker-emitted calibration session lifecycle events. The worker records
-# these itself, so they are the only signal that covers every way a session
-# can start — the nightly CalibrationOrchestrator tick *and* the admin
+# these itself, which makes them the only signal covering every way a session
+# can start: the nightly CalibrationOrchestrator tick and the admin
 # calibrate_uncalibrated endpoints, which send start_calibration_session
-# straight through the registry and never touch the orchestrator's slot.
+# straight through the registry without touching the orchestrator's slot.
 CALIBRATION_SESSION_STARTED_EVENT = "calibration_session_started"
 TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
@@ -290,10 +290,8 @@ class ProviderSession:
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
     max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
     # True between the worker's calibration_session_started event and its
-    # terminal event. A calibrating worker tears down every lane to free VRAM
-    # for its probes, so it looks like an empty, attractive node to the
-    # capacity planner — placing a lane there steals the VRAM the probes need
-    # and every following kv-cache size fails with a bogus OOM.
+    # terminal event. A calibrating worker has freed all VRAM for its probes,
+    # so its idle lanes and free VRAM are reserved rather than available.
     calibrating: bool = False
 
     def is_stale(self, stale_after_seconds: int) -> bool:
@@ -752,8 +750,8 @@ class LogosNodeRuntimeRegistry:
         ``start_calibration_session``: the admin calibrate_uncalibrated
         endpoints bypass the CalibrationOrchestrator's slot entirely, so its
         ``_active_provider_id`` is not a complete picture. On reconnect the
-        worker replays its event log from seq 0, which restores the flag for a
-        session that is still running.
+        worker replays its event log from seq 0, so a session that is still
+        running re-marks the fresh ProviderSession.
         """
         event_name = str(event.get("event", "")).strip()
         if event_name == CALIBRATION_SESSION_STARTED_EVENT:

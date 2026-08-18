@@ -517,12 +517,10 @@ class CapacityPlanner:
 
         * No first status since connect — we don't know which lanes are
           already loaded, and acting on empty state can destroy them.
-        * A calibration session is running — the worker destroys every lane
-          up front to free VRAM for its probes, so it presents as an empty
-          node with plenty of headroom, exactly what makes the planner want
-          to load a model onto it. That lane then holds the VRAM the probes
-          need and the whole kv-cache search fails with bogus OOMs (see the
-          deimama Qwen3.8-27B session on 2026-08-18).
+        * A calibration session is running — the worker frees all VRAM for
+          its probes, so its idle lanes and large free VRAM are reserved,
+          not available. A lane placed here would take the memory the
+          probes need and make them fail.
         """
         if self._registry is None:
             return True
