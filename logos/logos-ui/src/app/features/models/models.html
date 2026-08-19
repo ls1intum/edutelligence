@@ -21,8 +21,8 @@
     <app-error-message variant="banner" message="Failed to load models, please refresh." />
   }
 
-  <!-- ── Table ──────────────────────────────────────────────────────────── -->
-  <app-data-table
+<!-- ── Table ──────────────────────────────────────────────────────────── -->
+<app-data-table
   [columns]="[
     'MODEL NAME',
     'DESCRIPTION',
@@ -30,15 +30,29 @@
     'CAPABILITIES',
     ...(role() === 'logos_admin' ? ['WEIGHTS', ''] : [])
   ]"
-  gridCols="220fr 260fr 160fr 220fr 180fr 72px"
+  [gridCols]="
+    role() === 'logos_admin'
+      ? '220fr 260fr 160fr 220fr 180fr 72px'
+      : '220fr 260fr 220fr'
+  "
   [loading]="loading()"
   [empty]="filteredModels().length === 0"
   emptyMessage="No models match your search."
 >
-    @for (model of filteredModels(); track model.id) {
-      <div class="table-row">
-        <div class="col-name name-cell" role="cell">
-          <button type="button" class="model-name" (click)="openReport(model)">{{ model.name }}</button>
+  @for (model of filteredModels(); track model.id) {
+    <div class="table-row">
+
+      <!-- Model Name -->
+      <div class="col-name name-cell" role="cell">
+        <button
+          type="button"
+          class="model-name"
+          (click)="openReport(model)"
+        >
+          {{ model.name }}
+        </button>
+
+        @if (role() === 'logos_admin') {
           <div class="name-mobile-actions">
             <button
               class="btn-icon"
@@ -48,6 +62,7 @@
             >
               <i class="pi pi-pencil" aria-hidden="true"></i>
             </button>
+
             <button
               class="btn-icon btn-icon--danger"
               type="button"
@@ -57,88 +72,140 @@
               <i class="pi pi-trash" aria-hidden="true"></i>
             </button>
           </div>
-        </div>
-
-        <div class="col-desc desc-cell" role="cell" data-label="Description">
-          <span class="desc-text">{{ model.description || '-' }}</span>
-        </div>
-
-        @if (role() === 'logos_admin') {
-          <div class="col-tags tags-cell" role="cell" data-label="Tags">
-            <span class="tags-text">{{ model.tags || '-' }}</span>
-          </div>
         }
+      </div>
 
-        <div class="col-capabilities capabilities-cell" role="cell" data-label="Capabilities">
-          @if (getCapabilities(model.id); as capabilities) {
-            <div class="capability-chips">
-              @if (capabilities.supports_function_calling) {
-                <span class="capability-chip capability-chip--supported" title="Function Calling">
-                  <i class="pi pi-code" aria-hidden="true"></i>
-                </span>
-              }
-            
-              @if (capabilities.supports_vision) {
-                <span class="capability-chip capability-chip--supported" title="Vision">
-                  <i class="pi pi-eye" aria-hidden="true"></i>
-                </span>
-              }
-            
-              @if (capabilities.supports_reasoning) {
-                <span class="capability-chip capability-chip--supported" title="Reasoning">
-                  <i class="pi pi-lightbulb" aria-hidden="true"></i>
-                </span>
-              }
+      <!-- Description -->
+      <div
+        class="col-desc desc-cell"
+        role="cell"
+        data-label="Description"
+      >
+        <span class="desc-text">
+          {{ model.description || '-' }}
+        </span>
+      </div>
 
-              @if (!capabilities.supports_function_calling && !capabilities.supports_vision && !capabilities.supports_reasoning) {
-                <span>-</span>
-              }
-            </div>
-          } @else {
-            <span>-</span>
-          }
+      <!-- Tags: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-tags tags-cell"
+          role="cell"
+          data-label="Tags"
+        >
+          <span class="tags-text">
+            {{ model.tags || '-' }}
+          </span>
         </div>
+      }
 
-        @if (role() === 'logos_admin') {
-          <div class="col-weights weights-cell" role="cell" data-label="Weights">
-            <div class="weights-chips">
-              <span class="wchip wchip--latency" [class.wchip--null]="model.weight_latency == null" title="Latency"
-                >L <span class="wchip-val">{{ model.weight_latency ?? '-' }}</span></span
+      <!-- Capabilities -->
+      <div
+        class="col-capabilities capabilities-cell"
+        role="cell"
+        data-label="Capabilities"
+      >
+        @if (getCapabilities(model.id); as capabilities) {
+          <div class="capability-chips">
+
+            @if (capabilities.supports_function_calling) {
+              <span
+                class="capability-chip capability-chip--supported"
+                title="Function Calling"
               >
-              <span class="wchip wchip--accuracy" [class.wchip--null]="model.weight_accuracy == null" title="Accuracy"
-                >A <span class="wchip-val">{{ model.weight_accuracy ?? '-' }}</span></span
+                <i class="pi pi-code" aria-hidden="true"></i>
+              </span>
+            }
+
+            @if (capabilities.supports_vision) {
+              <span
+                class="capability-chip capability-chip--supported"
+                title="Vision"
               >
-              <span class="wchip wchip--cost" [class.wchip--null]="model.weight_cost == null" title="Cost"
-                >C <span class="wchip-val">{{ model.weight_cost ?? '-' }}</span></span
+                <i class="pi pi-eye" aria-hidden="true"></i>
+              </span>
+            }
+
+            @if (capabilities.supports_reasoning) {
+              <span
+                class="capability-chip capability-chip--supported"
+                title="Reasoning"
               >
-              <span class="wchip wchip--quality" [class.wchip--null]="model.weight_quality == null" title="Quality"
-                >Q <span class="wchip-val">{{ model.weight_quality ?? '-' }}</span></span
-              >
-            </div>
+                <i class="pi pi-lightbulb" aria-hidden="true"></i>
+              </span>
+            }
+
+            @if (
+              !capabilities.supports_function_calling &&
+              !capabilities.supports_vision &&
+              !capabilities.supports_reasoning
+            ) {
+              <span>-</span>
+            }
+
           </div>
+        } @else {
+          <span>-</span>
         }
+      </div>
 
-        @if (role() === 'logos_admin') {
-          <div class="col-actions actions-cell" role="cell">
-            <button
-              class="btn-icon"
-              type="button"
-              [attr.aria-label]="'Edit model ' + model.name"
-              (click)="openEditDialog(model)"
+      <!-- Weights: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-weights weights-cell"
+          role="cell"
+          data-label="Weights"
+        >
+          <div class="weights-chips">
+
+            <span
+              class="wchip wchip--latency"
+              [class.wchip--null]="model.weight_latency == null"
+              title="Latency"
             >
-              <i class="pi pi-pencil" aria-hidden="true"></i>
-            </button>
-            <button
-              class="btn-icon btn-icon--danger"
-              type="button"
-              [attr.aria-label]="'Delete model ' + model.name"
-              (click)="openDeleteDialog(model)"
+              L
+              <span class="wchip-val">
+                {{ model.weight_latency ?? '-' }}
+              </span>
+            </span>
+
+            <span
+              class="wchip wchip--accuracy"
+              [class.wchip--null]="model.weight_accuracy == null"
+              title="Accuracy"
             >
-              <i class="pi pi-trash" aria-hidden="true"></i>
-            </button>
+              A
+              <span class="wchip-val">
+                {{ model.weight_accuracy ?? '-' }}
+              </span>
+            </span>
+
+            <span
+              class="wchip wchip--cost"
+              [class.wchip--null]="model.weight_cost == null"
+              title="Cost"
+            >
+              C
+              <span class="wchip-val">
+                {{ model.weight_cost ?? '-' }}
+              </span>
+            </span>
+
+            <span
+              class="wchip wchip--quality"
+              [class.wchip--null]="model.weight_quality == null"
+              title="Quality"
+            >
+              Q
+              <span class="wchip-val">
+                {{ model.weight_quality ?? '-' }}
+              </span>
+            </span>
+
           </div>
         </div>
 
+        <!-- Actions: logos_admin only -->
         <div class="col-actions actions-cell" role="cell">
           <button
             class="btn-icon"
@@ -148,6 +215,7 @@
           >
             <i class="pi pi-pencil" aria-hidden="true"></i>
           </button>
+
           <button
             class="btn-icon btn-icon--danger"
             type="button"
@@ -157,10 +225,11 @@
             <i class="pi pi-trash" aria-hidden="true"></i>
           </button>
         </div>
-      </div>
-    }
-  </app-data-table>
-</div>
+      }
+
+    </div>
+  }
+</app-data-table>
 
 <!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
 <app-modal-confirm
