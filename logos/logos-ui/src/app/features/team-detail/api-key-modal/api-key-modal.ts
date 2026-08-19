@@ -96,10 +96,20 @@ export class ApiKeyModalComponent implements OnChanges {
     );
   });
 
-  // ── save / copy ───────────────────────────────────────────────────────────
+  // ── save / copy / rotate ─────────────────────────────────────────────────
   saveLoading = signal(false);
   saveError = signal('');
   copied = signal(false);
+  rotateConfirm = signal(false);
+  rotateLoading = signal(false);
+  rotateError = signal('');
+
+  /** Live key value updated after a successful rotation. */
+  private liveKeyValue = signal<string | null>(null);
+
+  effectiveKeyValue(): string | null {
+    return this.liveKeyValue() ?? this.key?.key_value ?? null;
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['visible']?.currentValue && this.key) {
@@ -121,6 +131,9 @@ export class ApiKeyModalComponent implements OnChanges {
     this.fCustom.set(!!key.use_custom_permissions);
     this.saveError.set('');
     this.copied.set(false);
+    this.liveKeyValue.set(null);
+    this.rotateConfirm.set(false);
+    this.rotateError.set('');
   }
 
   private async loadPermissions(keyId: number): Promise<void> {
@@ -193,7 +206,7 @@ export class ApiKeyModalComponent implements OnChanges {
   }
 
   async copyKey(): Promise<void> {
-    const v = this.key?.key_value;
+    const v = this.effectiveKeyValue();
     if (!v) return;
     await navigator.clipboard.writeText(v);
     this.copied.set(true);
@@ -201,9 +214,35 @@ export class ApiKeyModalComponent implements OnChanges {
   }
 
   maskedKey(): string {
-    const v = this.key?.key_value;
+    const v = this.effectiveKeyValue();
     if (!v) return '••••••••••••••••••••';
     return `${v.substring(0, 14)}••••••••••••••`;
+  }
+
+  requestRotate(): void {
+    this.rotateError.set('');
+    this.rotateConfirm.set(true);
+  }
+
+  cancelRotate(): void {
+    this.rotateConfirm.set(false);
+    this.rotateError.set('');
+  }
+
+  async confirmRotate(): Promise<void> {
+    const key = this.key;
+    if (!key || this.rotateLoading()) return;
+    this.rotateLoading.set(true);
+    this.rotateError.set('');
+    try {
+      const res = await this.svc.rotateApiKey(key.id);
+      this.liveKeyValue.set(res.api_key);
+      this.rotateConfirm.set(false);
+    } catch {
+      this.rotateError.set('Failed to rotate key, please try again.');
+    } finally {
+      this.rotateLoading.set(false);
+    }
   }
 
   formatDollars(mc: number | null | undefined): string {
