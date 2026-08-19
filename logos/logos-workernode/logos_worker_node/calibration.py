@@ -854,6 +854,14 @@ def _build_vllm_cmd(
         cmd.extend(["--gpu-memory-utilization", str(explicit_gmu)])
     if max_model_len:
         cmd.extend(["--max-model-len", str(int(max_model_len))])
+    else:
+        # Ask vLLM for the largest window this KV budget can hold. Probing
+        # without the flag starts at the model default, which a small budget
+        # cannot hold, so the probe used to fail on purpose just to read the
+        # suggested length out of the error and start over. "auto" returns the
+        # same number from the first start, and it is the same flag the serving
+        # lane uses, so the curve is measured under the configuration that runs.
+        cmd.extend(["--max-model-len", "auto"])
     if max_num_seqs:
         cmd.extend(["--max-num-seqs", str(int(max_num_seqs))])
     if quant:
@@ -1880,7 +1888,6 @@ def calibrate_model(
             suggested_mml = _extract_vllm_max_model_len_suggestion(probe_log)
             # Model-level truths seen while this probe was still being rejected
             # (captured in _try_start, where they are guaranteed to be in view).
-            _injected_max_len = bool(probe_overrides.get("_max_model_len_retry_count") or 0)
             _obs_seq_len = int(probe_overrides.get("_observed_model_max_seq_len") or 0)
             if model_default_max_len is None and _obs_seq_len > 0:
                 model_default_max_len = _obs_seq_len
@@ -1888,12 +1895,17 @@ def calibrate_model(
             if kv_needed_for_full_mb is None and _obs_kv_gib:
                 kv_needed_for_full_mb = float(_obs_kv_gib) * 1024.0
             if model_default_max_len is None:
-                # Only consult the config dump when we did NOT inject a
-                # --max-model-len for this probe; otherwise it echoes our own
-                # shrunken value back as if it were the model's default.
-                model_default_max_len = _extract_vllm_max_seq_len(
-                    probe_log, allow_config_fallback=not _injected_max_len
-                )
+                # Never consult the config dump: every probe now runs with
+                # --max-model-len (either "auto" or an injected retry value),
+                # so the dump echoes the length THIS probe resolved to, not the
+                # model's own maximum. Reading it back would pin the whole
+                # sweep to the floor probe's context — the exact failure this
+                # flag was added for (deipapa/deimama 2026-08-18, Qwen3.8-27B
+                # recorded a flat 27440). Leaving it None is safe: the plateau
+                # backfill below then trusts the highest context any probe
+                # actually served, which under "auto" is the model's maximum
+                # whenever a probe's budget could hold it.
+                model_default_max_len = _extract_vllm_max_seq_len(probe_log, allow_config_fallback=False)
             if kv_needed_for_full_mb is None:
                 _gib = _extract_vllm_kv_gib_needed_for_full(probe_log)
                 if _gib:

@@ -475,7 +475,10 @@ def test_build_cmd_omits_default_lane_context_cap_for_vllm(monkeypatch) -> None:
         vllm_config=VllmConfig(max_model_len=0),
     )
     cmd = handle._build_cmd(lane)
-    assert "--max-model-len" not in cmd
+    # The 4096 sentinel must not be passed through as a real cap; with nothing
+    # explicit the lane asks vLLM to size the window itself.
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "auto"
 
 
 def test_build_cmd_keeps_explicit_lane_context_cap_for_vllm(monkeypatch) -> None:
@@ -493,13 +496,12 @@ def test_build_cmd_keeps_explicit_lane_context_cap_for_vllm(monkeypatch) -> None
     assert cmd[idx + 1] == "8192"
 
 
-def test_build_cmd_uses_calibrated_max_model_len_when_nothing_explicit(monkeypatch) -> None:
-    """Lane spawn picks up calibration's auto-shrunk --max-model-len.
+def test_build_cmd_prefers_auto_over_calibrated_max_model_len(monkeypatch) -> None:
+    """A recorded calibration_max_model_len does not become the start flag.
 
-    Regression: without this, vLLM falls back to the model's default
-    max_seq_len (e.g. Gemma-3-12B's 131072) which the operator-pinned KV
-    budget may not be able to hold — vLLM refuses to start even though
-    calibration proved a shrunk value works.
+    That value is only valid for the KV budget it was measured at, so reusing
+    it on a lane with a different budget serves the wrong window in either
+    direction. "auto" is resolved against the budget the lane actually gets.
     """
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
@@ -520,7 +522,10 @@ def test_build_cmd_uses_calibrated_max_model_len_when_nothing_explicit(monkeypat
     )
     cmd = handle._build_cmd(lane)
     idx = cmd.index("--max-model-len")
-    assert cmd[idx + 1] == "115632"
+    # "auto" wins over the calibrated value: that value is only valid for the
+    # KV budget it was measured at, while "auto" is resolved against the budget
+    # this lane actually gets.
+    assert cmd[idx + 1] == "auto"
 
 
 def test_build_cmd_prefers_explicit_max_model_len_over_calibrated(monkeypatch) -> None:
@@ -555,14 +560,15 @@ def test_build_cmd_prefers_explicit_lane_context_over_calibrated(monkeypatch) ->
     assert cmd[idx + 1] == "8192"
 
 
-def test_build_cmd_omits_max_model_len_when_no_profile(monkeypatch) -> None:
-    """Without a profile or explicit override, vLLM picks its own default."""
+def test_build_cmd_uses_auto_max_model_len_when_no_profile(monkeypatch) -> None:
+    """Without a profile or explicit override, vLLM sizes the window itself."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
 
     lane = LaneConfig(model="unknown/model", vllm=True, vllm_config=VllmConfig(max_model_len=0))
     cmd = handle._build_cmd(lane)
-    assert "--max-model-len" not in cmd
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "auto"
 
 
 def test_build_cmd_uses_calibrated_max_num_seqs_when_nothing_explicit(monkeypatch) -> None:

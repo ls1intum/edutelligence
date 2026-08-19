@@ -2163,3 +2163,28 @@ def test_kv_starved_floor_probe_does_not_flatten_curve(tmp_path: Path):
                 expected
             ), f"kv={kv_mb} lost its concurrency annotation: {par_by_kv}"
     assert any(p is not None and p > 2.0 for p in par_by_kv.values()), par_by_kv
+
+
+def test_build_vllm_cmd_uses_auto_max_model_len_by_default() -> None:
+    """A probe with no pinned length asks vLLM to size the window itself.
+
+    Probing without the flag starts at the model default, which a small KV
+    budget cannot hold — the probe then fails on purpose just so the suggested
+    length can be read out of the error and the probe restarted. "auto" returns
+    the same number from the first start, and matches what the serving lane
+    passes, so the curve is measured under the configuration that runs.
+    """
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    cmd = _build_vllm_cmd({"model": "m"}, "/tmp/vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "auto"
+
+
+def test_build_vllm_cmd_keeps_pinned_max_model_len() -> None:
+    """An injected retry value (or operator pin) still wins over "auto"."""
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    cmd = _build_vllm_cmd({"model": "m", "max_model_len": 27440}, "/tmp/vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "27440"
