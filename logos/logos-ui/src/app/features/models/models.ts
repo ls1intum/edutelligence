@@ -14,6 +14,7 @@ import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { AuthService } from '../../core/auth/services/auth.service';
 
 @Component({
   selector: 'app-models',
@@ -32,6 +33,7 @@ import { ErrorMessageComponent } from '../../shared/components/error-message/err
 })
 export class Models implements OnInit {
   private modelService = inject(ModelManagementService);
+  readonly role = inject(AuthService).role;
 
   // ── List state ──────────────────────────────────────────────────────────
   models = signal<Model[]>([]);

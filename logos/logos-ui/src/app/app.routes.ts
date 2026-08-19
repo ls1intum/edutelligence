@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { authGuard } from './core/auth/guards/auth.guard';
 import { roleGuard } from './core/auth/guards/role.guard';
 import { hasKeysGuard } from './core/auth/guards/has-keys.guard';
+import { ALL_ROLES } from './shared/constants/roles';
 
 export const routes: Routes = [
   {
@@ -17,7 +18,7 @@ export const routes: Routes = [
     children: [
       { path: 'dashboard',       title: 'Dashboard · Logos',       data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/dashboard/dashboard').then(m => m.Dashboard) },
       { path: 'statistics',      title: 'Statistics · Logos',      data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/statistics/statistics').then(m => m.Statistics) },
-      { path: 'models',         title: 'Models · Logos',           data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/models/models').then(m => m.Models) },
+      { path: 'models',         title: 'Models · Logos',           data: { roles: ALL_ROLES },                canActivate: [hasKeysGuard], loadComponent: () => import('./features/models/models').then(m => m.Models) },
       { path: 'providers',      title: 'Providers · Logos',        data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/providers/providers').then(m => m.Providers) },
       { path: 'policies',       title: 'Policies · Logos',         data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/policies/policies').then(m => m.Policies) },
       { path: 'billing',        title: 'Billing · Logos',          data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/billing/billing').then(m => m.Billing) },

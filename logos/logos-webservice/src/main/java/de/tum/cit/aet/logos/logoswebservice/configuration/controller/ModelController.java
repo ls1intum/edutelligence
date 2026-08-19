@@ -18,6 +18,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequest
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 
 @RestController
@@ -26,10 +27,12 @@ public class ModelController {
 
     private final ModelService modelService;
     private final PriceUpdaterService priceUpdaterService;
+    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
 
-    public ModelController(ModelService modelService, PriceUpdaterService priceUpdaterService) {
+    public ModelController(ModelService modelService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService) {
         this.modelService = modelService;
         this.priceUpdaterService = priceUpdaterService;
+        this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
     }
 
     @PostMapping("/get_models")
@@ -41,7 +44,17 @@ public class ModelController {
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addModel(
             @RequestBody AddModelRequestDTO req) {
-        return ResponseEntity.ok(modelService.addModel(req));
+        try {
+            Map<String, Object> serviceResult = (Map<String, Object>) modelService.addModel(req);
+            Integer newModelId = (Integer) serviceResult.get("model_id");
+            if (newModelId != null && req.name() != null) {
+                priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(newModelId, req.name());
+            }
+            return ResponseEntity.ok(serviceResult);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping("/update_model_info")
@@ -52,6 +65,7 @@ public class ModelController {
             ResponseEntity<?> response = ResponseEntity.ok(modelService.updateModelInfo(req));
             if (req.name() != null) {
                 priceUpdaterService.updatePricesForModelAsync(req.modelId(), req.name());
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(req.modelId(), req.name());
             }
             return response;
         } catch (IllegalArgumentException e) {

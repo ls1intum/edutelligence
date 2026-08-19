@@ -20,12 +20,10 @@ import org.springframework.transaction.annotation.Transactional;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
-import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelProvider;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Provider;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.TokenPrice;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.TokenType;
-import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
@@ -55,16 +53,13 @@ public class PriceUpdaterService {
     private final ProviderRepository providerRepository;
     private final TokenTypeRepository tokenTypeRepository;
     private final TokenPriceRepository tokenPriceRepository;
-    private final ModelCapabilitiesRepository modelCapabilitiesRepository;
-
 
     public PriceUpdaterService(ObjectMapper objectMapper,
                                ModelRepository modelRepository,
                                ModelProviderRepository modelProviderRepository,
                                ProviderRepository providerRepository,
                                TokenTypeRepository tokenTypeRepository,
-                               TokenPriceRepository tokenPriceRepository,
-                               ModelCapabilitiesRepository modelCapabilitiesRepository) {
+                               TokenPriceRepository tokenPriceRepository) {
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         this.modelRepository = modelRepository;
@@ -72,7 +67,6 @@ public class PriceUpdaterService {
         this.providerRepository = providerRepository;
         this.tokenTypeRepository = tokenTypeRepository;
         this.tokenPriceRepository = tokenPriceRepository;
-        this.modelCapabilitiesRepository = modelCapabilitiesRepository;
     }
 
     @Scheduled(initialDelay = 0, fixedDelay = 86_400_000)
@@ -142,20 +136,13 @@ public class PriceUpdaterService {
             return;
         }
 
-        updateModelCapabilities(modelId, data);
-
         Instant validFrom = Instant.now();
-
         for (Map.Entry<String, String> entry : LITELLM_TO_TOKEN_TYPE.entrySet()) {
             Object costObj = data.get(entry.getKey());
             if (costObj == null) continue;
             double cost = ((Number) costObj).doubleValue();
             if (cost <= 0) continue;
-            // Duration usage is stored as integer milliseconds. One thousand
-            // milliseconds equal one catalogue-priced second, so its per-1K
-            // unit price uses 1e8 rather than the usual 1e11.
-            double unitScale = "input_cost_per_second".equals(entry.getKey()) ? 1e8 : 1e11;
-            long pricePerK = Math.round(cost * unitScale);
+            long pricePerK = Math.round(cost * 1e11);
             upsertTokenPrice(modelId, providerId, entry.getValue(), pricePerK, validFrom);
         }
         log.info("price_updater: prices updated for '{}' (id={}, provider_id={})", modelName, modelId, providerId);
@@ -203,20 +190,4 @@ public class PriceUpdaterService {
         price.setPricePerKToken(pricePerK);
         tokenPriceRepository.save(price);
     }
-
-    @Transactional
-    protected void updateModelCapabilities(int modelId, Map<String, Object> data) {
-        ModelCapabilities capabilities = modelCapabilitiesRepository.findByModelId(modelId)
-            .orElseGet(() -> {
-                ModelCapabilities newCap = new ModelCapabilities();
-                newCap.setModelId(modelId);
-                return newCap;
-            });
-        capabilities.setSupportsFunctionCalling(Boolean.TRUE.equals(data.get("supports_function_calling")));
-        capabilities.setSupportsVision(Boolean.TRUE.equals(data.get("supports_vision")));
-        capabilities.setSupportsReasoning(Boolean.TRUE.equals(data.get("supports_reasoning")));
-
-        modelCapabilitiesRepository.save(capabilities);
-    }
-
 }

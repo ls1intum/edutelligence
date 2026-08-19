@@ -36,7 +36,7 @@ public class ModelService {
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
-        List<ModelWithPriceProjection> projections = isAdmin(auth)
+        List<ModelWithPriceProjection> projections = isLogosAdmin(auth)
             ? modelRepository.findAllWithPricing()
             : modelRepository.findAllWithPricingForUser(auth.userId());
         return projections.stream().map(ModelService::toModelMap).toList();
@@ -121,6 +121,10 @@ public class ModelService {
 
     private static boolean isAdmin(AuthContext auth) {
         return Role.LOGOS_ADMIN.matches(auth.role()) || Role.APP_ADMIN.matches(auth.role());
+    }
+    
+    private static boolean isLogosAdmin(AuthContext auth) {
+        return Role.LOGOS_ADMIN.matches(auth.role());
     }
 
     private static Map<String, Object> toModelMap(ModelWithPriceProjection p) {

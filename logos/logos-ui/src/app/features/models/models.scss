@@ -52,6 +52,12 @@
   flex-wrap: wrap;
 }
 
+.capability-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px; 
+}
+
 .wchip {
   display: inline-flex;
   align-items: center;

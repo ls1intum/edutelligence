@@ -10,9 +10,11 @@
       placeholder="Search models..."
       (valueChange)="search.set($event)"
     />
-    <button type="button" class="btn-primary" (click)="openAddDialog()">
-      <i class="pi pi-plus" aria-hidden="true"></i> Add Model
-    </button>
+    @if (role() === 'logos_admin') {
+      <button type="button" class="btn-primary" (click)="openAddDialog()">
+        <i class="pi pi-plus" aria-hidden="true"></i> Add Model
+      </button>
+    }
   </div>
 
   @if (loadError()) {
@@ -24,10 +26,9 @@
   [columns]="[
     'MODEL NAME',
     'DESCRIPTION',
-    'TAGS',
+    ...(role() === 'logos_admin' ? ['TAGS'] : []),
     'CAPABILITIES',
-    'WEIGHTS',
-    ''
+    ...(role() === 'logos_admin' ? ['WEIGHTS', ''] : [])
   ]"
   gridCols="220fr 260fr 160fr 220fr 180fr 72px"
   [loading]="loading()"
@@ -62,31 +63,33 @@
           <span class="desc-text">{{ model.description || '-' }}</span>
         </div>
 
-        <div class="col-tags tags-cell" role="cell" data-label="Tags">
-          <span class="tags-text">{{ model.tags || '-' }}</span>
-        </div>
+        @if (role() === 'logos_admin') {
+          <div class="col-tags tags-cell" role="cell" data-label="Tags">
+            <span class="tags-text">{{ model.tags || '-' }}</span>
+          </div>
+        }
 
         <div class="col-capabilities capabilities-cell" role="cell" data-label="Capabilities">
           @if (getCapabilities(model.id); as capabilities) {
             <div class="capability-chips">
               @if (capabilities.supports_function_calling) {
                 <span class="capability-chip capability-chip--supported" title="Function Calling">
-                  FC
+                  <i class="pi pi-code" aria-hidden="true"></i>
                 </span>
               }
-
+            
               @if (capabilities.supports_vision) {
                 <span class="capability-chip capability-chip--supported" title="Vision">
-                  V
+                  <i class="pi pi-eye" aria-hidden="true"></i>
+                </span>
+              }
+            
+              @if (capabilities.supports_reasoning) {
+                <span class="capability-chip capability-chip--supported" title="Reasoning">
+                  <i class="pi pi-lightbulb" aria-hidden="true"></i>
                 </span>
               }
 
-              @if (capabilities.supports_reasoning) {
-                <span class="capability-chip capability-chip--supported" title="Reasoning">
-                  R
-                </span>
-              }
-              
               @if (!capabilities.supports_function_calling && !capabilities.supports_vision && !capabilities.supports_reasoning) {
                 <span>-</span>
               }
@@ -96,41 +99,45 @@
           }
         </div>
 
-        <div class="col-weights weights-cell" role="cell" data-label="Weights">
-          <div class="weights-chips">
-            <span class="wchip wchip--latency" [class.wchip--null]="model.weight_latency == null" title="Latency"
-              >L <span class="wchip-val">{{ model.weight_latency ?? '-' }}</span></span
-            >
-            <span class="wchip wchip--accuracy" [class.wchip--null]="model.weight_accuracy == null" title="Accuracy"
-              >A <span class="wchip-val">{{ model.weight_accuracy ?? '-' }}</span></span
-            >
-            <span class="wchip wchip--cost" [class.wchip--null]="model.weight_cost == null" title="Cost"
-              >C <span class="wchip-val">{{ model.weight_cost ?? '-' }}</span></span
-            >
-            <span class="wchip wchip--quality" [class.wchip--null]="model.weight_quality == null" title="Quality"
-              >Q <span class="wchip-val">{{ model.weight_quality ?? '-' }}</span></span
-            >
+        @if (role() === 'logos_admin') {
+          <div class="col-weights weights-cell" role="cell" data-label="Weights">
+            <div class="weights-chips">
+              <span class="wchip wchip--latency" [class.wchip--null]="model.weight_latency == null" title="Latency"
+                >L <span class="wchip-val">{{ model.weight_latency ?? '-' }}</span></span
+              >
+              <span class="wchip wchip--accuracy" [class.wchip--null]="model.weight_accuracy == null" title="Accuracy"
+                >A <span class="wchip-val">{{ model.weight_accuracy ?? '-' }}</span></span
+              >
+              <span class="wchip wchip--cost" [class.wchip--null]="model.weight_cost == null" title="Cost"
+                >C <span class="wchip-val">{{ model.weight_cost ?? '-' }}</span></span
+              >
+              <span class="wchip wchip--quality" [class.wchip--null]="model.weight_quality == null" title="Quality"
+                >Q <span class="wchip-val">{{ model.weight_quality ?? '-' }}</span></span
+              >
+            </div>
           </div>
-        </div>
+        }
 
-        <div class="col-actions actions-cell" role="cell">
-          <button
-            class="btn-icon"
-            type="button"
-            [attr.aria-label]="'Edit model ' + model.name"
-            (click)="openEditDialog(model)"
-          >
-            <i class="pi pi-pencil" aria-hidden="true"></i>
-          </button>
-          <button
-            class="btn-icon btn-icon--danger"
-            type="button"
-            [attr.aria-label]="'Delete model ' + model.name"
-            (click)="openDeleteDialog(model)"
-          >
-            <i class="pi pi-trash" aria-hidden="true"></i>
-          </button>
-        </div>
+        @if (role() === 'logos_admin') {
+          <div class="col-actions actions-cell" role="cell">
+            <button
+              class="btn-icon"
+              type="button"
+              [attr.aria-label]="'Edit model ' + model.name"
+              (click)="openEditDialog(model)"
+            >
+              <i class="pi pi-pencil" aria-hidden="true"></i>
+            </button>
+            <button
+              class="btn-icon btn-icon--danger"
+              type="button"
+              [attr.aria-label]="'Delete model ' + model.name"
+              (click)="openDeleteDialog(model)"
+            >
+              <i class="pi pi-trash" aria-hidden="true"></i>
+            </button>
+          </div>
+        }
       </div>
     }
   </app-data-table>
