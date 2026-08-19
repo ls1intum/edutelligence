@@ -134,6 +134,14 @@ def test_infer_tool_call_parser() -> None:
     assert _infer_tool_call_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3_xml"
     assert _infer_tool_call_parser("Qwen/Qwen2.5-Coder-14B-Instruct-AWQ") == "hermes"
     assert _infer_tool_call_parser("Qwen/QwQ-32B") == "hermes"
+    # Qwen3 point releases emit the Qwen3-Coder XML dialect, not hermes JSON.
+    assert _infer_tool_call_parser("Qwen/Qwen3.8-27B") == "qwen3_xml"
+    assert _infer_tool_call_parser("Qwen/Qwen3.6-35B-A3B") == "qwen3_xml"
+    assert _infer_tool_call_parser("Qwen/Qwen3.5-122B-A10B") == "qwen3_xml"
+    assert _infer_tool_call_parser("RedHatAI/Qwen3.5-122B-A10B-NVFP4") == "qwen3_xml"
+    # Dot-free Qwen3 stays on hermes, and Qwen2.5 must not match the dotted rule.
+    assert _infer_tool_call_parser("Qwen/Qwen3-32B") == "hermes"
+    assert _infer_tool_call_parser("Qwen/Qwen2.5-72B-Instruct") == "hermes"
     # Salesforce xLAM (contains "llama"/"qwen" — must match xlam first)
     assert _infer_tool_call_parser("Salesforce/Llama-xLAM-2-8B-fc-r") == "xlam"
     assert _infer_tool_call_parser("Salesforce/Qwen-xLAM-32B-fc-r") == "xlam"

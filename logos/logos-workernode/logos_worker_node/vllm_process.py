@@ -160,6 +160,15 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
     # Alibaba Qwen (coder→qwen3_xml per docs, then general qwen3→hermes)
     ("qwen3-coder", "qwen3_xml"),
     ("qwen3_coder", "qwen3_xml"),
+    # Qwen3 point releases (3.5, 3.6, 3.8, …) emit the same XML dialect as
+    # Qwen3-Coder, not the JSON-in-<tool_call> that hermes expects: their
+    # bundled chat templates render '<tool_call>\n<function=NAME>\n<parameter=…>'
+    # verbatim.  This rule has to sit above the "qwen3-"/"qwen3_" entries,
+    # which never matched a dotted name and so let every point release fall
+    # through to the generic ("qwen", "hermes") catch-all — hermes then failed
+    # to parse the XML and vLLM returned the raw markup as assistant text.
+    ("qwen3.", "qwen3_xml"),
+    # Qwen3 (dot-free, e.g. Qwen3-32B) still emits hermes-style JSON.
     ("qwen3-", "hermes"),
     ("qwen3_", "hermes"),
     ("qwen", "hermes"),
