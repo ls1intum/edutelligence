@@ -324,6 +324,20 @@ def _infer_tool_call_parser(model: str) -> str:
     return "hermes"
 
 
+def _speculative_decoding_requested(vc: Any) -> bool:
+    """True when this lane runs vLLM with a draft model.
+
+    Covers both the ``speculative_config`` field and a raw
+    ``--speculative-config`` in ``extra_args``, because either one produces a
+    lane whose draft model vLLM loads with the main model's ``--load-format``.
+    """
+    if vc is None:
+        return False
+    if str(getattr(vc, "speculative_config", "") or "").strip():
+        return True
+    return any(str(a).startswith("--speculative-config") for a in (getattr(vc, "extra_args", None) or []))
+
+
 class VllmProcessHandle:
     """Manages a single vLLM server process on a specific port."""
 
@@ -1143,6 +1157,21 @@ class VllmProcessHandle:
         ec = self._vllm_engine_config
         if not getattr(ec, "sharded_checkpoint_enabled", True):
             return
+        if _speculative_decoding_requested(vc):
+            # vLLM loads the draft model with the same --load-format as the main
+            # model, and the sharded cache holds shards only for the main one, so
+            # the lane dies at startup with "Could not find checkpoint files
+            # model-rank-N-part-*.safetensors, only pre-sharded checkpoints are
+            # currently supported". Serve this lane from the full checkpoint
+            # instead — that is a per-lane decision, so speculative decoding on
+            # one model does not cost every other model on the node its cache.
+            logger.info(
+                "[%s] skipping sharded checkpoint for %s: speculative decoding needs the "
+                "full checkpoint for the draft model",
+                self.lane_id,
+                lane_config.model,
+            )
+            return
         tp = int(vc.tensor_parallel_size)
         min_tp = max(2, int(getattr(ec, "sharded_checkpoint_min_tensor_parallel_size", 2)))
         if tp < min_tp:
@@ -1290,6 +1319,8 @@ class VllmProcessHandle:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.kv_cache_dtype:
             cmd.extend(["--kv-cache-dtype", vc.kv_cache_dtype])
+        if vc.speculative_config.strip():
+            cmd.extend(["--speculative-config", vc.speculative_config.strip()])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
         # enforce_eager defaults to False (CUDA graph capture enabled).

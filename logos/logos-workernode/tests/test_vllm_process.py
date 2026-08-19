@@ -1991,3 +1991,81 @@ async def test_spawn_does_not_retry_on_unrelated_startup_failure(tmp_path: Path,
     # Unrelated failure must not wipe the compile cache.
     assert paths["vllm"].exists()
     assert paths["inductor"].exists()
+
+
+def test_build_cmd_emits_speculative_config(monkeypatch) -> None:
+    """The MTP draft head is configured per model, not through extra_args."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    spec = '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    lane = LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, vllm_config=VllmConfig(speculative_config=spec))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--speculative-config")
+    assert cmd[idx + 1] == spec
+
+
+def test_build_cmd_omits_speculative_config_when_unset(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="m", vllm=True, vllm_config=VllmConfig())
+    assert "--speculative-config" not in handle._build_cmd(lane)
+
+
+def test_speculative_decoding_requested_detects_both_spellings() -> None:
+    """A raw --speculative-config in extra_args counts too.
+
+    Either spelling produces a lane with a draft model, and the draft model is
+    what makes the sharded checkpoint cache unusable — so the detection cannot
+    key on the typed field alone.
+    """
+    from logos_worker_node.vllm_process import _speculative_decoding_requested
+
+    assert not _speculative_decoding_requested(VllmConfig())
+    assert _speculative_decoding_requested(VllmConfig(speculative_config='{"method":"qwen3_5_mtp"}'))
+    assert _speculative_decoding_requested(VllmConfig(extra_args=["--speculative-config", '{"method":"mtp"}']))
+    assert _speculative_decoding_requested(VllmConfig(extra_args=['--speculative-config={"method":"mtp"}']))
+    assert not _speculative_decoding_requested(VllmConfig(extra_args=["--enable-prefix-caching"]))
+    assert not _speculative_decoding_requested(VllmConfig(speculative_config="   "))
+
+
+@pytest.mark.asyncio
+async def test_sharded_checkpoint_skipped_for_speculative_lane(monkeypatch, tmp_path) -> None:
+    """A speculative lane must serve the full checkpoint.
+
+    vLLM loads the draft model with the main model's --load-format, and the
+    sharded cache carries shards only for the main model, so the lane dies with
+    "only pre-sharded checkpoints are currently supported". Skipping is per
+    lane, so one model using MTP does not cost the whole node its cache.
+    """
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(),
+        vllm_engine_config=VllmEngineConfig(sharded_checkpoint_enabled=True),
+    )
+    monkeypatch.setattr(handle, "_resolve_persistent_cache_root", lambda _cfg: str(tmp_path))
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.8-27B",
+        vllm=True,
+        vllm_config=VllmConfig(
+            tensor_parallel_size=2,
+            speculative_config='{"method":"qwen3_5_mtp","num_speculative_tokens":3}',
+        ),
+    )
+    # A ready cache is present, so the only reason not to use it is the draft
+    # model. Without this the assertion below would hold for the wrong reason.
+    from logos_worker_node import sharded_checkpoint as sc
+
+    monkeypatch.setattr(sc, "is_sharded_checkpoint_ready", lambda _target: True)
+
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None
+
+    # Same lane, same ready cache, no draft model — now it is used. This is what
+    # makes the assertion above meaningful.
+    plain = LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+    await handle._maybe_prepare_sharded_checkpoint(plain)
+    assert handle._sharded_model_dir is not None

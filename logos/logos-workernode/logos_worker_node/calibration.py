@@ -828,6 +828,10 @@ def _build_vllm_cmd(
     # Calibrate the same engine config that serves so the pair curve is exact.
     enable_prefix_caching = bool(plan.get("enable_prefix_caching", True))
     extra_args: list[str] = list(plan.get("extra_args") or [])
+    # Calibrate with the lane's speculative-decoding setting: a draft model adds
+    # its own weights and activation peak, so a profile measured without it
+    # would under-report the residency the served lane actually needs.
+    speculative_config = str(plan.get("speculative_config") or "").strip()
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
     kv_cache_dtype = str(plan.get("kv_cache_dtype") or "")
     explicit_gmu = plan.get("gpu_memory_utilization")
@@ -864,6 +868,8 @@ def _build_vllm_cmd(
         cmd.extend(["--max-model-len", "auto"])
     if max_num_seqs:
         cmd.extend(["--max-num-seqs", str(int(max_num_seqs))])
+    if speculative_config:
+        cmd.extend(["--speculative-config", speculative_config])
     if quant:
         cmd.extend(["--quantization", quant])
     if kv_cache_dtype:
