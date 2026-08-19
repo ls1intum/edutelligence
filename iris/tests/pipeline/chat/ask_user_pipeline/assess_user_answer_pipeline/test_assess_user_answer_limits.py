@@ -14,13 +14,13 @@ from tests.pipeline.chat.ask_user_pipeline.helper.helper import (
 from tests.pipeline.chat.ask_user_pipeline.helper.test_callback import (
     AskUserStatusCallbackMock,
 )
-from tests.pipeline.chat.ask_user_pipeline.helper.test_data import DTO
+from tests.pipeline.chat.ask_user_pipeline.helper.test_data import DTO, EXERCISE
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-# This class tests the decision process of assessing a student's answer to a given question.
+# This class tests the decision process of assessing a student's answer to a given question with different question limits.
 #
 # Marked "integration" and excluded from the default pytest run (see the
 # addopts/markers config in pyproject.toml): setUpClass below constructs a
@@ -31,7 +31,7 @@ logger.setLevel(logging.INFO)
 # configuration whose example model entries have no API keys. Run explicitly
 # with `pytest -m integration`.
 @pytest.mark.integration
-class TestAssessUserAnswer(unittest.TestCase):
+class TestAssessUserAnswerLimits(unittest.TestCase):
 
     # Helper function to run assessment pipeline with given parameters
     def get_verdicts(
@@ -66,9 +66,7 @@ class TestAssessUserAnswer(unittest.TestCase):
         cls.number_of_verdicts_to_test = 5
         cls.required_test_pass_rate = 0.8
 
-        cls.question = to_ai_message(
-            "How is the swap of two elements implemented in your implementation of the bubble sort algorithm?"
-        )
+        cls.question = to_ai_message(EXERCISE.tutor_question)
 
         cls.callback = AskUserStatusCallbackMock()
         cls.pipeline = AssessUserAnswerPipeline(callback=cls.callback)
@@ -80,7 +78,7 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     def test_answer_correct_between_min_max(self):
         verdicts = self.get_verdicts(
-            "I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp.",
+            EXERCISE.answers.correct,
             min_questions=1,
             max_questions=2,
             questions_asked=1,
@@ -94,7 +92,7 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     def test_answer_wrong_between_min_max(self):
         verdicts = self.get_verdicts(
-            "The compiler handles the swap automatically.",
+            EXERCISE.answers.wrong[0],
             min_questions=1,
             max_questions=2,
             questions_asked=1,
@@ -106,7 +104,7 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     def test_answer_vague_between_min_max(self):
         verdicts = self.get_verdicts(
-            "I follow the definition of the bubble sort algorithm.",
+            EXERCISE.answers.half_correct[-1],
             min_questions=1,
             max_questions=2,
             questions_asked=1,
@@ -118,7 +116,7 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     def test_answer_correct_over_max(self):
         verdicts = self.get_verdicts(
-            "I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp.",
+            EXERCISE.answers.correct,
             min_questions=1,
             max_questions=1,
             questions_asked=1,
@@ -130,7 +128,7 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     def test_answer_wrong_over_max(self):
         verdicts = self.get_verdicts(
-            "The compiler handles the swap automatically.",
+            EXERCISE.answers.wrong[0],
             min_questions=1,
             max_questions=1,
             questions_asked=1,
@@ -142,7 +140,7 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     def test_answer_vague_over_max(self):
         verdicts = self.get_verdicts(
-            "I follow the definition of the bubble sort algorithm.",
+            EXERCISE.answers.half_correct[-1],
             min_questions=1,
             max_questions=1,
             questions_asked=1,
@@ -156,7 +154,7 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     def test_answer_correct_under_min(self):
         verdicts = self.get_verdicts(
-            "I store arr[j] in temp, then assign arr[j] = arr[j+1], and finally set arr[j+1] = temp.",
+            EXERCISE.answers.correct,
             min_questions=2,
             max_questions=2,
             questions_asked=1,
@@ -168,7 +166,7 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     def test_answer_wrong_under_min(self):
         verdicts = self.get_verdicts(
-            "The compiler handles the swap automatically.",
+            EXERCISE.answers.wrong[0],
             min_questions=2,
             max_questions=2,
             questions_asked=1,
@@ -180,7 +178,7 @@ class TestAssessUserAnswer(unittest.TestCase):
 
     def test_answer_vague_under_min(self):
         verdicts = self.get_verdicts(
-            "I follow the definition of the bubble sort algorithm.",
+            EXERCISE.answers.half_correct[-1],
             min_questions=2,
             max_questions=2,
             questions_asked=1,

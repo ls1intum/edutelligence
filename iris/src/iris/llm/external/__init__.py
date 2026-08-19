@@ -1,5 +1,6 @@
 from typing import Union
 
+from ...llm.external.google_gemini import GoogleGeminiChatModel
 from ...llm.external.ollama import OllamaModel
 from ...llm.external.openai_chat import (
     AzureOpenAIChatModel,
@@ -27,4 +28,5 @@ AnyLlm = Union[
     OpenAIWhisperModel,
     OllamaModel,
     CohereAzureClient,
+    GoogleGeminiChatModel,
 ]

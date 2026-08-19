@@ -18,12 +18,10 @@ from tests.pipeline.chat.ask_user_pipeline.helper.test_callback import (
     AskUserStatusCallbackMock,
 )
 from tests.pipeline.chat.ask_user_pipeline.helper.test_data import (
-    CODE_SORTING,
     DTO,
+    EXERCISE,
     FIRST_MESSAGE_TIME,
     LLM_REPEATING_TOPICS_PROMPT,
-    TASK_SORTING,
-    TEMPLATE_SORTING,
     USER_ANSWER,
     VARIANT,
 )
@@ -51,9 +49,9 @@ class TestAskUserMultipleQuestions(unittest.TestCase):
         number_of_questions_per_test = 3
         cls.required_test_pass_rate = 0.8
 
-        cls.task = TASK_SORTING
-        cls.template = TEMPLATE_SORTING
-        cls.code = CODE_SORTING
+        cls.task = EXERCISE.task
+        cls.template = EXERCISE.template
+        cls.code = EXERCISE.code
 
         # This monkeypatch replaces the AssessUserAnswerPipeline with a mock that always assesses
         # the answer as too vague (NEXT_QUESTION is returned)

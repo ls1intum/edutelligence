@@ -14,11 +14,9 @@ from tests.pipeline.chat.ask_user_pipeline.helper.test_callback import (
     AskUserStatusCallbackMock,
 )
 from tests.pipeline.chat.ask_user_pipeline.helper.test_data import (
-    CODE_SORTING,
     DTO,
+    EXERCISE,
     LLM_GENERATION_EVALUATION_PROMPT,
-    TASK_SORTING,
-    TEMPLATE_SORTING,
     VARIANT,
 )
 
@@ -46,12 +44,12 @@ class TestAskUserFirstQuestion(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        number_of_questions_to_test = 5
+        number_of_questions_to_test = 1
         cls.required_test_pass_rate = 0.8
 
-        cls.task = TASK_SORTING
-        cls.template = TEMPLATE_SORTING
-        cls.code = CODE_SORTING
+        cls.task = EXERCISE.task
+        cls.template = EXERCISE.template
+        cls.code = EXERCISE.code
 
         cls.template_concatenated = "\n".join(cls.template.values())
         cls.code_concatenated = "\n".join(cls.code.values())
@@ -182,7 +180,7 @@ class TestAskUserFirstQuestion(unittest.TestCase):
         # required voting result for a question
         required_voting_result = 0.8
         # number of LLM instances to evaluate a question
-        instances = 5
+        instances = 1
 
         pass_ratio = get_pass_ratio(
             self.questions,

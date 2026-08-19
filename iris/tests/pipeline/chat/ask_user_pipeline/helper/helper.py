@@ -69,10 +69,15 @@ def llm_evaluate(
     template: str,
     code: str,
 ):
-    # Create LLM for evaluation
+    # Separate LLM-as-a-judge model used by tests that grade
+    # another LLM's output (e.g. tests/pipeline/chat/ask_user_pipeline/helper/helper.py::llm_evaluate)
+    # which are using GPT models.
+    # LLM-as-a-judge carries systematic biases -- among them self-enhancement
+    # bias: models have been shown to favor their own generations. That is
+    # why it is recommended to use a different model for judging pipeline output.
     completion_args = CompletionArguments(temperature=0.6, max_tokens=2000)
     llm = IrisLangchainChatModel(
-        request_handler=LlmRequestHandler(model_id="oai-gpt-5-mini"),
+        request_handler=LlmRequestHandler(model_id="gemini-3.1-pro"),
         completion_args=completion_args,
     )
 
