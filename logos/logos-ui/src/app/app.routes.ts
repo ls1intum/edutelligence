@@ -27,6 +27,7 @@ export const routes: Routes = [
       { path: 'teams/:id',       title: 'Team · Logos',            data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/team-detail/team-detail').then(m => m.TeamDetail) },
       { path: 'my-workspace',    title: 'My Workspace · Logos',    canActivate: [hasKeysGuard], loadComponent: () => import('./features/my-workspace/my-workspace').then(m => m.MyWorkspace) },
       { path: 'open-code',       title: 'OpenCode · Logos',        canActivate: [hasKeysGuard], loadComponent: () => import('./features/open-code/open-code').then(m => m.OpenCode) },
+      { path: 'claude-code',     title: 'Claude Code · Logos',     canActivate: [hasKeysGuard], loadComponent: () => import('./features/claude-code/claude-code').then(m => m.ClaudeCode) },
       { path: 'no-access',       title: 'No Access · Logos',       loadComponent: () => import('./features/no-access/no-access').then(m => m.NoAccess) },
       { path: '**', redirectTo: 'my-workspace' },
     ],
