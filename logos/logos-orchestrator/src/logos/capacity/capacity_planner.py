@@ -5365,6 +5365,16 @@ class CapacityPlanner:
         )
         if tp > 1 and not graphs_proven:
             vllm_config["enforce_eager"] = True
+            # Say so. This value appears in no config file, so a lane running
+            # eager without an operator asking for it is otherwise invisible —
+            # and it is expensive enough to be worth naming.
+            logger.info(
+                "%s: forcing enforce_eager for the tp=%d lane (calibration did not record a "
+                "successful graph capture at that tensor-parallel size). Set enforce_eager "
+                "under engines.vllm.model_overrides on the worker to override.",
+                model_name,
+                tp,
+            )
         available_for_kv_mb = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
         kv_mb, selected_max_model_len = self._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb)
         if kv_mb is None:
