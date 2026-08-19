@@ -107,6 +107,20 @@ class ContextResolver:
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
 
+            # The provider form advertises "Authorization" and "Bearer {}" as
+            # placeholders, so operators routinely save an OpenAI-shaped cloud
+            # provider with both fields empty. Without a default the header was
+            # dropped silently below and the upstream rejected the request as
+            # unauthenticated — apply the advertised convention instead. An
+            # explicit header name (e.g. Azure's "api-key") keeps its own name
+            # and defaults to the bare key rather than a Bearer prefix.
+            if provider_type != "logosnode" and api_key:
+                if not auth_name:
+                    auth_name = "Authorization"
+                    auth_format = auth_format or "Bearer {}"
+                elif not auth_format:
+                    auth_format = "{}"
+
             if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
                 logger.error(
                     f"No API key for model {model_id} / provider {auth_info.get('provider_name', provider_id)}"

@@ -136,6 +136,24 @@ def generate_logos_api_key(label: str) -> str:
     return "lg-" + label + "-" + secrets.token_urlsafe(96)
 
 
+def _stringify_error_message(value: Any) -> str:
+    """Render a non-string error into a value the text column can store.
+
+    Upstream failures arrive as OpenAI-shaped dicts (``{"message": ..., "type":
+    ...}``). psycopg2 cannot adapt a dict, so passing one through turned every
+    failed cloud request into an unhandled 500 that masked the real status —
+    an authentication error upstream surfaced to the client as a Logos crash.
+    """
+    if isinstance(value, dict):
+        message = value.get("message")
+        if isinstance(message, str) and message:
+            return message
+        return json.dumps(value, separators=(",", ":"), default=str)
+    if isinstance(value, (list, tuple)):
+        return json.dumps(value, separators=(",", ":"), default=str)
+    return str(value)
+
+
 # noinspection PyUnresolvedReferences
 class DBManager:
     def __init__(self):
@@ -277,6 +295,8 @@ class DBManager:
             db_col = field_map.get(key, key)
             if key == "result_status" and isinstance(value, ResultStatus):
                 value = value.value
+            if key == "error_message" and not isinstance(value, str):
+                value = _stringify_error_message(value)
             update_data[db_col] = value
 
         if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
@@ -388,7 +408,9 @@ class DBManager:
         if result_payload is not None:
             update_data["result_payload"] = result_payload
         if error_message is not None:
-            update_data["error_message"] = error_message
+            update_data["error_message"] = (
+                error_message if isinstance(error_message, str) else _stringify_error_message(error_message)
+            )
         self.update("jobs", job_id, update_data)
 
     def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
@@ -2197,6 +2219,83 @@ class DBManager:
         )
         self.session.commit()
         return {"result": "response_payload set"}, 200
+
+    def get_usage_cost_micro_cents(
+        self,
+        model_id: int,
+        provider_id: int,
+        usage: Dict[str, int],
+        response_at: datetime.datetime,
+    ) -> Optional[int]:
+        """Return the configured cloud cost for one response in micro-cents.
+
+        The lookup mirrors the ``budget_usage`` view: model/provider-specific
+        prices take precedence over generic prices and only prices valid at
+        ``response_at`` are considered. ``None`` identifies a local provider;
+        cloud providers without a matching price retain the existing billing
+        semantics and cost zero.
+        """
+        billable_usage = {
+            token_type: token_count
+            for token_type, token_count in usage.items()
+            if isinstance(token_type, str)
+            and isinstance(token_count, int)
+            and not isinstance(token_count, bool)
+            and token_count >= 0
+        }
+        if not billable_usage:
+            return None
+
+        row = self.session.execute(
+            text(
+                """
+                WITH response_usage AS (
+                    SELECT usage.key AS token_type,
+                           usage.value::BIGINT AS token_count
+                    FROM jsonb_each_text(CAST(:usage AS JSONB)) AS usage
+                ),
+                cloud_provider AS (
+                    SELECT id
+                    FROM providers
+                    WHERE id = :provider_id
+                      AND LOWER(provider_type::text) = 'cloud'
+                )
+                SELECT CASE
+                    WHEN EXISTS (SELECT 1 FROM cloud_provider)
+                    THEN COALESCE(SUM(
+                        CASE WHEN price.price_per_k_token IS NOT NULL
+                             THEN (ru.token_count * price.price_per_k_token / 1000)::BIGINT
+                             ELSE 0
+                        END
+                    ), 0)
+                    ELSE NULL
+                END AS cost_micro_cents
+                FROM response_usage ru
+                LEFT JOIN token_types tt ON tt.name = ru.token_type
+                LEFT JOIN LATERAL (
+                    SELECT tp.price_per_k_token
+                    FROM token_prices tp
+                    WHERE tp.type_id = tt.id
+                      AND (tp.model_id = :model_id OR tp.model_id IS NULL)
+                      AND (tp.provider_id = :provider_id OR tp.provider_id IS NULL)
+                      AND tp.valid_from <= :response_at
+                    ORDER BY (tp.model_id = :model_id) DESC NULLS LAST,
+                             (tp.provider_id = :provider_id) DESC NULLS LAST,
+                             tp.valid_from DESC
+                    LIMIT 1
+                ) price ON true
+                """
+            ),
+            {
+                "usage": json.dumps(billable_usage),
+                "model_id": int(model_id),
+                "provider_id": int(provider_id),
+                "response_at": response_at,
+            },
+        ).fetchone()
+        if row is None or row.cost_micro_cents is None:
+            return None
+        return int(row.cost_micro_cents)
 
     def check_authorization(self, logos_key: str):
         sql = text(
