@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from logos.capacity.capacity_planner import CapacityPlanner
-from logos.logosnode_registry import LogosNodeRuntimeRegistry, ProviderSession
+from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry, ProviderSession
 
 # ---------------------------------------------------------------------------
 # Registry: calibrating flag driven by worker events
@@ -339,12 +339,13 @@ def test_dispatching_a_start_excludes_the_provider_before_the_worker_confirms():
 
 
 def test_a_refused_start_releases_the_provider_again():
-    """The worker reports a refusal as a successful command carrying ok=False,
-    so the mark has to be undone on that payload — otherwise a worker that
-    never starts a session stays excluded forever."""
+    """The worker reports a refusal in the payload, not as a transport error, so
+    the mark has to be undone on that payload — otherwise a worker that never
+    starts a session stays excluded forever."""
     registry, _session, _ = _registry_answering_start(reply={"ok": False, "error": "node is in a degraded state"})
 
-    asyncio.run(registry.send_command(1, "start_calibration_session"))
+    with pytest.raises(LogosNodeCommandError, match="degraded"):
+        asyncio.run(registry.send_command(1, "start_calibration_session"))
 
     assert registry.is_calibrating(1) is False
 
@@ -359,9 +360,35 @@ def test_a_refused_start_keeps_an_already_running_session_excluded():
     asyncio.run(registry.append_event(1, _event("calibration_session_started")))
     assert registry.is_calibrating(1) is True
 
-    asyncio.run(registry.send_command(1, "start_calibration_session"))
+    with pytest.raises(LogosNodeCommandError):
+        asyncio.run(registry.send_command(1, "start_calibration_session"))
 
     assert registry.is_calibrating(1) is True
+
+
+def test_a_refused_lane_command_is_raised_not_returned():
+    """The worker refuses VRAM-growing lane commands while it calibrates. Handed
+    back as a result, the planner would record desired state for a lane that was
+    never created and then wait out its confirmation timeout."""
+    registry, _session, _ = _registry_answering_start(
+        reply={
+            "ok": False,
+            "error": "'add_lane' is refused while a calibration session is running",
+            "calibrating": True,
+        }
+    )
+
+    with pytest.raises(LogosNodeCommandError, match="calibration session is running"):
+        asyncio.run(registry.send_command(1, "add_lane", params={"model": "model-a"}))
+
+
+def test_an_ok_true_payload_is_returned_unchanged():
+    registry, _session, _ = _registry_answering_start(reply={"ok": True, "lane_id": "lane-0"})
+
+    assert asyncio.run(registry.send_command(1, "delete_lane", params={"lane_id": "lane-0"})) == {
+        "ok": True,
+        "lane_id": "lane-0",
+    }
 
 
 def test_an_unrelated_command_does_not_touch_the_flag():

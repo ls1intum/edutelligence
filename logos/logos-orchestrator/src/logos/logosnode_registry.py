@@ -971,11 +971,17 @@ class LogosNodeRuntimeRegistry:
             _undo_optimistic_calibration_mark()
             raise LogosNodeCommandError(str(result.get("error", "unknown worker command error")))
         payload = result.get("result", {})
-        # A refused start (session already running, node unhealthy) comes back
-        # as a successful command carrying ok=False, not as an error — so the
-        # check above does not see it.
-        if calibration_start and isinstance(payload, dict) and payload.get("ok") is False:
+        # A worker that declines a command answers it — the transport succeeded,
+        # so the check above sees nothing. Refusals travel in the payload as
+        # ok=False: a start rejected because a session is already running or the
+        # node is degraded, and any lane command rejected because a calibration
+        # session holds this node's VRAM. Handing that back as a result would
+        # have callers treat it as done — the planner would record desired state
+        # for a lane the worker never created and then wait out the confirmation
+        # timeout — so it is raised like any other command failure.
+        if isinstance(payload, dict) and payload.get("ok") is False:
             _undo_optimistic_calibration_mark()
+            raise LogosNodeCommandError(str(payload.get("error", f"worker refused '{action}'")))
         return payload
 
     async def send_stream_command(
