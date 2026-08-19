@@ -15,6 +15,7 @@ import { SearchInputComponent } from '../../shared/components/search-input/searc
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { AuthService } from '../../core/auth/services/auth.service';
+import { Router } from '@angular/router';
 
 @Component({
   selector: 'app-models',
@@ -34,6 +35,7 @@ import { AuthService } from '../../core/auth/services/auth.service';
 export class Models implements OnInit {
   private modelService = inject(ModelManagementService);
   readonly role = inject(AuthService).role;
+  private router = inject(Router);
 
   // ── List state ──────────────────────────────────────────────────────────
   models = signal<Model[]>([]);
@@ -116,6 +118,10 @@ export class Models implements OnInit {
 
   getCapabilities(modelId: number): ModelCapability | undefined {
     return this.capabilities()[modelId];
+  }
+  
+  openReport(model: Model): void {
+    this.router.navigate(['/models', model.id, 'errors']);
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

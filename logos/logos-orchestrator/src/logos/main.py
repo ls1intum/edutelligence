@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+import re
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -16,6 +17,7 @@ from typing import Any, Dict, Optional, Set
 
 import grpc
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -811,6 +813,33 @@ def _capture_logosnode_provider_snapshot(
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
 
 
+def _capture_calibration_probe_log(provider_id: int, event: Dict[str, Any]) -> None:
+    """Persist a worker's ``calibration_probe_log`` event into the DB.
+
+    Fired once per model per calibration attempt (see
+    ``LogosBridgeClient._record_calibration_probe_log`` on the worker side).
+    Keeps only the most recent row per (provider_id, model_name) via
+    ``upsert_calibration_probe_log``'s ON CONFLICT — mirrors how
+    ``upsert_model_profiles`` above keeps one row per (provider_id,
+    model_name).
+    """
+    model_name = str(event.get("model") or "").strip()
+    if not model_name:
+        return
+    recorded_at = _parse_iso_datetime(event.get("timestamp"))
+    details_raw = event.get("details")
+    payload = json.loads(details_raw) if isinstance(details_raw, str) and details_raw else {}
+    if not isinstance(payload, dict):
+        return
+    # Pop out before it goes into `summary` below — otherwise the (large,
+    # deliberately un-truncated) raw log text would be duplicated into both
+    # the dedicated `log_text` column and the JSONB summary blob.
+    log_text = payload.pop("log_text", None)
+
+    with DBManager() as db:
+        db.upsert_calibration_probe_log(provider_id, model_name, recorded_at, payload, log_text)
+
+
 def _merge_local_provider_vram_payload(
     logos_key: str,
     payload: Dict[str, Any],
@@ -1150,6 +1179,121 @@ def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
             return {}
         return extract_token_usage({"seconds": parsed_duration})
     return {}
+
+
+_MICRO_CENTS_PER_EUR = 100_000_000
+
+
+def _response_with_cost(
+    response_payload: Any,
+    provider_id: Optional[int],
+    model_id: Optional[int],
+    response_at: datetime.datetime,
+) -> tuple[Any, bool]:
+    """Add the configured EUR cost to a cloud response's usage object.
+
+    Cost enrichment is deliberately best-effort: a billing lookup must never
+    turn a successful inference into an error. The DB method returns ``None``
+    for local providers, so proxy mode can safely use the same helper without
+    separately resolving the provider type.
+    """
+    if not isinstance(response_payload, dict) or provider_id is None or model_id is None:
+        return response_payload, False
+    usage = response_payload.get("usage")
+    if not isinstance(usage, dict):
+        return response_payload, False
+    usage_tokens = extract_token_usage(usage)
+    if not usage_tokens:
+        return response_payload, False
+
+    try:
+        with DBManager() as db:
+            cost_micro_cents = db.get_usage_cost_micro_cents(
+                model_id,
+                provider_id,
+                usage_tokens,
+                response_at,
+            )
+    except Exception:
+        logger.exception(
+            "Failed to calculate response cost (model_id=%s, provider_id=%s)",
+            model_id,
+            provider_id,
+        )
+        return response_payload, False
+    if cost_micro_cents is None:
+        return response_payload, False
+
+    enriched_usage = dict(usage)
+    enriched_usage["cost"] = round(cost_micro_cents / _MICRO_CENTS_PER_EUR, 8)
+    enriched_usage["cost_currency"] = "EUR"
+    enriched_payload = dict(response_payload)
+    enriched_payload["usage"] = enriched_usage
+    return enriched_payload, True
+
+
+@dataclass
+class _StreamingCostEnricher:
+    """Enrich terminal SSE usage events while preserving all other frames."""
+
+    provider_id: Optional[int]
+    model_id: Optional[int]
+    buffer: bytes = b""
+
+    def feed(self, chunk: bytes | str) -> list[bytes]:
+        self.buffer += chunk.encode("utf-8") if isinstance(chunk, str) else chunk
+        frames: list[bytes] = []
+        while True:
+            delimiter = re.search(rb"\r?\n\r?\n", self.buffer)
+            if delimiter is None:
+                break
+            end = delimiter.end()
+            frame = self.buffer[:end]
+            self.buffer = self.buffer[end:]
+            frames.append(self._enrich_frame(frame, delimiter.start(), delimiter.group()))
+        return frames
+
+    def finish(self) -> list[bytes]:
+        if not self.buffer:
+            return []
+        remainder = self.buffer
+        self.buffer = b""
+        return [remainder]
+
+    def _enrich_frame(self, frame: bytes, payload_end: int, delimiter: bytes) -> bytes:
+        event = frame[:payload_end]
+        newline = b"\r\n" if b"\r\n" in event else b"\n"
+        lines = event.split(newline)
+        for index, line in enumerate(lines):
+            if not line.startswith(b"data:"):
+                continue
+            raw_data = line[5:].lstrip()
+            if raw_data == b"[DONE]":
+                return frame
+            try:
+                blob = json.loads(raw_data)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(blob, dict):
+                continue
+
+            target = blob.get("response") if isinstance(blob.get("response"), dict) else blob
+            enriched_target, changed = _response_with_cost(
+                target,
+                self.provider_id,
+                self.model_id,
+                datetime.datetime.now(datetime.timezone.utc),
+            )
+            if not changed:
+                continue
+            if target is blob:
+                blob = enriched_target
+            else:
+                blob = dict(blob)
+                blob["response"] = enriched_target
+            lines[index] = b"data: " + json.dumps(blob, separators=(",", ":")).encode("utf-8")
+            return newline.join(lines) + delimiter
+        return frame
 
 
 @asynccontextmanager
@@ -1573,6 +1717,30 @@ async def internal_model_context_windows(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     return {"windows": _served_context_windows()}
+
+
+@app.get("/internal/calibration_probe_logs", tags=["admin"])
+def internal_calibration_probe_logs(model_name: str, request: Request):
+    """Every node's most recent calibration probe log for one model.
+
+    Backs the webservice's model-error-report page (Complete Logs tab) —
+    it resolves a model id to a model name, then asks here for what every
+    provider that has calibrated it reported.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    with DBManager() as db:
+        rows = db.get_calibration_probe_logs_by_model(model_name)
+    return JSONResponse(status_code=200, content=jsonable_encoder({"logs": rows}))
 
 
 class _InternalCalibrateRequest(BaseModel):
@@ -2429,14 +2597,23 @@ async def _streaming_response(
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
+        cost_enricher = (
+            _StreamingCostEnricher(provider_id, model_id)
+            if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
+            else None
+        )
         error_message = None
         ttft_recorded = False
+
+        def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
+            return cost_enricher.feed(chunk) if cost_enricher else [chunk]
 
         try:
             # Yield the already-peeked first chunk
             if first_chunk:
-                yield first_chunk
-                stream_log.feed(first_chunk)
+                for outgoing_chunk in enriched_chunks(first_chunk):
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
                 if not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
@@ -2444,15 +2621,24 @@ async def _streaming_response(
                     ttft_recorded = True
 
             async for chunk in chunk_iter:
-                yield chunk
+                for outgoing_chunk in enriched_chunks(chunk):
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
                 if chunk and not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
                     ttft_recorded = True
-                stream_log.feed(chunk)
+            if cost_enricher:
+                for outgoing_chunk in cost_enricher.finish():
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
         except Exception as exc:
             error_message = str(exc)
+            if cost_enricher:
+                for outgoing_chunk in cost_enricher.finish():
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
             # Once bytes have reached the client, only SSE can carry the
             # synthetic OpenAI error frame without corrupting its protocol.
             if upstream_media_type == "text/event-stream":
@@ -2648,6 +2834,7 @@ async def _sync_response(
                 )
         else:
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+        response_at = datetime.datetime.now(datetime.timezone.utc)
 
         # Update rate limits from response headers
         if exec_result.headers:
@@ -2679,6 +2866,9 @@ async def _sync_response(
                 f"Request failed (model_id={model_id}, provider_id={provider_id}): "
                 f"{exec_result.error}, response={response_payload}"
             )
+
+        if exec_result.success and context.provider_type == "cloud":
+            response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
 
         usage_tokens = _usage_tokens_from_payload(response_payload)
 
@@ -2841,6 +3031,7 @@ def _proxy_streaming_response(
 
     async def streamer():
         stream_log = _StreamingLogAccumulator()
+        cost_enricher = _StreamingCostEnricher(provider_id, model_id)
         stream_status = StreamingExecutionStatus()
         ttft = None
         error_message = None
@@ -2859,11 +3050,17 @@ def _proxy_streaming_response(
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
 
-                yield chunk
-
-                stream_log.feed(chunk)
+                for outgoing_chunk in cost_enricher.feed(chunk):
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
+            for outgoing_chunk in cost_enricher.finish():
+                yield outgoing_chunk
+                stream_log.feed(outgoing_chunk)
         except Exception as exc:  # noqa: BLE001
             error_message = str(exc)
+            for outgoing_chunk in cost_enricher.finish():
+                yield outgoing_chunk
+                stream_log.feed(outgoing_chunk)
             raise
         finally:
             if error_message is None:
@@ -2917,10 +3114,13 @@ async def _proxy_sync_response(
     from fastapi.responses import JSONResponse
 
     exec_result = await _pipeline.executor.execute_sync(forward_url, proxy_headers, payload)
+    response_at = datetime.datetime.now(datetime.timezone.utc)
 
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
         response_payload = {"error": exec_result.error}
+    if exec_result.success:
+        response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
 
     if log_id:
         usage_tokens = _usage_tokens_from_payload(response_payload)
@@ -3814,6 +4014,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     max_lanes=(
                         int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
+                    calibrating=(
+                        bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
+                    ),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -3831,10 +4034,21 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 )
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
+                event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
-                    event=(payload.get("event") if isinstance(payload.get("event"), dict) else {}),
+                    event=event,
+                    replay=bool(payload.get("replay", False)),
                 )
+                if event.get("event") == "calibration_probe_log":
+                    try:
+                        await asyncio.to_thread(_capture_calibration_probe_log, ticket.provider_id, event)
+                    except Exception:
+                        logger.debug(
+                            "Failed to persist calibration probe log for provider %s",
+                            _resolve_provider_name(ticket.provider_id),
+                            exc_info=True,
+                        )
             elif msg_type == "heartbeat":
                 await _logosnode_registry.mark_heartbeat(ticket.provider_id)
             elif msg_type == "command_result":

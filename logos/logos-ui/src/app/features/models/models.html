@@ -36,15 +36,15 @@
   emptyMessage="No models match your search."
 >
     @for (model of filteredModels(); track model.id) {
-      <div class="table-row" role="row">
+      <div class="table-row">
         <div class="col-name name-cell" role="cell">
-          <span class="model-name">{{ model.name }}</span>
+          <button type="button" class="model-name" (click)="openReport(model)">{{ model.name }}</button>
           <div class="name-mobile-actions">
             <button
               class="btn-icon"
               type="button"
               [attr.aria-label]="'Edit model ' + model.name"
-              (click)="openEditDialog(model)"
+              (click)="openEditDialog(model); $event.stopPropagation()"
             >
               <i class="pi pi-pencil" aria-hidden="true"></i>
             </button>
@@ -52,7 +52,7 @@
               class="btn-icon btn-icon--danger"
               type="button"
               [attr.aria-label]="'Delete model ' + model.name"
-              (click)="openDeleteDialog(model)"
+              (click)="openDeleteDialog(model); $event.stopPropagation()"
             >
               <i class="pi pi-trash" aria-hidden="true"></i>
             </button>
@@ -137,7 +137,26 @@
               <i class="pi pi-trash" aria-hidden="true"></i>
             </button>
           </div>
-        }
+        </div>
+
+        <div class="col-actions actions-cell" role="cell">
+          <button
+            class="btn-icon"
+            type="button"
+            [attr.aria-label]="'Edit model ' + model.name"
+            (click)="openEditDialog(model); $event.stopPropagation()"
+          >
+            <i class="pi pi-pencil" aria-hidden="true"></i>
+          </button>
+          <button
+            class="btn-icon btn-icon--danger"
+            type="button"
+            [attr.aria-label]="'Delete model ' + model.name"
+            (click)="openDeleteDialog(model); $event.stopPropagation()"
+          >
+            <i class="pi pi-trash" aria-hidden="true"></i>
+          </button>
+        </div>
       </div>
     }
   </app-data-table>

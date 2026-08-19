@@ -1,0 +1,439 @@
+<div class="ai-tools">
+  <h1 class="page-title">AI Coding Tools</h1>
+  <p class="page-subtitle">Connect your preferred AI coding assistant to Logos.</p>
+
+  <!-- ── Tool tabs ─────────────────────────────────────────────────────────── -->
+  <div class="tool-tabs" role="tablist">
+    <button
+      class="tool-tab"
+      role="tab"
+      [class.tool-tab--active]="activeTool() === 'opencode'"
+      [attr.aria-selected]="activeTool() === 'opencode'"
+      (click)="activeTool.set('opencode')"
+    >
+      <i class="pi pi-code" aria-hidden="true"></i> OpenCode
+    </button>
+    <button
+      class="tool-tab"
+      role="tab"
+      [class.tool-tab--active]="activeTool() === 'claudecode'"
+      [attr.aria-selected]="activeTool() === 'claudecode'"
+      (click)="activeTool.set('claudecode')"
+    >
+      <i class="pi pi-sparkles" aria-hidden="true"></i> Claude Code
+    </button>
+  </div>
+
+  <!-- ══════════════ OPENCODE ══════════════════════════════════════════════ -->
+  @if (activeTool() === 'opencode') {
+    <!-- ── 1 - INSTALL OPENCODE ──────────────────────────────────────────── -->
+    <div class="config-section">
+      <p class="step-label">1. INSTALL OPENCODE</p>
+      <div class="os-tabs" role="tablist">
+        <button class="os-tab" role="tab"
+          [class.os-tab--active]="installTab() === 'mac'"
+          (click)="installTab.set('mac')">macOS</button>
+        <button class="os-tab" role="tab"
+          [class.os-tab--active]="installTab() === 'linux'"
+          (click)="installTab.set('linux')">Linux</button>
+        <button class="os-tab" role="tab"
+          [class.os-tab--active]="installTab() === 'windows'"
+          (click)="installTab.set('windows')">Windows</button>
+      </div>
+
+      @if (installTab() === 'mac') {
+        <div class="terminal-block">
+          <span class="terminal-prefix" aria-hidden="true">$</span>
+          <code class="terminal-cmd">{{ openCodeInstallCommands.mac }}</code>
+          <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === openCodeInstallCommands.mac"
+            (click)="copyCmd(openCodeInstallCommands.mac)" aria-label="Copy command">
+            <i [class]="copiedCmd() === openCodeInstallCommands.mac ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+          </button>
+        </div>
+        <p class="tab-note">
+          Installs the OpenCode desktop app. Prefer the terminal-only version? Use
+          <code class="inline-code">{{ openCodeInstallCommands.macCli }}</code> or
+          <code class="inline-code">{{ openCodeInstallCommands.npmCli }}</code> instead.
+        </p>
+      }
+      @if (installTab() === 'linux') {
+        <p class="install-hint">
+          Download the OpenCode desktop app (<code class="inline-code">.deb</code> /
+          <code class="inline-code">.rpm</code>) from
+          <a class="ext-link" href="https://opencode.ai/download" target="_blank" rel="noopener">opencode.ai/download</a>.
+        </p>
+        <p class="tab-note">
+          Prefer the terminal-only version? Use
+          <code class="inline-code">{{ openCodeInstallCommands.linuxCli }}</code> or
+          <code class="inline-code">{{ openCodeInstallCommands.npmCli }}</code> instead.
+        </p>
+      }
+      @if (installTab() === 'windows') {
+        <p class="install-hint">
+          Download the OpenCode desktop installer from
+          <a class="ext-link" href="https://opencode.ai/download" target="_blank" rel="noopener">opencode.ai/download</a>.
+        </p>
+        <p class="tab-note">
+          Prefer the terminal-only version? Use
+          <code class="inline-code">{{ openCodeInstallCommands.npmCli }}</code> instead.
+        </p>
+      }
+    </div>
+  }
+
+  <!-- ══════════════ CLAUDE CODE ═══════════════════════════════════════════ -->
+  @if (activeTool() === 'claudecode') {
+    <!-- ── 1 - INSTALL CLAUDE CODE ───────────────────────────────────────── -->
+    <div class="config-section">
+      <p class="step-label">1. INSTALL CLAUDE CODE</p>
+      <div class="os-tabs" role="tablist">
+        <button class="os-tab" role="tab"
+          [attr.aria-selected]="installTab() === 'mac'"
+          [class.os-tab--active]="installTab() === 'mac'"
+          (click)="installTab.set('mac')">macOS</button>
+        <button class="os-tab" role="tab"
+          [attr.aria-selected]="installTab() === 'linux'"
+          [class.os-tab--active]="installTab() === 'linux'"
+          (click)="installTab.set('linux')">Linux</button>
+        <button class="os-tab" role="tab"
+          [attr.aria-selected]="installTab() === 'windows'"
+          [class.os-tab--active]="installTab() === 'windows'"
+          (click)="installTab.set('windows')">Windows</button>
+      </div>
+
+      @if (installTab() === 'mac') {
+        <div class="terminal-block">
+          <span class="terminal-prefix" aria-hidden="true">$</span>
+          <code class="terminal-cmd">{{ claudeCodeInstallCommands.mac }}</code>
+          <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeInstallCommands.mac"
+            (click)="copyCmd(claudeCodeInstallCommands.mac)" aria-label="Copy command">
+            <i [class]="copiedCmd() === claudeCodeInstallCommands.mac ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+          </button>
+        </div>
+        <p class="tab-note">
+          Homebrew installs do not auto-update. Prefer the self-updating native installer?
+          Use <code class="inline-code">{{ claudeCodeInstallCommands.nativeUnix }}</code> instead.
+        </p>
+      }
+      @if (installTab() === 'linux') {
+        <div class="terminal-block">
+          <span class="terminal-prefix" aria-hidden="true">$</span>
+          <code class="terminal-cmd">{{ claudeCodeInstallCommands.nativeUnix }}</code>
+          <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeInstallCommands.nativeUnix"
+            (click)="copyCmd(claudeCodeInstallCommands.nativeUnix)" aria-label="Copy command">
+            <i [class]="copiedCmd() === claudeCodeInstallCommands.nativeUnix ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+          </button>
+        </div>
+        <p class="tab-note">
+          Works on WSL too. Debian, Fedora, RHEL and Alpine can also install via
+          <code class="inline-code">apt</code>, <code class="inline-code">dnf</code> or
+          <code class="inline-code">apk</code>; see
+          <a class="ext-link" href="https://code.claude.com/docs/en/setup" target="_blank" rel="noopener">the setup guide</a>.
+        </p>
+      }
+      @if (installTab() === 'windows') {
+        <div class="terminal-block">
+          <span class="terminal-prefix" aria-hidden="true">&gt;</span>
+          <code class="terminal-cmd">{{ claudeCodeInstallCommands.windows }}</code>
+          <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeInstallCommands.windows"
+            (click)="copyCmd(claudeCodeInstallCommands.windows)" aria-label="Copy command">
+            <i [class]="copiedCmd() === claudeCodeInstallCommands.windows ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+          </button>
+        </div>
+        <p class="tab-note">
+          Run in PowerShell, not CMD. WinGet works as well
+          (<code class="inline-code">{{ claudeCodeInstallCommands.winget }}</code>), but does not auto-update.
+        </p>
+      }
+    </div>
+  }
+
+  <!-- ── 2 - SELECT API KEY (shared) ──────────────────────────────────────── -->
+  <div class="config-section">
+    <p class="step-label">2. SELECT API KEY</p>
+
+    @if (keysLoading()) {
+      <div class="model-loading">
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        <span>Loading your keys…</span>
+      </div>
+    } @else if (keysError()) {
+      <p class="model-error">Failed to load your API keys. Please refresh.</p>
+    } @else if (keys().length === 0) {
+      <p class="model-empty">No API keys found for your account.</p>
+    } @else {
+      <app-select
+        [options]="keyOptions()"
+        [value]="selectedKey() ? String(selectedKey()!.id) : ''"
+        ariaLabel="Select API key"
+        (valueChange)="selectKeyById($event ?? '')"
+      />
+    }
+  </div>
+
+  <!-- ── 3 - MODEL (shared) ────────────────────────────────────────────────── -->
+  <div class="config-section">
+    @if (activeTool() === 'opencode') {
+      <p class="step-label">3. DEFAULT MODEL</p>
+      <p class="section-note" style="margin-bottom: 12px;">
+        Sets the default model for the terminal version; the desktop app ignores
+        this, there you pick the model manually after connecting (step 4).
+      </p>
+    } @else {
+      <p class="step-label">3. MODEL</p>
+      <p class="section-note" style="margin-bottom: 12px;">
+        Claude Code has one active model at a time, so every alias — <code class="inline-code">opus</code>,
+        <code class="inline-code">sonnet</code>, <code class="inline-code">haiku</code> — is pointed at
+        the model you pick here. Switching alias with <code class="inline-code">/model</code> then never
+        leaves Logos.
+      </p>
+    }
+
+    @if (keysLoading() || modelsLoading()) {
+      <div class="model-loading">
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        <span>Loading models…</span>
+      </div>
+    } @else if (modelsError()) {
+      <p class="model-error">Failed to load models for this key.</p>
+    } @else if (models().length === 0) {
+      <p class="model-empty">No models are accessible for this key.</p>
+    } @else {
+      <app-select
+        [options]="modelOptions()"
+        [value]="selected()?.model_name ?? ''"
+        ariaLabel="Select model"
+        (valueChange)="selectModel($event ?? '')"
+      />
+
+      @if (activeTool() === 'claudecode' && selected()) {
+        <p class="context-note">
+          Serves <strong>{{ contextTokens() | number }}</strong> tokens of context,
+          <strong>{{ outputTokens() | number }}</strong> of them reserved for output.
+          @if (!selected()!.context_window) {
+            This model reports no window, so this is a conservative fallback.
+          }
+          Claude Code otherwise assumes 200,000 tokens for models it does not know and lets
+          requests overflow before it compacts, so the config below states the real number.
+        </p>
+
+        @if (windowUnenforced()) {
+          <div class="privacy-callout" role="note">
+            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+            <p>
+              <strong>Claude Code will ignore the context window below for this model.</strong>
+              It applies only to model IDs that Claude Code cannot resolve to a Claude model —
+              names starting with <code class="inline-code">claude-</code> or containing
+              <code class="inline-code">[1m]</code> need
+              <code class="inline-code">DISABLE_COMPACT</code> or
+              <code class="inline-code">CLAUDE_CODE_DISABLE_1M_CONTEXT</code> as well. Pick another
+              model, or set those yourself.
+            </p>
+          </div>
+        }
+      }
+    }
+  </div>
+
+  <!-- ══════════════ CONNECT - OPENCODE ════════════════════════════════════ -->
+  @if (activeTool() === 'opencode') {
+    <div class="config-section">
+      <p class="step-label">4. CONNECT</p>
+
+      <div class="privacy-callout" role="note">
+        <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+        <p>
+          <strong>Prompts only stay on Logos while a Logos model is selected</strong>;
+          otherwise OpenCode sends them to its built-in cloud models.
+        </p>
+      </div>
+
+      <p class="substep-label">a. Add the Logos provider to your config</p>
+
+      <div class="os-tabs" role="tablist">
+        <button class="os-tab" role="tab"
+          [class.os-tab--active]="connectMethod() === 'download'"
+          (click)="connectMethod.set('download')">Download config</button>
+        <button class="os-tab" role="tab"
+          [class.os-tab--active]="connectMethod() === 'terminal'"
+          (click)="connectMethod.set('terminal')">Terminal</button>
+      </div>
+
+      @if (connectMethod() === 'download') {
+        <p class="apply-hint">
+          Only if you have no <code class="inline-code">opencode.json</code> yet: save it as
+          <code class="inline-code">~/.config/opencode/opencode.json</code>
+          (Windows: <code class="inline-code">%USERPROFILE%\.config\opencode\opencode.json</code>).
+        </p>
+        <div class="code-header">
+          <span class="file-tab">opencode.json</span>
+          <button class="btn-copy-config" (click)="downloadOpenCodeConfig()">
+            <i class="pi pi-download" aria-hidden="true"></i> Download Config
+          </button>
+        </div>
+        <div class="code-block" role="region" aria-label="Generated opencode.json">
+          <div class="line-numbers" aria-hidden="true">
+            @for (line of openCodeConfigLines(); track $index) {
+              <span>{{ $index + 1 }}</span>
+            }
+          </div>
+          <pre class="code-content">{{ openCodeConfigJson() }}</pre>
+        </div>
+      } @else {
+        <p class="apply-hint">
+          Run in your terminal; adds only the Logos provider, an existing config is kept:
+        </p>
+        <div class="os-tabs" role="tablist">
+          <button class="os-tab" role="tab"
+            [class.os-tab--active]="installTab() === 'mac'"
+            (click)="installTab.set('mac')">macOS</button>
+          <button class="os-tab" role="tab"
+            [class.os-tab--active]="installTab() === 'linux'"
+            (click)="installTab.set('linux')">Linux</button>
+          <button class="os-tab" role="tab"
+            [class.os-tab--active]="installTab() === 'windows'"
+            (click)="installTab.set('windows')">Windows</button>
+        </div>
+        <div class="terminal-block">
+          <span class="terminal-prefix" aria-hidden="true">{{ installTab() === 'windows' ? '>' : '$' }}</span>
+          <code class="terminal-cmd">{{ openCodeMergeCommand() }}</code>
+          <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === openCodeMergeCommand()"
+            (click)="copyCmd(openCodeMergeCommand())" aria-label="Copy command">
+            <i [class]="copiedCmd() === openCodeMergeCommand() ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+          </button>
+        </div>
+        @if (installTab() === 'windows') {
+          <p class="tab-note">Run in PowerShell; uses only built-in cmdlets.</p>
+        } @else if (installTab() === 'mac') {
+          <p class="tab-note">
+            Uses <code class="inline-code">python3</code>, included in the Xcode Command Line
+            Tools (already present if you installed via Homebrew).
+          </p>
+        } @else {
+          <p class="tab-note">Uses the system <code class="inline-code">python3</code>.</p>
+        }
+      }
+
+      <p class="substep-label">b. Restart OpenCode</p>
+      <p class="apply-hint">The config is only read at startup.</p>
+
+      <p class="substep-label">c. Select a Logos model</p>
+      <p class="apply-hint">
+        Open the model picker (or type <code class="inline-code">/models</code>) and pick a
+        model under <strong>Logos LLM Platform</strong>, both in the desktop app and in the
+        terminal.
+      </p>
+    </div>
+  }
+
+  <!-- ══════════════ CONNECT - CLAUDE CODE ══════════════════════════════════ -->
+  @if (activeTool() === 'claudecode') {
+    <div class="config-section">
+      <p class="step-label">4. CONNECT</p>
+
+      <div class="privacy-callout" role="note">
+        <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+        <p>
+          <strong>This replaces your claude.ai login for every Claude Code session on this
+          machine</strong>, not just this project: prompts go to Logos, and your subscription
+          is not used. Run <code class="inline-code">/status</code> to see which credential is
+          active, or remove the <code class="inline-code">env</code> block to switch back.
+        </p>
+      </div>
+
+      <p class="substep-label">a. Write the Logos settings</p>
+
+      @if (!ready()) {
+        <p class="model-empty">
+          Pick an API key and a model above — the settings below are generated from them.
+        </p>
+      } @else {
+        <div class="os-tabs" role="tablist">
+          <button class="os-tab" role="tab"
+            [attr.aria-selected]="connectMethod() === 'download'"
+            [class.os-tab--active]="connectMethod() === 'download'"
+            (click)="connectMethod.set('download')">Download settings</button>
+          <button class="os-tab" role="tab"
+            [attr.aria-selected]="connectMethod() === 'terminal'"
+            [class.os-tab--active]="connectMethod() === 'terminal'"
+            (click)="connectMethod.set('terminal')">Terminal</button>
+        </div>
+
+        @if (connectMethod() === 'download') {
+          <p class="apply-hint">
+            Only if you have no <code class="inline-code">settings.json</code> yet: save it as
+            <code class="inline-code">~/.claude/settings.json</code>
+            (Windows: <code class="inline-code">%USERPROFILE%\.claude\settings.json</code>).
+            It has to be that user-level file — an <code class="inline-code">env</code> block in a
+            project's <code class="inline-code">.claude/settings.json</code> is only read after the
+            first-run setup, so Claude Code would still ask you to log in.
+          </p>
+          <div class="code-header">
+            <span class="file-tab">~/.claude/settings.json</span>
+            <button class="btn-copy-config" (click)="downloadClaudeCodeSettings()">
+              <i class="pi pi-download" aria-hidden="true"></i> Download Settings
+            </button>
+          </div>
+          <div class="code-block" role="region" aria-label="Generated settings.json">
+            <div class="line-numbers" aria-hidden="true">
+              @for (line of claudeCodeSettingsLines(); track $index) {
+                <span>{{ $index + 1 }}</span>
+              }
+            </div>
+            <pre class="code-content">{{ claudeCodeSettingsJson() }}</pre>
+          </div>
+        } @else {
+          <p class="apply-hint">
+            Run in your terminal; adds only the Logos keys, an existing settings file is kept:
+          </p>
+          <div class="os-tabs" role="tablist">
+            <button class="os-tab" role="tab"
+              [attr.aria-selected]="installTab() === 'mac'"
+              [class.os-tab--active]="installTab() === 'mac'"
+              (click)="installTab.set('mac')">macOS</button>
+            <button class="os-tab" role="tab"
+              [attr.aria-selected]="installTab() === 'linux'"
+              [class.os-tab--active]="installTab() === 'linux'"
+              (click)="installTab.set('linux')">Linux</button>
+            <button class="os-tab" role="tab"
+              [attr.aria-selected]="installTab() === 'windows'"
+              [class.os-tab--active]="installTab() === 'windows'"
+              (click)="installTab.set('windows')">Windows</button>
+          </div>
+          <div class="terminal-block">
+            <span class="terminal-prefix" aria-hidden="true">{{ installTab() === 'windows' ? '>' : '$' }}</span>
+            <code class="terminal-cmd">{{ claudeCodeMergeCommand() }}</code>
+            <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeMergeCommand()"
+              (click)="copyCmd(claudeCodeMergeCommand())" aria-label="Copy command">
+              <i [class]="copiedCmd() === claudeCodeMergeCommand() ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+            </button>
+          </div>
+          @if (installTab() === 'windows') {
+            <p class="tab-note">Run in PowerShell; uses only built-in cmdlets.</p>
+          } @else if (installTab() === 'mac') {
+            <p class="tab-note">
+              Uses <code class="inline-code">python3</code>, included in the Xcode Command Line
+              Tools (already present if you installed via Homebrew).
+            </p>
+          } @else {
+            <p class="tab-note">Uses the system <code class="inline-code">python3</code>.</p>
+          }
+        }
+      }
+
+      <p class="substep-label">b. Restart Claude Code</p>
+      <p class="apply-hint">
+        Environment variables are read at startup, so exit any running session first. If one was
+        already logged in to claude.ai, run <code class="inline-code">/logout</code> so only the
+        Logos credential remains.
+      </p>
+
+      <p class="substep-label">c. Verify</p>
+      <p class="apply-hint">
+        Run <code class="inline-code">claude</code> and type <code class="inline-code">/status</code>:
+        it shows the base URL and the credential source. It should name this Logos instance, not
+        api.anthropic.com.
+      </p>
+    </div>
+  }
+</div>

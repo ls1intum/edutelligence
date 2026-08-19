@@ -96,8 +96,29 @@ public class PriceUpdaterService {
         log.info("price_updater: full refresh complete ({} pairs)", count);
     }
 
+    /**
+     * Refresh prices for a model whose name the caller does not know.
+     *
+     * Linking a model to a cloud provider is the moment its prices become
+     * resolvable, but the link carries only ids. Resolving the name here keeps
+     * callers from having to load the model just to trigger a refresh.
+     */
+    @Async
+    public void updatePricesForModelAsync(int modelId) {
+        Model model = modelRepository.findById(modelId).orElse(null);
+        if (model == null || model.getName() == null || model.getName().isBlank()) {
+            log.info("price_updater: model id={} unknown or unnamed, skipping", modelId);
+            return;
+        }
+        updatePricesForModel(modelId, model.getName());
+    }
+
     @Async
     public void updatePricesForModelAsync(int modelId, String modelName) {
+        updatePricesForModel(modelId, modelName);
+    }
+
+    private void updatePricesForModel(int modelId, String modelName) {
         try {
             List<ModelProvider> links = modelProviderRepository.findByModelId(modelId);
             List<ModelProvider> cloudLinks = links.stream()

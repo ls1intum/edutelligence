@@ -136,6 +136,24 @@ def generate_logos_api_key(label: str) -> str:
     return "lg-" + label + "-" + secrets.token_urlsafe(96)
 
 
+def _stringify_error_message(value: Any) -> str:
+    """Render a non-string error into a value the text column can store.
+
+    Upstream failures arrive as OpenAI-shaped dicts (``{"message": ..., "type":
+    ...}``). psycopg2 cannot adapt a dict, so passing one through turned every
+    failed cloud request into an unhandled 500 that masked the real status —
+    an authentication error upstream surfaced to the client as a Logos crash.
+    """
+    if isinstance(value, dict):
+        message = value.get("message")
+        if isinstance(message, str) and message:
+            return message
+        return json.dumps(value, separators=(",", ":"), default=str)
+    if isinstance(value, (list, tuple)):
+        return json.dumps(value, separators=(",", ":"), default=str)
+    return str(value)
+
+
 # noinspection PyUnresolvedReferences
 class DBManager:
     def __init__(self):
@@ -277,6 +295,8 @@ class DBManager:
             db_col = field_map.get(key, key)
             if key == "result_status" and isinstance(value, ResultStatus):
                 value = value.value
+            if key == "error_message" and not isinstance(value, str):
+                value = _stringify_error_message(value)
             update_data[db_col] = value
 
         if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
@@ -388,7 +408,9 @@ class DBManager:
         if result_payload is not None:
             update_data["result_payload"] = result_payload
         if error_message is not None:
-            update_data["error_message"] = error_message
+            update_data["error_message"] = (
+                error_message if isinstance(error_message, str) else _stringify_error_message(error_message)
+            )
         self.update("jobs", job_id, update_data)
 
     def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
@@ -1051,6 +1073,96 @@ class DBManager:
             count += 1
         self.session.commit()
         return count
+
+    def upsert_calibration_probe_log(
+        self,
+        provider_id: int,
+        model_name: str,
+        recorded_at: Optional[datetime.datetime],
+        payload: Dict[str, Any],
+        log_text: Optional[str] = None,
+    ) -> None:
+        """Upsert a calibration probe log from a worker's calibration_probe_log event.
+
+        Keeps only the most recent row per (provider_id, model_name) — same
+        ON CONFLICT DO UPDATE pattern as upsert_model_profiles above.
+
+        Args:
+            provider_id: Provider ID (FK to providers.id) — the worker node.
+            model_name: The model the probe attempted to load.
+            recorded_at: Timestamp the worker emitted the event, if known.
+            payload: Structured probe summary (see LogosBridgeClient.
+                _record_calibration_probe_log on the worker side for the
+                exact shape) — must NOT contain "log_text" (caller pops it
+                before calling, so it isn't duplicated into the summary
+                JSONB column below).
+            log_text: Full raw calibration log for this (provider, model),
+                stored separately so it doesn't bloat/duplicate `summary`.
+        """
+        sql = text(
+            """
+            INSERT INTO calibration_probe_logs (
+                provider_id, model_name,
+                success, probe_command, error,
+                unsupported_reason, node_unhealthy_reason,
+                summary, log_text, recorded_at, updated_at
+            ) VALUES (
+                :provider_id, :model_name,
+                :success, :probe_command, :error,
+                :unsupported_reason, :node_unhealthy_reason,
+                :summary, :log_text, :recorded_at, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                success = EXCLUDED.success,
+                probe_command = EXCLUDED.probe_command,
+                error = EXCLUDED.error,
+                unsupported_reason = EXCLUDED.unsupported_reason,
+                node_unhealthy_reason = EXCLUDED.node_unhealthy_reason,
+                summary = EXCLUDED.summary,
+                log_text = EXCLUDED.log_text,
+                recorded_at = EXCLUDED.recorded_at,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE calibration_probe_logs.recorded_at IS NULL
+               OR EXCLUDED.recorded_at IS NULL
+               OR EXCLUDED.recorded_at > calibration_probe_logs.recorded_at
+        """
+        )
+        self.session.execute(
+            sql,
+            {
+                "provider_id": provider_id,
+                "model_name": model_name,
+                "success": bool(payload.get("success", False)),
+                "probe_command": payload.get("probe_command") or None,
+                "error": payload.get("error") or None,
+                "unsupported_reason": payload.get("unsupported_reason"),
+                "node_unhealthy_reason": payload.get("node_unhealthy_reason"),
+                "summary": json.dumps(payload),
+                "log_text": log_text or None,
+                "recorded_at": recorded_at,
+            },
+        )
+        self.session.commit()
+
+    def get_calibration_probe_logs_by_model(self, model_name: str) -> list[Dict[str, Any]]:
+        """Every node's most recent calibration probe log for one model.
+
+        Used by the webservice's model-error-report page to show real
+        per-node log text instead of mocked fixtures.
+        """
+        sql = text(
+            """
+            SELECT cpl.provider_id, p.name AS provider_name, cpl.success,
+                   cpl.probe_command, cpl.error, cpl.log_text,
+                   cpl.recorded_at, cpl.updated_at
+            FROM calibration_probe_logs cpl
+            JOIN providers p ON p.id = cpl.provider_id
+            WHERE cpl.model_name = :model_name
+            ORDER BY cpl.provider_id
+        """
+        )
+        rows = self.session.execute(sql, {"model_name": model_name}).fetchall()
+        return [dict(row._mapping) for row in rows]
 
     def get_ollama_vram_stats(
         self,
@@ -2107,6 +2219,83 @@ class DBManager:
         )
         self.session.commit()
         return {"result": "response_payload set"}, 200
+
+    def get_usage_cost_micro_cents(
+        self,
+        model_id: int,
+        provider_id: int,
+        usage: Dict[str, int],
+        response_at: datetime.datetime,
+    ) -> Optional[int]:
+        """Return the configured cloud cost for one response in micro-cents.
+
+        The lookup mirrors the ``budget_usage`` view: model/provider-specific
+        prices take precedence over generic prices and only prices valid at
+        ``response_at`` are considered. ``None`` identifies a local provider;
+        cloud providers without a matching price retain the existing billing
+        semantics and cost zero.
+        """
+        billable_usage = {
+            token_type: token_count
+            for token_type, token_count in usage.items()
+            if isinstance(token_type, str)
+            and isinstance(token_count, int)
+            and not isinstance(token_count, bool)
+            and token_count >= 0
+        }
+        if not billable_usage:
+            return None
+
+        row = self.session.execute(
+            text(
+                """
+                WITH response_usage AS (
+                    SELECT usage.key AS token_type,
+                           usage.value::BIGINT AS token_count
+                    FROM jsonb_each_text(CAST(:usage AS JSONB)) AS usage
+                ),
+                cloud_provider AS (
+                    SELECT id
+                    FROM providers
+                    WHERE id = :provider_id
+                      AND LOWER(provider_type::text) = 'cloud'
+                )
+                SELECT CASE
+                    WHEN EXISTS (SELECT 1 FROM cloud_provider)
+                    THEN COALESCE(SUM(
+                        CASE WHEN price.price_per_k_token IS NOT NULL
+                             THEN (ru.token_count * price.price_per_k_token / 1000)::BIGINT
+                             ELSE 0
+                        END
+                    ), 0)
+                    ELSE NULL
+                END AS cost_micro_cents
+                FROM response_usage ru
+                LEFT JOIN token_types tt ON tt.name = ru.token_type
+                LEFT JOIN LATERAL (
+                    SELECT tp.price_per_k_token
+                    FROM token_prices tp
+                    WHERE tp.type_id = tt.id
+                      AND (tp.model_id = :model_id OR tp.model_id IS NULL)
+                      AND (tp.provider_id = :provider_id OR tp.provider_id IS NULL)
+                      AND tp.valid_from <= :response_at
+                    ORDER BY (tp.model_id = :model_id) DESC NULLS LAST,
+                             (tp.provider_id = :provider_id) DESC NULLS LAST,
+                             tp.valid_from DESC
+                    LIMIT 1
+                ) price ON true
+                """
+            ),
+            {
+                "usage": json.dumps(billable_usage),
+                "model_id": int(model_id),
+                "provider_id": int(provider_id),
+                "response_at": response_at,
+            },
+        ).fetchone()
+        if row is None or row.cost_micro_cents is None:
+            return None
+        return int(row.cost_micro_cents)
 
     def check_authorization(self, logos_key: str):
         sql = text(

@@ -11,7 +11,9 @@
     <include file="liquibase/changelog/003_provider_base_url_nullable.xml"/>
     <include file="liquibase/changelog/004_vram_snapshot_success_index.xml"/>
     <include file="liquibase/changelog/005_usage_billing_indexes.xml"/>
-    <include file="liquibase/changelog/006_add_model_capabilities.xml"/>
-    <include file="liquibase/changelog/007_add_fk_model_capabilities_cascade.xml"/>
+    <include file="liquibase/changelog/006_calibration_probe_logs.xml"/>
+    <include file="liquibase/changelog/007_calibration_probe_logs_log_text.xml"/>
+    <include file="liquibase/changelog/008_add_model_capabilities.xml"/>
+    <include file="liquibase/changelog/009_add_fk_model_capabilities_cascade.xml"/>
 
 </databaseChangeLog>

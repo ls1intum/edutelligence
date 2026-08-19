@@ -20,6 +20,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorCalibrationLogsClient;
 
 @RestController
 @RequestMapping("/logosdb")
@@ -27,12 +28,17 @@ public class ModelController {
 
     private final ModelService modelService;
     private final PriceUpdaterService priceUpdaterService;
-    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
+    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;    
+    private final OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient;
 
-    public ModelController(ModelService modelService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService) {
+    public ModelController(ModelService modelService,
+                           PriceUpdaterService priceUpdaterService,
+                           ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
+                           OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient) {
         this.modelService = modelService;
         this.priceUpdaterService = priceUpdaterService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
+        this.orchestratorCalibrationLogsClient = orchestratorCalibrationLogsClient;
     }
 
     @PostMapping("/get_models")
@@ -91,6 +97,18 @@ public class ModelController {
         if (req.id() == null) return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
         return modelService.getModel(req.id())
             .map(ResponseEntity::ok)
+            .<ResponseEntity<?>>map(r -> r)
+            .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
+    }
+
+    @PostMapping("/get_model_calibration_logs")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> getModelCalibrationLogs(
+            @RequestBody GetModelRequestDTO req) {
+        if (req.id() == null) return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
+        return modelService.getModel(req.id())
+            .map(model -> ResponseEntity.ok(
+                Map.of("logs", orchestratorCalibrationLogsClient.getLogs((String) model.get("name")))))
             .<ResponseEntity<?>>map(r -> r)
             .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
     }
