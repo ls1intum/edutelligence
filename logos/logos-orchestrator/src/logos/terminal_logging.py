@@ -216,8 +216,45 @@ class ModelNameCache:
             self._cache[model_id] = name
 
 
-#: Global singleton — import and use directly in other modules.
+class ProviderNameCache:
+    """Thread-safe in-memory provider-id → name resolver backed by the DB.
+
+    Mirror of :class:`ModelNameCache` for providers — used to label
+    Prometheus series (e.g. request duration / cold starts) with the
+    provider that actually served a request. Never hits the DB more than
+    once per provider_id; falls back to str(provider_id) on any error.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[int, str] = {}
+
+    def get(self, provider_id: int) -> str:
+        """Return the provider name for *provider_id*, resolving via DB on first call."""
+        if provider_id in self._cache:
+            return self._cache[provider_id]
+        name = self._resolve(provider_id)
+        self._cache[provider_id] = name
+        return name
+
+    def _resolve(self, provider_id: int) -> str:
+        try:
+            from logos.dbutils.dbmanager import DBManager  # noqa: PLC0415
+
+            with DBManager() as db:
+                info = db.get_provider(provider_id)
+            return (info or {}).get("name") or str(provider_id)
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            return str(provider_id)
+
+    def prime(self, provider_id: int, name: str) -> None:
+        """Pre-populate the cache without a DB round-trip."""
+        if name:
+            self._cache[provider_id] = name
+
+
+#: Global singletons — import and use directly in other modules.
 model_name_cache = ModelNameCache()
+provider_name_cache = ProviderNameCache()
 
 
 def terminal_width(default: int = 120, max_width: int = 140) -> int:

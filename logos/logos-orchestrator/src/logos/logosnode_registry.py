@@ -149,6 +149,7 @@ def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
     if cache_pressure is None:
         cache_pressure = backend_metrics.get("gpu_cache_usage_perc")
     prefix_hit = lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
+    mtp_accept = lane_metric_float(backend_metrics.get("mtp_acceptance_rate"))
     ttft_p95 = _lane_ttft_p95_seconds(backend_metrics)
 
     return {
@@ -162,6 +163,7 @@ def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
         "requests_running": (round(requests_running, 1) if requests_running is not None else None),
         "gpu_cache_usage_percent": (round(float(cache_pressure), 1) if cache_pressure is not None else None),
         "prefix_cache_hit_rate": (round(prefix_hit, 3) if prefix_hit is not None else None),
+        "mtp_acceptance_rate": (round(mtp_accept, 3) if mtp_accept is not None else None),
         "ttft_p95_seconds": round(ttft_p95, 3) if ttft_p95 is not None else None,
         "gpu_devices": _lane_gpu_devices(lane),
     }
@@ -181,12 +183,14 @@ def _render_lane_summary(snapshot: dict[str, Any], *, indent: str = "    ") -> l
     ttft_text = _format_optional_float(snapshot.get("ttft_p95_seconds"), "s")
     prefix_hit_raw = snapshot.get("prefix_cache_hit_rate")
     prefix_text = _format_optional_float(round(prefix_hit_raw * 100, 1) if prefix_hit_raw is not None else None, "%")
+    mtp_raw = snapshot.get("mtp_acceptance_rate")
+    mtp_text = _format_optional_float(round(mtp_raw * 100, 1) if mtp_raw is not None else None, "%")
 
     lines = wrap_plain(f"model: {snapshot['model']}", indent=indent)
     lines.append(f"{indent}state={state_text} mem={snapshot['effective_vram_mb']:.0f}MB gpus={snapshot['gpu_devices']}")
     lines.append(
         f"{indent}waiting={queue_text} running={running_text} "
-        f"kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text}"
+        f"kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text} mtp_accept={mtp_text}"
     )
     return lines
 

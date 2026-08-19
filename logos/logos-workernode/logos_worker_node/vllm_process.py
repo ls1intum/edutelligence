@@ -847,6 +847,7 @@ class VllmProcessHandle:
             "requests_running": None,
             "gpu_cache_usage_percent": None,
             "prefix_cache_hit_rate": None,
+            "mtp_acceptance_rate": None,
             "prompt_tokens_total": None,
             "generation_tokens_total": None,
             "ttft_histogram": {},
@@ -860,6 +861,8 @@ class VllmProcessHandle:
                 return metrics
             _prefix_queries: float = 0.0
             _prefix_hits: float = 0.0
+            _spec_draft_tokens: float = 0.0
+            _spec_accepted_tokens: float = 0.0
             for raw_line in resp.text.splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -900,6 +903,18 @@ class VllmProcessHandle:
                     or metric_name.endswith(":prefix_cache_hits")
                 ):
                     _prefix_hits += value
+                elif metric_name.endswith("spec_decode_num_draft_tokens") or metric_name.endswith(
+                    "spec_decode_num_draft_tokens_total"
+                ):
+                    # vLLM speculative decoding (e.g. MTP draft heads):
+                    # cumulative tokens proposed by the draft model.
+                    _spec_draft_tokens += value
+                elif metric_name.endswith("spec_decode_num_accepted_tokens") or metric_name.endswith(
+                    "spec_decode_num_accepted_tokens_total"
+                ):
+                    # Cumulative draft tokens accepted by the target model.
+                    # Only present when --speculative-config is active.
+                    _spec_accepted_tokens += value
                 elif metric_name.endswith("prompt_tokens_total"):
                     metrics["prompt_tokens_total"] = value
                 elif metric_name.endswith("generation_tokens_total"):
@@ -918,6 +933,10 @@ class VllmProcessHandle:
             # gauge was not present.
             if metrics["prefix_cache_hit_rate"] is None and _prefix_queries > 0:
                 metrics["prefix_cache_hit_rate"] = _prefix_hits / _prefix_queries
+            # Speculative decoding acceptance rate (MTP): accepted / draft
+            # tokens since process start. None unless spec decode is enabled.
+            if _spec_draft_tokens > 0:
+                metrics["mtp_acceptance_rate"] = _spec_accepted_tokens / _spec_draft_tokens
         except httpx.HTTPError:
             return metrics
         return metrics

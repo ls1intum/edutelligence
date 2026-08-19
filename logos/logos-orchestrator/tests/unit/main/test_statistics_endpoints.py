@@ -137,6 +137,7 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
                                     "requests_running": 2,
                                     "gpu_cache_usage_percent": 66.0,
                                     "prefix_cache_hit_rate": 0.42,
+                                    "mtp_acceptance_rate": 0.61,
                                     "prompt_tokens_total": 1200,
                                     "generation_tokens_total": 3400,
                                     "ttft_histogram": {"0.5": 8, "1.0": 10},
@@ -189,7 +190,11 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["queue_waiting_current"] == 3.0
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["requests_running_current"] == 2.0
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["ttft_p95_seconds"] == pytest.approx(0.875)
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["prefix_cache_hit_rate_avg"] == pytest.approx(0.42)
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["mtp_acceptance_rate_avg"] == pytest.approx(0.61)
     assert scheduler_signals["lanes"]["qwen-a"]["gpu_cache_usage_percent"] == 66.0
+    assert scheduler_signals["lanes"]["qwen-a"]["prefix_cache_hit_rate"] == 0.42
+    assert scheduler_signals["lanes"]["qwen-a"]["mtp_acceptance_rate"] == 0.61
 
     offline_provider = payload["providers"][1]
     assert offline_provider["connected"] is False

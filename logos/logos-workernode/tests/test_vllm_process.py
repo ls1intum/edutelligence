@@ -1067,6 +1067,81 @@ vllm:gpu_prefix_cache_hits{model_name="m"} 10
     assert metrics["prefix_cache_hit_rate"] == pytest.approx(0.75)
 
 
+@pytest.mark.asyncio
+async def test_get_backend_metrics_parses_spec_decode_counters() -> None:
+    """MTP/speculative decoding: acceptance rate from draft/accepted counters."""
+
+    class DummyResponse:
+        status_code = 200
+        text = """
+vllm:num_requests_running{model_name="m"} 1
+vllm:kv_cache_usage_perc{model_name="m"} 0.5
+vllm:spec_decode_num_drafts_total{model_name="m"} 300
+vllm:spec_decode_num_draft_tokens_total{model_name="m"} 1000
+vllm:spec_decode_num_accepted_tokens_total{model_name="m"} 620
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    assert metrics["mtp_acceptance_rate"] == pytest.approx(0.62)
+    # No prefix-cache counters in this scrape.
+    assert metrics["prefix_cache_hit_rate"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_backend_metrics_spec_decode_counter_unsuffixed_names() -> None:
+    """Accept the counter names without the _total suffix variant."""
+
+    class DummyResponse:
+        status_code = 200
+        text = """
+vllm:num_requests_running{model_name="m"} 1
+vllm:spec_decode_num_draft_tokens{model_name="m"} 200
+vllm:spec_decode_num_accepted_tokens{model_name="m"} 90
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    assert metrics["mtp_acceptance_rate"] == pytest.approx(0.45)
+
+
+@pytest.mark.asyncio
+async def test_get_backend_metrics_without_spec_decode_counters_reports_none() -> None:
+    """Lanes without --speculative-config expose no spec_decode_* counters."""
+
+    class DummyResponse:
+        status_code = 200
+        text = """
+vllm:num_requests_running{model_name="m"} 1
+vllm:kv_cache_usage_perc{model_name="m"} 0.5
+vllm:gpu_prefix_cache_queries{model_name="m"} 100
+vllm:gpu_prefix_cache_hits{model_name="m"} 10
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    assert metrics["mtp_acceptance_rate"] is None
+    assert metrics["prefix_cache_hit_rate"] == pytest.approx(0.1)
+
+
 def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> None:
     handle = VllmProcessHandle(
         "lane-test",

@@ -112,6 +112,8 @@ export type LaneSignalData = {
   ttft_p95_seconds: number | null;
   queue_waiting: number | null;
   requests_running: number | null;
+  prefix_cache_hit_rate: number | null;
+  mtp_acceptance_rate: number | null;
 };
 
 // PaginatedRequestItem from logos-ui-old/components/statistics/types.ts

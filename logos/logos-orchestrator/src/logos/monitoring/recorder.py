@@ -16,11 +16,27 @@ from typing import Any, Callable, Dict, Optional
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import ResultStatus
 from logos.monitoring import prometheus_metrics as prom
+from logos.terminal_logging import model_name_cache, provider_name_cache
 
 logger = logging.getLogger(__name__)
 
-# Track in-flight request start times for duration histograms
-_request_start_times: Dict[str, float] = {}
+# Track in-flight requests: request_id → (start_time, model, provider).
+# start_time feeds the duration histogram; model/provider are the label
+# values for REQUEST_DURATION_SECONDS / COLD_STARTS_TOTAL (see #738) —
+# "unknown" is only the pre-selection fallback.
+_request_states: Dict[str, tuple[float, str, str]] = {}
+
+
+def _resolve_label_names(model_id: Optional[int], provider_id: Optional[int]) -> tuple[str, str]:
+    """Resolve the model/provider label values for completion metrics.
+
+    Uses the in-memory name caches (DB-backed, at most one lookup per id).
+    None ids — requests that failed before a model/provider was selected —
+    keep the "unknown" fallback so no observation is dropped.
+    """
+    model = model_name_cache.get(model_id) if model_id is not None else "unknown"
+    provider = provider_name_cache.get(provider_id) if provider_id is not None else "unknown"
+    return model, provider
 
 
 class MonitoringRecorder:
@@ -44,7 +60,8 @@ class MonitoringRecorder:
         prom.REQUESTS_IN_FLIGHT.inc()
         if queue_depth is not None:
             prom.QUEUE_DEPTH.set(queue_depth)
-        _request_start_times[request_id] = time.monotonic()
+        model, provider = _resolve_label_names(model_id, provider_id)
+        _request_states[request_id] = (time.monotonic(), model, provider)
 
         payload = {
             "model_id": model_id,
@@ -78,6 +95,13 @@ class MonitoringRecorder:
         prom.REQUESTS_TOTAL.labels(status="scheduled").inc()
         prom.SCHEDULING_DECISIONS_TOTAL.labels(result="scheduled").inc()
 
+        # Overwrite the enqueue-time labels with the actually selected
+        # model/provider; keep the original start time for duration.
+        model, provider = _resolve_label_names(model_id, provider_id)
+        previous = _request_states.get(request_id)
+        start = previous[0] if previous is not None else time.monotonic()
+        _request_states[request_id] = (start, model, provider)
+
         payload = {
             "model_id": model_id,
             "provider_id": provider_id,
@@ -109,17 +133,22 @@ class MonitoringRecorder:
         prom.REQUESTS_TOTAL.labels(status=status_value).inc()
         prom.REQUESTS_IN_FLIGHT.dec()
 
-        start = _request_start_times.pop(request_id, None)
+        state = _request_states.pop(request_id, None)
+        if state is not None:
+            start, model, provider = state
+        else:
+            start, model, provider = None, "unknown", "unknown"
+
         if start is not None:
             duration = time.monotonic() - start
             prom.REQUEST_DURATION_SECONDS.labels(
-                model="unknown",
-                provider="unknown",
+                model=model,
+                provider=provider,
                 status=status_value,
             ).observe(duration)
 
         if cold_start:
-            prom.COLD_STARTS_TOTAL.labels(model="unknown").inc()
+            prom.COLD_STARTS_TOTAL.labels(model=model).inc()
 
         payload = {
             "request_complete_ts": datetime.datetime.now(datetime.timezone.utc),
