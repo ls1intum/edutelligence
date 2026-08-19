@@ -6,7 +6,7 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
     <changeSet id="009_add_fk_model_capabilities_cascade" author="Malte">
-        <addForeignKeyConstraint 
+        <addForeignKeyConstraint
             baseTableName="model_capabilities"
             baseColumnNames="model_id"
             constraintName="fk_model_capabilities_model"

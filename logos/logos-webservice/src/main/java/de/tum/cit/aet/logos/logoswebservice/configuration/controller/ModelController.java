@@ -28,7 +28,7 @@ public class ModelController {
 
     private final ModelService modelService;
     private final PriceUpdaterService priceUpdaterService;
-    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;    
+    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient;
 
     public ModelController(ModelService modelService,

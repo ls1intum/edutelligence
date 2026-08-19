@@ -122,7 +122,7 @@ public class ModelService {
     private static boolean isAdmin(AuthContext auth) {
         return Role.LOGOS_ADMIN.matches(auth.role()) || Role.APP_ADMIN.matches(auth.role());
     }
-    
+
     private static boolean isLogosAdmin(AuthContext auth) {
         return Role.LOGOS_ADMIN.matches(auth.role());
     }

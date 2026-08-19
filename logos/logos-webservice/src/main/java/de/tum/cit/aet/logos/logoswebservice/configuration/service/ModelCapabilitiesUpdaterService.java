@@ -28,13 +28,13 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRep
 public class ModelCapabilitiesUpdaterService {
 
     private static final Logger log = LoggerFactory.getLogger(ModelCapabilitiesUpdaterService.class);
-    
+
     private static final String LOCAL_JSON_PATH = "classpath:model_prices_and_context_window.json";
 
     private final ObjectMapper objectMapper;
     private final ResourceLoader resourceLoader;
     private final ModelRepository modelRepository;
-    private final ModelCapabilitiesRepository modelCapabilitiesRepository; 
+    private final ModelCapabilitiesRepository modelCapabilitiesRepository;
 
     public ModelCapabilitiesUpdaterService(ObjectMapper objectMapper,
                                            ResourceLoader resourceLoader,
@@ -51,7 +51,7 @@ public class ModelCapabilitiesUpdaterService {
     @Scheduled(initialDelay = 0, fixedDelay = 86_400_000)
     public void updateAllModelCapabilities() {
         log.info("capabilities_updater: starting local catalog refresh for all models");
-        
+
         Map<String, Object> fullCatalog = loadLocalCatalog();
         if (fullCatalog == null || fullCatalog.isEmpty()) {
             log.error("capabilities_updater: local JSON catalog could not be loaded or is empty!");
@@ -67,7 +67,7 @@ public class ModelCapabilitiesUpdaterService {
         int count = 0;
         for (Model model : allModels) {
             if (model.getName() == null || model.getName().isBlank()) continue;
-            
+
             try {
                 boolean success = extractAndStoreCapabilities(fullCatalog, model.getId(), model.getName());
                 if (success) count++;
@@ -96,50 +96,50 @@ public class ModelCapabilitiesUpdaterService {
             Map<String, Object> catalog,
             int modelId,
             String modelName) {
-    
+
         String normalizedModelName = normalizeModelName(modelName);
         boolean found = false;
         boolean supportsFunctionCalling = false;
         boolean supportsVision = false;
         boolean supportsReasoning = false;
-    
+
         for (Map.Entry<String, Object> entry : catalog.entrySet()) {
             String catalogKey = entry.getKey();
-    
+
             if (catalogKey == null || !(entry.getValue() instanceof Map)) {
                 continue;
             }
-    
+
             String catalogModelName = extractModelName(catalogKey);
             if (catalogModelName == null) {
                 continue;
             }
-    
+
             if (!modelNamesMatch(normalizedModelName, catalogModelName)) {
                 continue;
             }
-    
+
             Map<String, Object> modelData = (Map<String, Object>) entry.getValue();
             found = true;
             supportsFunctionCalling |= Boolean.TRUE.equals(
                 modelData.get("supports_function_calling")
             );
-    
+
             supportsVision |= Boolean.TRUE.equals(
                 modelData.get("supports_vision")
             );
-    
+
             supportsReasoning |= Boolean.TRUE.equals(
                 modelData.get("supports_reasoning")
             );
-    
+
             log.debug(
                 "capabilities_updater: matched '{}' for model '{}'",
                 catalogKey,
                 modelName
             );
         }
-    
+
         if (!found) {
             log.debug(
                 "capabilities_updater: model '{}' not found in local JSON registry",
@@ -147,7 +147,7 @@ public class ModelCapabilitiesUpdaterService {
             );
             return false;
         }
-    
+
         Map<String, Object> mergedCapabilities = new HashMap<>();
         mergedCapabilities.put(
             "supports_function_calling",
@@ -161,9 +161,9 @@ public class ModelCapabilitiesUpdaterService {
             "supports_reasoning",
             supportsReasoning
         );
-    
+
         updateModelCapabilities(modelId, mergedCapabilities);
-    
+
         return true;
     }
 
