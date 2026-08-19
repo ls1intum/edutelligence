@@ -136,6 +136,24 @@ def generate_logos_api_key(label: str) -> str:
     return "lg-" + label + "-" + secrets.token_urlsafe(96)
 
 
+def _stringify_error_message(value: Any) -> str:
+    """Render a non-string error into a value the text column can store.
+
+    Upstream failures arrive as OpenAI-shaped dicts (``{"message": ..., "type":
+    ...}``). psycopg2 cannot adapt a dict, so passing one through turned every
+    failed cloud request into an unhandled 500 that masked the real status —
+    an authentication error upstream surfaced to the client as a Logos crash.
+    """
+    if isinstance(value, dict):
+        message = value.get("message")
+        if isinstance(message, str) and message:
+            return message
+        return json.dumps(value, separators=(",", ":"), default=str)
+    if isinstance(value, (list, tuple)):
+        return json.dumps(value, separators=(",", ":"), default=str)
+    return str(value)
+
+
 # noinspection PyUnresolvedReferences
 class DBManager:
     def __init__(self):
@@ -277,6 +295,8 @@ class DBManager:
             db_col = field_map.get(key, key)
             if key == "result_status" and isinstance(value, ResultStatus):
                 value = value.value
+            if key == "error_message" and not isinstance(value, str):
+                value = _stringify_error_message(value)
             update_data[db_col] = value
 
         if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
@@ -388,7 +408,9 @@ class DBManager:
         if result_payload is not None:
             update_data["result_payload"] = result_payload
         if error_message is not None:
-            update_data["error_message"] = error_message
+            update_data["error_message"] = (
+                error_message if isinstance(error_message, str) else _stringify_error_message(error_message)
+            )
         self.update("jobs", job_id, update_data)
 
     def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:

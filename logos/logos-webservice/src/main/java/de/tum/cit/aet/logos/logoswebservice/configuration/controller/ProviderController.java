@@ -22,6 +22,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteProviderRequ
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
@@ -31,11 +32,13 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdmin
 public class ProviderController {
 
     private final ProviderService providerService;
+    private final PriceUpdaterService priceUpdaterService;
     private final OrchestratorWorkerAdminClient workerAdminClient;
     private final ObjectMapper objectMapper;
 
-    public ProviderController(ProviderService providerService, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
         this.providerService = providerService;
+        this.priceUpdaterService = priceUpdaterService;
         this.workerAdminClient = workerAdminClient;
         this.objectMapper = objectMapper;
     }
@@ -83,7 +86,15 @@ public class ProviderController {
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> connectModelProvider(
             @RequestBody ConnectModelProviderRequestDTO req) {
-        return ResponseEntity.ok(providerService.connectModelProvider(req));
+        ResponseEntity<?> response = ResponseEntity.ok(providerService.connectModelProvider(req));
+        // A model only becomes priceable once it is linked to a cloud provider:
+        // before the link, updatePricesForModelAsync finds no cloud pair and
+        // skips. Without this trigger prices stayed absent until the next daily
+        // refresh, so freshly connected cloud models reported a cost of zero.
+        if (req.modelId() != null) {
+            priceUpdaterService.updatePricesForModelAsync(req.modelId());
+        }
+        return response;
     }
 
     @PostMapping("/disconnect_model_provider")
