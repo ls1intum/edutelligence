@@ -75,6 +75,13 @@ export class MyKeysService {
     return firstValueFrom(this.http.patch<{ result: string }>(`/api/me/keys/${keyId}/log`, { log }));
   }
 
+  rotateKey(keyId: number): Promise<{ result: string; api_key: string }> {
+    this.invalidateCache();
+    return firstValueFrom(
+      this.http.post<{ result: string; api_key: string }>(`/api/me/keys/${keyId}/rotate`, {}),
+    );
+  }
+
   /**
    * OpenCode fetches the default key's models on every navigation (it can't
    * be parallelized with getMyKeys() above -- it needs the key id from that

@@ -83,6 +83,23 @@ public class MeKeysService {
             .toList());
     }
 
+    @Transactional
+    public Optional<Map<String, Object>> rotateKeyForUser(int keyId, int userId) {
+        Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
+        if (keyOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        ApiKey key = keyOpt.get();
+        if (!key.getUserId().equals(userId)) {
+            return Optional.empty();
+        }
+        key.setKeyValue(rotateKeyValue(key.getKeyValue()));
+        apiKeyRepository.save(key);
+        return Optional.of(Map.of(
+            "result", "API key rotated successfully",
+            "api_key", key.getKeyValue()));
+    }
+
     private Map<String, Object> toMap(MyKeyProjection p) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.getId());
@@ -126,5 +143,14 @@ public class MeKeysService {
         if (json == null || json.isBlank()) return Map.of();
         try { return OBJECT_MAPPER.readValue(json, OBJ_TYPE); }
         catch (Exception e) { return Map.of(); }
+    }
+
+    private String rotateKeyValue(String currentKeyValue) {
+        if (currentKeyValue == null || currentKeyValue.isBlank()) {
+            return "lg-" + ApiKeyFactory.generateToken();
+        }
+        int lastDash = currentKeyValue.lastIndexOf('-');
+        String prefix = lastDash > 0 ? currentKeyValue.substring(0, lastDash) : "lg";
+        return prefix + "-" + ApiKeyFactory.generateToken();
     }
 }

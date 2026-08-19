@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 import { MyKeysService } from '../../core/services/my-keys.service';
@@ -32,7 +33,13 @@ interface ModelGroup {
 @Component({
   selector: 'app-my-workspace',
   standalone: true,
-  imports: [CommonModule, ModalFormComponent, ErrorMessageComponent, IconTileComponent],
+  imports: [
+    CommonModule,
+    ModalFormComponent,
+    ModalConfirmComponent,
+    ErrorMessageComponent,
+    IconTileComponent,
+  ],
   templateUrl: './my-workspace.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './my-workspace.scss',
@@ -58,6 +65,10 @@ export class MyWorkspace implements OnInit {
   logChangeTarget = signal<{ key: MyKey; newLog: 'BILLING' | 'FULL' } | null>(null);
   logChangeLoading = signal(false);
   logChangeError = signal(false);
+
+  rotateTarget = signal<MyKey | null>(null);
+  rotateLoading = signal(false);
+  rotateError = signal(false);
 
   copiedKeyId = signal<number | null>(null);
 
@@ -235,6 +246,38 @@ export class MyWorkspace implements OnInit {
     return target.newLog === 'FULL'
       ? `Switch "${target.key.name}" to Full logging? By enabling full logging, you agree that Logos may store complete request and response data instead of billing-only logs. Full logging is optional and helps the TUM Chair of Applied Education Technologies improve Logos, develop new features, and conduct research on LLM requests and responses.`
       : `Switch "${target.key.name}" to Billing logging? Only metadata (no content) will be stored.`;
+  }
+
+  requestRotate(key: MyKey): void {
+    this.rotateError.set(false);
+    this.rotateTarget.set(key);
+  }
+
+  closeRotateModal(): void {
+    if (this.rotateLoading()) return;
+    this.rotateTarget.set(null);
+  }
+
+  async confirmRotate(): Promise<void> {
+    const key = this.rotateTarget();
+    if (!key || this.rotateLoading()) return;
+    this.rotateLoading.set(true);
+    this.rotateError.set(false);
+    try {
+      const res = await this.keysService.rotateKey(key.id);
+      this.workspaces.update((list) =>
+        list.map((ws) => ({
+          ...ws,
+          keys: ws.keys.map((k) => (k.id === key.id ? { ...k, key_value: res.api_key } : k)),
+        })),
+      );
+      this.copiedKeyId.set(null);
+      this.rotateTarget.set(null);
+    } catch {
+      this.rotateError.set(true);
+    } finally {
+      this.rotateLoading.set(false);
+    }
   }
 
   // ── Key budget ─────────────────────────────────────────────────────────────
