@@ -2163,3 +2163,90 @@ def test_kv_starved_floor_probe_does_not_flatten_curve(tmp_path: Path):
                 expected
             ), f"kv={kv_mb} lost its concurrency annotation: {par_by_kv}"
     assert any(p is not None and p > 2.0 for p in par_by_kv.values()), par_by_kv
+
+
+def test_build_vllm_cmd_uses_auto_max_model_len_by_default() -> None:
+    """A probe with no pinned length asks vLLM to size the window itself.
+
+    Probing without the flag starts at the model default, which a small KV
+    budget cannot hold — the probe then fails on purpose just so the suggested
+    length can be read out of the error and the probe restarted. "auto" returns
+    the same number from the first start, and matches what the serving lane
+    passes, so the curve is measured under the configuration that runs.
+    """
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    cmd = _build_vllm_cmd({"model": "m"}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "auto"
+
+
+def test_build_vllm_cmd_keeps_pinned_max_model_len() -> None:
+    """An injected retry value (or operator pin) still wins over "auto"."""
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    cmd = _build_vllm_cmd({"model": "m", "max_model_len": 27440}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "27440"
+
+
+def test_sweep_derives_rate_from_anchors_when_auto_never_fails():
+    """With --max-model-len auto no probe fails, so the sweep has no vLLM error
+    to read the KV->context rate from: the "needs X GiB for max seq len (M)"
+    line only appears in a KV-too-small rejection. The rate then has to come
+    from a probed anchor still below the plateau, or the curve degrades to the
+    handful of probed points and the planner loses every value in between.
+
+    Mirrors the deipapa profile for Qwen3.8-27B: 1 GiB serves 27440 tokens
+    (26.8 tokens/MiB), which puts the full 262144 window at ~9.8 GiB.
+    """
+    M = 262144
+    per_token = (1024.0 * 1024.0 * 1024.0) / 27440.0  # bytes/token: 1 GiB serves 27440
+    kv_calls: list = []
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
+        mp = MagicMock()
+        mp.pid = 1
+        mp.poll.return_value = None
+        return (mp, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*a, **k):
+        if kv_calls[-1] >= 21504.0:  # OOM above ~20G, same as the sibling test
+            raise RuntimeError("OOM")
+        return None  # "auto" always resolves — no probe is ever rejected
+
+    def served_side_effect(log_tail):
+        # What the engine reports it actually loaded, capped at the model window.
+        return min(M, int(kv_calls[-1] * 1024.0 * 1024.0 / per_token))
+
+    patches = _patch_search_infra(wait_ready_side_effect=wait_ready_side_effect, gpu_vram_total_mb=48000.0)
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=spawn_side_effect)
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    # Nothing failed, so none of the failure-derived signals are available.
+    patches["maxseq"] = patch("logos_worker_node.calibration._extract_vllm_max_seq_len", return_value=None)
+    patches["kvneeded"] = patch("logos_worker_node.calibration._extract_vllm_kv_gib_needed_for_full", return_value=None)
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion", return_value=None
+    )
+    patches["served"] = patch(
+        "logos_worker_node.calibration._extract_vllm_served_context", side_effect=served_side_effect
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    pairs = sorted(result.kv_max_model_len_pairs)
+    assert pairs
+    # The curve is filled across the whole startable window, not just at the
+    # few probed anchors — that is what the derived rate buys.
+    assert len(pairs) >= 10, f"curve collapsed to probed anchors only: {pairs}"
+    # It rises, then holds the model's full window once the budget can hold it.
+    assert pairs[0][1] < pairs[-1][1]
+    assert pairs[-1][1] == M
+    # The plateau starts where the rate predicts it (~9.8 GiB), not at the floor
+    # and not only at the ceiling.
+    first_full_kv = min(kv for kv, mml in pairs if mml >= M)
+    assert 9216.0 <= first_full_kv <= 11264.0, f"plateau at {first_full_kv} MB"
+    # No point may claim more than the model's window.
+    assert all(0 < mml <= M for _, mml in pairs)
