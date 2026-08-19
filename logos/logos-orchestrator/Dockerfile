@@ -7,12 +7,12 @@ WORKDIR /build
 
 # Install system packages needed for compiling C-extension wheels
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends gcc build-essential \
+  && apt-get install -y --no-install-recommends gcc build-essential rustc cargo \
   && rm -rf /var/lib/apt/lists/*
 
 # Install uv – a drop-in pip replacement written in Rust (10-100× faster)
 # Pinned to a specific version to mitigate supply-chain risk (update explicitly)
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv
 
 # Create an isolated virtual-env that we will copy into the runtime image
 RUN uv venv /opt/venv
