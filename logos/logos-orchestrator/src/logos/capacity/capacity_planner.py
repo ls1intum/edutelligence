@@ -5343,11 +5343,38 @@ class CapacityPlanner:
             if inferred_tp and inferred_tp > 1:
                 tp = inferred_tp
                 vllm_config["tensor_parallel_size"] = tp
-        # TP>1: force enforce_eager=True — CUDA graph capture crashes the
+        # TP>1 defaults to enforce_eager=True — CUDA graph capture crashes the
         # Marlin MoE kernel on Turing GPUs (cudaErrorLaunchFailure in
         # fused_marlin_moe during compile_or_warm_up_model).
-        if tp > 1:
+        #
+        # Unless calibration already disproved it for this exact model on this
+        # provider. Calibration captures graphs when it runs with
+        # enforce_eager=False, so a profile recording that mode is a profile
+        # whose graph capture succeeded on those GPUs at that tensor-parallel
+        # size — the crash this guard exists for cannot happen there. Keeping
+        # the guard anyway is expensive: on RTX 6000 Ada (sm89) with
+        # Qwen3.8-27B at tp=2, eager mode costs ~45% of decode throughput
+        # (15.2 vs 26.7 output tok/s single-stream, 60.4 vs 32.6 ms per token).
+        #
+        # An operator can still pin either value per model via
+        # engines.vllm.model_overrides on the worker, which wins over this.
+        graphs_proven = (
+            profile.enforce_eager_at_calibration is False
+            and profile.tensor_parallel_size is not None
+            and int(profile.tensor_parallel_size) == tp
+        )
+        if tp > 1 and not graphs_proven:
             vllm_config["enforce_eager"] = True
+            # Say so. This value appears in no config file, so a lane running
+            # eager without an operator asking for it is otherwise invisible —
+            # and it is expensive enough to be worth naming.
+            logger.info(
+                "%s: forcing enforce_eager for the tp=%d lane (calibration did not record a "
+                "successful graph capture at that tensor-parallel size). Set enforce_eager "
+                "under engines.vllm.model_overrides on the worker to override.",
+                model_name,
+                tp,
+            )
         available_for_kv_mb = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
         kv_mb, selected_max_model_len = self._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb)
         if kv_mb is None:

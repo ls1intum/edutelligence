@@ -18,6 +18,7 @@ export const MENU_ITEMS: MenuItem[] = [
   // Personal (all roles)
   { label: 'My Workspace', path: '/my-workspace',  piIcon: 'objects-column', group: 'personal',   roles: ALL_ROLES },
   { label: 'OpenCode',   path: '/open-code',       piIcon: 'code',           group: 'personal',   roles: ALL_ROLES },
+  { label: 'Claude Code', path: '/claude-code',   piIcon: 'sparkles',       group: 'personal',   roles: ALL_ROLES },
 ];
 
 export const HOME_ROUTE: Record<UserRole, string> = {

@@ -341,6 +341,10 @@ class ModelProfile:
     observed_gpu_memory_utilization: Optional[float] = None
     min_gpu_memory_utilization_to_load: Optional[float] = None
     tensor_parallel_size: Optional[int] = None
+    # True/False when calibration recorded which mode it ran in, None when
+    # the worker predates the field. False means CUDA graphs were captured
+    # successfully at this tensor_parallel_size on this provider's GPUs.
+    enforce_eager_at_calibration: Optional[bool] = None
     kv_per_token_bytes: Optional[int] = None
     max_context_length: Optional[int] = None
     measurement_count: int = 0
@@ -411,6 +415,7 @@ class ModelProfile:
             "observed_gpu_memory_utilization": self.observed_gpu_memory_utilization,
             "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,
             "tensor_parallel_size": self.tensor_parallel_size,
+            "enforce_eager_at_calibration": self.enforce_eager_at_calibration,
             "kv_per_token_bytes": self.kv_per_token_bytes,
             "max_context_length": self.max_context_length,
             "measurement_count": self.measurement_count,

@@ -828,6 +828,10 @@ def _build_vllm_cmd(
     # Calibrate the same engine config that serves so the pair curve is exact.
     enable_prefix_caching = bool(plan.get("enable_prefix_caching", True))
     extra_args: list[str] = list(plan.get("extra_args") or [])
+    # Calibrate with the lane's speculative-decoding setting: a draft model adds
+    # its own weights and activation peak, so a profile measured without it
+    # would under-report the residency the served lane actually needs.
+    speculative_config = str(plan.get("speculative_config") or "").strip()
     kv_bytes = str(plan.get("kv_cache_memory_bytes") or kv_cache_memory_bytes)
     kv_cache_dtype = str(plan.get("kv_cache_dtype") or "")
     explicit_gmu = plan.get("gpu_memory_utilization")
@@ -854,8 +858,18 @@ def _build_vllm_cmd(
         cmd.extend(["--gpu-memory-utilization", str(explicit_gmu)])
     if max_model_len:
         cmd.extend(["--max-model-len", str(int(max_model_len))])
+    else:
+        # Ask vLLM for the largest window this KV budget can hold. Probing
+        # without the flag starts at the model default, which a small budget
+        # cannot hold, so the probe used to fail on purpose just to read the
+        # suggested length out of the error and start over. "auto" returns the
+        # same number from the first start, and it is the same flag the serving
+        # lane uses, so the curve is measured under the configuration that runs.
+        cmd.extend(["--max-model-len", "auto"])
     if max_num_seqs:
         cmd.extend(["--max-num-seqs", str(int(max_num_seqs))])
+    if speculative_config:
+        cmd.extend(["--speculative-config", speculative_config])
     if quant:
         cmd.extend(["--quantization", quant])
     if kv_cache_dtype:
@@ -1880,7 +1894,6 @@ def calibrate_model(
             suggested_mml = _extract_vllm_max_model_len_suggestion(probe_log)
             # Model-level truths seen while this probe was still being rejected
             # (captured in _try_start, where they are guaranteed to be in view).
-            _injected_max_len = bool(probe_overrides.get("_max_model_len_retry_count") or 0)
             _obs_seq_len = int(probe_overrides.get("_observed_model_max_seq_len") or 0)
             if model_default_max_len is None and _obs_seq_len > 0:
                 model_default_max_len = _obs_seq_len
@@ -1888,12 +1901,17 @@ def calibrate_model(
             if kv_needed_for_full_mb is None and _obs_kv_gib:
                 kv_needed_for_full_mb = float(_obs_kv_gib) * 1024.0
             if model_default_max_len is None:
-                # Only consult the config dump when we did NOT inject a
-                # --max-model-len for this probe; otherwise it echoes our own
-                # shrunken value back as if it were the model's default.
-                model_default_max_len = _extract_vllm_max_seq_len(
-                    probe_log, allow_config_fallback=not _injected_max_len
-                )
+                # Never consult the config dump: every probe now runs with
+                # --max-model-len (either "auto" or an injected retry value),
+                # so the dump echoes the length THIS probe resolved to, not the
+                # model's own maximum. Reading it back would pin the whole
+                # sweep to the floor probe's context — the exact failure this
+                # flag was added for (deipapa/deimama 2026-08-18, Qwen3.8-27B
+                # recorded a flat 27440). Leaving it None is safe: the plateau
+                # backfill below then trusts the highest context any probe
+                # actually served, which under "auto" is the model's maximum
+                # whenever a probe's budget could hold it.
+                model_default_max_len = _extract_vllm_max_seq_len(probe_log, allow_config_fallback=False)
             if kv_needed_for_full_mb is None:
                 _gib = _extract_vllm_kv_gib_needed_for_full(probe_log)
                 if _gib:
@@ -1994,11 +2012,34 @@ def calibrate_model(
 
         cap = model_default_max_len or max_mml_seen or first_mml
 
-        # Derive the KV→context rate from vLLM's report and validate it against
-        # every real anchor; discard it (anchors-only) if it is >10% off anywhere.
+        # Re-evaluate the floor against that cap. plateau_at_floor was decided
+        # against model_default_max_len, which under "auto" is usually unknown
+        # — no probe fails, so nothing reports the model's own maximum. A floor
+        # probe that already served the highest context any probe reached IS at
+        # the plateau, and saying so keeps the gap fill working for models whose
+        # smallest KV step already holds the full window.
+        plateau_at_floor = plateau_at_floor or (first_mml > 0 and first_mml >= cap)
+
+        # Derive the KV→context rate and validate it against every real anchor;
+        # discard it (anchors-only) if it is >10% off anywhere.
         per_token_bytes: float | None = None
         if kv_needed_for_full_mb and model_default_max_len:
             per_token_bytes = (kv_needed_for_full_mb * 1024.0 * 1024.0) / model_default_max_len
+        else:
+            # No report to read: with --max-model-len auto a probe no longer
+            # fails, so vLLM never prints the "needs X GiB for max seq len (M)"
+            # line the rate used to come from. Any anchor still below the
+            # plateau carries the same number, because KV scales linearly with
+            # context. Verified against this node's recorded curve (Qwen3.8-27B
+            # on deipapa: 1 GiB → 27440 tokens = 26.8 tok/MiB, which predicts
+            # the full 262144 context at 9.8 GiB — the measured plateau sits at
+            # the next probed step, 10 GiB). The highest such anchor is used:
+            # it has the longest lever arm and so the least rounding error.
+            rising = [(a_kv, a_mml) for a_kv, a_mml in anchors.items() if 0 < a_mml < cap]
+            if rising:
+                r_kv, r_mml = max(rising, key=lambda t: t[0])
+                per_token_bytes = (r_kv * 1024.0 * 1024.0) / r_mml
+        if per_token_bytes:
             for a_kv, a_mml in anchors.items():
                 if a_mml <= 0:
                     continue
@@ -2178,8 +2219,17 @@ def calibrate_model(
             return partial
 
         # Explicit KV produces a single point on the curve using the resolved
-        # max_model_len (injected or default).
-        explicit_max = int(explicit_probe_overrides.get("_resolved_max_model_len") or plan.get("max_model_len") or 0)
+        # max_model_len. Read it from the probe's own log first: under
+        # --max-model-len auto nothing was injected, so the planned value is
+        # unset and the engine's resolved window is only stated in the "Maximum
+        # concurrency for N tokens per request" line it prints on success.
+        # Without this the fixed-KV path records no curve point at all and the
+        # planner is left with no context for the model.
+        explicit_max = int(_extract_vllm_served_context(_read_log_since(log_path, _last_probe_log_offset[0])) or 0)
+        if explicit_max <= 0:
+            explicit_max = int(
+                explicit_probe_overrides.get("_resolved_max_model_len") or plan.get("max_model_len") or 0
+            )
         if explicit_max > 0:
             partial.kv_max_model_len_pairs = [(kv_cache_sent_mb, explicit_max)]
             partial.max_model_len = explicit_max
