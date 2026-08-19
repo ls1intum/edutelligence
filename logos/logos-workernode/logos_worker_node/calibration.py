@@ -2569,7 +2569,10 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
 
         # Merge vllm model_overrides (quantization, disable_custom_all_reduce, etc.)
         for k, v in (vllm_model_overrides.get(model) or {}).items():
-            # Only merge fields relevant to calibration (skip runtime-only flags)
+            # Only merge fields relevant to calibration (skip runtime-only flags).
+            # "Relevant" means: it changes what the engine allocates. Anything the
+            # serving lane passes that costs VRAM has to be passed here too, or the
+            # profile describes a configuration that never runs.
             if k in (
                 "quantization",
                 "dtype",
@@ -2578,6 +2581,13 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
                 "max_model_len",
                 "max_num_seqs",
                 "disable_custom_all_reduce",
+                # A draft model is loaded alongside the main one and adds its own
+                # weights and activation peak (measured on deipapa for
+                # Qwen3.8-27B: +0.44 GiB weights, +1.09 GiB peak activation,
+                # +0.19 GiB graphs). Calibrating without it under-reports
+                # base_residency, and the planner then hands the lane a KV budget
+                # that does not fit — 17 GiB where only ~15 GiB is left.
+                "speculative_config",
             ):
                 plan.setdefault(k, v)
 
