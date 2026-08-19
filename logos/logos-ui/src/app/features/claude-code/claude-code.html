@@ -158,6 +158,11 @@
 
     <p class="substep-label">a. Write the Logos settings</p>
 
+    @if (!ready()) {
+      <p class="model-empty">
+        Pick an API key and a model above — the settings below are generated from them.
+      </p>
+    } @else {
     <div class="os-tabs" role="tablist">
       <button class="os-tab" role="tab"
         [class.os-tab--active]="connectMethod() === 'download'"
@@ -206,7 +211,7 @@
           (click)="installTab.set('windows')">Windows</button>
       </div>
       <div class="terminal-block">
-        <span class="terminal-prefix" aria-hidden="true">{{ installTab() === 'windows' ? '&gt;' : '$' }}</span>
+        <span class="terminal-prefix" aria-hidden="true">{{ installTab() === 'windows' ? '>' : '$' }}</span>
         <code class="terminal-cmd">{{ mergeCommand() }}</code>
         <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === mergeCommand()"
           (click)="copyCmd(mergeCommand())" aria-label="Copy command">
@@ -223,6 +228,8 @@
       } @else {
         <p class="tab-note">Uses the system <code class="inline-code">python3</code>.</p>
       }
+    }
+
     }
 
     <p class="substep-label">b. Restart Claude Code</p>

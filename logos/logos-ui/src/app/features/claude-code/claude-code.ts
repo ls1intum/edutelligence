@@ -75,6 +75,12 @@ export class ClaudeCode implements OnInit {
     return name.startsWith('claude-') || name.includes('[1m]');
   });
 
+  // Both a key and a model are required before any settings can be written.
+  // Without this the page would happily generate a config with an empty token
+  // and an empty model name, and offer it for download — overwriting a working
+  // ~/.claude/settings.json with one that cannot authenticate.
+  ready = computed(() => this.selectedKey() !== null && this.selected() !== null);
+
   maskedKey = computed(() => {
     const k = this.selectedKey()?.key_value ?? '';
     return k.length > 14 ? k.slice(0, 14) + ' ···' : k;
@@ -198,7 +204,14 @@ export class ClaudeCode implements OnInit {
     if (key) this.pickKey(key);
   }
 
+  // Incremented on every key switch. A model fetch that resolves after a newer
+  // switch started is discarded: otherwise picking key A then key B can leave
+  // B paired with A's models, and the generated settings would name a model
+  // that key B has no access to.
+  private modelsRequestId = 0;
+
   private async pickKey(key: MyKey): Promise<void> {
+    const requestId = ++this.modelsRequestId;
     this.selectedKey.set(key);
     this.models.set([]);
     this.selected.set(null);
@@ -206,6 +219,7 @@ export class ClaudeCode implements OnInit {
     this.modelsError.set(false);
     try {
       const models = await this.myKeysService.getKeyModels(key.id);
+      if (requestId !== this.modelsRequestId) return;
       // On duplicate names keep the local entry: the served window falls back to
       // provider_type-based limits, and the local window is the safe lower bound.
       const byName = new Map<string, ModelAccess>();
@@ -219,9 +233,9 @@ export class ClaudeCode implements OnInit {
       this.models.set(unique);
       if (unique.length > 0) this.selected.set(unique[0]);
     } catch {
-      this.modelsError.set(true);
+      if (requestId === this.modelsRequestId) this.modelsError.set(true);
     } finally {
-      this.modelsLoading.set(false);
+      if (requestId === this.modelsRequestId) this.modelsLoading.set(false);
     }
   }
 
