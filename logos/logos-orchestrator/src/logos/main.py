@@ -4014,6 +4014,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     max_lanes=(
                         int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
+                    calibrating=(
+                        bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
+                    ),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -4035,6 +4038,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
                     event=event,
+                    replay=bool(payload.get("replay", False)),
                 )
                 if event.get("event") == "calibration_probe_log":
                     try:

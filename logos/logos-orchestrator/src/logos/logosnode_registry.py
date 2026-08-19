@@ -246,6 +246,19 @@ def _render_lane_diff(old: dict[str, Any], new: dict[str, Any], *, indent: str =
     return lines
 
 
+# Worker-emitted calibration session lifecycle events. The worker records
+# these itself, which makes them the only signal covering every way a session
+# can start: the nightly CalibrationOrchestrator tick and the admin
+# calibrate_uncalibrated endpoints, which send start_calibration_session
+# straight through the registry without touching the orchestrator's slot.
+CALIBRATION_SESSION_STARTED_EVENT = "calibration_session_started"
+# The command that starts a session. send_command marks the provider
+# calibrating the moment it dispatches this, rather than waiting for the
+# worker's started event — see send_command for why.
+START_CALIBRATION_SESSION_ACTION = "start_calibration_session"
+TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -280,6 +293,12 @@ class ProviderSession:
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
     max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
+    # True between the worker's calibration_session_started event and its
+    # terminal event, and seeded from the worker's hello so a reconnect
+    # mid-session is correct before the first status arrives. A calibrating
+    # worker has freed all VRAM for its probes, so its idle lanes and free
+    # VRAM are reserved rather than available.
+    calibrating: bool = False
 
     def is_stale(self, stale_after_seconds: int) -> bool:
         return (_utc_now() - self.last_heartbeat) > timedelta(seconds=stale_after_seconds)
@@ -565,6 +584,7 @@ class LogosNodeRuntimeRegistry:
         capabilities_models: list[str] | None = None,
         max_lanes: int = 0,
         configured_models: list[str] | None = None,
+        calibrating: bool | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -572,6 +592,14 @@ class LogosNodeRuntimeRegistry:
         session.worker_id = worker_id or session.worker_id
         session.last_heartbeat = _utc_now()
         session.max_lanes = max_lanes
+        # Hello arrives before the first status, so this settles `calibrating`
+        # before `_is_plannable` can ever say yes for this session. Without it
+        # a reconnect mid-session would open a placement window: the fresh
+        # session starts non-calibrating and the event replay that would mark
+        # it only arrives after the first status. None = worker predates the
+        # field; leave the replay as the only source in that case.
+        if calibrating is not None:
+            self._set_calibrating(session, bool(calibrating), "hello")
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:
@@ -711,7 +739,7 @@ class LogosNodeRuntimeRegistry:
             result.append(dict(sample))
         return result
 
-    async def append_event(self, provider_id: int, event: dict[str, Any]) -> None:
+    async def append_event(self, provider_id: int, event: dict[str, Any], replay: bool = False) -> None:
         session = await self._get_session(provider_id)
         if session is None:
             return
@@ -719,6 +747,16 @@ class LogosNodeRuntimeRegistry:
         if isinstance(event, dict):
             session.latest_events.append(event)
             session.latest_events = session.latest_events[-500:]
+            if replay:
+                # A replayed event is history, and every consumer of these
+                # events reads them as live state. CalibrationOrchestrator
+                # frees its cluster-wide slot on any terminal session event
+                # from the active provider, so a stale one in the backlog
+                # would release the slot mid-session and let the next tick
+                # start a second worker calibrating. The backlog stays in
+                # latest_events for history and diagnostics.
+                return
+            self._track_calibration_state(session, event)
             for subscriber in tuple(self._event_subscribers):
                 try:
                     subscriber(provider_id, event)
@@ -729,11 +767,58 @@ class LogosNodeRuntimeRegistry:
                         event.get("event"),
                     )
 
+    def _track_calibration_state(self, session: ProviderSession, event: dict[str, Any]) -> None:
+        """Flip ``session.calibrating`` on the worker's session lifecycle events.
+
+        Driven by the worker rather than by whoever sent
+        ``start_calibration_session``: the admin calibrate_uncalibrated
+        endpoints bypass the CalibrationOrchestrator's slot entirely, so its
+        ``_active_provider_id`` is not a complete picture.
+
+        Only live events reach this. The worker's post-connect replay is
+        excluded by ``append_event``, because a backlog's order says nothing
+        about what is running now: the log still holds the terminal event of an
+        earlier session, and replaying it would clear the flag that ``hello``
+        had just set correctly for the session actually in progress. ``hello``
+        is the authority at connect, these events for everything after.
+        """
+        event_name = str(event.get("event", "")).strip()
+        if event_name == CALIBRATION_SESSION_STARTED_EVENT:
+            self._set_calibrating(session, True, event_name)
+        elif event_name in TERMINAL_CALIBRATION_SESSION_EVENTS:
+            self._set_calibrating(session, False, event_name)
+
+    def _set_calibrating(self, session: ProviderSession, calibrating: bool, source: str) -> None:
+        """Set ``session.calibrating``, logging only actual transitions."""
+        if session.calibrating == calibrating:
+            return
+        session.calibrating = calibrating
+        if calibrating:
+            logger.info(
+                "provider=%s entered calibration (%s) — excluded from lane placement until the session ends",
+                session.worker_id or str(session.provider_id),
+                source,
+            )
+        else:
+            logger.info(
+                "provider=%s left calibration (%s) — eligible for lane placement again",
+                session.worker_id or str(session.provider_id),
+                source,
+            )
+
+    def is_calibrating(self, provider_id: int) -> bool:
+        """Return True while the worker is running a calibration session."""
+        session = self._sessions.get(int(provider_id))
+        return session is not None and session.calibrating
+
     def subscribe_to_events(self, callback: Callable[[int, dict[str, Any]], None]) -> None:
         """Register a callback fired for every worker event.
 
         Called synchronously inside ``append_event`` so subscribers must do
         cheap work (e.g. mutate in-memory state) and never block on I/O.
+
+        Live events only — the worker's post-connect replay is not delivered,
+        because subscribers read these events as the current state of the node.
         """
         if callback not in self._event_subscribers:
             self._event_subscribers.append(callback)
@@ -832,11 +917,33 @@ class LogosNodeRuntimeRegistry:
             "action": action,
             "params": params or {},
         }
+
+        # Starting a session is the one command whose effect the planner must
+        # see before the worker confirms it. The worker's started event is
+        # forwarded by a one-second poll loop, and within that second the
+        # provider still looks plannable — long enough for a cycle to place a
+        # lane on the VRAM the probes are about to claim. Marking it here, on
+        # the only path all three callers use (nightly tick and both admin
+        # calibrate_uncalibrated endpoints), closes the window. The worker's
+        # own events remain the authority for the rest of the session.
+        calibration_start = action == START_CALIBRATION_SESSION_ACTION
+        was_calibrating = session.calibrating
+        if calibration_start:
+            self._set_calibrating(session, True, "start_calibration_session dispatched")
+
+        def _undo_optimistic_calibration_mark() -> None:
+            # Restore rather than clear: the worker refuses a start while a
+            # session is already running, and clearing would then release a
+            # live session for lane placement.
+            if calibration_start:
+                self._set_calibrating(session, was_calibrating, "start_calibration_session refused")
+
         try:
             async with session.send_lock:
                 await session.websocket.send_json(message)
         except Exception as exc:  # noqa: BLE001
             session.pending_commands.pop(cmd_id, None)
+            _undo_optimistic_calibration_mark()
             raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
 
         try:
@@ -854,11 +961,28 @@ class LogosNodeRuntimeRegistry:
                 timeout_seconds=int(max(1, timeout_seconds)),
                 cooldown_seconds=5.0,
             )
+            # Deliberately not undone here: a timeout leaves it unknown whether
+            # the session started, and releasing a running one is the failure
+            # this guard exists to prevent. The worker's terminal event, or its
+            # hello on the next connect, settles the flag either way.
             raise LogosNodeOfflineError("Command timeout waiting for worker response") from exc
 
         if not bool(result.get("success", False)):
+            _undo_optimistic_calibration_mark()
             raise LogosNodeCommandError(str(result.get("error", "unknown worker command error")))
-        return result.get("result", {})
+        payload = result.get("result", {})
+        # A worker that declines a command answers it — the transport succeeded,
+        # so the check above sees nothing. Refusals travel in the payload as
+        # ok=False: a start rejected because a session is already running or the
+        # node is degraded, and any lane command rejected because a calibration
+        # session holds this node's VRAM. Handing that back as a result would
+        # have callers treat it as done — the planner would record desired state
+        # for a lane the worker never created and then wait out the confirmation
+        # timeout — so it is raised like any other command failure.
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            _undo_optimistic_calibration_mark()
+            raise LogosNodeCommandError(str(payload.get("error", f"worker refused '{action}'")))
+        return payload
 
     async def send_stream_command(
         self,

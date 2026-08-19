@@ -509,6 +509,25 @@ class CapacityPlanner:
                 pass  # Periodic tick — normal path.
             self._tick_event.clear()
 
+    def _is_plannable(self, provider_id: int) -> bool:
+        """Return True when this cycle may act on *provider_id*.
+
+        Two exclusions, both about acting on state that is transient by
+        design:
+
+        * No first status since connect — we don't know which lanes are
+          already loaded, and acting on empty state can destroy them.
+        * A calibration session is running — the worker frees all VRAM for
+          its probes, so its idle lanes and large free VRAM are reserved,
+          not available. A lane placed here would take the memory the
+          probes need and make them fail.
+        """
+        if self._registry is None:
+            return True
+        if not self._registry.has_received_first_status(provider_id):
+            return False
+        return not self._registry.is_calibrating(provider_id)
+
     async def _run_cycle(self) -> None:
         """Execute one planner cycle."""
         cycle_start = time.time()
@@ -573,9 +592,7 @@ class CapacityPlanner:
         # because it was iterated first.
         best_provider_for_model: Optional[dict[str, int]] = None
         if self._cross_provider_best_first:
-            ready_provider_ids = [
-                pid for pid in provider_ids if self._registry is None or self._registry.has_received_first_status(pid)
-            ]
+            ready_provider_ids = [pid for pid in provider_ids if self._is_plannable(pid)]
             best_provider_for_model = self._rank_providers_for_demanded_models(
                 ready_provider_ids,
                 self._demand.get_ranked_models(),
@@ -596,9 +613,9 @@ class CapacityPlanner:
             # Skip providers that haven't sent their first status yet —
             # we don't know what lanes are already loaded and acting on
             # stale/empty state can destroy existing lanes.
-            if self._registry and not self._registry.has_received_first_status(provider_id):
+            if not self._is_plannable(provider_id):
                 logger.debug(
-                    "Skipping worker=%s: waiting for first status report after connect",
+                    "Skipping worker=%s: not plannable this cycle",
                     self._facade.get_provider_name(provider_id) or provider_id,
                 )
                 continue
@@ -653,6 +670,20 @@ class CapacityPlanner:
                 # Acquire per-lane lock so concurrent operations on the same
                 # lane are serialized, but unrelated lanes remain unblocked.
                 async with self._lane_lock(action.provider_id, action.lane_id):
+                    # Re-check under the lock: actions execute sequentially and
+                    # a cold load takes ~90s, so a calibration session can start
+                    # after this action was planned. Acting on the stale verdict
+                    # would place the very lane the guard exists to prevent.
+                    if not self._is_plannable(action.provider_id):
+                        logger.info(
+                            "Dropping planned %s on worker=%s model=%s lane=%s: "
+                            "provider became unplannable after planning",
+                            action.action,
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                            action.model_name,
+                            action.lane_id,
+                        )
+                        continue
                     await self._execute_action_with_confirmation(action)
                 prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(action=action.action).inc()
             except Exception:
@@ -3473,6 +3504,11 @@ class CapacityPlanner:
 
         Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM=false`` (the default).
 
+        Candidate workers pass through ``_is_plannable`` for the same
+        reasons the main demand pass does — a replica is a plain ``load``,
+        so it would take the VRAM a calibration session reserved for its
+        probes just as readily.
+
         Models that already had an action emitted this cycle (in
         ``cycle_planned_models``) are skipped — the main demand pass
         already handles them.
@@ -3494,7 +3530,7 @@ class CapacityPlanner:
                 continue
 
             for pid in provider_ids:
-                if self._registry is not None and not self._registry.has_received_first_status(pid):
+                if not self._is_plannable(pid):
                     continue
                 try:
                     lanes = self._facade.get_all_provider_lane_signals(pid)

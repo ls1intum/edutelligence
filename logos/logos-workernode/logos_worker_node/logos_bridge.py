@@ -43,6 +43,11 @@ _INFERENCE_RELAY_TIMEOUT = httpx.Timeout(
 _MAX_CALIBRATION_LOG_TEXT_BYTES = 512 * 1024
 
 
+# Commands that can grow this node's VRAM footprint. Refused while a
+# calibration session holds the GPU — see _execute_command.
+_VRAM_GROWING_ACTIONS = frozenset({"add_lane", "apply_lanes", "wake_lane", "reconfigure_lane"})
+
+
 class _CalibrationSession:
     """Worker-driven calibration loop state.
 
@@ -85,7 +90,11 @@ class LogosBridgeClient:
         self._last_connected_at: datetime | None = None
         self._last_status_sent_at: datetime | None = None
         self._consecutive_failures = 0
-        self._last_event_seq = 0
+        # Event ids already forwarded on the current connection. The log is
+        # capped and trims from the front, so a list position is not a stable
+        # cursor: once the log is full its length stops changing, and a
+        # position-based cursor never advances past it again.
+        self._forwarded_event_ids: set[str] = set()
         self._last_runtime_signature: str | None = None
         self._last_runtime_payload: dict[str, Any] = {}
         # Resolved by server during auth
@@ -155,7 +164,12 @@ class LogosBridgeClient:
                     self._connected = True
                     self._last_connected_at = datetime.now(timezone.utc)
                     self._consecutive_failures = 0
-                    self._last_event_seq = 0
+                    # Resend the whole log to the new server session, and
+                    # remember which events it already held: those are backlog,
+                    # anything appended from here on is live. The first drain
+                    # carries both and only this snapshot tells them apart.
+                    self._forwarded_event_ids.clear()
+                    replay_event_ids = self._current_event_ids()
                     self._last_runtime_signature = None
                     self._last_runtime_payload = {}
                     caps = list(self._cfg.capabilities_models) if self._cfg.capabilities_models else []
@@ -171,7 +185,10 @@ class LogosBridgeClient:
                     await self._send_runtime_status(ws, force=True)
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws), name="logos-bridge-heartbeat")
                     status_task = asyncio.create_task(self._status_refresh_loop(ws), name="logos-bridge-status")
-                    event_task = asyncio.create_task(self._event_loop(ws), name="logos-bridge-events")
+                    event_task = asyncio.create_task(
+                        self._event_loop(ws, replay_event_ids=replay_event_ids),
+                        name="logos-bridge-events",
+                    )
                     try:
                         while not self._stopping.is_set():
                             raw = await ws.recv()
@@ -307,20 +324,41 @@ class LogosBridgeClient:
                 await self._send_runtime_status(ws, force=False)
                 last_refresh = now
 
-    async def _event_loop(self, ws) -> None:
+    async def _event_loop(self, ws, replay_event_ids: frozenset[str] = frozenset()) -> None:
+        # Events named in *replay_event_ids* were already in the log when this
+        # connection came up: a backlog that can hold lifecycle events from
+        # sessions long finished, in an order that says nothing about what is
+        # running now. They are flagged so the server keeps taking its
+        # calibration state from the hello instead.
+        #
+        # Membership, not position. The log is capped at _MAX_EVENT_LOG and
+        # trims from the front, so on a full log a live event lands at a
+        # position the backlog used to occupy — a positional boundary would
+        # send it as replay, the server would ignore it, and a terminal event
+        # lost that way leaves the provider excluded from lane placement with
+        # nothing left to release it. The same trimming is why what has already
+        # been forwarded is tracked by id: a positional cursor equals the log
+        # length once it is full and never advances again, so no further event
+        # would reach the server at all.
         while not self._stopping.is_set():
             await asyncio.sleep(1)
             events = self._app.state.lane_manager.event_log
-            for event in events[self._last_event_seq :]:
+            for event in events:
+                if event.event_id in self._forwarded_event_ids:
+                    continue
                 await self._send_json(
                     ws,
                     {
                         "type": "event",
                         "worker_id": self.worker_id,
                         "event": event.model_dump(mode="json"),
+                        "replay": event.event_id in replay_event_ids,
                     },
                 )
-            self._last_event_seq = len(events)
+                self._forwarded_event_ids.add(event.event_id)
+            # Forget ids the log has trimmed away, so this set stays bounded by
+            # the log size rather than growing for the life of the connection.
+            self._forwarded_event_ids &= {event.event_id for event in events}
 
     async def _send_hello(self, ws) -> None:
         max_lanes = 0
@@ -338,6 +376,13 @@ class LogosBridgeClient:
                 "configured_models": self._cfg.configured_models,
                 "max_lanes": max_lanes,
                 "static_lane_ids": static_lane_ids,
+                # Authoritative calibration state at connect time. The server
+                # excludes calibrating workers from lane placement; it cannot
+                # derive that from the replayed event log alone, because the
+                # log is in-memory, capped, and only reaches the server a
+                # moment after the first status has already made this worker
+                # look plannable.
+                "calibrating": self._active_calibration_session is not None,
                 "actions": [
                     "infer",
                     "infer_stream",
@@ -533,6 +578,32 @@ class LogosBridgeClient:
     async def _execute_command(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         lane_manager = self._app.state.lane_manager
 
+        if action in _VRAM_GROWING_ACTIONS and self._calibration_session_is_live():
+            # Last line of defence, at the resource itself. The server excludes
+            # a calibrating worker from lane placement, but every mechanism it
+            # has for knowing lags reality by some amount — an event in flight,
+            # a plan made a moment ago — and a lane placed here takes the VRAM
+            # the probes need, which fails the kv-cache search at sizes that
+            # would otherwise fit. Refusing locally makes those races harmless.
+            #
+            # The session's own lane work does not come through here: it drives
+            # the lane manager directly (destroy_all) and runs its probes on
+            # _CALIBRATION_PORT. The server re-spawns lanes via apply_lanes once
+            # the session ends, which is why that command in particular has to
+            # be refused while it is still running.
+            logger.warning(
+                "[Calibration] refusing %s: a calibration session is running and holds this node's VRAM",
+                action,
+            )
+            return {
+                "ok": False,
+                "error": (
+                    f"'{action}' is refused while a calibration session is running: "
+                    f"the session has freed this node's VRAM for its probes."
+                ),
+                "calibrating": True,
+            }
+
         if action == "infer":
             return await self._execute_infer_command(params)
         if action == "get_runtime":
@@ -576,6 +647,27 @@ class LogosBridgeClient:
             return await self._handle_stop_calibration_session()
 
         raise ValueError(f"Unsupported bridge command '{action}'")
+
+    def _current_event_ids(self) -> frozenset[str]:
+        lane_manager = getattr(self._app.state, "lane_manager", None)
+        if lane_manager is None:
+            return frozenset()
+        try:
+            return frozenset(event.event_id for event in lane_manager.event_log)
+        except Exception:  # noqa: BLE001
+            return frozenset()
+
+    def _calibration_session_is_live(self) -> bool:
+        """True while a calibration session is actually running.
+
+        A finished session can linger in ``_active_calibration_session`` until
+        the next start clears it, so the task state is what counts.
+        """
+        session = self._active_calibration_session
+        if session is None:
+            return False
+        task = session.task
+        return task is None or not task.done()
 
     async def _handle_start_calibration_session(self, params: dict[str, Any]) -> dict[str, Any]:
         """Start a worker-driven calibration session.
