@@ -2006,11 +2006,26 @@ def calibrate_model(
 
         cap = model_default_max_len or max_mml_seen or first_mml
 
-        # Derive the KV→context rate from vLLM's report and validate it against
-        # every real anchor; discard it (anchors-only) if it is >10% off anywhere.
+        # Derive the KV→context rate and validate it against every real anchor;
+        # discard it (anchors-only) if it is >10% off anywhere.
         per_token_bytes: float | None = None
         if kv_needed_for_full_mb and model_default_max_len:
             per_token_bytes = (kv_needed_for_full_mb * 1024.0 * 1024.0) / model_default_max_len
+        else:
+            # No report to read: with --max-model-len auto a probe no longer
+            # fails, so vLLM never prints the "needs X GiB for max seq len (M)"
+            # line the rate used to come from. Any anchor still below the
+            # plateau carries the same number, because KV scales linearly with
+            # context. Verified against this node's recorded curve (Qwen3.8-27B
+            # on deipapa: 1 GiB → 27440 tokens = 26.8 tok/MiB, which predicts
+            # the full 262144 context at 9.8 GiB — the measured plateau sits at
+            # the next probed step, 10 GiB). The highest such anchor is used:
+            # it has the longest lever arm and so the least rounding error.
+            rising = [(a_kv, a_mml) for a_kv, a_mml in anchors.items() if 0 < a_mml < cap]
+            if rising:
+                r_kv, r_mml = max(rising, key=lambda t: t[0])
+                per_token_bytes = (r_kv * 1024.0 * 1024.0) / r_mml
+        if per_token_bytes:
             for a_kv, a_mml in anchors.items():
                 if a_mml <= 0:
                     continue
