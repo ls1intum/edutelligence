@@ -2006,6 +2006,14 @@ def calibrate_model(
 
         cap = model_default_max_len or max_mml_seen or first_mml
 
+        # Re-evaluate the floor against that cap. plateau_at_floor was decided
+        # against model_default_max_len, which under "auto" is usually unknown
+        # — no probe fails, so nothing reports the model's own maximum. A floor
+        # probe that already served the highest context any probe reached IS at
+        # the plateau, and saying so keeps the gap fill working for models whose
+        # smallest KV step already holds the full window.
+        plateau_at_floor = plateau_at_floor or (first_mml > 0 and first_mml >= cap)
+
         # Derive the KV→context rate and validate it against every real anchor;
         # discard it (anchors-only) if it is >10% off anywhere.
         per_token_bytes: float | None = None
