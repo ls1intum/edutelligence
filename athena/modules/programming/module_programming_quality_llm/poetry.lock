@@ -1346,14 +1346,14 @@ tenacity = ">=8.1.0,<8.4.0 || >8.4.0,<10.0.0"
 
 [[package]]
 name = "langchain-core"
-version = "1.5.6"
+version = "1.6.0"
 description = "Building applications with LLMs through composability"
 optional = false
 python-versions = "<4.0.0,>=3.10.0"
 groups = ["main"]
 files = [
-    {file = "langchain_core-1.5.6-py3-none-any.whl", hash = "sha256:d6cf37bf695ecc22cddeb8461a684e353190b2ce430d99eb22bc11c0c7c00ea5"},
-    {file = "langchain_core-1.5.6.tar.gz", hash = "sha256:b5f73bd9688c457b31ec73657a0ad56948f889fae27acee79286e9c285632ee6"},
+    {file = "langchain_core-1.6.0-py3-none-any.whl", hash = "sha256:d8bb924cd413955d9d3192ccced140407427c3ff51e50ffb941222648da92cb2"},
+    {file = "langchain_core-1.6.0.tar.gz", hash = "sha256:dc72e36678ed26683ec0ad8829b44011fba461d10f9b31dbd9110215e5ec2333"},
 ]
 
 [package.dependencies]
@@ -1367,6 +1367,22 @@ pyyaml = ">=5.3.0,<7.0.0"
 tenacity = ">=8.1.0,<8.4.0 || >8.4.0,<10.0.0"
 typing-extensions = ">=4.7.0,<5.0.0"
 uuid-utils = ">=0.12.0,<1.0"
+
+[[package]]
+name = "langchain-ollama"
+version = "1.1.0"
+description = "An integration package connecting Ollama and LangChain"
+optional = false
+python-versions = "<4.0.0,>=3.10.0"
+groups = ["main"]
+files = [
+    {file = "langchain_ollama-1.1.0-py3-none-any.whl", hash = "sha256:43ac83a6eacb0f43855810739794dd55019e0d9b17bdcf3ecb3b1991ac3b59dd"},
+    {file = "langchain_ollama-1.1.0.tar.gz", hash = "sha256:f776f56f6782ae4da7692579b94a6575906118318d1023b455d7207f9d059811"},
+]
+
+[package.dependencies]
+langchain-core = ">=1.2.21,<2.0.0"
+ollama = ">=0.6.1,<1.0.0"
 
 [[package]]
 name = "langchain-openai"
@@ -1691,7 +1707,7 @@ develop = true
 [package.dependencies]
 athena = {path = "../athena", develop = true}
 langchain = "1.3.15"
-langchain-community = "0.4.2"
+langchain-ollama = "1.1.0"
 langchain-openai = "1.5.2"
 langsmith = "0.11.0"
 openai = "3.3.0"
@@ -2066,6 +2082,22 @@ files = [
     {file = "numpy-2.4.6-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:2803abfebfc990042cd494d8ce2d5f82e9d847af6d35ec486923aa19dbad5e73"},
     {file = "numpy-2.4.6.tar.gz", hash = "sha256:f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda"},
 ]
+
+[[package]]
+name = "ollama"
+version = "0.6.2"
+description = "The official Python client for Ollama."
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "ollama-0.6.2-py3-none-any.whl", hash = "sha256:3ad7daab28e5a973445c36a73882a3ef698c2ebb00e21e308652741577509f7d"},
+    {file = "ollama-0.6.2.tar.gz", hash = "sha256:936d55daa684f474364c098611c933626f8d6c7d67065c5b7ae0c477b508b07f"},
+]
+
+[package.dependencies]
+httpx = ">=0.27"
+pydantic = ">=2.9"
 
 [[package]]
 name = "openai"
@@ -4148,4 +4180,4 @@ cffi = ["cffi (>=1.17,<2.0)", "cffi (>=2.0.0b)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "3.11.*"
-content-hash = "7562d5323424266b6044bdd7e0a30d43907bff040ab5240b5cde0be364d214d4"
+content-hash = "ee50c6bd4520acf4446a643eda522b1b658ae6b0deb97f707bf3128e97d82d1f"
