@@ -83,6 +83,75 @@
   &--ok { border-color: rgb(var(--color-success)  / var(--opacity-strong)); color: rgb(var(--color-success)); }
 }
 
+.btn-rotate {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+
+  &:hover:not(:disabled) { background: rgb(var(--color-warning, 255 165 0) / 0.1); color: rgb(var(--color-warning, 200 120 0)); border-color: rgb(var(--color-warning, 200 120 0) / 0.4); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.rotate-confirm-box {
+  border: 1px solid rgb(var(--color-outline-200));
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: rgb(var(--glass-fill) / var(--opacity-muted));
+  margin-bottom: 14px;
+}
+
+.rotate-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  margin: 0 0 10px;
+
+  i { color: rgb(var(--color-warning, 200 120 0)); flex-shrink: 0; margin-top: 2px; }
+}
+
+.rotate-error {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-danger, var(--color-error)));
+  margin: 0 0 10px;
+}
+
+.rotate-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: none;
+  background: rgb(var(--color-error, 220 53 69));
+  color: #fff;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: opacity 0.12s;
+
+  &:hover:not(:disabled) { opacity: 0.85; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
 .stats-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

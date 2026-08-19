@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestAttribute;
@@ -54,13 +55,26 @@ public class MeKeysController {
         }
         Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
         if (keyOpt.isEmpty()) {
-            return ResponseEntity.status(404).body(Map.of("detail", "API key not found."));
+            return ResponseEntity.status(404).body(Map.of("detail", "API key not found or not owned."));
         }
         ApiKey key = keyOpt.get();
         if (!auth.userId().equals(key.getUserId())) {
             return ResponseEntity.status(403).body(Map.of("detail", "You do not own this API key."));
         }
         Optional<Map<String, Object>> result = meKeysService.setLogForUser(keyId, auth.userId(), level);
+        return result
+            .<ResponseEntity<?>>map(ResponseEntity::ok)
+            .orElseGet(() -> ResponseEntity.status(404).body(Map.of("detail", "API key not found or not owned.")));
+    }
+
+    @PostMapping("/{keyId}/rotate")
+    public ResponseEntity<?> rotateKey(
+            @PathVariable Integer keyId,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (auth.userId() == null) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Forbidden."));
+        }
+        Optional<Map<String, Object>> result = meKeysService.rotateKeyForUser(keyId, auth.userId());
         return result
             .<ResponseEntity<?>>map(ResponseEntity::ok)
             .orElseGet(() -> ResponseEntity.status(404).body(Map.of("detail", "API key not found or not owned.")));

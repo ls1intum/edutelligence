@@ -18,6 +18,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -105,6 +106,32 @@ class MeKeysControllerTest {
                 .content("{\"log\": \"FULL\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.result").isString());
+    }
+
+    // POST /me/keys/{keyId}/rotate
+
+    @Test
+    void rotateKey_returns404WhenNotOwner() throws Exception {
+        mvc.perform(post("/me/keys/3102/rotate")
+                .with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void rotateKey_returns404ForUnknownKey() throws Exception {
+        mvc.perform(post("/me/keys/99999/rotate")
+                .with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void rotateKey_rotatesOwnKeySuccessfully() throws Exception {
+        mvc.perform(post("/me/keys/3101/rotate")
+                .with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("API key rotated successfully"))
+           .andExpect(jsonPath("$.api_key").isString())
+           .andExpect(jsonPath("$.api_key").value(org.hamcrest.Matchers.not("alice-key-1")));
     }
 
     // GET /me/keys/{keyId}/models

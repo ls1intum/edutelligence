@@ -56,6 +56,24 @@ public class ApiKeyAdminController {
         return ResponseEntity.ok(Map.of("result", "API Key deleted successfully"));
     }
 
+    @PostMapping("/api-keys/{keyId}/rotate")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> rotateKey(
+            @PathVariable Integer keyId,
+            @RequestAttribute("authContext") AuthContext auth) {
+        Optional<Map<String, Object>> keyInfo = service.getKeyById(keyId);
+        if (keyInfo.isEmpty()) return ResponseEntity.status(404).body(Map.of("detail", "API Key not found"));
+        if (Role.APP_ADMIN.matches(auth.role())) {
+            Integer teamId = (Integer) keyInfo.get().get("team_id");
+            if (teamId == null || !service.isTeamOwner(teamId, auth.userId())) {
+                return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+            }
+        }
+        return service.rotateKey(keyId)
+            .<ResponseEntity<?>>map(ResponseEntity::ok)
+            .orElseGet(() -> ResponseEntity.status(404).body(Map.of("detail", "API Key not found")));
+    }
+
     @PatchMapping("/api-keys/{keyId}")
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> updateKey(
