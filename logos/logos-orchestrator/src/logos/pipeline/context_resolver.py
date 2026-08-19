@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlencode
 
 from logos.dbutils.dbmanager import DBManager
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
+from logos.pipeline.effort_normalization import normalize_reasoning_effort
 from logos.request_content import is_multipart_payload, set_payload_field
 from logos.sdi.azure_deployment_sync import AZURE_OPERATION_API_VERSIONS
 
@@ -249,6 +250,13 @@ class ContextResolver:
         # OpenWebUI requires model name injection
         if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
             payload = set_payload_field(payload, "model", context.model_name)
+
+        # The Qwen3.8 chat template only accepts xhigh/medium/low as reasoning
+        # effort, but clients such as Claude Code send the Anthropic value
+        # "high" in every request. vLLM forwards the value to the template,
+        # which rejects it with an error surfaced as HTTP 500 — map the wider
+        # client scale onto the accepted one before forwarding (#749).
+        payload = normalize_reasoning_effort(payload, context.model_name)
 
         # Azure Responses API resolves the deployment from the body's "model"
         # field (the URL carries no deployment segment). Clients address models
