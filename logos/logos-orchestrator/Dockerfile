@@ -7,7 +7,7 @@ WORKDIR /build
 
 # Install system packages needed for compiling C-extension wheels
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends gcc build-essential \
+  && apt-get install -y --no-install-recommends gcc build-essential rustc cargo \
   && rm -rf /var/lib/apt/lists/*
 
 # Install uv – a drop-in pip replacement written in Rust (10-100× faster)
