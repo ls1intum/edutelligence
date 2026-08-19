@@ -1,10 +1,18 @@
-import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  inject,
+  signal,
+  computed,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 import { MyKeysService } from '../../core/services/my-keys.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
+import { AuthService } from '../../core/auth/services/auth.service';
 import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
 import { MyTeam } from '../../shared/models/team.model';
 import { isInteractiveClick } from '../../shared/utils/interactive-click';
@@ -32,6 +40,11 @@ interface ModelGroup {
 export class MyWorkspace implements OnInit {
   private keysService = inject(MyKeysService);
   private teamService = inject(TeamManagementService);
+  private authService = inject(AuthService);
+
+  readonly showProviderNames = computed(
+    () => this.authService.role() === 'logos_admin' || this.authService.role() === 'app_admin',
+  );
 
   workspaces = signal<TeamWorkspace[]>([]);
   loading = signal(true);
@@ -163,7 +176,9 @@ export class MyWorkspace implements OnInit {
         hasCloud: false,
         hasLocal: false,
       };
-      if (!group.providers.includes(m.provider_name)) group.providers.push(m.provider_name);
+      if (m.provider_name && !group.providers.includes(m.provider_name)) {
+        group.providers.push(m.provider_name);
+      }
       if (m.provider_type === 'cloud') group.hasCloud = true;
       else group.hasLocal = true;
       groups.set(m.model_name, group);
