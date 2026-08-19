@@ -157,9 +157,11 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
     ("internlm", "internlm"),
     # AI21 Labs Jamba
     ("jamba", "jamba"),
-    # Alibaba Qwen (coder→qwen3_xml per docs, then general qwen3→hermes)
-    ("qwen3-coder", "qwen3_xml"),
-    ("qwen3_coder", "qwen3_xml"),
+    # Alibaba Qwen.  vLLM registers "qwen3_coder" and "qwen3_xml" as two names
+    # for the same Qwen3EngineToolParser; "qwen3_coder" is the one vLLM's own
+    # deployment recipes name, so it is the one used here.
+    ("qwen3-coder", "qwen3_coder"),
+    ("qwen3_coder", "qwen3_coder"),
     # Qwen3 point releases (3.5, 3.6, 3.8, …) emit the same XML dialect as
     # Qwen3-Coder, not the JSON-in-<tool_call> that hermes expects: their
     # bundled chat templates render '<tool_call>\n<function=NAME>\n<parameter=…>'
@@ -167,7 +169,7 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
     # which never matched a dotted name and so let every point release fall
     # through to the generic ("qwen", "hermes") catch-all — hermes then failed
     # to parse the XML and vLLM returned the raw markup as assistant text.
-    ("qwen3.", "qwen3_xml"),
+    ("qwen3.", "qwen3_coder"),
     # Qwen3 (dot-free, e.g. Qwen3-32B) still emits hermes-style JSON.
     ("qwen3-", "hermes"),
     ("qwen3_", "hermes"),
@@ -219,6 +221,11 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
 _REASONING_PARSER_RULES: tuple[tuple[str, str], ...] = (
     ("gemma-4", "gemma4"),
     ("gpt-oss", "openai_gptoss"),
+    # Qwen3 point releases think by default.  Without a reasoning parser the
+    # <think> block is returned inline in the assistant message instead of in
+    # reasoning_content, so clients render it as the answer.  Only the dotted
+    # releases are mapped: dot-free Qwen3 predates the parser.
+    ("qwen3.", "qwen3"),
 )
 
 # Model-name → default --default-chat-template-kwargs mapping.  Applied as a

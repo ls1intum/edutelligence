@@ -131,14 +131,14 @@ def test_infer_tool_call_parser() -> None:
     # AI21 Jamba
     assert _infer_tool_call_parser("ai21labs/AI21-Jamba-1.5-Mini") == "jamba"
     # Alibaba Qwen (coder→qwen3_xml, general→hermes)
-    assert _infer_tool_call_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3_xml"
+    assert _infer_tool_call_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3_coder"
     assert _infer_tool_call_parser("Qwen/Qwen2.5-Coder-14B-Instruct-AWQ") == "hermes"
     assert _infer_tool_call_parser("Qwen/QwQ-32B") == "hermes"
     # Qwen3 point releases emit the Qwen3-Coder XML dialect, not hermes JSON.
-    assert _infer_tool_call_parser("Qwen/Qwen3.8-27B") == "qwen3_xml"
-    assert _infer_tool_call_parser("Qwen/Qwen3.6-35B-A3B") == "qwen3_xml"
-    assert _infer_tool_call_parser("Qwen/Qwen3.5-122B-A10B") == "qwen3_xml"
-    assert _infer_tool_call_parser("RedHatAI/Qwen3.5-122B-A10B-NVFP4") == "qwen3_xml"
+    assert _infer_tool_call_parser("Qwen/Qwen3.8-27B") == "qwen3_coder"
+    assert _infer_tool_call_parser("Qwen/Qwen3.6-35B-A3B") == "qwen3_coder"
+    assert _infer_tool_call_parser("Qwen/Qwen3.5-122B-A10B") == "qwen3_coder"
+    assert _infer_tool_call_parser("RedHatAI/Qwen3.5-122B-A10B-NVFP4") == "qwen3_coder"
     # Dot-free Qwen3 stays on hermes, and Qwen2.5 must not match the dotted rule.
     assert _infer_tool_call_parser("Qwen/Qwen3-32B") == "hermes"
     assert _infer_tool_call_parser("Qwen/Qwen2.5-72B-Instruct") == "hermes"
@@ -1595,8 +1595,8 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
 def test_infer_reasoning_parser() -> None:
     from logos_worker_node.vllm_process import _infer_reasoning_parser
 
-    # The production rule table currently registers only the parsers shipping
-    # in vllm/reasoning/__init__.py: gemma4 and openai_gptoss. Other model
+    # The production rule table registers only parsers shipping in
+    # vllm/reasoning/__init__.py: gemma4, openai_gptoss and qwen3. Other model
     # families return None — no flag emitted — until vLLM exposes a parser
     # for them.
     # Google Gemma 4
@@ -1605,6 +1605,10 @@ def test_infer_reasoning_parser() -> None:
     # OpenAI GPT-OSS
     assert _infer_reasoning_parser("openai/gpt-oss-120b") == "openai_gptoss"
     assert _infer_reasoning_parser("openai/gpt-oss-20b") == "openai_gptoss"
+    # Qwen3 point releases think by default and have a parser since vLLM 0.27
+    assert _infer_reasoning_parser("Qwen/Qwen3.8-27B") == "qwen3"
+    assert _infer_reasoning_parser("Qwen/Qwen3.6-35B-A3B") == "qwen3"
+    assert _infer_reasoning_parser("Qwen/Qwen3.5-4B") == "qwen3"
     # Unknown / unsupported model families → None (no flag emitted)
     assert _infer_reasoning_parser("meta-llama/Llama-3.1-8B-Instruct") is None
     assert _infer_reasoning_parser("some/unknown-model") is None
