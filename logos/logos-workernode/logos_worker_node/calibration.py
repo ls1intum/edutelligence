@@ -2213,8 +2213,17 @@ def calibrate_model(
             return partial
 
         # Explicit KV produces a single point on the curve using the resolved
-        # max_model_len (injected or default).
-        explicit_max = int(explicit_probe_overrides.get("_resolved_max_model_len") or plan.get("max_model_len") or 0)
+        # max_model_len. Read it from the probe's own log first: under
+        # --max-model-len auto nothing was injected, so the planned value is
+        # unset and the engine's resolved window is only stated in the "Maximum
+        # concurrency for N tokens per request" line it prints on success.
+        # Without this the fixed-KV path records no curve point at all and the
+        # planner is left with no context for the model.
+        explicit_max = int(_extract_vllm_served_context(_read_log_since(log_path, _last_probe_log_offset[0])) or 0)
+        if explicit_max <= 0:
+            explicit_max = int(
+                explicit_probe_overrides.get("_resolved_max_model_len") or plan.get("max_model_len") or 0
+            )
         if explicit_max > 0:
             partial.kv_max_model_len_pairs = [(kv_cache_sent_mb, explicit_max)]
             partial.max_model_len = explicit_max

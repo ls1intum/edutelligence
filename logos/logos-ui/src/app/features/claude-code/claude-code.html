@@ -7,12 +7,15 @@
     <p class="step-label">1. INSTALL CLAUDE CODE</p>
     <div class="os-tabs" role="tablist">
       <button class="os-tab" role="tab"
+        [attr.aria-selected]="installTab() === 'mac'"
         [class.os-tab--active]="installTab() === 'mac'"
         (click)="installTab.set('mac')">macOS</button>
       <button class="os-tab" role="tab"
+        [attr.aria-selected]="installTab() === 'linux'"
         [class.os-tab--active]="installTab() === 'linux'"
         (click)="installTab.set('linux')">Linux</button>
       <button class="os-tab" role="tab"
+        [attr.aria-selected]="installTab() === 'windows'"
         [class.os-tab--active]="installTab() === 'windows'"
         (click)="installTab.set('windows')">Windows</button>
     </div>
@@ -165,9 +168,11 @@
     } @else {
     <div class="os-tabs" role="tablist">
       <button class="os-tab" role="tab"
+        [attr.aria-selected]="connectMethod() === 'download'"
         [class.os-tab--active]="connectMethod() === 'download'"
         (click)="connectMethod.set('download')">Download settings</button>
       <button class="os-tab" role="tab"
+        [attr.aria-selected]="connectMethod() === 'terminal'"
         [class.os-tab--active]="connectMethod() === 'terminal'"
         (click)="connectMethod.set('terminal')">Terminal</button>
     </div>
@@ -201,12 +206,15 @@
       </p>
       <div class="os-tabs" role="tablist">
         <button class="os-tab" role="tab"
+          [attr.aria-selected]="installTab() === 'mac'"
           [class.os-tab--active]="installTab() === 'mac'"
           (click)="installTab.set('mac')">macOS</button>
         <button class="os-tab" role="tab"
+          [attr.aria-selected]="installTab() === 'linux'"
           [class.os-tab--active]="installTab() === 'linux'"
           (click)="installTab.set('linux')">Linux</button>
         <button class="os-tab" role="tab"
+          [attr.aria-selected]="installTab() === 'windows'"
           [class.os-tab--active]="installTab() === 'windows'"
           (click)="installTab.set('windows')">Windows</button>
       </div>

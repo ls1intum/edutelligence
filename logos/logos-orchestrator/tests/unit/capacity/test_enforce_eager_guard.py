@@ -43,8 +43,24 @@ def test_calibration_with_graphs_at_same_tp_lifts_the_guard() -> None:
 
 
 def test_evidence_from_a_different_tp_does_not_count() -> None:
-    """The crash is tensor-parallel specific, so tp=1 evidence proves nothing."""
+    """The crash is tensor-parallel specific, so tp=1 evidence proves nothing.
+
+    The lane must actually be planned at tp>1 for the guard to apply at all, so
+    the profile records tp=1 while the planner infers tp=2. Asserting on a
+    profile that is simply tp=1 would only show that the guard skips non-TP
+    lanes, and a regression in the same-TP check would pass unnoticed.
+    """
     planner = CapacityPlanner.__new__(CapacityPlanner)
-    cfg = _vllm_config(planner, _profile(tensor_parallel_size=1, enforce_eager_at_calibration=False))
-    # tp=1 lanes never had the guard applied in the first place.
+    planner._infer_tensor_parallel = lambda *a, **kw: 2  # type: ignore[method-assign]
+    profile = _profile(tensor_parallel_size=1, enforce_eager_at_calibration=False)
+    params = planner._build_load_params("m", "lane-1", profile, capacity=object(), provider_id=1)
+    cfg = params.get("vllm_config") or {}
+    assert cfg.get("tensor_parallel_size") == 2, "test is meaningless unless the lane is tp>1"
+    assert cfg.get("enforce_eager") is True
+
+
+def test_tp_1_lane_never_gets_the_guard() -> None:
+    """A single-GPU lane is outside the guard regardless of calibration."""
+    planner = CapacityPlanner.__new__(CapacityPlanner)
+    cfg = _vllm_config(planner, _profile(tensor_parallel_size=1))
     assert cfg.get("enforce_eager") is None
