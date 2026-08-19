@@ -24,6 +24,7 @@ public class MeKeysService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<Object> OBJ_TYPE = new TypeReference<>() {};
+    private static final int API_KEY_TOKEN_LENGTH = 128;
 
     private final ApiKeyRepository apiKeyRepository;
     private final OrchestratorModelWindowClient modelWindowClient;
@@ -50,6 +51,9 @@ public class MeKeysService {
         }
         ApiKey key = keyOpt.get();
         if (!key.getUserId().equals(userId)) {
+            // Deliberately collapse "exists but not owned" into the same outcome as
+            // "not found" so callers can return a uniform 404 and avoid key
+            // enumeration.
             return Optional.empty();
         }
         key.setLog(LogLevel.valueOf(level));
@@ -149,8 +153,14 @@ public class MeKeysService {
         if (currentKeyValue == null || currentKeyValue.isBlank()) {
             return "lg-" + ApiKeyFactory.generateToken();
         }
-        int lastDash = currentKeyValue.lastIndexOf('-');
-        String prefix = lastDash > 0 ? currentKeyValue.substring(0, lastDash) : "lg";
+        String prefix = null;
+        int separatorIndex = currentKeyValue.length() - API_KEY_TOKEN_LENGTH - 1;
+        if (separatorIndex >= 0 && currentKeyValue.charAt(separatorIndex) == '-') {
+            prefix = currentKeyValue.substring(0, separatorIndex);
+        }
+        if (prefix == null || prefix.isBlank()) {
+            prefix = "lg";
+        }
         return prefix + "-" + ApiKeyFactory.generateToken();
     }
 }

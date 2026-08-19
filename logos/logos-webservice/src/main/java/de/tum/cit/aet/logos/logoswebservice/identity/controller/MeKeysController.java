@@ -55,7 +55,7 @@ public class MeKeysController {
         }
         Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
         if (keyOpt.isEmpty()) {
-            return ResponseEntity.status(404).body(Map.of("detail", "API key not found."));
+            return ResponseEntity.status(404).body(Map.of("detail", "API key not found or not owned."));
         }
         ApiKey key = keyOpt.get();
         if (!auth.userId().equals(key.getUserId())) {
@@ -72,15 +72,7 @@ public class MeKeysController {
             @PathVariable Integer keyId,
             @RequestAttribute("authContext") AuthContext auth) {
         if (auth.userId() == null) {
-            return ResponseEntity.status(403).body(Map.of("detail", "Service keys cannot rotate API keys."));
-        }
-        Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
-        if (keyOpt.isEmpty()) {
-            return ResponseEntity.status(404).body(Map.of("detail", "API key not found."));
-        }
-        ApiKey key = keyOpt.get();
-        if (!auth.userId().equals(key.getUserId())) {
-            return ResponseEntity.status(403).body(Map.of("detail", "You do not own this API key."));
+            return ResponseEntity.status(403).body(Map.of("detail", "Forbidden."));
         }
         Optional<Map<String, Object>> result = meKeysService.rotateKeyForUser(keyId, auth.userId());
         return result

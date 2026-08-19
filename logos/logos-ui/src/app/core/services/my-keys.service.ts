@@ -71,7 +71,7 @@ export class MyKeysService {
   }
 
   setLogLevel(keyId: number, log: 'BILLING' | 'FULL'): Promise<{ result: string }> {
-    this.cachedKeys = null;
+    this.invalidateCache();
     return firstValueFrom(this.http.patch<{ result: string }>(`/api/me/keys/${keyId}/log`, { log }));
   }
 

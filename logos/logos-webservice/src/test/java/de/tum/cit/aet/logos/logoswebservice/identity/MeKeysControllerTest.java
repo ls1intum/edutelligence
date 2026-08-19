@@ -111,10 +111,10 @@ class MeKeysControllerTest {
     // POST /me/keys/{keyId}/rotate
 
     @Test
-    void rotateKey_returns403WhenNotOwner() throws Exception {
+    void rotateKey_returns404WhenNotOwner() throws Exception {
         mvc.perform(post("/me/keys/3102/rotate")
                 .with(TestJwt.forSeededUser(ALICE_ID, "alice")))
-           .andExpect(status().isForbidden());
+           .andExpect(status().isNotFound());
     }
 
     @Test
