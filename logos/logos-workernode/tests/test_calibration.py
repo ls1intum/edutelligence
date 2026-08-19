@@ -2250,3 +2250,42 @@ def test_sweep_derives_rate_from_anchors_when_auto_never_fails():
     assert 9216.0 <= first_full_kv <= 11264.0, f"plateau at {first_full_kv} MB"
     # No point may claim more than the model's window.
     assert all(0 < mml <= M for _, mml in pairs)
+
+
+def test_plans_from_config_forwards_speculative_config(tmp_path: Path) -> None:
+    """A draft model must reach the calibration plan.
+
+    engines.vllm.model_overrides is filtered to the keys that change what the
+    engine allocates. speculative_config does — it loads a second model — so
+    leaving it out makes calibration measure a lane that never runs, and the
+    planner then sizes the KV budget against a residency that is too low.
+    """
+    from logos_worker_node.calibration import plans_from_config
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: Qwen/Qwen3.8-27B\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      Qwen/Qwen3.8-27B:\n"
+        '        speculative_config: \'{"method":"qwen3_5_mtp","num_speculative_tokens":3}\'\n'
+        "        enforce_eager: false\n"
+        '        env_overrides: {"IGNORED": "1"}\n'
+    )
+    plan = next(p for p in plans_from_config(cfg) if p["model"] == "Qwen/Qwen3.8-27B")
+    assert plan["speculative_config"] == '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    assert plan["enforce_eager"] is False
+    # Runtime-only keys stay out.
+    assert "env_overrides" not in plan
+
+
+def test_build_vllm_cmd_passes_speculative_config_from_plan() -> None:
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    spec = '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    cmd = _build_vllm_cmd({"model": "m", "speculative_config": spec}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--speculative-config")
+    assert cmd[idx + 1] == spec
