@@ -509,6 +509,25 @@ class CapacityPlanner:
                 pass  # Periodic tick — normal path.
             self._tick_event.clear()
 
+    def _is_plannable(self, provider_id: int) -> bool:
+        """Return True when this cycle may act on *provider_id*.
+
+        Two exclusions, both about acting on state that is transient by
+        design:
+
+        * No first status since connect — we don't know which lanes are
+          already loaded, and acting on empty state can destroy them.
+        * A calibration session is running — the worker frees all VRAM for
+          its probes, so its idle lanes and large free VRAM are reserved,
+          not available. A lane placed here would take the memory the
+          probes need and make them fail.
+        """
+        if self._registry is None:
+            return True
+        if not self._registry.has_received_first_status(provider_id):
+            return False
+        return not self._registry.is_calibrating(provider_id)
+
     async def _run_cycle(self) -> None:
         """Execute one planner cycle."""
         cycle_start = time.time()
@@ -573,9 +592,7 @@ class CapacityPlanner:
         # because it was iterated first.
         best_provider_for_model: Optional[dict[str, int]] = None
         if self._cross_provider_best_first:
-            ready_provider_ids = [
-                pid for pid in provider_ids if self._registry is None or self._registry.has_received_first_status(pid)
-            ]
+            ready_provider_ids = [pid for pid in provider_ids if self._is_plannable(pid)]
             best_provider_for_model = self._rank_providers_for_demanded_models(
                 ready_provider_ids,
                 self._demand.get_ranked_models(),
@@ -596,9 +613,9 @@ class CapacityPlanner:
             # Skip providers that haven't sent their first status yet —
             # we don't know what lanes are already loaded and acting on
             # stale/empty state can destroy existing lanes.
-            if self._registry and not self._registry.has_received_first_status(provider_id):
+            if not self._is_plannable(provider_id):
                 logger.debug(
-                    "Skipping worker=%s: waiting for first status report after connect",
+                    "Skipping worker=%s: not plannable this cycle",
                     self._facade.get_provider_name(provider_id) or provider_id,
                 )
                 continue
@@ -653,6 +670,20 @@ class CapacityPlanner:
                 # Acquire per-lane lock so concurrent operations on the same
                 # lane are serialized, but unrelated lanes remain unblocked.
                 async with self._lane_lock(action.provider_id, action.lane_id):
+                    # Re-check under the lock: actions execute sequentially and
+                    # a cold load takes ~90s, so a calibration session can start
+                    # after this action was planned. Acting on the stale verdict
+                    # would place the very lane the guard exists to prevent.
+                    if not self._is_plannable(action.provider_id):
+                        logger.info(
+                            "Dropping planned %s on worker=%s model=%s lane=%s: "
+                            "provider became unplannable after planning",
+                            action.action,
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                            action.model_name,
+                            action.lane_id,
+                        )
+                        continue
                     await self._execute_action_with_confirmation(action)
                 prom.CAPACITY_PLANNER_ACTIONS_TOTAL.labels(action=action.action).inc()
             except Exception:
@@ -3473,6 +3504,11 @@ class CapacityPlanner:
 
         Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM=false`` (the default).
 
+        Candidate workers pass through ``_is_plannable`` for the same
+        reasons the main demand pass does — a replica is a plain ``load``,
+        so it would take the VRAM a calibration session reserved for its
+        probes just as readily.
+
         Models that already had an action emitted this cycle (in
         ``cycle_planned_models``) are skipped — the main demand pass
         already handles them.
@@ -3494,7 +3530,7 @@ class CapacityPlanner:
                 continue
 
             for pid in provider_ids:
-                if self._registry is not None and not self._registry.has_received_first_status(pid):
+                if not self._is_plannable(pid):
                     continue
                 try:
                     lanes = self._facade.get_all_provider_lane_signals(pid)
@@ -5307,11 +5343,38 @@ class CapacityPlanner:
             if inferred_tp and inferred_tp > 1:
                 tp = inferred_tp
                 vllm_config["tensor_parallel_size"] = tp
-        # TP>1: force enforce_eager=True — CUDA graph capture crashes the
+        # TP>1 defaults to enforce_eager=True — CUDA graph capture crashes the
         # Marlin MoE kernel on Turing GPUs (cudaErrorLaunchFailure in
         # fused_marlin_moe during compile_or_warm_up_model).
-        if tp > 1:
+        #
+        # Unless calibration already disproved it for this exact model on this
+        # provider. Calibration captures graphs when it runs with
+        # enforce_eager=False, so a profile recording that mode is a profile
+        # whose graph capture succeeded on those GPUs at that tensor-parallel
+        # size — the crash this guard exists for cannot happen there. Keeping
+        # the guard anyway is expensive: on RTX 6000 Ada (sm89) with
+        # Qwen3.8-27B at tp=2, eager mode costs ~45% of decode throughput
+        # (15.2 vs 26.7 output tok/s single-stream, 60.4 vs 32.6 ms per token).
+        #
+        # An operator can still pin either value per model via
+        # engines.vllm.model_overrides on the worker, which wins over this.
+        graphs_proven = (
+            profile.enforce_eager_at_calibration is False
+            and profile.tensor_parallel_size is not None
+            and int(profile.tensor_parallel_size) == tp
+        )
+        if tp > 1 and not graphs_proven:
             vllm_config["enforce_eager"] = True
+            # Say so. This value appears in no config file, so a lane running
+            # eager without an operator asking for it is otherwise invisible —
+            # and it is expensive enough to be worth naming.
+            logger.info(
+                "%s: forcing enforce_eager for the tp=%d lane (calibration did not record a "
+                "successful graph capture at that tensor-parallel size). Set enforce_eager "
+                "under engines.vllm.model_overrides on the worker to override.",
+                model_name,
+                tp,
+            )
         available_for_kv_mb = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
         kv_mb, selected_max_model_len = self._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb)
         if kv_mb is None:
