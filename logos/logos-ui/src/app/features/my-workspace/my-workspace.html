@@ -162,7 +162,9 @@
                               @if (group.hasLocal) { <span>Local</span> }
                             </span>
                           </div>
-                          <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                          @if (showProviderNames() && group.providers.length > 0) {
+                            <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                          }
                         </div>
                       }
                     </div>

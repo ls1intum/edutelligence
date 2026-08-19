@@ -10,6 +10,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
@@ -115,11 +116,20 @@ class MeKeysControllerTest {
     }
 
     @Test
-    void getModels_returnsTeamModelList() throws Exception {
+    void getModels_hidesProviderNamesFromAppDevelopers() throws Exception {
         mvc.perform(get("/me/keys/3101/models").with(TestJwt.forSeededUser(ALICE_ID, "alice")))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.length()").value(1))
            .andExpect(jsonPath("$[0].model_name").value("test-model"))
+           .andExpect(jsonPath("$[0].provider_name").doesNotExist());
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = "UPDATE users SET role = 'app_admin' WHERE id = 1101")
+    void getModels_includesProviderNamesForAppAdmins() throws Exception {
+        mvc.perform(get("/me/keys/3101/models").with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isOk())
            .andExpect(jsonPath("$[0].provider_name").value("test-provider"));
     }
 

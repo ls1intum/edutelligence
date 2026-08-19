@@ -57,7 +57,8 @@ public class MeKeysService {
         return Optional.of(Map.of("result", "Log level updated to " + level));
     }
 
-    public Optional<List<ModelAccessDTO>> getAccessibleModels(int keyId, int userId) {
+    public Optional<List<ModelAccessDTO>> getAccessibleModels(
+            int keyId, int userId, boolean includeProviderNames) {
         Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
         if (keyOpt.isEmpty()) {
             return Optional.empty();
@@ -75,7 +76,10 @@ public class MeKeysService {
         Map<String, Integer> windows = modelWindowClient.getContextWindows();
         return Optional.of(rows.stream()
             .map(r -> new ModelAccessDTO(
-                r.getModelName(), r.getProviderName(), r.getProviderType(), windows.get(r.getModelName())))
+                r.getModelName(),
+                includeProviderNames ? r.getProviderName() : null,
+                r.getProviderType(),
+                windows.get(r.getModelName())))
             .toList());
     }
 
