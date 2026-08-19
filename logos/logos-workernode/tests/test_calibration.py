@@ -2250,3 +2250,89 @@ def test_sweep_derives_rate_from_anchors_when_auto_never_fails():
     assert 9216.0 <= first_full_kv <= 11264.0, f"plateau at {first_full_kv} MB"
     # No point may claim more than the model's window.
     assert all(0 < mml <= M for _, mml in pairs)
+
+
+def test_plans_from_config_forwards_speculative_config(tmp_path: Path) -> None:
+    """A draft model must reach the calibration plan.
+
+    engines.vllm.model_overrides is filtered to the keys that change what the
+    engine allocates. speculative_config does — it loads a second model — so
+    leaving it out makes calibration measure a lane that never runs, and the
+    planner then sizes the KV budget against a residency that is too low.
+    """
+    from logos_worker_node.calibration import plans_from_config
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: Qwen/Qwen3.8-27B\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      Qwen/Qwen3.8-27B:\n"
+        '        speculative_config: \'{"method":"qwen3_5_mtp","num_speculative_tokens":3}\'\n'
+        "        enforce_eager: false\n"
+        '        env_overrides: {"IGNORED": "1"}\n'
+    )
+    plan = next(p for p in plans_from_config(cfg) if p["model"] == "Qwen/Qwen3.8-27B")
+    assert plan["speculative_config"] == '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    assert plan["enforce_eager"] is False
+
+
+def test_build_vllm_cmd_passes_speculative_config_from_plan() -> None:
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    spec = '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    cmd = _build_vllm_cmd({"model": "m", "speculative_config": spec}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--speculative-config")
+    assert cmd[idx + 1] == spec
+
+
+def test_plans_from_config_forwards_extra_args(tmp_path: Path) -> None:
+    """--hf-overrides has to reach calibration, or it measures another model.
+
+    hochbruegge pins a YaRN rope_scaling for Qwen2.5-Coder (quadrupling the
+    context window) and deioma pins an architecture swap for Qwen3-Reranker,
+    both through extra_args. Calibrating without them profiles a model that is
+    not the one being served.
+    """
+    from logos_worker_node.calibration import _build_vllm_cmd, plans_from_config
+
+    hf = '--hf-overrides={"rope_scaling":{"rope_type":"yarn","factor":4.0}}'
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:\n"
+        "        attention_backend: TRITON_ATTN\n"
+        f"        extra_args: ['{hf}']\n"
+    )
+    plan = next(p for p in plans_from_config(cfg) if "Coder" in p["model"])
+    assert plan["extra_args"] == [hf]
+    assert hf in _build_vllm_cmd(plan, "vllm", "127.0.0.1", 9000, "4G")
+
+
+def test_plans_from_config_never_takes_internal_bookkeeping(tmp_path: Path) -> None:
+    """The retry counters steer the sweep and must not be settable from config."""
+    from logos_worker_node.calibration import plans_from_config
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: m\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      m:\n"
+        "        _max_model_len_retry_count: 99\n"
+        "        dtype: bfloat16\n"
+    )
+    plan = next(p for p in plans_from_config(cfg) if p["model"] == "m")
+    assert "_max_model_len_retry_count" not in plan
+    assert plan["dtype"] == "bfloat16"

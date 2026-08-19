@@ -2567,19 +2567,28 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
         for k, v in (caps_overrides.get(model) or {}).items():
             plan.setdefault(k, v)
 
-        # Merge vllm model_overrides (quantization, disable_custom_all_reduce, etc.)
+        # Merge vllm model_overrides. Everything the operator pins for the
+        # serving lane comes through, because the profile is only meaningful if
+        # it describes the lane that actually runs.
+        #
+        # This used to be an allow-list of seven keys, which silently dropped
+        # the rest. What it dropped mattered: extra_args carries --hf-overrides
+        # (a YaRN rope_scaling that quadruples the context window on
+        # hochbruegge's Qwen2.5-Coder, an architecture swap on deioma's
+        # Qwen3-Reranker), and speculative_config loads a second model worth
+        # ~1.7 GiB per GPU. Calibrating without those measures a different model
+        # than the one being served, and the planner then sizes KV budgets
+        # against a residency that was never real.
+        #
+        # An allow-list also fails in the dangerous direction: a new vLLM
+        # setting is dropped by default and nothing reports it. Unknown keys are
+        # harmless here — the calibration command builder reads the ones it
+        # knows and ignores the rest — so only the plan's own bookkeeping is
+        # excluded, plus "model", which the loop above already resolved.
         for k, v in (vllm_model_overrides.get(model) or {}).items():
-            # Only merge fields relevant to calibration (skip runtime-only flags)
-            if k in (
-                "quantization",
-                "dtype",
-                "kv_cache_dtype",
-                "enforce_eager",
-                "max_model_len",
-                "max_num_seqs",
-                "disable_custom_all_reduce",
-            ):
-                plan.setdefault(k, v)
+            if k == "model" or k.startswith("_"):
+                continue
+            plan.setdefault(k, v)
 
         plans.append(plan)
 
