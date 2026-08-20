@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import textwrap
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -227,14 +228,23 @@ class ProviderNameCache:
 
     def __init__(self) -> None:
         self._cache: dict[int, str] = {}
+        self._lock = threading.Lock()
 
     def get(self, provider_id: int) -> str:
-        """Return the provider name for *provider_id*, resolving via DB on first call."""
+        """Return the provider name for *provider_id*, resolving via DB on first call.
+
+        Cache misses are serialized by ``_lock`` with a double-check, so
+        concurrent first requests for one provider_id trigger a single DB
+        lookup (the documented one-lookup guarantee).
+        """
         if provider_id in self._cache:
             return self._cache[provider_id]
-        name = self._resolve(provider_id)
-        self._cache[provider_id] = name
-        return name
+        with self._lock:
+            if provider_id in self._cache:
+                return self._cache[provider_id]
+            name = self._resolve(provider_id)
+            self._cache[provider_id] = name
+            return name
 
     def _resolve(self, provider_id: int) -> str:
         try:
@@ -249,7 +259,8 @@ class ProviderNameCache:
     def prime(self, provider_id: int, name: str) -> None:
         """Pre-populate the cache without a DB round-trip."""
         if name:
-            self._cache[provider_id] = name
+            with self._lock:
+                self._cache[provider_id] = name
 
 
 #: Global singletons — import and use directly in other modules.

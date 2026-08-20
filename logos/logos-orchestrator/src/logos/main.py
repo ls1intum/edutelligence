@@ -496,8 +496,8 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
                 "_gpu_cache_usage_percent_count": 0,
                 "_prefix_cache_hit_rate_sum": 0.0,
                 "_prefix_cache_hit_rate_count": 0,
-                "_mtp_acceptance_rate_sum": 0.0,
-                "_mtp_acceptance_rate_count": 0,
+                "_mtp_draft_tokens_total": 0.0,
+                "_mtp_accepted_tokens_total": 0.0,
             },
         )
 
@@ -601,10 +601,16 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
             entry["_prefix_cache_hit_rate_count"] += 1
 
-        mtp_acceptance_rate = _safe_float(backend_metrics.get("mtp_acceptance_rate"))
-        if mtp_acceptance_rate is not None:
-            entry["_mtp_acceptance_rate_sum"] += mtp_acceptance_rate
-            entry["_mtp_acceptance_rate_count"] += 1
+        # Token-weighted MTP aggregation: sum the cumulative draft/accepted
+        # token counters per model (an unweighted mean of per-lane rates would
+        # misstate the model rate when lanes have different draft volumes).
+        mtp_draft_tokens_total = _safe_float(backend_metrics.get("mtp_draft_tokens_total"))
+        if mtp_draft_tokens_total is not None:
+            entry["_mtp_draft_tokens_total"] += mtp_draft_tokens_total
+
+        mtp_accepted_tokens_total = _safe_float(backend_metrics.get("mtp_accepted_tokens_total"))
+        if mtp_accepted_tokens_total is not None:
+            entry["_mtp_accepted_tokens_total"] += mtp_accepted_tokens_total
 
         _merge_histogram_buckets(entry["ttft_histogram"], ttft_histogram)
 
@@ -619,10 +625,10 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         if prefix_count > 0:
             entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
 
-        mtp_count = int(entry.pop("_mtp_acceptance_rate_count", 0) or 0)
-        mtp_sum = float(entry.pop("_mtp_acceptance_rate_sum", 0.0) or 0.0)
-        if mtp_count > 0:
-            entry["mtp_acceptance_rate_avg"] = mtp_sum / mtp_count
+        mtp_draft = float(entry.pop("_mtp_draft_tokens_total", 0.0) or 0.0)
+        mtp_accepted = float(entry.pop("_mtp_accepted_tokens_total", 0.0) or 0.0)
+        if mtp_draft > 0:
+            entry["mtp_acceptance_rate_avg"] = mtp_accepted / mtp_draft
 
         entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
 

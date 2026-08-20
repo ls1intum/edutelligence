@@ -1090,6 +1090,9 @@ vllm:spec_decode_num_accepted_tokens_total{model_name="m"} 620
 
     metrics = await handle.get_backend_metrics()
     assert metrics["mtp_acceptance_rate"] == pytest.approx(0.62)
+    # Cumulative counters are exposed for token-weighted aggregation upstream.
+    assert metrics["mtp_draft_tokens_total"] == pytest.approx(1000)
+    assert metrics["mtp_accepted_tokens_total"] == pytest.approx(620)
     # No prefix-cache counters in this scrape.
     assert metrics["prefix_cache_hit_rate"] is None
 
@@ -1115,6 +1118,8 @@ vllm:spec_decode_num_accepted_tokens{model_name="m"} 90
 
     metrics = await handle.get_backend_metrics()
     assert metrics["mtp_acceptance_rate"] == pytest.approx(0.45)
+    assert metrics["mtp_draft_tokens_total"] == pytest.approx(200)
+    assert metrics["mtp_accepted_tokens_total"] == pytest.approx(90)
 
 
 @pytest.mark.asyncio
@@ -1139,6 +1144,8 @@ vllm:gpu_prefix_cache_hits{model_name="m"} 10
 
     metrics = await handle.get_backend_metrics()
     assert metrics["mtp_acceptance_rate"] is None
+    assert metrics["mtp_draft_tokens_total"] is None
+    assert metrics["mtp_accepted_tokens_total"] is None
     assert metrics["prefix_cache_hit_rate"] == pytest.approx(0.1)
 
 

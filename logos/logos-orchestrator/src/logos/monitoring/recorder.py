@@ -148,7 +148,10 @@ class MonitoringRecorder:
             ).observe(duration)
 
         if cold_start:
-            prom.COLD_STARTS_TOTAL.labels(model=model).inc()
+            prom.COLD_STARTS_TOTAL.labels(
+                model=model,
+                provider=provider,
+            ).inc()
 
         payload = {
             "request_complete_ts": datetime.datetime.now(datetime.timezone.utc),

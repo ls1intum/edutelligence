@@ -221,7 +221,7 @@ def test_cold_starts_total_labeled_with_model(monkeypatch):
     )
     recorder.record_complete(request_id="req-738-cold", result_status="success", cold_start=True)
 
-    assert fake.COLD_STARTS_TOTAL.label_calls == [{"model": "cold-model"}]
+    assert fake.COLD_STARTS_TOTAL.label_calls == [{"model": "cold-model", "provider": "local-node"}]
     assert fake.COLD_STARTS_TOTAL.inc_calls == 1
 
 
