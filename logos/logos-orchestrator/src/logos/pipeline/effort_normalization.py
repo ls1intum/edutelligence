@@ -28,7 +28,11 @@ entry in ``CHAT_TEMPLATE_EFFORT_SCALES``.
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 
-# vLLM's ChatCompletionRequest.reasoning_effort Literal.
+# Snapshot of vLLM 0.27.1's ChatCompletionRequest.reasoning_effort Literal,
+# kept in sync with the workernode's VLLM_PIP_SPEC (the "Logos - Update
+# vLLM" workflow bumps that pin). It only drives the coverage test: runtime
+# normalization is drift-proof, since unknown values fall back to the
+# family's default instead of reaching the template.
 VLLM_REASONING_EFFORT_VALUES = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
@@ -38,12 +42,16 @@ class EffortScale:
 
     ``accepted`` are the values the template accepts verbatim (in addition
     to ``none``, which vLLM translates into ``enable_thinking=false`` so
-    the template's effort block is skipped); ``map`` rewrites every other
-    value vLLM allows onto the closest accepted level.
+    the template's effort block is skipped); ``map`` rewrites known
+    out-of-scale values onto the closest accepted level, and ``default``
+    is the fallback every other value — including ones a future vLLM may
+    introduce — is coerced to, so the template can never reject an effort
+    value.
     """
 
     accepted: FrozenSet[str]
     map: Mapping[str, str]
+    default: str
 
 
 # Maps a chat template family (matched case-insensitively as a model-name
@@ -55,6 +63,9 @@ CHAT_TEMPLATE_EFFORT_SCALES: Dict[str, EffortScale] = {
     "qwen3.8": EffortScale(
         accepted=frozenset({"xhigh", "medium", "low"}),
         map={"high": "xhigh", "max": "xhigh", "minimal": "low"},
+        # The template's own default — what it would resolve to without
+        # rejecting the value.
+        default="xhigh",
     ),
 }
 
@@ -68,12 +79,20 @@ def effort_scale_for_model(model_name: Optional[str]) -> Optional[EffortScale]:
     return None
 
 
+def _map_effort(value: str, scale: EffortScale) -> str:
+    """Map a client effort value onto the family's accepted scale."""
+    if value == "none" or value in scale.accepted:
+        return value
+    return scale.map.get(value, scale.default)
+
+
 def normalize_reasoning_effort(payload: Dict[str, Any], model_name: Optional[str]) -> Dict[str, Any]:
     """Map out-of-scale reasoning-effort values onto the model's accepted scale.
 
-    Returns a copy of ``payload`` with every value in the model's scale
-    ``map`` rewritten in each location vLLM forwards to the chat template;
-    the input is never mutated. Payloads for models without a restricted
+    Returns a copy of ``payload`` with every value the model's scale does
+    not accept rewritten (known values via its ``map``, all others to its
+    ``default``) in each location vLLM forwards to the chat template; the
+    input is never mutated. Payloads for models without a restricted
     scale, or payloads whose effort values are already accepted, are
     returned as-is.
     """
@@ -81,23 +100,22 @@ def normalize_reasoning_effort(payload: Dict[str, Any], model_name: Optional[str
     if not isinstance(payload, dict) or scale is None:
         return payload
 
-    effort_map = scale.map
     result = payload
     output_config = payload.get("output_config")
     if isinstance(output_config, dict) and isinstance(output_config.get("effort"), str):
-        mapped = effort_map.get(output_config["effort"])
-        if mapped is not None:
+        mapped = _map_effort(output_config["effort"], scale)
+        if mapped != output_config["effort"]:
             result = {**result, "output_config": {**output_config, "effort": mapped}}
 
     if isinstance(payload.get("reasoning_effort"), str):
-        mapped = effort_map.get(payload["reasoning_effort"])
-        if mapped is not None:
+        mapped = _map_effort(payload["reasoning_effort"], scale)
+        if mapped != payload["reasoning_effort"]:
             result = {**result, "reasoning_effort": mapped}
 
     template_kwargs = payload.get("chat_template_kwargs")
     if isinstance(template_kwargs, dict) and isinstance(template_kwargs.get("reasoning_effort"), str):
-        mapped = effort_map.get(template_kwargs["reasoning_effort"])
-        if mapped is not None:
+        mapped = _map_effort(template_kwargs["reasoning_effort"], scale)
+        if mapped != template_kwargs["reasoning_effort"]:
             result = {**result, "chat_template_kwargs": {**template_kwargs, "reasoning_effort": mapped}}
 
     return result

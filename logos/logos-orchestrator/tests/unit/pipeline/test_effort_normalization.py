@@ -90,10 +90,28 @@ def test_accepted_values_pass_through_unchanged():
 
 def test_every_registered_scale_covers_every_vllm_reasoning_effort_value():
     # Every value vLLM's reasoning_effort Literal allows must either pass
-    # through or be mapped to an accepted value (or "none"), per family.
+    # through or be mapped to an accepted value (or "none"), per family;
+    # the family default must itself be accepted.
     for pattern, scale in CHAT_TEMPLATE_EFFORT_SCALES.items():
+        assert scale.default in scale.accepted, pattern
         for value in VLLM_REASONING_EFFORT_VALUES:
-            assert scale.map.get(value, value) in scale.accepted | {"none"}, pattern
+            assert scale.map.get(value, scale.default) in scale.accepted | {"none"}, pattern
+
+
+def test_unknown_effort_falls_back_to_family_default():
+    # Drift-proofing: a value neither accepted nor mapped (e.g. one a
+    # future vLLM introduces) is coerced to the family default instead of
+    # reaching the template, which would reject it with an HTTP 500.
+    payload = {
+        "model": MODEL,
+        "output_config": {"effort": "banana"},
+        "reasoning_effort": "banana",
+        "chat_template_kwargs": {"reasoning_effort": "banana"},
+    }
+    result = normalize_reasoning_effort(payload, MODEL)
+    assert result["output_config"]["effort"] == "xhigh"
+    assert result["reasoning_effort"] == "xhigh"
+    assert result["chat_template_kwargs"]["reasoning_effort"] == "xhigh"
 
 
 def test_new_template_family_needs_only_a_registry_entry(monkeypatch):
@@ -102,7 +120,9 @@ def test_new_template_family_needs_only_a_registry_entry(monkeypatch):
     monkeypatch.setitem(
         CHAT_TEMPLATE_EFFORT_SCALES,
         "acme-1.0",
-        EffortScale(accepted=frozenset({"deep", "shallow"}), map={"high": "deep", "medium": "shallow"}),
+        EffortScale(
+            accepted=frozenset({"deep", "shallow"}), map={"high": "deep", "medium": "shallow"}, default="shallow"
+        ),
     )
     payload = {"model": "Acme/Acme-1.0-7B", "output_config": {"effort": "high"}}
     assert normalize_reasoning_effort(payload, "Acme/Acme-1.0-7B")["output_config"]["effort"] == "deep"
