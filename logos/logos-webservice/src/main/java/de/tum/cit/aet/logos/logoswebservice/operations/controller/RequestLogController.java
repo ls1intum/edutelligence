@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -24,7 +25,13 @@ public class RequestLogController {
         this.requestLogService = requestLogService;
     }
 
+    /**
+     * System-wide request feed. Unlike {@code /request_logs} this has no
+     * per-user scoping to fall back on — every row carries the requester's full
+     * name, team and cloud cost — so it is restricted to Logos admins.
+     */
     @PostMapping("/latest_requests")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> latestRequests(@RequestAttribute("authContext") AuthContext auth) {
         // No explicit range: the service defaults to the last 30 days.
         return ResponseEntity.ok(requestLogService.getLatestRequests(null, null));

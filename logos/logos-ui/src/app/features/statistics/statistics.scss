@@ -155,6 +155,7 @@
 // ── Provider-row badges (free VRAM / calibrating) ─────────────────────────────
 .stats-provider-vram-badge {
   @include glass-surface;
+
   border-radius: 9999px;
   align-self: center;
   padding: 3px 12px;

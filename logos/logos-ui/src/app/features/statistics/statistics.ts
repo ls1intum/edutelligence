@@ -33,6 +33,7 @@ import {
 import {
   TimePreset, calendarRange, periodLabel as periodLabelFn,
 } from '../../shared/utils/time-range';
+import { formatEur } from '../../shared/utils/currency';
 import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
 
 import type {
@@ -569,11 +570,9 @@ export class Statistics implements OnInit, OnDestroy {
     return String(Math.round(v));
   }
 
-  /** Format cloud cost in microcents as EUR (µ¢ ÷ 1e6). */
+  /** Format cloud cost in microcents as EUR. */
   formatCloudCost(microCents: number): string {
-    const euros = microCents / 1_000_000;
-    if (euros === 0) return '€0.00';
-    return `€${euros < 0.01 ? euros.toFixed(4) : euros.toFixed(2)}`;
+    return formatEur(microCents);
   }
 
   readonly cloudPct = computed(() => {

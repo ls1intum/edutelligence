@@ -14,7 +14,7 @@ import { VramRangeSliderComponent } from '../vram-range-slider/vram-range-slider
 import { seriesColor } from '../../statistics.constants';
 import { parseVramSnapshot, timeAxisLabels } from '../../statistics.utils';
 import type { VramV2Sample, VramProviderMeta, LaneSignalData } from '../../statistics.models';
-import { pointerPlotFrac, nearestIndex } from '../chart-interaction.util';
+import { pointerPlotFrac } from '../chart-interaction.util';
 
 // ── SVG geometry ─────────────────────────────────────────────────────────────
 const CHART_W = 1000;
@@ -32,6 +32,13 @@ const STALENESS_LIMIT_MS = 5 * 60_000;
 interface PlotPoint {
   x: number;
   y: number;
+}
+
+/** A sample reduced to what the chart needs, plus the source for the crosshair. */
+interface RawPt {
+  tsMs: number;
+  gb: number;
+  sample: VramV2Sample;
 }
 
 interface ProviderSeries {
@@ -189,9 +196,48 @@ export class VramRemainingChartComponent implements OnChanges {
     return { winStartMs: range.startMs, winEndMs: range.endMs };
   });
 
+  /**
+   * Samples clipped to the visible window, per provider, chronologically.
+   *
+   * The 'all' dataset is always live and spans far more than the selected
+   * range, so everything downstream (paths, y-scale, crosshair, empty state)
+   * must work off this — plotting a raw sample from outside the window maps it
+   * to an x far outside the plot box, and the SVG does not clip.
+   *
+   * The last sample before the window is carried in as a boundary point so a
+   * series that was flat across the whole window still draws a line.
+   */
+  private readonly _windowedSeries = computed((): { name: string; pts: RawPt[] }[] => {
+    const data = this._data();
+    const { winStartMs, winEndMs } = this._visibleWindow();
+    if (!Number.isFinite(winStartMs) || !Number.isFinite(winEndMs) || winEndMs <= winStartMs) {
+      return [];
+    }
+
+    return Object.keys(data)
+      .map((name) => {
+        const all: RawPt[] = [];
+        for (const s of data[name] ?? []) {
+          const tsMs = new Date(s.timestamp).getTime();
+          if (!Number.isFinite(tsMs)) continue;
+          all.push({ tsMs, gb: parseVramSnapshot(s).remainingGb, sample: s });
+        }
+        all.sort((a, b) => a.tsMs - b.tsMs);
+
+        const inWindow = all.filter((p) => p.tsMs >= winStartMs && p.tsMs <= winEndMs);
+        if (inWindow.length === 0) return { name, pts: [] };
+
+        const predecessor = [...all].reverse().find((p) => p.tsMs < winStartMs);
+        const pts = predecessor
+          ? [{ ...predecessor, tsMs: winStartMs }, ...inWindow]
+          : inWindow;
+        return { name, pts };
+      })
+      .filter((s) => s.pts.length > 0);
+  });
+
   // ── Chart computation ────────────────────────────────────────────────────────
   readonly chartData = computed((): ChartOutput => {
-    const data = this._data();
     const { winStartMs, winEndMs } = this._visibleWindow();
 
     const empty: ChartOutput = {
@@ -204,12 +250,12 @@ export class VramRemainingChartComponent implements OnChanges {
       plotBottom: CHART_H - CHART_PAD_BOTTOM,
     };
 
-    const providers = Object.keys(data);
-    if (providers.length === 0) return empty;
-
     if (!Number.isFinite(winStartMs) || !Number.isFinite(winEndMs) || winEndMs <= winStartMs) {
       return empty;
     }
+
+    const rawBySeries = this._windowedSeries();
+    if (rawBySeries.length === 0) return empty;
 
     const winDurMs = Math.max(winEndMs - winStartMs, 1);
 
@@ -217,40 +263,11 @@ export class VramRemainingChartComponent implements OnChanges {
     const plotH = CHART_H - CHART_PAD_TOP - CHART_PAD_BOTTOM;
     const base = CHART_PAD_TOP + plotH; // y-coordinate of baseline
 
-    // ── Build raw points per provider ────────────────────────────────────────
-    type RawPt = { tsMs: number; gb: number };
-    const rawBySeries: { name: string; pts: RawPt[] }[] = providers
-      .map((name) => {
-        const samples = data[name] ?? [];
-        const pts: RawPt[] = [];
-        for (const s of samples) {
-          const tsMs = new Date(s.timestamp).getTime();
-          if (!Number.isFinite(tsMs)) continue;
-          const gb = parseVramSnapshot(s).remainingGb;
-          pts.push({ tsMs, gb });
-        }
-        pts.sort((a, b) => a.tsMs - b.tsMs);
-        return { name, pts };
-      })
-      .filter((s) => s.pts.length > 0);
-
-    if (rawBySeries.length === 0) return empty;
-
-    // ── Compute y-scale across all points in visible window ─────────────────
+    // ── Compute y-scale across the visible points only ──────────────────────
     let maxGb = 0;
     for (const { pts } of rawBySeries) {
       for (const p of pts) {
-        if (p.tsMs >= winStartMs && p.tsMs <= winEndMs && p.gb > maxGb) {
-          maxGb = p.gb;
-        }
-      }
-    }
-    // Fallback: use all data if nothing in window
-    if (maxGb === 0) {
-      for (const { pts } of rawBySeries) {
-        for (const p of pts) {
-          if (p.gb > maxGb) maxGb = p.gb;
-        }
+        if (p.gb > maxGb) maxGb = p.gb;
       }
     }
     const yMax = niceMax(maxGb);
@@ -313,11 +330,8 @@ export class VramRemainingChartComponent implements OnChanges {
     };
   });
 
-  // ── Derived: has any data ────────────────────────────────────────────────────
-  readonly hasData = computed(() => {
-    const data = this._data();
-    return Object.values(data).some((arr) => arr.length > 0);
-  });
+  // ── Derived: has any data *in the selected range* ────────────────────────────
+  readonly hasData = computed(() => this._windowedSeries().length > 0);
 
   /** True when the visible (zoomed) window differs from the full range. */
   readonly isZoomed = computed(
@@ -336,9 +350,8 @@ export class VramRemainingChartComponent implements OnChanges {
     const frac = this.hoverIndex();
     if (frac === null) return null;
 
-    const data = this._data();
-    const providers = Object.keys(data);
-    if (providers.length === 0) return null;
+    const windowed = this._windowedSeries();
+    if (windowed.length === 0) return null;
 
     const { winStartMs, winEndMs } = this._visibleWindow();
     const winDurMs = Math.max(winEndMs - winStartMs, 1);
@@ -350,30 +363,22 @@ export class VramRemainingChartComponent implements OnChanges {
     const plotW = CHART_W - CHART_PAD_LEFT - CHART_PAD_RIGHT;
     const x = CHART_PAD_LEFT + frac * plotW;
 
-    // For each provider, find the nearest sample by time
+    // For each provider, find the sample closest to the hovered instant. The
+    // series are windowed, so this can only ever pick a visible sample.
     const rows: { label: string; usedGb: number; remainingGb: number; totalGb: number; color: string }[] = [];
     let bestTs: number | null = null;
 
-    providers.forEach((name, idx) => {
-      const samples = data[name] ?? [];
-      if (samples.length === 0) return;
-
-      // Sort and find nearest by time
-      const sorted = [...samples]
-        .map((s) => ({ s, tsMs: new Date(s.timestamp).getTime() }))
-        .filter((p) => Number.isFinite(p.tsMs))
-        .sort((a, b) => a.tsMs - b.tsMs);
-
-      if (sorted.length === 0) return;
-
-      const nearestIdx = nearestIndex(frac, sorted.length);
-      const { s, tsMs } = sorted[nearestIdx];
-
-      if (bestTs === null || Math.abs(tsMs - hoveredMs) < Math.abs(bestTs - hoveredMs)) {
-        bestTs = tsMs;
+    windowed.forEach(({ name, pts }, idx) => {
+      let nearest = pts[0];
+      for (const p of pts) {
+        if (Math.abs(p.tsMs - hoveredMs) < Math.abs(nearest.tsMs - hoveredMs)) nearest = p;
       }
 
-      const parsed = parseVramSnapshot(s);
+      if (bestTs === null || Math.abs(nearest.tsMs - hoveredMs) < Math.abs(bestTs - hoveredMs)) {
+        bestTs = nearest.tsMs;
+      }
+
+      const parsed = parseVramSnapshot(nearest.sample);
       rows.push({
         label: name,
         usedGb: parsed.usedGb,
@@ -406,17 +411,9 @@ export class VramRemainingChartComponent implements OnChanges {
       this.hoverIndex.set(null);
       return;
     }
-    const data = this._data();
-    const providers = Object.keys(data);
-    // Use the length of the densest provider to snap to a meaningful sample
-    const maxN = providers.reduce((m, k) => Math.max(m, (data[k] ?? []).length), 0);
-    if (maxN > 0) {
-      // Store nearest-index fraction as a pure fraction (not a bucket index)
-      // We keep it as-is since crosshair uses it to reconstruct the timestamp
-      this.hoverIndex.set(frac);
-    } else {
-      this.hoverIndex.set(null);
-    }
+    // Only track the pointer when there is something visible under it. Stored
+    // as a plain fraction — the crosshair reconstructs the timestamp from it.
+    this.hoverIndex.set(this._windowedSeries().length > 0 ? frac : null);
   }
 
   onPlotLeave(): void {

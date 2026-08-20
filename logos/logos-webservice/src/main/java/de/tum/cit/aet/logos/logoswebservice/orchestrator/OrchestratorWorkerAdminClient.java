@@ -4,15 +4,17 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestTemplate;
+
+import de.tum.cit.aet.logos.logoswebservice.common.RestTemplateConfig;
 
 @Service
 public class OrchestratorWorkerAdminClient {
@@ -20,9 +22,10 @@ public class OrchestratorWorkerAdminClient {
     private static final Logger log = LoggerFactory.getLogger(OrchestratorWorkerAdminClient.class);
 
     private final RestTemplate restTemplate;
-    // add_lane loads a model and can take minutes on the worker; the
-    // shared 5 s read timeout would kill the call long before the worker
-    // answers, so long-running commands use their own template.
+    // add_lane loads a model and can take minutes on the worker; the shared
+    // 5 s read timeout would kill the call long before the worker answers, so
+    // long-running commands use the template configured for that in
+    // RestTemplateConfig.
     private final RestTemplate longRunningRestTemplate;
 
     @Value("${logos.orchestrator.url:}")
@@ -31,12 +34,11 @@ public class OrchestratorWorkerAdminClient {
     @Value("${logos.orchestrator.internal-secret:}")
     private String internalSecret;
 
-    public OrchestratorWorkerAdminClient(RestTemplate restTemplate) {
+    public OrchestratorWorkerAdminClient(
+            RestTemplate restTemplate,
+            @Qualifier(RestTemplateConfig.LONG_RUNNING) RestTemplate longRunningRestTemplate) {
         this.restTemplate = restTemplate;
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(3_000);
-        factory.setReadTimeout(185_000);
-        this.longRunningRestTemplate = new RestTemplate(factory);
+        this.longRunningRestTemplate = longRunningRestTemplate;
     }
 
     public ResponseEntity<Map> calibrateUncalibrated(int providerId) {

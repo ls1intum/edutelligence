@@ -64,35 +64,39 @@ const HOUR_MS = 3_600_000;
  *                   unique, e.g. "Jul 30" vs "Aug 30" never collide)
  * - span >  32 d  → "Mon YYYY" at month boundaries
  * Labels are thinned to at most `maxLabels`, keeping the first of each step.
+ *
+ * When a window is too short to contain a single boundary of its own tier
+ * (a 20-minute "Today" view, a single-bucket chart), the boundaries are
+ * replaced by evenly spaced ticks so the axis is never left blank.
  */
 export function timeAxisLabels(
   winStartMs: number,
   winEndMs: number,
   maxLabels = 8,
 ): TimeAxisLabel[] {
+  if (!Number.isFinite(winStartMs) || !Number.isFinite(winEndMs) || winEndMs <= winStartMs) {
+    return [];
+  }
   const spanMs = winEndMs - winStartMs;
 
   if (spanMs <= 24 * HOUR_MS) {
     const out: TimeAxisLabel[] = [];
     for (let ts = Math.ceil(winStartMs / HOUR_MS) * HOUR_MS; ts < winEndMs; ts += HOUR_MS) {
-      out.push({
-        tsMs: ts,
-        label: `${String(new Date(ts).getUTCHours()).padStart(2, '0')}:00`,
-      });
+      out.push({ tsMs: ts, label: hourLabel(ts) });
     }
-    return thinLabels(out, maxLabels);
+    return out.length > 0
+      ? thinLabels(out, maxLabels)
+      : evenlySpacedLabels(winStartMs, winEndMs, maxLabels, clockLabel);
   }
 
   if (spanMs <= 32 * DAY_MS) {
     const out: TimeAxisLabel[] = [];
     for (let ts = Math.ceil(winStartMs / DAY_MS) * DAY_MS; ts < winEndMs; ts += DAY_MS) {
-      const d = new Date(ts);
-      out.push({
-        tsMs: ts,
-        label: `${MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCDate()}`,
-      });
+      out.push({ tsMs: ts, label: dayLabel(ts) });
     }
-    return thinLabels(out, maxLabels);
+    return out.length > 0
+      ? thinLabels(out, maxLabels)
+      : evenlySpacedLabels(winStartMs, winEndMs, maxLabels, dayLabel);
   }
 
   // Month boundaries strictly inside the window.
@@ -100,7 +104,7 @@ export function timeAxisLabels(
   const start = new Date(winStartMs);
   let y = start.getUTCFullYear();
   let m = start.getUTCMonth();
-  while (true) {
+  for (;;) {
     m += 1; // next month boundary
     if (m > 11) {
       m = 0;
@@ -110,7 +114,42 @@ export function timeAxisLabels(
     if (ts >= winEndMs) break;
     out.push({ tsMs: ts, label: `${MONTHS_SHORT[m]} ${y}` });
   }
-  return thinLabels(out, Math.max(maxLabels, 6));
+  return out.length > 0
+    ? thinLabels(out, Math.max(maxLabels, 6))
+    : evenlySpacedLabels(winStartMs, winEndMs, maxLabels, dayLabel);
+}
+
+function hourLabel(tsMs: number): string {
+  return `${String(new Date(tsMs).getUTCHours()).padStart(2, '0')}:00`;
+}
+
+function clockLabel(tsMs: number): string {
+  const d = new Date(tsMs);
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+function dayLabel(tsMs: number): string {
+  const d = new Date(tsMs);
+  return `${MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCDate()}`;
+}
+
+/** Fallback ticks for windows that contain no boundary of their own tier. */
+function evenlySpacedLabels(
+  winStartMs: number,
+  winEndMs: number,
+  maxLabels: number,
+  format: (tsMs: number) => string,
+): TimeAxisLabel[] {
+  const count = Math.max(2, Math.min(maxLabels, 4));
+  const step = (winEndMs - winStartMs) / (count - 1);
+  const out: TimeAxisLabel[] = [];
+  for (let i = 0; i < count; i++) {
+    const ts = Math.round(winStartMs + i * step);
+    const label = format(ts);
+    if (out.length > 0 && out[out.length - 1].label === label) continue;
+    out.push({ tsMs: ts, label });
+  }
+  return out;
 }
 
 /** Keep every n-th label so at most `max` survive (first label always kept). */

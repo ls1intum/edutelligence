@@ -1865,10 +1865,23 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
     )
     if not hmac.compare_digest(token, _INTERNAL_SECRET):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    model = str(data.lane.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="lane.model is required")
+
+    # Resolve the calibrated profile the same way the planner does for its own
+    # loads. Forwarding the caller's bare {"model": ...} would make the worker
+    # fall back to LaneConfig's defaults (vllm=False, default context/KV), i.e.
+    # start a vLLM model on the wrong backend and bypass the VRAM accounting.
+    if _capacity_planner is None:
+        raise HTTPException(status_code=503, detail="Capacity planner not ready")
+    params = _capacity_planner.build_manual_load_params(data.provider_id, model)
+
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="add_lane",
-        params={**data.lane},
+        params=params,
     )
 
 

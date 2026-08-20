@@ -33,10 +33,10 @@ public class RequestLogService {
      */
     public Map<String, Object> getLatestRequests(String startDate, String endDate) {
         ZonedDateTime endDt = parseInstantOrNow(endDate);
-        ZonedDateTime startDt = startDate != null
-                ? ZonedDateTime.parse(startDate).withZoneSameInstant(ZoneOffset.UTC)
-                : endDt.minusDays(30);
-        if (startDt.isAfter(endDt)) {
+        // Same lenient parse as the end: a malformed range must fall back to the
+        // default window, not surface as a 500.
+        ZonedDateTime startDt = parseInstantOrNull(startDate);
+        if (startDt == null || startDt.isAfter(endDt)) {
             startDt = endDt.minusDays(30);
         }
         Timestamp startTs = Timestamp.from(startDt.toInstant());
@@ -76,11 +76,16 @@ public class RequestLogService {
     }
 
     private static ZonedDateTime parseInstantOrNow(String iso) {
-        if (iso == null || iso.isBlank()) return ZonedDateTime.now(ZoneOffset.UTC);
+        ZonedDateTime parsed = parseInstantOrNull(iso);
+        return parsed != null ? parsed : ZonedDateTime.now(ZoneOffset.UTC);
+    }
+
+    private static ZonedDateTime parseInstantOrNull(String iso) {
+        if (iso == null || iso.isBlank()) return null;
         try {
             return ZonedDateTime.parse(iso).withZoneSameInstant(ZoneOffset.UTC);
         } catch (Exception e) {
-            return ZonedDateTime.now(ZoneOffset.UTC);
+            return null;
         }
     }
 

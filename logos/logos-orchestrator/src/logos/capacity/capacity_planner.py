@@ -5315,6 +5315,20 @@ class CapacityPlanner:
         sanitized = model_name.replace("/", "_").replace(":", "_").replace(" ", "_")
         return f"planner-{sanitized}"
 
+    def build_manual_load_params(self, provider_id: int, model_name: str) -> Dict[str, Any]:
+        """Lane parameters for an operator-initiated load ("Load lane" in the UI).
+
+        Manual loads have to go through the same profile lookup as the planner's
+        own loads. A bare ``{"model": ...}`` makes the worker build a LaneConfig
+        with ``vllm=False`` and default context/KV settings, so a vLLM-calibrated
+        model would be started on the wrong backend, ignoring its calibrated
+        profile and the planner's VRAM accounting.
+        """
+        profile = self._safe_get_profiles(provider_id).get(model_name)
+        capacity = self._safe_get_capacity(provider_id)
+        lane_id = self._planner_lane_id(model_name)
+        return self._build_load_params(model_name, lane_id, profile, capacity, provider_id)
+
     def _build_load_params(
         self,
         model_name: str,

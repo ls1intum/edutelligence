@@ -3,12 +3,14 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { VramV2Payload } from '../statistics.models';
 
-/** Model entry as returned by POST /api/logosdb/get_provider_models. */
+/**
+ * Lane-picker view of POST /api/logosdb/get_provider_models. The endpoint also
+ * returns `endpoint`/`api_key`; both are deliberately left out here so the
+ * credential never enters this feature's data flow.
+ */
 export interface ProviderModel {
   model_id: number;
   model_name: string;
-  endpoint: string;
-  api_key: string;
 }
 
 @Injectable({ providedIn: 'root' })

@@ -121,39 +121,6 @@ export type LaneSignalData = {
   mtp_acceptance_rate: number | null;
 };
 
-// PaginatedRequestItem from logos-ui-old/components/statistics/types.ts
-export type PaginatedRequestItem = {
-  request_id: string;
-  model_name: string;
-  provider_name: string;
-  is_cloud: boolean;
-  status: string;
-  timestamp: string | null;
-  duration: number | null;
-  cold_start: boolean | null;
-  enqueue_ts: string | null;
-  scheduled_ts: string | null;
-  request_complete_ts: string | null;
-  queue_seconds: number | null;
-  total_seconds: number | null;
-  initial_priority: string | null;
-  priority_when_scheduled: string | null;
-  queue_depth_at_enqueue: number | null;
-  error_message: string | null;
-  team_name: string | null;
-  username: string | null;
-  environment: string | null;
-};
-
-// PaginatedRequestResponse from logos-ui-old/components/statistics/types.ts
-export type PaginatedRequestResponse = {
-  requests: PaginatedRequestItem[];
-  total: number;
-  page: number;
-  per_page: number;
-  total_pages: number;
-};
-
 // VramV2Sample from logos-ui-old/hooks/use-stats-websocket-v2.ts
 export interface VramV2Sample {
   snapshot_id?: number;
