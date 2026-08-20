@@ -10,8 +10,10 @@ Logos maps the wider client scale onto the accepted one before forwarding.
 
 from logos.pipeline.context_resolver import ContextResolver, ExecutionContext
 from logos.pipeline.effort_normalization import (
-    QWEN38_EFFORT_MAP,
-    model_uses_qwen38_effort_scale,
+    CHAT_TEMPLATE_EFFORT_SCALES,
+    VLLM_REASONING_EFFORT_VALUES,
+    EffortScale,
+    effort_scale_for_model,
     normalize_reasoning_effort,
 )
 
@@ -31,15 +33,16 @@ def _context(model_name: str = MODEL, provider_type: str = "logosnode") -> Execu
     )
 
 
-def test_qwen38_model_detected_case_insensitively():
-    assert model_uses_qwen38_effort_scale("Qwen/Qwen3.8-27B")
-    assert model_uses_qwen38_effort_scale("qwen/qwen3.8-coder-30b-a3b")
+def test_effort_scale_lookup_by_model_name():
+    # Matched case-insensitively as a model-name substring.
+    assert effort_scale_for_model("Qwen/Qwen3.8-27B") == CHAT_TEMPLATE_EFFORT_SCALES["qwen3.8"]
+    assert effort_scale_for_model("qwen/qwen3.8-coder-30b-a3b") == CHAT_TEMPLATE_EFFORT_SCALES["qwen3.8"]
     # Other families keep their own scales and must not be rewritten.
-    assert not model_uses_qwen38_effort_scale("Qwen/Qwen3.5-27B")
-    assert not model_uses_qwen38_effort_scale("Qwen/Qwen3-32B")
-    assert not model_uses_qwen38_effort_scale("gpt-4.1-mini")
-    assert not model_uses_qwen38_effort_scale("")
-    assert not model_uses_qwen38_effort_scale(None)
+    assert effort_scale_for_model("Qwen/Qwen3.5-27B") is None
+    assert effort_scale_for_model("Qwen/Qwen3-32B") is None
+    assert effort_scale_for_model("gpt-4.1-mini") is None
+    assert effort_scale_for_model("") is None
+    assert effort_scale_for_model(None) is None
 
 
 def test_anthropic_output_config_high_mapped_to_xhigh():
@@ -85,13 +88,26 @@ def test_accepted_values_pass_through_unchanged():
         assert normalize_reasoning_effort(payload, MODEL) is payload
 
 
-def test_map_covers_every_vllm_reasoning_effort_value():
-    # vLLM's ChatCompletionRequest.reasoning_effort Literal: none, minimal,
-    # low, medium, high, xhigh, max. Everything must either pass through or
-    # be mapped to an accepted Qwen3.8 value.
-    accepted = {"xhigh", "medium", "low"}
-    for value in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
-        assert QWEN38_EFFORT_MAP.get(value, value) in accepted | {"none"}
+def test_every_registered_scale_covers_every_vllm_reasoning_effort_value():
+    # Every value vLLM's reasoning_effort Literal allows must either pass
+    # through or be mapped to an accepted value (or "none"), per family.
+    for pattern, scale in CHAT_TEMPLATE_EFFORT_SCALES.items():
+        for value in VLLM_REASONING_EFFORT_VALUES:
+            assert scale.map.get(value, value) in scale.accepted | {"none"}, pattern
+
+
+def test_new_template_family_needs_only_a_registry_entry(monkeypatch):
+    # Onboarding a chat template with its own restricted scale is a single
+    # registry entry — the normalization logic stays family-agnostic.
+    monkeypatch.setitem(
+        CHAT_TEMPLATE_EFFORT_SCALES,
+        "acme-1.0",
+        EffortScale(accepted=frozenset({"deep", "shallow"}), map={"high": "deep", "medium": "shallow"}),
+    )
+    payload = {"model": "Acme/Acme-1.0-7B", "output_config": {"effort": "high"}}
+    assert normalize_reasoning_effort(payload, "Acme/Acme-1.0-7B")["output_config"]["effort"] == "deep"
+    # Unrelated models are still untouched.
+    assert normalize_reasoning_effort(payload, "gpt-4.1-mini") is payload
 
 
 def test_other_models_keep_high_untouched():
