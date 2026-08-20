@@ -177,6 +177,24 @@ export class AiTools implements OnInit {
 
   outputTokens = computed(() => Math.min(32768, Math.floor(this.contextTokens() / 4)));
 
+  // The settings below state the window minus the output reservation minus this
+  // headroom. Both deductions are needed: Claude Code's auto-compact threshold is
+  // computed against CLAUDE_CODE_MAX_CONTEXT_TOKENS WITHOUT reserving
+  // CLAUDE_CODE_MAX_OUTPUT_TOKENS of it (measured: a session 400'd at exactly
+  // window - max_output + 1 input tokens while the CLI was told a full window), so
+  // the output has to come out of the number we hand it. The headroom additionally
+  // covers the CLI's token estimate, which runs slightly under what the vLLM
+  // worker's Qwen tokenizer counts. It scales with the window (~3%) and is clamped:
+  // small windows cannot afford a fixed 8k cut, large ones do not need more.
+  contextHeadroom = computed(() => {
+    const w = this.contextTokens();
+    return w > 0 ? Math.min(8192, Math.max(512, Math.floor(w * 0.03))) : 0;
+  });
+
+  contextTokensCapped = computed(
+    () => this.contextTokens() - this.outputTokens() - this.contextHeadroom(),
+  );
+
   windowUnenforced = computed(() => {
     const name = (this.selected()?.model_name ?? '').toLowerCase();
     return name.startsWith('claude-') || name.includes('[1m]');
@@ -198,7 +216,7 @@ export class AiTools implements OnInit {
         ANTHROPIC_DEFAULT_SONNET_MODEL: model,
         ANTHROPIC_DEFAULT_OPUS_MODEL: model,
         ANTHROPIC_DEFAULT_FABLE_MODEL: model,
-        CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(this.contextTokens()),
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(this.contextTokensCapped()),
         CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(this.outputTokens()),
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       },
