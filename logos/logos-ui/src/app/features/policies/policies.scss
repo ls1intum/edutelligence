@@ -64,28 +64,13 @@
   font-weight: var(--font-weight-semibold);
   white-space: nowrap;
 
-  &--local {
-    background: rgb(var(--color-accent-green)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-green));
-    border: 1px solid rgb(var(--color-accent-green)  / var(--opacity-border));
-  }
-
-  &--eu-eu {
-    background: rgb(var(--color-primary-500)  / var(--opacity-soft));
-    color: rgb(var(--color-text-accent));
-    border: 1px solid rgb(var(--color-primary-400)  / var(--opacity-border));
-  }
-
-  &--eu-us {
-    background: rgb(var(--color-accent-yellow)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-yellow));
-    border: 1px solid rgb(var(--color-accent-yellow)  / var(--opacity-border));
-  }
-
+  &--local,
+  &--eu-eu,
+  &--eu-us,
   &--non-eu {
-    background: rgb(var(--color-error)  / var(--opacity-soft));
-    color: rgb(var(--color-error));
-    border: 1px solid rgb(var(--color-error)  / var(--opacity-border));
+    background: rgb(var(--color-outline-200)  / var(--opacity-soft));
+    color: rgb(var(--color-typography-300));
+    border: 1px solid rgb(var(--color-outline-200)  / var(--opacity-border));
   }
 }
 

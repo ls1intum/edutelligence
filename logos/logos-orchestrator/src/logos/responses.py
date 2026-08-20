@@ -1,4 +1,5 @@
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -132,7 +133,7 @@ def request_setup(headers: dict, api_key_id: int):
                 cloud_provider_type = p_info.get("cloud_provider_type") or infer_cloud_provider_type(
                     d.get("type"), base_url=p_info.get("base_url")
                 )
-                d["type"] = cloud_provider_type if cloud_provider_type else provider_type
+                d["type"] = "azure" if provider_type == "cloud" and cloud_provider_type == "azure" else provider_type
             deployments.append(d)
 
     allowed_models = get_unique_models_from_deployments(deployments)
@@ -250,6 +251,17 @@ def extract_token_usage(usage: dict) -> dict:
     usage_tokens = {}
 
     def _add(key: str, value: Any) -> None:
+        if (
+            key == "seconds"
+            and not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and math.isfinite(float(value))
+            and value >= 0
+        ):
+            # usage_tokens stores integers. Milliseconds retain fractional
+            # transcription duration without requiring a schema change.
+            usage_tokens["audio_milliseconds"] = math.ceil(float(value) * 1000)
+            return
         # Only integer token counts are stored (one row per type in
         # usage_tokens). Skip non-numeric fields such as Azure's nested
         # `latency_checkpoint` dict, which would otherwise reach the DB as a

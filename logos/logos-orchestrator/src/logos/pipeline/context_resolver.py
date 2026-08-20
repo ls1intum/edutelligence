@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlencode
 
 from logos.dbutils.dbmanager import DBManager
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
+from logos.request_content import is_multipart_payload, set_payload_field
 from logos.sdi.azure_deployment_sync import AZURE_OPERATION_API_VERSIONS
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,20 @@ class ContextResolver:
             auth_name = (auth_info.get("auth_name") or "").strip()
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
+
+            # The provider form advertises "Authorization" and "Bearer {}" as
+            # placeholders, so operators routinely save an OpenAI-shaped cloud
+            # provider with both fields empty. Without a default the header was
+            # dropped silently below and the upstream rejected the request as
+            # unauthenticated — apply the advertised convention instead. An
+            # explicit header name (e.g. Azure's "api-key") keeps its own name
+            # and defaults to the bare key rather than a Bearer prefix.
+            if provider_type != "logosnode" and api_key:
+                if not auth_name:
+                    auth_name = "Authorization"
+                    auth_format = auth_format or "Bearer {}"
+                elif not auth_format:
+                    auth_format = "{}"
 
             if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
                 logger.error(
@@ -225,20 +240,22 @@ class ContextResolver:
         Returns:
             Tuple of (headers, modified_payload)
         """
-        headers = {"Content-Type": "application/json"}
+        # httpx must generate the multipart boundary for file-upload requests;
+        # setting Content-Type manually would omit that required boundary.
+        headers = {} if is_multipart_payload(payload) else {"Content-Type": "application/json"}
         if context.auth_header and context.auth_value:
             headers[context.auth_header] = context.auth_value
 
         # OpenWebUI requires model name injection
         if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
-            payload = {**payload, "model": context.model_name}
+            payload = set_payload_field(payload, "model", context.model_name)
 
         # Azure Responses API resolves the deployment from the body's "model"
         # field (the URL carries no deployment segment). Clients address models
         # by the catalogued (served) name, which can differ from the Azure
         # deployment id — rewrite it so Azure can resolve the deployment.
         if context.azure_responses_deployment:
-            payload = {**payload, "model": context.azure_responses_deployment}
+            payload = set_payload_field(payload, "model", context.azure_responses_deployment)
 
         return headers, payload
 
@@ -256,9 +273,10 @@ class ContextResolver:
     # exactly one endpoint (the sync classifies gpt-5.x to "responses",
     # everything chat-shaped to "chat/completions"), but most chat deployments
     # serve both APIs — so the client's chosen surface wins over the stored
-    # default. Other operations (embeddings, audio, images) are never
-    # re-targeted.
+    # default. Whisper deployments are stored as audio/transcriptions but also
+    # serve audio/translations, so those two operations are swappable as well.
     _SWAPPABLE_AZURE_OPS = {"chat/completions", "responses"}
+    _SWAPPABLE_AZURE_AUDIO_OPS = {"audio/transcriptions", "audio/translations"}
 
     @staticmethod
     def _requested_operation(request_path: Optional[str]) -> Optional[str]:
@@ -275,7 +293,8 @@ class ContextResolver:
             if path.startswith(prefix):
                 path = path[len(prefix) :]
                 break
-        return path if path in ContextResolver._SWAPPABLE_AZURE_OPS else None
+        swappable = ContextResolver._SWAPPABLE_AZURE_OPS | ContextResolver._SWAPPABLE_AZURE_AUDIO_OPS
+        return path if path in swappable else None
 
     @staticmethod
     def _align_azure_operation(endpoint: str, request_path: Optional[str]) -> str:
@@ -298,7 +317,13 @@ class ContextResolver:
         if not match:
             return endpoint
         current = match.group("operation")
-        if current == requested or current not in ContextResolver._SWAPPABLE_AZURE_OPS:
+        same_family = (
+            current in ContextResolver._SWAPPABLE_AZURE_OPS and requested in ContextResolver._SWAPPABLE_AZURE_OPS
+        ) or (
+            current in ContextResolver._SWAPPABLE_AZURE_AUDIO_OPS
+            and requested in ContextResolver._SWAPPABLE_AZURE_AUDIO_OPS
+        )
+        if current == requested or not same_family:
             return endpoint
         params = dict(parse_qsl(match.group("query") or ""))
         api_version = AZURE_OPERATION_API_VERSIONS.get(requested)

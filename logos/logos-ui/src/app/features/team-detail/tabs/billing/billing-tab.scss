@@ -36,24 +36,12 @@
   flex-shrink: 0;
   font-size: var(--font-size-lg);
 
-  &--spend {
-    background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-purple));
-  }
-
-  &--avg {
-    background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-cyan));
-  }
-
-  &--trend-up {
-    background: rgb(var(--color-success)  / var(--opacity-soft));
-    color: rgb(var(--color-success));
-  }
-
+  &--spend,
+  &--avg,
+  &--trend-up,
   &--trend-down {
-    background: rgb(var(--color-error)  / var(--opacity-soft));
-    color: rgb(var(--color-error));
+    background: rgb(var(--color-primary-500)  / var(--opacity-soft));
+    color: rgb(var(--color-text-accent));
   }
 }
 
@@ -78,8 +66,6 @@
   color: rgb(var(--color-typography-0));
   line-height: var(--line-height-tight);
 
-  &--up    { color: rgb(var(--color-success)); }
-  &--down  { color: rgb(var(--color-error)); }
   &--muted { color: rgb(var(--color-typography-700)); }
 }
 
@@ -194,10 +180,8 @@
   min-width: 150px;
   padding: 8px 12px;
   border-radius: 8px;
-  background: rgb(var(--glass-fill)  / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke)  / var(--glass-stroke-opacity));
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgb(var(--color-surface-0));
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
   box-shadow: 0 4px 20px rgb(var(--shadow-color) / 0.35);
   white-space: nowrap;
   z-index: 9999;
@@ -355,24 +339,9 @@
 .trend-badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 8px;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-
-  &--up {
-    background: rgb(var(--color-success)  / var(--opacity-soft));
-    color: rgb(var(--color-success));
-  }
-
-  &--down {
-    background: rgb(var(--color-error)  / var(--opacity-soft));
-    color: rgb(var(--color-error));
-  }
-
-  &--neutral {
-    color: rgb(var(--color-typography-700));
-  }
+  color: rgb(var(--color-typography-700));
 }
 
 // ── Tablet ────────────────────────────────────────────────────────────────────

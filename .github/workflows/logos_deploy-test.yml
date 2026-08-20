@@ -24,12 +24,6 @@ jobs:
           - environment: "Logos - Test"
             compose-file: ./logos/docker-compose.yaml
             base-path: /opt/logos
-          - environment: "Logos Worker - Prod - deimama"
-            compose-file: ./logos/logos-workernode/docker-compose.yml
-            base-path: /opt/logos-workernode
-          - environment: "Logos Worker - Prod - deipapa"
-            compose-file: ./logos/logos-workernode/docker-compose.yml
-            base-path: /opt/logos-workernode
     environment:
       name: ${{ matrix.environment }}
     steps:

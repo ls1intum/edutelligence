@@ -1,0 +1,401 @@
+<div class="model-error-report">
+
+  <!-- Navigation -->
+  <a class="breadcrumb" routerLink="/models">
+    <i class="pi pi-chevron-left" aria-hidden="true"></i>
+    Model Management
+  </a>
+
+  <!-- Page State -->
+  @if (loading()) {
+
+    <div class="loading-state">
+      <i class="pi pi-spin pi-spinner"></i>
+      <span>Loading model…</span>
+    </div>
+
+  } @else if (loadError()) {
+
+    <app-error-message
+      variant="banner"
+      message="Failed to load model, please refresh."
+    />
+
+  } @else if (model(); as model) {
+
+    <!-- Header -->
+    <header class="model-header">
+
+      <div class="header-left">
+
+        <h1 class="model-name">
+          {{ model.name }}
+        </h1>
+
+        <p class="model-desc">
+          Model Error Report
+        </p>
+
+      </div>
+
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav
+      class="tab-bar"
+      role="tablist"
+    >
+
+      @for (tab of visibleTabs(); track tab) {
+
+        <button
+          type="button"
+          class="tab-btn"
+          role="tab"
+          [class.tab-btn--active]="activeTab() === tab"
+          [attr.aria-selected]="activeTab() === tab"
+          (click)="setTab(tab)"
+        >
+          {{ tabLabel[tab] }}
+        </button>
+
+      }
+
+    </nav>
+
+    <!-- Tab Content -->
+    <section class="tab-content">
+
+      @switch (activeTab()) {
+
+        <!-- Error Report -->
+        @case ('error_report') {
+
+          @if (hasCompleteLogs() && !hasParseableCalibrationData()) {
+
+            <div class="empty-state">
+
+              <h2>
+                No logs available
+              </h2>
+
+              <p>
+                No log files are available for this model. The error report cannot be generated.
+              </p>
+
+            </div>
+
+          } @else if (hasCompleteLogs()) {
+
+            <app-data-table
+              [columns]="['', 'PROCESS']"
+              gridCols="40px 1fr"
+              [loading]="processesLoading()"
+              [empty]="processes().length === 0"
+              emptyMessage="No process information available."
+            >
+
+              @for (process of processes(); track process.id) {
+
+                <!-- Process Row -->
+                <div
+                  class="table-row"
+                  [class.table-row--expanded]="isExpanded(process.id)"
+                >
+
+                  <div class="col-chevron">
+
+                    <button
+                      type="button"
+                      class="btn-chevron"
+                      [class.btn-chevron--open]="isExpanded(process.id)"
+                      [attr.aria-label]="'Expand ' + process.process"
+                      (click)="toggleProcess(process.id)"
+                    >
+                      <i class="pi pi-chevron-right"></i>
+                    </button>
+
+                  </div>
+
+                  <div class="col-process">
+
+                    <span class="process-name">
+                      {{ process.process }}
+                    </span>
+
+                  </div>
+
+                </div>
+
+                <!-- Expanded Details -->
+                @if (isExpanded(process.id)) {
+
+                  <div class="expanded-row">
+
+                    <div class="expanded-content">
+
+                      <div class="checklist-box">
+
+                        <header class="expanded-header">
+                          <span class="expanded-title">
+                            Checklist
+                          </span>
+                        </header>
+
+                        <div class="checklist">
+
+                          @for (item of process.items; track $index) {
+
+                            <div class="check-row">
+
+                              <span
+                                class="check-icon"
+                                [class.check-icon--success]="item.status === 'success'"
+                                [class.check-icon--failed]="item.status === 'failure'"
+                              >
+                                @if (item.status === 'success') {
+                                  ✓
+                                } @else {
+                                  !
+                                }
+                              </span>
+
+                              <span class="check-name">
+                                {{ item.name }}
+                              </span>
+
+                              @if (item.scope) {
+                                <span
+                                  class="scope-badge"
+                                  [ngClass]="getScopePercentageClass(item.scope, item.status)"
+                                >
+                                  {{ getScopeLabel(item.scope, item.status) }}
+                                </span>
+                              }
+
+                            </div>
+
+                            @if (
+                              item.name === 'Deployment Success' &&
+                              item.status === 'success' &&
+                              item.scope?.nodes?.length
+                            ) {
+
+                              <div class="error-scope">
+
+                                <strong>
+                                  Successful Nodes:
+                                </strong>
+
+                                <div class="scope-nodes">
+
+                                  @for (
+                                    node of item.scope?.nodes ?? [];
+                                    track node
+                                  ) {
+
+                                    <button
+                                      type="button"
+                                      class="scope-node-button scope-node-button--success"
+                                      (click)="openNodeLog(node)"
+                                    >
+                                      {{ node }}
+                                    </button>
+
+                                  }
+
+                                </div>
+
+                              </div>
+
+                            }
+
+                            @if (item.errorMessage) {
+
+                              <section class="error-box">
+
+                                <h3 class="error-box-title">
+                                  Error Details
+                                </h3>
+
+                                @if (item.scope) {
+                                  <div class="error-scope">
+                                    <strong>Scope:</strong>
+
+                                    @if (item.scope.type === 'global') {
+                                      <span>Global</span>
+                                    } @else {
+                                      <div class="scope-nodes">
+                                        @for (node of item.scope.nodes ?? []; track node) {
+                                          <button
+                                            type="button"
+                                            class="scope-node-button"
+                                            (click)="openNodeLog(node, item.errorMessage)"
+                                          >
+                                            {{ node }}
+                                          </button>
+                                        }
+                                      </div>
+                                    }
+                                  </div>
+                                }
+
+                                @if (item.errorDetail && item.errorDetail !== item.errorMessage) {
+
+                                  <button
+                                    type="button"
+                                    class="error-toggle"
+                                    (click)="toggleError(item.name)"
+                                  >
+                                    <i
+                                      class="pi pi-chevron-right"
+                                      [class.error-toggle__icon--open]="isErrorExpanded(item.name)"
+                                    ></i>
+                                    {{ isErrorExpanded(item.name) ? 'Hide full error' : 'Show full error' }}
+                                  </button>
+
+                                  @if (isErrorExpanded(item.name)) {
+                                    <pre>{{ item.errorDetail }}</pre>
+                                  } @else {
+                                    <pre>{{ item.errorMessage }}</pre>
+                                  }
+
+                                } @else {
+
+                                  <pre>{{ item.errorMessage }}</pre>
+
+                                }
+
+                              </section>
+
+                            }
+
+                          }
+
+                        </div>
+
+                      </div>
+
+                    </div>
+
+                  </div>
+
+                }
+
+              }
+
+            </app-data-table>
+
+          } @else {
+
+            <div class="empty-state">
+
+              <h2>
+                No logs available
+              </h2>
+
+              <p>
+                No log files are available for this model.
+                The error report cannot be generated.
+              </p>
+
+            </div>
+
+          }
+
+        }
+
+        <!-- Logs -->
+        @case ('complete_logs') {
+
+          @if (hasAnyLogText()) {
+
+            <div class="logs-panel">
+
+              <div class="log-selector">
+
+                <label class="log-selector__label" for="log-selector-node">
+                  Node
+                </label>
+
+                <select
+                  id="log-selector-node"
+                  class="log-selector__select"
+                  (change)="onLogSelectorChange($any($event.target).value)"
+                >
+                  @for (log of availableLogs(); track log.providerId) {
+                    <option
+                      [value]="log.providerId"
+                      [selected]="log.providerId === selectedLogProviderId()"
+                    >
+                      {{ log.node }}
+                    </option>
+                  }
+                </select>
+
+              </div>
+
+              <div class="log-viewer">
+
+                @if (!completeLog()) {
+
+                  <p class="log-viewer__empty">
+                    No log found for this node.
+                  </p>
+
+                } @else {
+
+                  <cdk-virtual-scroll-viewport
+                    class="log-viewer__viewport"
+                    itemSize="18"
+                  >
+
+                    <div
+                      *cdkVirtualFor="let line of logLines(); let i = index"
+                      class="log-line"
+                      [class.log-line--highlighted]="i === highlightedLogLineIndex()"
+                    >
+
+                      <span class="log-line-number">
+                        {{ i + 1 }}
+                      </span>
+
+                      <span class="log-line-content">
+                        {{ line }}
+                      </span>
+
+                    </div>
+
+                  </cdk-virtual-scroll-viewport>
+
+                }
+
+              </div>
+
+            </div>
+
+          } @else {
+
+            <div class="empty-state">
+
+              <h2>
+                No logs available
+              </h2>
+
+              <p>
+                No calibration logs have been recorded for this model yet.
+              </p>
+
+            </div>
+
+          }
+
+        }
+
+      }
+
+    </section>
+
+  }
+
+</div>

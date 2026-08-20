@@ -10,6 +10,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
@@ -17,6 +18,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -106,6 +108,32 @@ class MeKeysControllerTest {
            .andExpect(jsonPath("$.result").isString());
     }
 
+    // POST /me/keys/{keyId}/rotate
+
+    @Test
+    void rotateKey_returns404WhenNotOwner() throws Exception {
+        mvc.perform(post("/me/keys/3102/rotate")
+                .with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void rotateKey_returns404ForUnknownKey() throws Exception {
+        mvc.perform(post("/me/keys/99999/rotate")
+                .with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void rotateKey_rotatesOwnKeySuccessfully() throws Exception {
+        mvc.perform(post("/me/keys/3101/rotate")
+                .with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("API key rotated successfully"))
+           .andExpect(jsonPath("$.api_key").isString())
+           .andExpect(jsonPath("$.api_key").value(org.hamcrest.Matchers.not("alice-key-1")));
+    }
+
     // GET /me/keys/{keyId}/models
 
     @Test
@@ -115,11 +143,20 @@ class MeKeysControllerTest {
     }
 
     @Test
-    void getModels_returnsTeamModelList() throws Exception {
+    void getModels_hidesProviderNamesFromAppDevelopers() throws Exception {
         mvc.perform(get("/me/keys/3101/models").with(TestJwt.forSeededUser(ALICE_ID, "alice")))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.length()").value(1))
            .andExpect(jsonPath("$[0].model_name").value("test-model"))
+           .andExpect(jsonPath("$[0].provider_name").doesNotExist());
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = "UPDATE users SET role = 'app_admin' WHERE id = 1101")
+    void getModels_includesProviderNamesForAppAdmins() throws Exception {
+        mvc.perform(get("/me/keys/3101/models").with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isOk())
            .andExpect(jsonPath("$[0].provider_name").value("test-provider"));
     }
 
