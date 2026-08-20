@@ -44,13 +44,17 @@
 
       <!-- Model Name -->
       <div class="col-name name-cell" role="cell">
-        <button
-          type="button"
-          class="model-name"
-          (click)="openReport(model)"
-        >
-          {{ model.name }}
-        </button>
+        @if (role() === 'logos_admin') {
+          <button
+            type="button"
+            class="model-name"
+            (click)="openReport(model)"
+          >
+            {{ model.name }}
+          </button>
+        } @else {
+          <span class="model-name">{{ model.name }}</span>
+        }
 
         @if (role() === 'logos_admin') {
           <div class="name-mobile-actions">
