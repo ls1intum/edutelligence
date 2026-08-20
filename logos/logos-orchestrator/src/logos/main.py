@@ -3609,31 +3609,68 @@ async def _wait_for_client_disconnect(request: Request) -> None:
         await asyncio.sleep(_CLIENT_DISCONNECT_POLL_SECONDS)
 
 
+async def _settle(task: asyncio.Task) -> Any:
+    """Cancel ``task`` and wait for its cleanup to finish.
+
+    The pipeline releases the scheduler slot in a ``finally`` block, so the
+    caller must not unwind before that has run — otherwise the lane stays
+    booked for a request that is already gone.
+    """
+    task.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        return await task
+    return None
+
+
+async def _discard_response(response: Any) -> None:
+    """Close a response nobody is left to read.
+
+    ``_streaming_response`` pulls the first chunk before handing the response
+    over, so by then the upstream connection is already open. Closing the body
+    iterator unwinds the executor's stream contexts instead of leaving them to
+    the garbage collector.
+    """
+    iterator = getattr(response, "body_iterator", None)
+    if iterator is None:
+        return
+    with suppress(Exception):
+        await iterator.aclose()
+
+
 async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
     """Run ``route_and_execute``, dropping the work if the client leaves.
 
     Uvicorn does not tear the handler down when a client vanishes mid-request,
-    so a non-streaming call kept a worker generating a response nobody would
-    read — a ghost request holding a GPU lane for as long as the generation
-    took. Cancelling the task unwinds the executor's ``httpx.AsyncClient``
-    context, which closes the upstream connection so vLLM aborts the sequence.
+    so the call kept a worker generating a response nobody would read — a ghost
+    request holding a GPU lane for as long as the generation took. Cancelling
+    the task unwinds the executor's ``httpx.AsyncClient`` context, which closes
+    the upstream connection so vLLM aborts the sequence.
+
+    Whether the response ends up streaming is decided deep inside the pipeline:
+    resource mode can resolve to Whisper and answer synchronously even for
+    ``stream: true``. So this reacts to what came back rather than predicting
+    it. Once a streaming response is handed on, Starlette's own watcher takes
+    over — it listens for the disconnect while the body is consumed and cancels
+    the generator, which unwinds the same stream context.
     """
     work = asyncio.create_task(route_and_execute(**kwargs))
     watcher = asyncio.create_task(_wait_for_client_disconnect(request))
     try:
         done, _ = await asyncio.wait({work, watcher}, return_when=asyncio.FIRST_COMPLETED)
     except asyncio.CancelledError:
-        work.cancel()
+        await _settle(work)
         raise
     finally:
         watcher.cancel()
 
-    if work in done:
+    # The watcher may land in the same batch as a finished task. Its probe
+    # consumes the http.disconnect message, so a response produced in that
+    # same tick can no longer be handed to Starlette's watcher — drop it here
+    # instead of streaming it into a closed socket.
+    if work in done and watcher not in done:
         return work.result()
 
-    work.cancel()
-    with suppress(asyncio.CancelledError):
-        await work
+    await _discard_response(await _settle(work))
 
     request_id = kwargs.get("request_id")
     logger.info("Cancelled request %s: client disconnected before the response was ready", request_id)
@@ -3689,12 +3726,6 @@ async def handle_sync_request(path: str, request: Request):
         log_id=log_id,
         request_id=request_id,
     )
-    # While a StreamingResponse is being consumed Starlette watches for the
-    # disconnect itself and cancels the generator, which unwinds the executor's
-    # stream context. Polling the receive channel here would race that watcher
-    # for the http.disconnect message, so only whole responses get the guard.
-    if payload_requests_streaming(body) and not is_whisper_payload(body):
-        return await route_and_execute(**execute_kwargs)
     return await _execute_cancelling_on_disconnect(request, **execute_kwargs)
 
 

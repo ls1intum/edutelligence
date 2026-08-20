@@ -161,6 +161,11 @@ def _strip_nul(value: Any) -> Any:
     ``json.dumps`` the escape for a NUL also occurs as a substring of an escaped
     backslash, so replacing it in the text would leave a dangling backslash
     behind and corrupt the document.
+
+    Keys that differ only in NULs collapse into one, and the last one wins —
+    a JSON object cannot hold both. That only arises for deliberately crafted
+    payloads, and these values feed audit logs rather than behaviour, so losing
+    one member of such a pair beats rejecting the request.
     """
     if isinstance(value, str):
         return value.replace("\x00", "")
@@ -437,7 +442,12 @@ class DBManager:
             "updated_at": datetime.datetime.now(datetime.timezone.utc),
         }
         if result_payload is not None:
-            update_data["result_payload"] = result_payload
+            # jobs.result_payload is jsonb and the reflected update binds this
+            # dict directly, so SQLAlchemy serialises it — _json_for_jsonb would
+            # store its string as a JSON scalar instead of an object. A NUL in a
+            # model's answer would otherwise fail the write and leave the job
+            # without its result.
+            update_data["result_payload"] = _strip_nul(result_payload)
         if error_message is not None:
             update_data["error_message"] = (
                 error_message if isinstance(error_message, str) else _stringify_error_message(error_message)

@@ -1,9 +1,9 @@
 """A client that vanishes mid-request must not leave the worker generating.
 
-Uvicorn does not tear the handler down when the connection breaks, so a
-non-streaming call kept a GPU lane busy producing a response nobody would read.
-Cancelling the task unwinds the executor's httpx context, which closes the
-upstream connection so vLLM aborts the sequence.
+Uvicorn does not tear the handler down when the connection breaks, so the call
+kept a GPU lane busy producing a response nobody would read. Cancelling the task
+unwinds the executor's httpx context, which closes the upstream connection so
+vLLM aborts the sequence.
 """
 
 from __future__ import annotations
@@ -27,6 +27,16 @@ class _Client:
     async def is_disconnected(self) -> bool:
         self.probes += 1
         return self._leaves
+
+
+class _Body:
+    """Async iterator stand-in that records being closed."""
+
+    def __init__(self):
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +88,49 @@ async def test_upstream_work_is_cancelled_when_the_client_leaves(monkeypatch, re
 
 
 @pytest.mark.asyncio
+async def test_pipeline_cleanup_finishes_before_the_wrapper_returns(monkeypatch, recorded_failures):
+    """The scheduler slot is released in a finally block, so it has to be awaited."""
+    released = []
+
+    async def fake_route_and_execute(**kwargs):
+        try:
+            await asyncio.sleep(30)
+        finally:
+            await asyncio.sleep(0)
+            released.append("scheduler slot")
+
+    monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
+
+    await main._execute_cancelling_on_disconnect(_Client(leaves=True), log_id=1, request_id="req-3")
+
+    assert released == ["scheduler slot"]
+
+
+@pytest.mark.asyncio
+async def test_a_response_finished_as_the_client_left_is_closed(monkeypatch, recorded_failures):
+    """The disconnect probe consumes the message Starlette's watcher would need."""
+    body = _Body()
+    streamed = MagicMock()
+    streamed.body_iterator = body
+
+    async def fake_route_and_execute(**kwargs):
+        return streamed
+
+    monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
+
+    response = await main._execute_cancelling_on_disconnect(_Client(leaves=True), log_id=2, request_id="req-4")
+
+    assert response.status_code == 499
+    assert body.closed, "the upstream stream was left open"
+
+
+@pytest.mark.asyncio
+async def test_discarding_a_plain_response_is_a_no_op():
+    await main._discard_response(MagicMock(spec=[]))
+    await main._discard_response(None)
+
+
+@pytest.mark.asyncio
 async def test_errors_from_the_pipeline_still_propagate(monkeypatch):
     async def fake_route_and_execute(**kwargs):
         raise HTTPException(status_code=404, detail="no deployments")
@@ -85,39 +138,34 @@ async def test_errors_from_the_pipeline_still_propagate(monkeypatch):
     monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
 
     with pytest.raises(HTTPException) as excinfo:
-        await main._execute_cancelling_on_disconnect(_Client(leaves=False), log_id=None, request_id="req-3")
+        await main._execute_cancelling_on_disconnect(_Client(leaves=False), log_id=None, request_id="req-5")
 
     assert excinfo.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_streaming_requests_keep_starlettes_own_disconnect_watcher(monkeypatch):
-    """Polling the receive channel here would race Starlette for the disconnect."""
+async def test_streaming_requests_are_guarded_too(monkeypatch):
+    """Resource mode can resolve to Whisper and answer synchronously even for stream: true."""
     guarded = []
-    direct = []
 
     async def fake_auth_parse_log(request, use_profile_auth=False):
         auth = MagicMock()
         auth.api_key_id = 88
-        return {}, auth, {"model": "some-model", "stream": True}, "127.0.0.1", None
+        return {}, auth, {"stream": True}, "127.0.0.1", None
 
     async def fake_filter(deployments):
         return deployments
 
+    async def fake_guard(request, **kwargs):
+        guarded.append(kwargs)
+        return "guarded"
+
     monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
     monkeypatch.setattr(main, "request_setup", lambda headers, api_key_id: ([{"model_id": 1}], ["m"]))
     monkeypatch.setattr(main, "_filter_logosnode_deployments", fake_filter)
-    monkeypatch.setattr(main, "route_and_execute", lambda **kwargs: direct.append(kwargs) or _done())
-    monkeypatch.setattr(
-        main,
-        "_execute_cancelling_on_disconnect",
-        lambda request, **kwargs: guarded.append(kwargs) or _done(),
-    )
+    monkeypatch.setattr(main, "_execute_cancelling_on_disconnect", fake_guard)
 
-    await main.handle_sync_request("chat/completions", _Client(leaves=False))
+    result = await main.handle_sync_request("chat/completions", _Client(leaves=False))
 
-    assert direct and not guarded
-
-
-async def _done():
-    return "streamed"
+    assert result == "guarded"
+    assert len(guarded) == 1

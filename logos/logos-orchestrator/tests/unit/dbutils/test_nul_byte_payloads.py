@@ -113,3 +113,20 @@ def test_strip_nul_leaves_non_strings_alone():
     value = {"n": 1, "f": 1.5, "b": True, "none": None}
 
     assert _strip_nul(value) == value
+
+
+def test_job_result_payload_is_sanitised():
+    """jobs.result_payload is jsonb and the reflected update binds the dict directly."""
+    db = _db()
+    db.update = MagicMock()
+    db.update_job_status(7, "completed", result_payload={"text": "answer" + NUL})
+
+    update_data = db.update.call_args[0][2]
+    assert update_data["result_payload"] == {"text": "answer"}
+
+
+def test_keys_differing_only_in_nuls_collapse_to_the_last_one():
+    """Documented trade-off: a JSON object cannot hold both, and dropping beats a 500."""
+    collapsed = _strip_nul({"k" + NUL: "first", "k": "second"})
+
+    assert collapsed == {"k": "second"}
