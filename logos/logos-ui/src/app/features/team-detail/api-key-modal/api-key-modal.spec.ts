@@ -1,3 +1,4 @@
+import { SimpleChange } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
 import { TeamManagementService } from '../../../core/services/team-management.service';
@@ -11,6 +12,7 @@ describe('ApiKeyModalComponent', () => {
     updateApiKey: ReturnType<typeof vi.fn>;
     setApiKeyProviderPermissions: ReturnType<typeof vi.fn>;
     setApiKeyModelPermissions: ReturnType<typeof vi.fn>;
+    rotateApiKey: ReturnType<typeof vi.fn>;
   };
 
   const key: TeamApiKey = {
@@ -29,6 +31,7 @@ describe('ApiKeyModalComponent', () => {
       updateApiKey: vi.fn().mockResolvedValue(undefined),
       setApiKeyProviderPermissions: vi.fn().mockResolvedValue(undefined),
       setApiKeyModelPermissions: vi.fn().mockResolvedValue(undefined),
+      rotateApiKey: vi.fn().mockResolvedValue({ result: 'ok', api_key: 'lg-rotated-123' }),
     };
 
     await TestBed.configureTestingModule({
@@ -62,5 +65,50 @@ describe('ApiKeyModalComponent', () => {
 
     expect(teamService.setApiKeyProviderPermissions).toHaveBeenCalledWith(42, [10]);
     expect(teamService.setApiKeyModelPermissions).toHaveBeenCalledWith(42, [20]);
+  });
+
+  describe('rotation', () => {
+    it('updates the shared key object after a successful rotation', async () => {
+      key.key_value = 'lg-old-key-42';
+
+      await component.confirmRotate();
+
+      expect(teamService.rotateApiKey).toHaveBeenCalledWith(42);
+      expect(key.key_value).toBe('lg-rotated-123');
+      expect(component.effectiveKeyValue()).toBe('lg-rotated-123');
+      expect(component.rotateConfirm()).toBe(false);
+      expect(component.rotateError()).toBe('');
+    });
+
+    it('shows the rotated key when the modal is closed and reopened', async () => {
+      key.key_value = 'lg-old-key-42';
+
+      await component.confirmRotate();
+
+      // Reopening the modal re-runs initForm via ngOnChanges, resetting the
+      // transient form state; the displayed value must come from the (now
+      // rotated) key object, not a stale pre-rotation value (issue #733).
+      component.ngOnChanges({
+        visible: new SimpleChange(false, true, false),
+        key: new SimpleChange(null, key, false),
+      });
+
+      expect(component.effectiveKeyValue()).toBe('lg-rotated-123');
+      expect(component.maskedKey()).toContain('lg-rotated-123');
+    });
+
+    it('keeps the old key and reports an error when rotation fails', async () => {
+      teamService.rotateApiKey.mockRejectedValue(new Error('boom'));
+      key.key_value = 'lg-old-key-42';
+      component.requestRotate();
+
+      await component.confirmRotate();
+
+      expect(key.key_value).toBe('lg-old-key-42');
+      expect(component.effectiveKeyValue()).toBe('lg-old-key-42');
+      expect(component.rotateError()).toBe('Failed to rotate key, please try again.');
+      // The confirm box stays open so the user can retry or cancel.
+      expect(component.rotateConfirm()).toBe(true);
+    });
   });
 });
