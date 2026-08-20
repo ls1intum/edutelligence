@@ -2,7 +2,7 @@ import os
 import requests
 from enum import Enum
 from typing import Dict, List
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 from athena.logger import logger
 
 OLLAMA_PREFIX = "ollama_"
@@ -30,14 +30,12 @@ ollama_available_models: Dict[str, ChatOllama] = {}
 
 for _name in _discover_ollama_models():
     key = OLLAMA_PREFIX + _name
-    params = {
-        "model": _name,
-        "base_url": OLLAMA_BASE_URL,
-        "format": "json",
-    }
-    if _headers:
-        params["headers"] = _headers
-    ollama_available_models[key] = ChatOllama(**params)
+    ollama_available_models[key] = ChatOllama(
+        model=_name,
+        base_url=OLLAMA_BASE_URL,
+        format="json",
+        client_kwargs={"headers": _headers} if _headers else None,
+    )
 
 if ollama_available_models:
     logger.info("Available Ollama models: %s", ", ".join(ollama_available_models))
