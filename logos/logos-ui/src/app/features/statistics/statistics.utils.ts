@@ -1,11 +1,13 @@
-import type { RequestLogStats, VramV2Sample, TimelineEnqueueEvent, VramSeriesPoint, VramProviderPayload, RequestItem, PaginatedRequestItem } from './statistics.models';
+import type { RequestLogStats, VramV2Sample, TimelineEnqueueEvent, VramSeriesPoint, VramProviderPayload } from './statistics.models';
 import { cssVar } from './statistics.constants';
 
 // ── Recent-Requests helpers (ported from paginated-request-list.tsx) ──────────
 
 export type RequestStage = 'queued' | 'executing' | 'complete';
 
-export function deriveStage(item: PaginatedRequestItem): RequestStage {
+export function deriveStage(
+  item: { request_complete_ts: string | null; scheduled_ts: string | null },
+): RequestStage {
   if (item.request_complete_ts) return 'complete';
   if (item.scheduled_ts) return 'executing';
   return 'queued';
@@ -40,76 +42,82 @@ export function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
-export function mergeWithLive(
-  liveRequests: RequestItem[],
-  pageItems: PaginatedRequestItem[],
-  perPage: number
-): PaginatedRequestItem[] {
-  const toPaginated = (r: RequestItem): PaginatedRequestItem => ({
-    request_id: r.request_id,
-    model_name: r.model_name,
-    provider_name: r.provider_name,
-    // infer is_cloud from provider name (fallback when paginated
-    // endpoint hasn't returned yet; pageData carries the real flag).
-    is_cloud:
-      r.provider_name?.toLowerCase().includes('openai') ||
-      r.provider_name?.toLowerCase().includes('azure') ||
-      r.provider_name?.toLowerCase().includes('cloud'),
-    status: r.status,
-    timestamp: r.timestamp,
-    duration: r.duration,
-    cold_start: r.cold_start,
-    enqueue_ts: r.enqueue_ts,
-    scheduled_ts: r.scheduled_ts,
-    request_complete_ts: r.request_complete_ts,
-    queue_seconds: r.queue_seconds,
-    total_seconds: r.total_seconds,
-    initial_priority: r.initial_priority,
-    priority_when_scheduled: r.priority_when_scheduled,
-    queue_depth_at_enqueue: r.queue_depth_at_enqueue,
-    error_message: r.error_message,
-    // the live WS payload carries no requester info, but pageData does.
-    team_name: null,
-    username: null,
-    environment: null,
-  });
+// ── X-axis labels (shared by request-volume and VRAM charts) ─────────────────
 
-  const liveById = new Map<string, PaginatedRequestItem>();
-  for (const r of liveRequests) {
-    liveById.set(r.request_id, toPaginated(r));
-  }
+export interface TimeAxisLabel {
+  tsMs: number;
+  label: string;
+}
 
-  const merged: PaginatedRequestItem[] = [];
-  const seen = new Set<string>();
-  for (const p of pageItems) {
-    const overlay = liveById.get(p.request_id);
-    if (overlay) {
-      // Preserve the paginated `is_cloud` flag and the requester fields
-      // (the WS payload has to infer/omit them); take everything else
-      // from the live row so state transitions render immediately.
-      merged.push({
-        ...overlay,
-        is_cloud: p.is_cloud ?? overlay.is_cloud,
-        team_name: p.team_name ?? overlay.team_name,
-        username: p.username ?? overlay.username,
-        environment: p.environment ?? overlay.environment,
+const MONTHS_SHORT = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+
+/**
+ * Deterministic, unambiguous x-axis labels for a time window (all UTC):
+ * - span ≤ 24 h   → "HH:00" at hour boundaries (hours are unique within 24 h)
+ * - span ≤ 32 d   → "Mon D" at day boundaries (the month prefix keeps labels
+ *                   unique, e.g. "Jul 30" vs "Aug 30" never collide)
+ * - span >  32 d  → "Mon YYYY" at month boundaries
+ * Labels are thinned to at most `maxLabels`, keeping the first of each step.
+ */
+export function timeAxisLabels(
+  winStartMs: number,
+  winEndMs: number,
+  maxLabels = 8,
+): TimeAxisLabel[] {
+  const spanMs = winEndMs - winStartMs;
+
+  if (spanMs <= 24 * HOUR_MS) {
+    const out: TimeAxisLabel[] = [];
+    for (let ts = Math.ceil(winStartMs / HOUR_MS) * HOUR_MS; ts < winEndMs; ts += HOUR_MS) {
+      out.push({
+        tsMs: ts,
+        label: `${String(new Date(ts).getUTCHours()).padStart(2, '0')}:00`,
       });
-    } else {
-      merged.push(p);
     }
-    seen.add(p.request_id);
-  }
-  for (const [id, r] of liveById) {
-    if (!seen.has(id)) merged.push(r);
+    return thinLabels(out, maxLabels);
   }
 
-  return merged
-    .sort((a, b) => {
-      const aTs = a.enqueue_ts ?? a.timestamp ?? '';
-      const bTs = b.enqueue_ts ?? b.timestamp ?? '';
-      return bTs.localeCompare(aTs);
-    })
-    .slice(0, perPage);
+  if (spanMs <= 32 * DAY_MS) {
+    const out: TimeAxisLabel[] = [];
+    for (let ts = Math.ceil(winStartMs / DAY_MS) * DAY_MS; ts < winEndMs; ts += DAY_MS) {
+      const d = new Date(ts);
+      out.push({
+        tsMs: ts,
+        label: `${MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCDate()}`,
+      });
+    }
+    return thinLabels(out, maxLabels);
+  }
+
+  // Month boundaries strictly inside the window.
+  const out: TimeAxisLabel[] = [];
+  const start = new Date(winStartMs);
+  let y = start.getUTCFullYear();
+  let m = start.getUTCMonth();
+  while (true) {
+    m += 1; // next month boundary
+    if (m > 11) {
+      m = 0;
+      y += 1;
+    }
+    const ts = Date.UTC(y, m, 1);
+    if (ts >= winEndMs) break;
+    out.push({ tsMs: ts, label: `${MONTHS_SHORT[m]} ${y}` });
+  }
+  return thinLabels(out, Math.max(maxLabels, 6));
+}
+
+/** Keep every n-th label so at most `max` survive (first label always kept). */
+function thinLabels<T extends TimeAxisLabel>(labels: T[], max: number): T[] {
+  if (labels.length <= max) return labels;
+  const step = Math.ceil(labels.length / max);
+  return labels.filter((_, i) => i % step === 0).slice(0, max);
 }
 
 // ── SVG Donut Arc ─────────────────────────────────────────────────────────────

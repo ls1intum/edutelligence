@@ -38,6 +38,8 @@ export type RequestLogStats = {
     warmStarts: number;
     avgQueueSeconds: number | null;
     avgRunSeconds: number | null;
+    totalTokens: number | null;
+    cloudCostMicroCents: number | null;
   };
   statusCounts: Record<string, number>;
   modelBreakdown: Array<{
@@ -106,6 +108,9 @@ export type LaneSignalData = {
   vllm: boolean;
   runtime_state: string; // "running"|"loaded"|"sleeping"|"starting"|"cold"|"stopped"|"error"
   sleep_state: string | null;
+  gpu_devices: string | null;
+  effective_gpu_devices: string | null;
+  num_parallel: number | null;
   active_requests: number;
   effective_vram_mb: number;
   gpu_cache_usage_percent: number | null;
@@ -266,6 +271,7 @@ export type VramProviderMeta = {
   runtime_modes?: string[];
   transport_connected?: boolean;
   last_heartbeat?: string | null;
+  calibrating?: boolean;
 };
 
 // VramProviderPayload from logos-ui-old/app/statistics.tsx lines 68-108
@@ -286,6 +292,7 @@ export interface RequestItem {
   request_id: string;
   model_name: string;
   provider_name: string;
+  is_cloud: boolean | null;
   status: string; // 'success', 'error', 'timeout', 'pending'
   timestamp: string | null;
   duration: number | null; // seconds (exec only)
@@ -299,4 +306,11 @@ export interface RequestItem {
   priority_when_scheduled: string | null;
   queue_depth_at_enqueue: number | null;
   error_message: string | null;
+  team_name: string | null;
+  username: string | null;
+  full_name: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  cost_microcents: number | null;
 }

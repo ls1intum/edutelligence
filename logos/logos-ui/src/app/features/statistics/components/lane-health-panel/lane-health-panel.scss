@@ -186,3 +186,114 @@
 .neutral {
   color: rgb(var(--color-typography-300));
 }
+
+// ── GPU placement line ───────────────────────────────────────────────────────
+.lane-gpu {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family-mono, monospace);
+  color: rgb(var(--color-typography-500));
+  margin-top: 3px;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+}
+
+// ── Empty (no lanes, provider online) ────────────────────────────────────────
+.lane-empty {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  padding: 8px 2px;
+}
+
+// ── Load-lane control ────────────────────────────────────────────────────────
+.lane-load {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lane-load__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lane-load__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  flex: 1;
+  min-width: 0;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+}
+
+.lane-load__select {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-100));
+  background: rgb(var(--glass-fill) / var(--opacity-faint));
+  border: 1px solid rgb(var(--glass-stroke) / 0.2);
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.btn-load {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-accent-cyan));
+  background: transparent;
+  border: 1px solid rgb(var(--color-accent-cyan) / var(--opacity-strong));
+  border-radius: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-accent-cyan) / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
+.lane-load__close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+
+  &:hover {
+    color: rgb(var(--color-typography-100));
+    background: rgb(var(--glass-fill) / var(--opacity-faint));
+  }
+}
