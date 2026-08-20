@@ -163,7 +163,11 @@ public class PriceUpdaterService {
             if (costObj == null) continue;
             double cost = ((Number) costObj).doubleValue();
             if (cost <= 0) continue;
-            long pricePerK = Math.round(cost * 1e11);
+            // Duration usage is stored as integer milliseconds. One thousand
+            // milliseconds equal one catalogue-priced second, so its per-1K
+            // unit price uses 1e8 rather than the usual 1e11.
+            double unitScale = "input_cost_per_second".equals(entry.getKey()) ? 1e8 : 1e11;
+            long pricePerK = Math.round(cost * unitScale);
             upsertTokenPrice(modelId, providerId, entry.getValue(), pricePerK, validFrom);
         }
         log.info("price_updater: prices updated for '{}' (id={}, provider_id={})", modelName, modelId, providerId);

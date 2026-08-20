@@ -19,17 +19,17 @@ public class ModelCapabilities {
     private Integer modelId;
 
     @Column(nullable = false)
-    private Boolean supportsFunctionCalling;
+    private boolean supportsFunctionCalling;
 
     @Column(nullable = false)
-    private Boolean supportsVision;
+    private boolean supportsVision;
 
     @Column(nullable = false)
-    private Boolean supportsReasoning;
+    private boolean supportsReasoning;
 
     public ModelCapabilities() {}
 
-    public ModelCapabilities(Integer modelId, Boolean supportsFunctionCalling, Boolean supportsVision, Boolean supportsReasoning) {
+    public ModelCapabilities(Integer modelId, boolean supportsFunctionCalling, boolean supportsVision, boolean supportsReasoning) {
         this.modelId = modelId;
         this.supportsFunctionCalling = supportsFunctionCalling;
         this.supportsVision = supportsVision;
@@ -39,12 +39,12 @@ public class ModelCapabilities {
 
     public Integer getId() { return id; }
     public Integer getModelId() { return modelId; }
-    public Boolean getSupportsFunctionCalling() { return supportsFunctionCalling; }
-    public Boolean getSupportsVision() { return supportsVision; }
-    public Boolean getSupportsReasoning() { return supportsReasoning; }
+    public boolean getSupportsFunctionCalling() { return supportsFunctionCalling; }
+    public boolean getSupportsVision() { return supportsVision; }
+    public boolean getSupportsReasoning() { return supportsReasoning; }
 
     public void setModelId(Integer modelId) { this.modelId = modelId; }
-    public void setSupportsFunctionCalling(Boolean supportsFunctionCalling) { this.supportsFunctionCalling = supportsFunctionCalling; }
-    public void setSupportsVision(Boolean supportsVision) { this.supportsVision = supportsVision; }
-    public void setSupportsReasoning(Boolean supportsReasoning) { this.supportsReasoning = supportsReasoning; }
+    public void setSupportsFunctionCalling(boolean supportsFunctionCalling) { this.supportsFunctionCalling = supportsFunctionCalling; }
+    public void setSupportsVision(boolean supportsVision) { this.supportsVision = supportsVision; }
+    public void setSupportsReasoning(boolean supportsReasoning) { this.supportsReasoning = supportsReasoning; }
 }

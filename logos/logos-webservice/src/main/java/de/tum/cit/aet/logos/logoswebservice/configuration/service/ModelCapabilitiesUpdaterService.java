@@ -1,7 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 
 import java.io.InputStream;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -13,16 +12,11 @@ import org.springframework.core.io.ResourceLoader;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
-import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
-import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
-import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
-import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
 
 @Service
 public class ModelCapabilitiesUpdaterService {
@@ -34,18 +28,17 @@ public class ModelCapabilitiesUpdaterService {
     private final ObjectMapper objectMapper;
     private final ResourceLoader resourceLoader;
     private final ModelRepository modelRepository;
-    private final ModelCapabilitiesRepository modelCapabilitiesRepository;
+    private final ModelCapabilitiesPersistenceService modelCapabilitiesPersistenceService;
 
     public ModelCapabilitiesUpdaterService(ObjectMapper objectMapper,
                                            ResourceLoader resourceLoader,
                                            ModelRepository modelRepository,
-                                           ModelProviderRepository modelProviderRepository,
-                                           ProviderRepository providerRepository,
-                                           ModelCapabilitiesRepository modelCapabilitiesRepository) {
+                                           ModelCapabilitiesPersistenceService modelCapabilitiesPersistenceService) {
+
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
         this.modelRepository = modelRepository;
-        this.modelCapabilitiesRepository = modelCapabilitiesRepository;
+        this.modelCapabilitiesPersistenceService = modelCapabilitiesPersistenceService;
     }
 
     @Scheduled(initialDelay = 0, fixedDelay = 86_400_000)
@@ -148,21 +141,12 @@ public class ModelCapabilitiesUpdaterService {
             return false;
         }
 
-        Map<String, Object> mergedCapabilities = new HashMap<>();
-        mergedCapabilities.put(
-            "supports_function_calling",
-            supportsFunctionCalling
-        );
-        mergedCapabilities.put(
-            "supports_vision",
-            supportsVision
-        );
-        mergedCapabilities.put(
-            "supports_reasoning",
+        modelCapabilitiesPersistenceService.updateModelCapabilities(
+            modelId,
+            supportsFunctionCalling,
+            supportsVision,
             supportsReasoning
         );
-
-        updateModelCapabilities(modelId, mergedCapabilities);
 
         return true;
     }
@@ -178,21 +162,6 @@ public class ModelCapabilitiesUpdaterService {
             log.error("capabilities_updater: failed to read local registry file from " + LOCAL_JSON_PATH, e);
             return null;
         }
-    }
-
-    @Transactional
-    protected void updateModelCapabilities(int modelId, Map<String, Object> data) {
-        ModelCapabilities capabilities = modelCapabilitiesRepository.findByModelId(modelId)
-            .orElseGet(() -> {
-                ModelCapabilities newCap = new ModelCapabilities();
-                newCap.setModelId(modelId);
-                return newCap;
-            });
-        capabilities.setSupportsFunctionCalling(Boolean.TRUE.equals(data.get("supports_function_calling")));
-        capabilities.setSupportsVision(Boolean.TRUE.equals(data.get("supports_vision")));
-        capabilities.setSupportsReasoning(Boolean.TRUE.equals(data.get("supports_reasoning")));
-
-        modelCapabilitiesRepository.save(capabilities);
     }
 
     private String extractModelName(String catalogKey) {

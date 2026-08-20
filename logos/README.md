@@ -132,6 +132,7 @@ To deploy Logos locally:
    ng serve
    ```
 
+   > 💡 **Note for Linux users:** Should you encounter `EACCES` permissions errors during the setup, consult the [Official npm Documentation](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally).
 3. Log In
 
    Once running, open the UI at:
