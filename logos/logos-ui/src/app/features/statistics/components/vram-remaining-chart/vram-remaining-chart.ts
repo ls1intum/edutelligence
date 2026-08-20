@@ -9,21 +9,12 @@ import {
   SimpleChanges,
   ChangeDetectionStrategy,
 } from '@angular/core';
-import { SegmentedSwitchComponent } from '../segmented-switch/segmented-switch';
 import { StatsSkeletonComponent } from '../skeletons/skeletons';
 import { VramRangeSliderComponent } from '../vram-range-slider/vram-range-slider';
 import { seriesColor } from '../../statistics.constants';
-import { parseVramSnapshot } from '../../statistics.utils';
+import { parseVramSnapshot, timeAxisLabels } from '../../statistics.utils';
 import type { VramV2Sample, VramProviderMeta, LaneSignalData } from '../../statistics.models';
 import { pointerPlotFrac, nearestIndex } from '../chart-interaction.util';
-
-// ── Live-window constants ─────────────────────────────────────────────────────
-const LIVE_WINDOW_MINUTES = 30;
-const LIVE_WINDOW_MS = LIVE_WINDOW_MINUTES * 60_000;
-const LIVE_RIGHT_PAD_MS = 60_000;
-/** If the newest sample is older than this, anchor the live window to the
- *  data rather than wall-clock so the chart doesn't look empty. */
-const LIVE_STALENESS_LIMIT_MS = 5 * 60_000;
 
 // ── SVG geometry ─────────────────────────────────────────────────────────────
 const CHART_W = 1000;
@@ -33,9 +24,10 @@ const CHART_PAD_BOTTOM = 24;
 const CHART_PAD_TOP = 8;
 const CHART_PAD_RIGHT = 8;
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+/** If the newest sample is older than this, flag it as stale in the badge. */
+const STALENESS_LIMIT_MS = 5 * 60_000;
 
-type ViewMode = 'live' | 'full';
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface PlotPoint {
   x: number;
@@ -87,30 +79,12 @@ function formatGb(v: number): string {
   return `${v.toFixed(0)} GB`;
 }
 
-/** UTC day start (ms) for `nowMs - offsetDays * DAY_MS`. */
-function utcDayStart(nowMs: number, offsetDays: number): number {
-  const d = new Date(nowMs - offsetDays * 86_400_000);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
-
-function periodLabel(offset: number, nowMs: number): string {
-  if (offset === 0) return 'Today';
-  if (offset === 1) return 'Yesterday';
-  const d = new Date(utcDayStart(nowMs, offset));
-  return d.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
-}
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 @Component({
   selector: 'app-stats-vram-remaining-chart',
   standalone: true,
-  imports: [SegmentedSwitchComponent, StatsSkeletonComponent, VramRangeSliderComponent],
+  imports: [StatsSkeletonComponent, VramRangeSliderComponent],
   templateUrl: './vram-remaining-chart.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './vram-remaining-chart.scss',
@@ -119,29 +93,29 @@ export class VramRemainingChartComponent implements OnChanges {
   // ── Inputs ──────────────────────────────────────────────────────────────────
   @Input() vramDataByProvider: Record<string, VramV2Sample[]> = {};
   @Input() providerMetaByName: Record<string, VramProviderMeta> = {};
-  @Input() vramDayOffset = 0;
+  /**
+   * The global (user-selected) time range. The always-live 'all' VRAM dataset
+   * is windowed over this range; the range slider only zooms inside it.
+   */
+  @Input() timeRange: { startMs: number; endMs: number } = { startMs: 0, endMs: 0 };
   @Input() isVramLoading = false;
   @Input() vramError: string | null = null;
   @Input() nowMs = Date.now();
   @Input() laneStateByProvider: Record<string, Record<string, LaneSignalData>> = {};
 
   // ── Outputs ─────────────────────────────────────────────────────────────────
-  @Output() vramDayOffsetChange = new EventEmitter<number>();
   @Output() refresh = new EventEmitter<void>();
 
   // ── Internal state ───────────────────────────────────────────────────────────
-  /** Live / Full History toggle */
-  readonly view = signal<ViewMode>('live');
-
   // Input mirror signals so computed() reacts on ngOnChanges
   private readonly _data = signal<Record<string, VramV2Sample[]>>({});
-  private readonly _offset = signal(0);
+  private readonly _range = signal<{ startMs: number; endMs: number }>({ startMs: 0, endMs: 0 });
   private readonly _nowMs = signal(Date.now());
 
   /** Hover fraction (0..1 across the plot area). null = no hover. */
   readonly hoverIndex = signal<number | null>(null);
 
-  /** Slider-controlled visible window (ms). 0 = use computed default (full day). */
+  /** Slider-controlled zoom window (ms) inside the global range. 0 = no zoom. */
   readonly visibleStart = signal<number>(0);
   readonly visibleEnd = signal<number>(0);
 
@@ -152,19 +126,6 @@ export class VramRemainingChartComponent implements OnChanges {
   readonly CHART_PAD_BOTTOM = CHART_PAD_BOTTOM;
   readonly CHART_PAD_TOP = CHART_PAD_TOP;
   readonly CHART_PAD_RIGHT = CHART_PAD_RIGHT;
-
-  // ── Segmented-switch options ─────────────────────────────────────────────────
-  readonly viewOptions = [
-    { value: 'live', label: `Live (${LIVE_WINDOW_MINUTES}m)` },
-    { value: 'full', label: 'Full History' },
-  ];
-
-  // ── Period label (day-nav) ───────────────────────────────────────────────────
-  readonly periodLabel = computed(() => periodLabel(this._offset(), this._nowMs()));
-
-  // ── Day boundaries (exposed to template for slider min/max) ─────────────────
-  readonly dayStartMs = computed(() => utcDayStart(this._nowMs(), this._offset()));
-  readonly dayEndMs = computed(() => this.dayStartMs() + 86_400_000);
 
   // ── Latest sample timestamp across all providers ─────────────────────────────
   readonly latestSampleMs = computed((): number | null => {
@@ -186,7 +147,7 @@ export class VramRemainingChartComponent implements OnChanges {
     const d = new Date(ts);
     const now = this._nowMs();
     const ageMs = Math.max(0, now - ts);
-    const isStale = ageMs > LIVE_STALENESS_LIMIT_MS;
+    const isStale = ageMs > STALENESS_LIMIT_MS;
     const time = d.toLocaleTimeString('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
@@ -210,21 +171,28 @@ export class VramRemainingChartComponent implements OnChanges {
     return `${time} UTC`;
   });
 
-  /** True if the last sample is older than LIVE_STALENESS_LIMIT_MS */
+  /** True if the last sample is older than STALENESS_LIMIT_MS */
   readonly isStale = computed(() => {
     const ts = this.latestSampleMs();
     if (ts === null) return false;
-    return this._nowMs() - ts > LIVE_STALENESS_LIMIT_MS;
+    return this._nowMs() - ts > STALENESS_LIMIT_MS;
+  });
+
+  // ── Visible window (global range, optionally zoomed by the slider) ──────────
+  private readonly _visibleWindow = computed((): { winStartMs: number; winEndMs: number } => {
+    const range = this._range();
+    const sliderStart = this.visibleStart();
+    const sliderEnd = this.visibleEnd();
+    if (sliderStart !== 0 && sliderEnd !== 0 && sliderEnd > sliderStart) {
+      return { winStartMs: sliderStart, winEndMs: sliderEnd };
+    }
+    return { winStartMs: range.startMs, winEndMs: range.endMs };
   });
 
   // ── Chart computation ────────────────────────────────────────────────────────
   readonly chartData = computed((): ChartOutput => {
     const data = this._data();
-    const offset = this._offset();
-    const nowMs = this._nowMs();
-    const view = this.view();
-    const sliderStart = this.visibleStart();
-    const sliderEnd = this.visibleEnd();
+    const { winStartMs, winEndMs } = this._visibleWindow();
 
     const empty: ChartOutput = {
       series: [],
@@ -239,36 +207,8 @@ export class VramRemainingChartComponent implements OnChanges {
     const providers = Object.keys(data);
     if (providers.length === 0) return empty;
 
-    const dayStartMs = utcDayStart(nowMs, offset);
-    const dayEndMs = dayStartMs + 86_400_000;
-
-    // Determine visible x-window
-    let winStartMs: number;
-    let winEndMs: number;
-
-    if (view === 'live') {
-      // TODO: For now full-day is also shown when no data is within the live window.
-      // A future improvement could anchor precisely to the trailing LIVE_WINDOW_MS.
-      const latestTs = this.latestSampleMs();
-      if (latestTs !== null) {
-        const isStale = nowMs - latestTs > LIVE_STALENESS_LIMIT_MS;
-        const anchor = isStale ? latestTs : Math.max(nowMs, latestTs);
-        winEndMs = anchor + LIVE_RIGHT_PAD_MS;
-        winStartMs = winEndMs - LIVE_WINDOW_MS;
-      } else {
-        // No data yet, so show the full day so the chart isn't blank
-        winStartMs = dayStartMs;
-        winEndMs = dayEndMs;
-      }
-    } else {
-      winStartMs = dayStartMs;
-      winEndMs = dayEndMs;
-    }
-
-    // Apply slider override when set (non-zero values indicate an explicit window)
-    if (sliderStart !== 0 && sliderEnd !== 0 && sliderEnd > sliderStart) {
-      winStartMs = sliderStart;
-      winEndMs = sliderEnd;
+    if (!Number.isFinite(winStartMs) || !Number.isFinite(winEndMs) || winEndMs <= winStartMs) {
+      return empty;
     }
 
     const winDurMs = Math.max(winEndMs - winStartMs, 1);
@@ -355,26 +295,17 @@ export class VramRemainingChartComponent implements OnChanges {
       label: formatGb(f * yMax),
     }));
 
-    // ── X-axis labels (hourly within window) ─────────────────────────────────
-    const xLabels: XLabel[] = [];
-    const hourMs = 3_600_000;
-    const firstHour = Math.ceil(winStartMs / hourMs) * hourMs;
-    for (let ts = firstHour; ts <= winEndMs; ts += hourMs) {
-      const x = tsToX(ts);
-      if (x < CHART_PAD_LEFT || x > CHART_W - CHART_PAD_RIGHT) continue;
-      const d = new Date(ts);
-      const label = `${String(d.getUTCHours()).padStart(2, '0')}:00`;
-      xLabels.push({ x, label });
-    }
-    // Thin out if too many
-    const maxLabels = 8;
-    const step = Math.max(1, Math.ceil(xLabels.length / maxLabels));
-    const filteredLabels = xLabels.filter((_, i) => i % step === 0);
+    // ── X-axis labels (adaptive to the window span, always unambiguous) ──────
+    const xLabels = timeAxisLabels(winStartMs, winEndMs, 8).map((l) => {
+      const x = tsToX(l.tsMs);
+      if (x < CHART_PAD_LEFT || x > CHART_W - CHART_PAD_RIGHT) return null;
+      return { x, label: l.label };
+    }).filter((l): l is XLabel => l !== null);
 
     return {
       series,
       gridLines,
-      xLabels: filteredLabels,
+      xLabels,
       plotLeft: CHART_PAD_LEFT,
       plotRight: CHART_W - CHART_PAD_RIGHT,
       plotTop: CHART_PAD_TOP,
@@ -388,32 +319,13 @@ export class VramRemainingChartComponent implements OnChanges {
     return Object.values(data).some((arr) => arr.length > 0);
   });
 
-  // ── Visible window (mirrors logic in chartData for crosshair use) ────────────
-  private readonly _visibleWindow = computed((): { winStartMs: number; winEndMs: number } => {
-    const offset = this._offset();
-    const nowMs = this._nowMs();
-    const view = this.view();
-    const sliderStart = this.visibleStart();
-    const sliderEnd = this.visibleEnd();
-    const dayStartMs = utcDayStart(nowMs, offset);
-    const dayEndMs = dayStartMs + 86_400_000;
-
-    // Apply slider override when set
-    if (sliderStart !== 0 && sliderEnd !== 0 && sliderEnd > sliderStart) {
-      return { winStartMs: sliderStart, winEndMs: sliderEnd };
-    }
-
-    if (view === 'live') {
-      const latestTs = this.latestSampleMs();
-      if (latestTs !== null) {
-        const isStale = nowMs - latestTs > LIVE_STALENESS_LIMIT_MS;
-        const anchor = isStale ? latestTs : Math.max(nowMs, latestTs);
-        const winEndMs = anchor + LIVE_RIGHT_PAD_MS;
-        return { winStartMs: winEndMs - LIVE_WINDOW_MS, winEndMs };
-      }
-    }
-    return { winStartMs: dayStartMs, winEndMs: dayEndMs };
-  });
+  /** True when the visible (zoomed) window differs from the full range. */
+  readonly isZoomed = computed(
+    () =>
+      this.visibleStart() !== 0 &&
+      this.visibleEnd() !== 0 &&
+      (this.visibleStart() !== this._range().startMs || this.visibleEnd() !== this._range().endMs),
+  );
 
   // ── Crosshair computed ───────────────────────────────────────────────────────
   readonly crosshair = computed((): {
@@ -511,9 +423,8 @@ export class VramRemainingChartComponent implements OnChanges {
     this.hoverIndex.set(null);
   }
 
-  /** Restore the full day view (reset live-window to full-history for current offset). */
+  /** Restore the full (unzoomed) range view. */
   resetView(): void {
-    this.view.set('full');
     this.visibleStart.set(0);
     this.visibleEnd.set(0);
   }
@@ -527,9 +438,9 @@ export class VramRemainingChartComponent implements OnChanges {
   // ── ngOnChanges bridge ──────────────────────────────────────────────────────
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['vramDataByProvider']) this._data.set(this.vramDataByProvider);
-    if (changes['vramDayOffset']) {
-      this._offset.set(this.vramDayOffset);
-      // Reset slider window when navigating to a different day
+    if (changes['timeRange']) {
+      this._range.set(this.timeRange);
+      // Reset the zoom window when the global range changes
       this.visibleStart.set(0);
       this.visibleEnd.set(0);
     }
@@ -539,25 +450,5 @@ export class VramRemainingChartComponent implements OnChanges {
   // ── Formatters ───────────────────────────────────────────────────────────────
   formatGb(v: number): string {
     return formatGb(v);
-  }
-
-  // ── Day-nav handlers ────────────────────────────────────────────────────────
-  // Day navigation only affects the Full History window; the live window is
-  // always anchored to now, so the nav is locked while Live is active.
-  navPrev(): void {
-    if (this.view() === 'live') return;
-    this.vramDayOffsetChange.emit(this.vramDayOffset + 1);
-  }
-
-  navNext(): void {
-    if (this.view() === 'live' || this.vramDayOffset === 0) return;
-    this.vramDayOffsetChange.emit(this.vramDayOffset - 1);
-  }
-
-  setView(v: string): void {
-    this.view.set(v as ViewMode);
-    if (v === 'live' && this.vramDayOffset !== 0) {
-      this.vramDayOffsetChange.emit(0);
-    }
   }
 }

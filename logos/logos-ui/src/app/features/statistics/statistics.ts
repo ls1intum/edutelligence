@@ -102,7 +102,6 @@ export class Statistics implements OnInit, OnDestroy {
   readonly latestRequests = signal<RequestItem[]>([]);
   readonly timelineEvents = signal<TimelineEnqueueEvent[]>([]);
   readonly selectedVramProvider = signal<string | null>(null);
-  readonly vramDayOffset = signal(0);
   readonly customRange = signal<{ start: Date; end: Date } | null>(null);
   readonly error = signal<string | null>(null);
   readonly vramError = signal<string | null>(null);
@@ -114,7 +113,7 @@ export class Statistics implements OnInit, OnDestroy {
   private readonly chartTooltipEl = viewChild<ElementRef<HTMLElement>>('chartTooltipEl');
 
   // ── Preset / time-range-bar state ─────────────────────────────────────────────
-  readonly preset = signal<TimePreset>('month');
+  readonly preset = signal<TimePreset>('30d');
   readonly offset = signal(0);
   readonly presetRange = computed(() => calendarRange(this.preset(), this.offset()));
   readonly periodLabel = computed(() =>
@@ -558,6 +557,25 @@ export class Statistics implements OnInit, OnDestroy {
   readonly cloudRequests = computed(() => this.stats()?.totals.cloudRequests ?? 0);
   readonly localRequests = computed(() => this.stats()?.totals.localRequests ?? 0);
 
+  // Historic totals over the selected range (items 6): tokens processed and
+  // accumulated cloud cost in microcents.
+  readonly totalTokens = computed(() => this.stats()?.totals.totalTokens ?? 0);
+  readonly cloudCostMicroCents = computed(() => this.stats()?.totals.cloudCostMicroCents ?? 0);
+
+  /** Format a token count for the KPI card (1.2M / 340k / 12). */
+  formatTokenCount(v: number): string {
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+    if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
+    return String(Math.round(v));
+  }
+
+  /** Format cloud cost in microcents as EUR (µ¢ ÷ 1e6). */
+  formatCloudCost(microCents: number): string {
+    const euros = microCents / 1_000_000;
+    if (euros === 0) return '€0.00';
+    return `€${euros < 0.01 ? euros.toFixed(4) : euros.toFixed(2)}`;
+  }
+
   readonly cloudPct = computed(() => {
     const total = this.totalRequests();
     const cloud = this.cloudRequests();
@@ -730,12 +748,25 @@ export class Statistics implements OnInit, OnDestroy {
     this.selectedVramProvider.set(name);
   }
 
-  setVramDayOffset(offset: number): void {
-    // Client-side only: re-windows the VRAM-remaining chart over the always-live
-    // 'all' dataset. The websocket vram_day is never re-scoped, so the provider
-    // panels (lanes, VRAM, GPUs) keep receiving live data.
-    this.vramDayOffset.set(offset);
-  }
+  /**
+   * The user-selected time range in epoch ms — the VRAM-remaining chart
+   * windows its (always-live 'all') samples over this global range instead of
+   * maintaining its own day offset.
+   */
+  readonly selectedTimeRangeMs = computed(() => {
+    const cfg = this.wsTimelineConfig();
+    return {
+      startMs: new Date(cfg.start).getTime(),
+      endMs: new Date(cfg.end).getTime(),
+    };
+  });
+
+  /** True while the selected provider's worker is running a calibration session. */
+  readonly selectedProviderCalibrating = computed(() => {
+    const prov = this.selectedVramProvider();
+    if (!prov) return false;
+    return this.vramProviderMetaByName()[prov]?.calibrating === true;
+  });
 
   setCustomRange(range: { start: Date; end: Date }): void {
     this.customRange.set(range);
@@ -858,6 +889,7 @@ export class Statistics implements OnInit, OnDestroy {
         runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
         last_heartbeat: provider.last_heartbeat,
+        calibrating: Boolean(provider.calibrating),
       };
       if (Array.isArray(provider.devices) && provider.devices.length) {
         nextDevices[provider.name] = provider.devices;
@@ -884,6 +916,7 @@ export class Statistics implements OnInit, OnDestroy {
         runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
         last_heartbeat: provider.last_heartbeat,
+        calibrating: Boolean(provider.calibrating),
       };
       const current = prevMeta[provider.name];
       const same =
@@ -893,7 +926,8 @@ export class Statistics implements OnInit, OnDestroy {
         current?.provider_type === meta.provider_type &&
         JSON.stringify(current?.runtime_modes || []) === JSON.stringify(meta.runtime_modes || []) &&
         current?.transport_connected === meta.transport_connected &&
-        current?.last_heartbeat === meta.last_heartbeat;
+        current?.last_heartbeat === meta.last_heartbeat &&
+        Boolean(current?.calibrating) === meta.calibrating;
       if (!same) {
         if (nextMeta === prevMeta) nextMeta = { ...prevMeta };
         nextMeta[provider.name] = meta;

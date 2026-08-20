@@ -45,6 +45,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
         volatile String timelineStart;
         volatile String timelineEnd;
+        // Span of the user-selected window; the live delta slide keeps this
+        // span and only advances the end to "now" (so a "last day" selection
+        // is not silently widened to the default 30 days).
+        volatile long windowSeconds = DEFAULT_WINDOW_DAYS * 86400L;
         volatile int targetBuckets = DEFAULT_TARGET_BUCKETS;
         volatile int bucketSeconds = 60;
         volatile boolean timelineLive = true;
@@ -59,6 +63,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
             timelineEnd = now.toInstant().toString();
             timelineStart = now.minusDays(DEFAULT_WINDOW_DAYS).toInstant().toString();
+            windowSeconds = DEFAULT_WINDOW_DAYS * 86400L;
             cursorTs = timelineEnd;
             cursorId = "";
             timelineLive = true;
@@ -73,6 +78,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 if (e.isAfter(now)) e = now;
                 timelineStart = s.toInstant().toString();
                 timelineEnd = e.toInstant().toString();
+                windowSeconds = Math.max(e.toEpochSecond() - s.toEpochSecond(), 1);
                 targetBuckets = Math.max(1, buckets);
                 timelineLive = now.toEpochSecond() - e.toEpochSecond() <= 120;
                 cursorTs = timelineEnd;
@@ -193,6 +199,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                                  "payload", Map.of("error", "Invalid timeline range")));
         } else {
             pushTimelineInit(session, state);
+            pushRequests(session, state, true);
         }
     }
 
@@ -276,7 +283,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         for (Object p : providers) {
             if (!(p instanceof Map<?, ?> provider)) continue;
             sb.append(provider.get("provider_id")).append(':')
-              .append(provider.get("connection_state")).append(',');
+              .append(provider.get("connection_state")).append(':')
+              .append(provider.get("calibrating")).append(',');
         }
         return sb.toString();
     }
@@ -318,7 +326,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
             state.timelineEnd   = untilIso;
-            state.timelineStart = now.minusSeconds((long)(DEFAULT_WINDOW_DAYS * 86400L)).toInstant().toString();
+            state.timelineStart = now.minusSeconds(state.windowSeconds).toInstant().toString();
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("events", events);
@@ -334,7 +342,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
     private void pushRequests(WebSocketSession session, SessionState state, boolean force) {
         try {
-            Map<String, Object> payload = requestLogService.getLatestRequests();
+            Map<String, Object> payload = requestLogService.getLatestRequests(state.timelineStart, state.timelineEnd);
             String sig = requestsSig(payload);
             if (force || !sig.equals(state.prevReqSig)) {
                 state.prevReqSig = sig;
@@ -345,6 +353,9 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    // Content-only signature: the live window slide advances the range on
+    // every delta, which must not force a push — user-driven range changes
+    // are already pushed explicitly (force=true) in handleSetTimelineRange.
     @SuppressWarnings("unchecked")
     private String requestsSig(Map<String, Object> payload) {
         var reqs = (java.util.List<Map<String, Object>>) payload.getOrDefault("requests", java.util.List.of());

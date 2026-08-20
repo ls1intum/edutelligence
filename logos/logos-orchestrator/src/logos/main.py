@@ -521,6 +521,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "vllm": is_vllm,
             "runtime_state": runtime_state,
             "sleep_state": lane.get("sleep_state"),
+            "gpu_devices": str(lane.get("gpu_devices") or ""),
+            "effective_gpu_devices": str(lane.get("effective_gpu_devices") or ""),
+            "num_parallel": _safe_int(lane.get("num_parallel")) or 0,
             "active_requests": active_requests,
             "effective_vram_mb": _safe_float(lane.get("effective_vram_mb")) or 0.0,
             "reported_vram_mb": _safe_float(lane.get("reported_vram_mb")) or 0.0,
@@ -1712,6 +1715,7 @@ async def internal_provider_status(request: Request):
                 "connected": connected,
                 "connection_state": "online" if connected else "offline",
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+                "calibrating": _logosnode_registry.is_calibrating(provider_id),
             }
         )
     return {"providers": providers}
@@ -1770,6 +1774,11 @@ class _InternalCalibrateRequest(BaseModel):
 class _InternalDeleteLaneRequest(BaseModel):
     provider_id: int
     lane_id: str
+
+
+class _InternalAddLaneRequest(BaseModel):
+    provider_id: int
+    lane: dict[str, Any]
 
 
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
@@ -1840,6 +1849,26 @@ async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, reque
         provider_id=data.provider_id,
         action="delete_lane",
         params={"lane_id": data.lane_id},
+    )
+
+
+@app.post("/internal/logosnode/lanes/add", tags=["admin"])
+async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Request):
+    """Manually load a single lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="add_lane",
+        params={**data.lane},
     )
 
 
@@ -4256,6 +4285,7 @@ async def logosnode_lanes(data: LogosNodeStatusRequest):
 
 
 _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
+    "add_lane": 180,
     "apply_lanes": 180,
     "reconfigure_lane": 180,
     "sleep_lane": 30,

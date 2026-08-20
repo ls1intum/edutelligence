@@ -71,10 +71,10 @@
   align-items: stretch;
   align-content: flex-start;
 
-  // Each KPI card (projected from child) ~25% minus gap
+  // Each KPI card (projected from child) ~1/6 minus gap (six cards per row)
   > * {
-    flex: 1 1 calc(25% - 9px);
-    min-width: 200px;
+    flex: 1 1 calc(16.66% - 10px);
+    min-width: 170px;
   }
 }
 
@@ -150,6 +150,40 @@
 .stats-panel-badge {
   font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
+}
+
+// ── Provider-row badges (free VRAM / calibrating) ─────────────────────────────
+.stats-provider-vram-badge {
+  @include glass-surface;
+  border-radius: 9999px;
+  align-self: center;
+  padding: 3px 12px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-accent-cyan));
+  white-space: nowrap;
+}
+
+.stats-provider-badge {
+  border-radius: 9999px;
+  align-self: center;
+  padding: 3px 12px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+}
+
+.stats-provider-badge--calibrating {
+  color: rgb(var(--color-warning));
+  background: rgb(var(--color-warning) / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
 }
 
 // ── Range badge ───────────────────────────────────────────────────────────────

@@ -26,7 +26,8 @@ public class RequestLogController {
 
     @PostMapping("/latest_requests")
     public ResponseEntity<?> latestRequests(@RequestAttribute("authContext") AuthContext auth) {
-        return ResponseEntity.ok(requestLogService.getLatestRequests());
+        // No explicit range: the service defaults to the last 30 days.
+        return ResponseEntity.ok(requestLogService.getLatestRequests(null, null));
     }
 
     @PostMapping("/request_logs")
