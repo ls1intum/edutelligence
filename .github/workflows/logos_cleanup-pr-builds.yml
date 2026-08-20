@@ -3,16 +3,19 @@
 # Deletes the PR's build images from Harbor when the PR is merged (or closed).
 #
 # What it deletes:
-#   1. The artifacts tagged `pr-<number>` (the manifest lists created by the
-#      build's `finalize` step). These are only ever touched for THIS PR, so
-#      there is no risk of hitting another PR's in-flight build.
+#   1. The artifact tagged `pr-<number>` (the manifest list the build's
+#      `finalize` step created). Only ever touched for THIS PR.
 #   2. Untagged "by-digest" artifacts older than 24 h. Every build pushes its
-#      image by digest (untagged) and only later tags it, so a short-lived
-#      untagged artifact is left behind. The 24 h age margin guarantees we
+#      image by digest (untagged) and only tags it later, so an orphaned
+#      by-digest artifact is left behind. The 24 h age margin guarantees we
 #      never delete an artifact that is still mid-build (builds finish in
-#      minutes, not hours), which is what the old cleanup accidentally did.
+#      minutes, not hours) — the thing the old cleanup accidentally did. The
+#      sweep also skips any artifact a still-tagged index references, so an
+#      open PR's build is never deleted.
 #
-# The Harbor retention policy is the backstop for everything else.
+# Auth: the Harbor account from vars.LOGOS_HARBOR_USER / secrets.LOGOS_HARBOR_PASSWORD
+# (HTTP basic auth), the same credentials the build workflow pushes with.
+# The Harbor retention policy remains the backstop for everything else.
 
 name: Logos - Cleanup PR builds from Harbor
 
@@ -28,52 +31,103 @@ jobs:
     name: Delete PR builds from Harbor
     if: ${{ github.event.action == 'closed' }}
     runs-on: ubuntu-latest
+    env:
+      HARBOR_REGISTRY: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+      HARBOR_USER: ${{ vars.LOGOS_HARBOR_USER }}
+      HARBOR_PASSWORD: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+      PROJECT: logos
+      TAG: pr-${{ github.event.pull_request.number }}
+      # Safety margin for the untagged sweep: never touch an untagged artifact
+      # younger than this. An in-flight build's by-digest manifest is minutes
+      # old, never hours, so 24 h is a comfortable "definitely not mid-build".
+      UNTAGGED_AGE_MARGIN_SECONDS: 86400
     steps:
       - name: Delete PR builds from Harbor
         run: |
           set -euo pipefail
-          HARBOR_REGISTRY="${{ vars.LOGOS_HARBOR_REGISTRY }}"
-          HARBOR_USER="${{ vars.LOGOS_HARBOR_USER }}"
-          HARBOR_PASSWORD="${{ secrets.LOGOS_HARBOR_PASSWORD }}"
-          PROJECT="logos"
-          TAG="pr-${{ github.event.pull_request.number }}"
-          # Safety margin: never delete an untagged artifact that is still
-          # mid-build (a build + finalize finishes in minutes, not hours).
-          UNTAGGED_AGE_MARGIN_SECONDS=86400
-
-          REPOS=("logos/logos" "logos/logos-webservice" "logos/logos-ui" "logos/logos-db" "logos/logos-workernode-vllm")
 
           API_BASE="https://${HARBOR_REGISTRY%/}/api/v2.0"
+          AUTH="${HARBOR_USER}:${HARBOR_PASSWORD}"
 
-          # Robot sign-in -> API token
-          TOKEN=$(curl -sfS -X POST "${API_BASE}/users/signin" \
-            -H "Content-Type: application/json" \
-            -d "{\"username\":\"${HARBOR_USER}\",\"password\":\"${HARBOR_PASSWORD}\"}" \
-            | jq -r '.token')
+          # Harbor stores push_time as an RFC3339 string (UTC); ISO-8601 UTC
+          # strings sort chronologically, so we compare the cutoff as a string.
+          CUTOFF_ISO="$(date -u -d "@$(( $(date -u +%s) - UNTAGGED_AGE_MARGIN_SECONDS ))" +%Y-%m-%dT%H:%M:%SZ)"
 
-          CUTOFF=$(( $(date -u +%s) - UNTAGGED_AGE_MARGIN_SECONDS ))
+          # Repositories inside the project (image refs are ${HARBOR_REGISTRY}/${PROJECT}/<name>).
+          REPOS=("logos" "logos-webservice" "logos-ui" "logos-db" "logos-workernode-vllm")
+
+          # Fail loud on bad credentials — a 401 must not masquerade as "nothing to clean".
+          curl -fsS -u "${AUTH}" "${API_BASE}/projects?name=${PROJECT}" > /dev/null
+          echo "Authenticated to ${HARBOR_REGISTRY} as ${HARBOR_USER}"
+
+          # GET artifacts (q=<query>, page=<n>). Prints the JSON body; empty on
+          # 404 (repository not created yet); aborts the run on any other HTTP
+          # error. page_size is capped at 100 by the API, so callers paginate.
+          get_artifacts() {
+            local q="$1" page="$2" body code
+            body="$(curl -sS -u "${AUTH}" -w '%{http_code}' \
+              "${BASE}?q=${q}&page=${page}&page_size=100")"
+            code="${body: -3}"
+            case "${code}" in
+              200) printf '%s' "${body%???}" ;;
+              404) : ;;
+              *)   echo "ERROR: HTTP ${code} on GET ${BASE}?q=${q}&page=${page}" >&2; return 1 ;;
+            esac
+          }
+
+          # DELETE an artifact id. Never fatal: a 404 (already gone) or 409
+          # (still referenced) is reported and skipped.
+          delete_artifact() {
+            local id="$1"
+            if curl -fsS -u "${AUTH}" -X DELETE "${BASE}/${id}"; then
+              echo "Deleted ${repo} artifact ${id}"
+            else
+              echo "WARN: could not delete ${repo} artifact ${id}; skipping"
+            fi
+          }
 
           for repo in "${REPOS[@]}"; do
-            # 1) Delete the artifacts that carry this PR's tag
-            PR_ARTIFACTS=$(curl -sfS -H "Authorization: Bearer ${TOKEN}" \
-              "${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts?tag=${TAG}" \
-              | jq -r '.[].id')
-            for id in ${PR_ARTIFACTS}; do
-              curl -sfS -X DELETE -H "Authorization: Bearer ${TOKEN}" \
-                "${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts/${id}"
-              echo "Deleted ${repo}:${TAG} (artifact ${id})"
-            done
+            BASE="${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts"
 
-            # 2) Delete untagged by-digest artifacts older than the margin
-            UNTAGGED=$(curl -sfS -H "Authorization: Bearer ${TOKEN}" \
-              "${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts?page_size=1000" \
-              | jq -r --argjson cutoff "${CUTOFF}" \
-                  '.[] | select(((.tags // []) | length) == 0 and (.push_time < $cutoff)) | .id')
-            for id in ${UNTAGGED}; do
-              curl -sfS -X DELETE -H "Authorization: Bearer ${TOKEN}" \
-                "${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts/${id}"
+            # 1) Drop the artifact(s) carrying this PR's tag (exact tag match).
+            get_artifacts "tags=${TAG}" 1 | jq -r '.[].id // empty' |
+              while IFS= read -r id; do
+                if [ -z "${id}" ]; then continue; fi
+                delete_artifact "${id}"
+                :
+              done
+
+            # 2) Child artifact ids referenced by a still-tagged index (open PRs)
+            #    must survive the untagged sweep. Best-effort: empty if the API
+            #    omits `references` in list responses.
+            tagged="$(get_artifacts 'tags=*' 1)"
+            PROTECTED="$(printf '%s' "${tagged}" | jq -r '.[].references[]?.child_id' 2> /dev/null || true)"
+
+            # 3) Sweep untagged by-digest artifacts older than the margin.
+            page=1
+            while :; do
+              resp="$(get_artifacts 'tags=nil' "${page}")"
+              [ -z "${resp}" ] && break
+              count="$(printf '%s' "${resp}" | jq 'length')"
+              [ "${count}" -eq 0 ] && break
+              printf '%s' "${resp}" | jq -r --arg cutoff "${CUTOFF_ISO}" \
+                '.[] | select(.push_time < $cutoff) | .id' |
+                while IFS= read -r id; do
+                  if [ -z "${id}" ]; then continue; fi
+                  # Keep anything a live tagged index still references.
+                  if [ -n "${PROTECTED}" ] && printf '%s\n' "${PROTECTED}" | grep -qxF "${id}"; then
+                    echo "Keep ${repo} artifact ${id} (referenced by a tagged index)"
+                    :
+                  else
+                    delete_artifact "${id}"
+                  fi
+                  :
+                done
+              [ "${count}" -lt 100 ] && break
+              page=$(( page + 1 ))
+              [ "${page}" -gt 200 ] && { echo "WARN: ${repo}: >20000 untagged artifacts, stopping sweep" >&2; break; }
+              :
             done
-            [ -z "${UNTAGGED}" ] || echo "Deleted ${repo}: untagged by-digest artifacts older than 24h"
           done
 
           echo "Cleanup done for PR tag ${TAG}"
