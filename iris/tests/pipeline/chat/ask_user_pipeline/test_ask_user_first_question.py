@@ -1,0 +1,202 @@
+import copy
+import logging
+import unittest
+
+import pytest
+
+from iris.pipeline.chat.ask_user_pipeline import AskUserPipeline
+from tests.pipeline.chat.ask_user_pipeline.helper.helper import (
+    extract_keywords,
+    get_pass_ratio,
+    llm_evaluate,
+)
+from tests.pipeline.chat.ask_user_pipeline.helper.test_callback import (
+    AskUserStatusCallbackMock,
+)
+from tests.pipeline.chat.ask_user_pipeline.helper.test_data import (
+    DTO,
+    EXERCISE,
+    LLM_GENERATION_EVALUATION_PROMPT,
+    VARIANT,
+)
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+
+# This class tests the quality of the question generation.
+# It assumes the case where the student just started the assessment mode and is asked the first question.
+# Note: Feedback of submission is not part of test inputs, could be interesting to check if
+# generated questions are only about correct parts of submission.
+# For this to happen, ResultDTO literal in DTO would have to be extended with feedback and the
+# test data with a test repository
+#
+# Marked "integration" and excluded from the default pytest run (see the
+# addopts/markers config in pyproject.toml): setUpClass below drives the real
+# AskUserPipeline, which invokes the LLMs configured in llm_config.yml, and
+# test_LLM_evaluation invokes another LLM to judge the results. Those
+# executions invoke configured LLMs and therefore make the default suite
+# depend on external credentials/network access, incur model usage, and fail
+# in the clean CI configuration whose example model entries have no API
+# keys. Run explicitly with `pytest -m integration`.
+@pytest.mark.integration
+class TestAskUserFirstQuestion(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        number_of_questions_to_test = 1
+        cls.required_test_pass_rate = 0.8
+
+        cls.task = EXERCISE.task
+        cls.template = EXERCISE.template
+        cls.code = EXERCISE.code
+
+        cls.template_concatenated = "\n".join(cls.template.values())
+        cls.code_concatenated = "\n".join(cls.code.values())
+
+        cls.keywords_code = extract_keywords(
+            cls.template_concatenated, cls.code_concatenated
+        )
+        cls.keywords_task = extract_keywords(cls.template_concatenated, cls.task)
+
+        pipeline = AskUserPipeline()
+
+        cls.questions = []
+
+        cls.dto = copy.deepcopy(DTO)
+
+        for i in range(number_of_questions_to_test):
+            callback = AskUserStatusCallbackMock()
+            pipeline(cls.dto, VARIANT, callback, event="FIRST_QUESTION")
+            cls.questions.append(callback.final_result)
+            logger.info("appended question:")
+            logger.info(callback.final_result)
+
+    def test_question_is_thematically_relevant(self):
+        # this tests if keywords of submission minus template or keywords of the problem
+        # statement minus template are part of the question
+        pass_ratio = get_pass_ratio(
+            self.questions,
+            lambda q: any(k in q.lower() for k in self.keywords_code)
+            or any(k in q.lower() for k in self.keywords_task),
+        )
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+    def test_question_not_too_easy(self):
+        min_length = 20
+        difficulty_words = [
+            "why",
+            "how",
+            "what",
+            "explain",
+            "describe",
+            "elaborate",
+            "tell",
+        ]
+
+        pass_ratio = get_pass_ratio(
+            self.questions,
+            lambda q: len(q) > min_length
+            and any(w in q.lower() for w in difficulty_words),
+        )
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+    def test_question_not_too_difficult_length(self):
+        max_length = 220
+
+        pass_ratio = get_pass_ratio(self.questions, lambda q: len(q) < max_length)
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+    def test_question_requires_reasonable_answer(self):
+        forbidden_phrases = [
+            "in detail",
+            "every step",
+            "all steps",
+            "list all",
+            "explain every",
+            "thoroughly",
+            "explain all",
+            "explain fully",
+            "full explanation",
+        ]
+
+        pass_ratio = get_pass_ratio(
+            self.questions, lambda q: not any(p in q.lower() for p in forbidden_phrases)
+        )
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+    def test_question_single_concept_focus(self):
+        key_terms = [
+            "swap",
+            "loop",
+            "runtime",
+            "complexity",
+            "array",
+            "sorting",
+            "comparison",
+            "iteration",
+            "index",
+            "element",
+            "order",
+            "ascending",
+            "descending",
+            "efficiency",
+            "pass",
+            "algorithm",
+            "step",
+            "position",
+            "largest",
+            "smallest",
+            "temporary",
+            "variable",
+            "condition",
+            "function",
+            "class",
+            "object",
+            "recursion",
+            "base case",
+            "edge case",
+            "input",
+            "output",
+            "pointer",
+            "memory",
+            "data",
+            "structure",
+        ]
+        max_allowed_terms = 4
+
+        pass_ratio = get_pass_ratio(
+            self.questions,
+            lambda q: sum(1 for k in key_terms if k in q.lower()) <= max_allowed_terms,
+        )
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+    def test_LLM_evaluation(self):
+        # required voting result for a question
+        required_voting_result = 0.8
+        # number of LLM instances to evaluate a question
+        instances = 1
+
+        pass_ratio = get_pass_ratio(
+            self.questions,
+            lambda q: llm_evaluate(
+                LLM_GENERATION_EVALUATION_PROMPT,
+                instances,
+                q,
+                self.task,
+                self.template_concatenated,
+                self.code_concatenated,
+            )
+            >= required_voting_result,
+        )
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+
+if __name__ == "__main__":
+    unittest.main()
