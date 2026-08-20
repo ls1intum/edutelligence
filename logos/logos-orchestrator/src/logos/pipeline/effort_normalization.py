@@ -71,12 +71,19 @@ CHAT_TEMPLATE_EFFORT_SCALES: Dict[str, EffortScale] = {
 
 
 def effort_scale_for_model(model_name: Optional[str]) -> Optional[EffortScale]:
-    """Return the effort scale the model's chat template enforces, if any."""
+    """Return the effort scale the model's chat template enforces, if any.
+
+    When several registered patterns match (e.g. a broad ``qwen3`` and a
+    specific ``qwen3.8``), the most specific one — the longest matching
+    pattern — wins, so broad entries cannot shadow specific ones
+    regardless of registration order.
+    """
     low = (model_name or "").lower()
-    for pattern, scale in CHAT_TEMPLATE_EFFORT_SCALES.items():
-        if pattern in low:
-            return scale
-    return None
+    best_pattern: Optional[str] = None
+    for pattern in CHAT_TEMPLATE_EFFORT_SCALES:
+        if pattern in low and (best_pattern is None or len(pattern) > len(best_pattern)):
+            best_pattern = pattern
+    return None if best_pattern is None else CHAT_TEMPLATE_EFFORT_SCALES[best_pattern]
 
 
 def _map_effort(value: str, scale: EffortScale) -> str:

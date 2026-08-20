@@ -8,6 +8,7 @@ as HTTP 500 internal_error — failing every turn of a session left on "high".
 Logos maps the wider client scale onto the accepted one before forwarding.
 """
 
+from logos.pipeline import effort_normalization
 from logos.pipeline.context_resolver import ContextResolver, ExecutionContext
 from logos.pipeline.effort_normalization import (
     CHAT_TEMPLATE_EFFORT_SCALES,
@@ -43,6 +44,21 @@ def test_effort_scale_lookup_by_model_name():
     assert effort_scale_for_model("gpt-4.1-mini") is None
     assert effort_scale_for_model("") is None
     assert effort_scale_for_model(None) is None
+
+
+def test_longest_matching_pattern_wins_over_broader_pattern(monkeypatch):
+    # Overlapping patterns must resolve to the most specific (longest)
+    # match regardless of registration order, so a broad "qwen3" entry
+    # cannot shadow the specific "qwen3.8" one.
+    broad = EffortScale(accepted=frozenset({"low", "medium", "high"}), map={"max": "high"}, default="medium")
+    specific = CHAT_TEMPLATE_EFFORT_SCALES["qwen3.8"]
+    for registry in (
+        {"qwen3": broad, "qwen3.8": specific},
+        {"qwen3.8": specific, "qwen3": broad},
+    ):
+        monkeypatch.setattr(effort_normalization, "CHAT_TEMPLATE_EFFORT_SCALES", registry)
+        assert effort_scale_for_model("Qwen/Qwen3.8-27B") is specific
+        assert effort_scale_for_model("Qwen/Qwen3-32B") is broad
 
 
 def test_anthropic_output_config_high_mapped_to_xhigh():
