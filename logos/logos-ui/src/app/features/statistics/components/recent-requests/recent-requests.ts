@@ -5,9 +5,11 @@ import {
   OnDestroy,
   signal,
   computed,
+  SimpleChanges,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { formatEur } from '../../../../shared/utils/currency';
 import { RequestItem } from '../../statistics.models';
 import {
   deriveStage,
@@ -36,13 +38,19 @@ export class RecentRequests implements OnChanges, OnDestroy {
 
   private intervalId: ReturnType<typeof setInterval> | null = null;
 
-  displayItems = computed(() => this.liveRequests.slice(0, MAX_ROWS));
+  // Input mirror signal so the computed()s below actually react: a plain
+  // @Input() is not a tracked producer, so reading it inside computed() would
+  // cache the very first value (an empty list) forever.
+  private readonly _liveRequests = signal<RequestItem[]>([]);
+
+  displayItems = computed(() => this._liveRequests().slice(0, MAX_ROWS));
 
   private hasLive = computed(() =>
     this.displayItems().some((it) => deriveStage(it) !== 'complete'),
   );
 
-  ngOnChanges(): void {
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['liveRequests']) this._liveRequests.set(this.liveRequests ?? []);
     // Re-schedule ticker whenever inputs change so cadence stays correct.
     this.scheduleTicker();
   }
@@ -89,11 +97,10 @@ export class RecentRequests implements OnChanges, OnDestroy {
     return item.full_name || item.username || '';
   }
 
-  /** Cloud cost in EUR (µ¢ → €, ÷ 1e6). */
+  /** Cloud cost in EUR; null when no price is on record for the model. */
   costLabelOf(item: RequestItem): string | null {
     if (item.cost_microcents == null) return null;
-    const euros = item.cost_microcents / 1_000_000;
-    return `€${euros < 0.005 && euros > 0 ? euros.toFixed(4) : euros.toFixed(2)}`;
+    return formatEur(item.cost_microcents);
   }
 
   /** Token line "↑prompt ↓completion", only when token counts are known. */

@@ -49,13 +49,18 @@ function formatCount(v: number): string {
   return String(Math.round(v));
 }
 
-/** Full, unambiguous timestamp for tooltips (always carries the year). */
+/**
+ * Full, unambiguous timestamp for tooltips (always carries the year). Rendered
+ * in UTC so a tooltip never contradicts the x-axis tick above it — the ticks
+ * come from `timeAxisLabels`, which works in UTC throughout, as does the VRAM
+ * chart next to it.
+ */
 function formatTimestamp(ts: number, spanMs: number): string {
   const d = new Date(ts);
   if (spanMs <= 2 * 86_400_000) {
-    return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    return `${d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' })} UTC`;
   }
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
 // ── Internal chart types ─────────────────────────────────────────────────────
@@ -287,6 +292,13 @@ export class RequestVolumeChartComponent implements OnChanges {
         seenX.add(x);
         xLabels.push({ x, label: l.label });
       }
+    } else if (Number.isFinite(firstTs)) {
+      // Single bucket: no span to place boundaries in, but the axis still
+      // needs to say which moment the lone bar covers.
+      xLabels.push({
+        x: Math.round(CHART_PAD_LEFT + slotW / 2),
+        label: formatTimestamp(firstTs, spanMs),
+      });
     }
 
     return {

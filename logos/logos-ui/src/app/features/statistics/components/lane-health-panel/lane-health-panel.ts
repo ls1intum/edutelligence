@@ -1,4 +1,12 @@
-import { Component, Input, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  Input,
+  OnChanges,
+  SimpleChanges,
+  inject,
+  signal,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { StatisticsService, ProviderModel } from '../../services/statistics.service';
 import { getLaneStateColor } from '../../statistics.constants';
@@ -44,7 +52,7 @@ export interface LaneRow {
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './lane-health-panel.scss',
 })
-export class LaneHealthPanel {
+export class LaneHealthPanel implements OnChanges {
   @Input() lanesByProvider: Record<string, Record<string, LaneSignalData>> = {};
   @Input() providerMeta: Record<string, VramProviderMeta> = {};
   @Input() selectedProvider: string | null = null;
@@ -61,7 +69,11 @@ export class LaneHealthPanel {
   selectedModel = signal<string | null>(null);
   addingLane = signal(false);
   addError = signal<string | null>(null);
-  private modelsFetchedFor: number | null = null;
+  /** Fetched model lists, keyed by provider id — never shared across providers. */
+  private readonly modelsByProvider = new Map<number, ProviderModel[]>();
+  private readonly modelsInFlight = new Set<number>();
+  /** Provider the currently visible picker state belongs to. */
+  private pickerProviderId: number | null = null;
 
   get providerName(): string | null {
     return this.selectedProvider ?? Object.keys(this.lanesByProvider)[0] ?? null;
@@ -119,12 +131,13 @@ export class LaneHealthPanel {
     return meta?.connection_state !== 'offline' && meta?.connected !== false;
   }
 
+  /** Lane actions need a resolved provider that is actually reachable. */
   get canUnload(): boolean {
     return this.providerId != null && this.providerOnline;
   }
 
   get canAdd(): boolean {
-    return this.providerId != null && this.providerOnline;
+    return this.canUnload;
   }
 
   /** Models that don't already have a lane (lanes are keyed by model name). */
@@ -168,26 +181,61 @@ export class LaneHealthPanel {
     this.pickerOpen.set(true);
     this.addError.set(null);
     const pid = this.providerId;
-    if (pid != null && this.modelsFetchedFor !== pid && !this.modelsLoading()) {
-      this.modelsLoading.set(true);
-      this.statisticsService
-        .getProviderModels(pid)
-        .then((models) => {
-          this.modelsFetchedFor = pid;
-          this.loadModels.set(models ?? []);
-        })
-        .catch((err: unknown) => {
-          const e = err as { error?: { error?: string } };
-          this.addError.set(`Could not load models: ${e?.error?.error ?? 'unknown error'}`);
-        })
-        .finally(() => this.modelsLoading.set(false));
+    this.pickerProviderId = pid;
+    if (pid == null) {
+      this.loadModels.set([]);
+      this.modelsLoading.set(false);
+      return;
     }
+
+    // Show whatever we already have for *this* provider, never another one's.
+    this.loadModels.set(this.modelsByProvider.get(pid) ?? []);
+    if (this.modelsByProvider.has(pid)) {
+      this.modelsLoading.set(false);
+      return;
+    }
+    if (this.modelsInFlight.has(pid)) {
+      this.modelsLoading.set(true);
+      return;
+    }
+
+    this.modelsInFlight.add(pid);
+    this.modelsLoading.set(true);
+    this.statisticsService
+      .getProviderModels(pid)
+      .then((models) => {
+        this.modelsByProvider.set(pid, models ?? []);
+        // Discard the response if the operator moved on to another provider.
+        if (this.pickerProviderId === pid) this.loadModels.set(models ?? []);
+      })
+      .catch((err: unknown) => {
+        const e = err as { error?: { error?: string } };
+        if (this.pickerProviderId === pid) {
+          this.addError.set(`Could not load models: ${e?.error?.error ?? 'unknown error'}`);
+        }
+      })
+      .finally(() => {
+        this.modelsInFlight.delete(pid);
+        if (this.pickerProviderId === pid) this.modelsLoading.set(false);
+      });
   }
 
   closePicker(): void {
     this.pickerOpen.set(false);
     this.selectedModel.set(null);
     this.addError.set(null);
+    this.pickerProviderId = null;
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    // The provider dropdown lives outside this component: when it moves, the
+    // open picker still holds the previous provider's models and selection,
+    // and submitting it would load a model onto a provider that never served it.
+    if (changes['selectedProvider'] && this.pickerProviderId !== this.providerId) {
+      this.closePicker();
+      this.loadModels.set([]);
+      this.modelsLoading.set(false);
+    }
   }
 
   selectModel(event: Event): void {
@@ -199,6 +247,11 @@ export class LaneHealthPanel {
     const pid = this.providerId;
     const model = this.selectedModel();
     if (pid == null || model == null || this.addingLane()) return;
+    // Guard against a provider switch between picking and submitting.
+    if (this.pickerProviderId !== pid || !this.loadModels().some((m) => m.model_name === model)) {
+      this.addError.set('The provider changed — reopen the picker and select a model again.');
+      return;
+    }
     this.addingLane.set(true);
     this.addError.set(null);
     try {

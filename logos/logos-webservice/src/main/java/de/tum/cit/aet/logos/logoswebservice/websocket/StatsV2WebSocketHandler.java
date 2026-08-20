@@ -43,12 +43,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile String vramDay = null;
         volatile int vramCursor = 0;
 
+        // The user-selected window. The live delta slide advances only the end
+        // to "now"; the start stays anchored where the preset put it.
         volatile String timelineStart;
         volatile String timelineEnd;
-        // Span of the user-selected window; the live delta slide keeps this
-        // span and only advances the end to "now" (so a "last day" selection
-        // is not silently widened to the default 30 days).
-        volatile long windowSeconds = DEFAULT_WINDOW_DAYS * 86400L;
         volatile int targetBuckets = DEFAULT_TARGET_BUCKETS;
         volatile int bucketSeconds = 60;
         volatile boolean timelineLive = true;
@@ -63,7 +61,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
             timelineEnd = now.toInstant().toString();
             timelineStart = now.minusDays(DEFAULT_WINDOW_DAYS).toInstant().toString();
-            windowSeconds = DEFAULT_WINDOW_DAYS * 86400L;
             cursorTs = timelineEnd;
             cursorId = "";
             timelineLive = true;
@@ -78,7 +75,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 if (e.isAfter(now)) e = now;
                 timelineStart = s.toInstant().toString();
                 timelineEnd = e.toInstant().toString();
-                windowSeconds = Math.max(e.toEpochSecond() - s.toEpochSecond(), 1);
                 targetBuckets = Math.max(1, buckets);
                 timelineLive = now.toEpochSecond() - e.toEpochSecond() <= 120;
                 cursorTs = timelineEnd;
@@ -324,9 +320,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             String newId = (String) cursor.get("request_id");
             if (newTs != null && !newTs.isBlank()) { state.cursorTs = newTs; state.cursorId = newId; }
 
-            ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
-            state.timelineEnd   = untilIso;
-            state.timelineStart = now.minusSeconds(state.windowSeconds).toInstant().toString();
+            // Only the end moves. Re-anchoring the start to now-windowSeconds
+            // would turn every calendar-anchored preset into a rolling window:
+            // picking "Today" at 00:20 gives a 20-minute span, so an hour later
+            // the view would cover 01:00–01:20 instead of the whole day.
+            state.timelineEnd = untilIso;
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("events", events);
@@ -342,7 +340,14 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
     private void pushRequests(WebSocketSession session, SessionState state, boolean force) {
         try {
-            Map<String, Object> payload = requestLogService.getLatestRequests(state.timelineStart, state.timelineEnd);
+            // A live selection ("last 30 days", "today", …) keeps growing while
+            // the page is open, so the request list has to query up to *now*.
+            // state.timelineEnd is only advanced by pushTimelineDelta, which the
+            // statistics page disables (timelineDeltas: false) — reading it here
+            // would pin the list to the instant the range was set and no request
+            // enqueued after page load would ever show up.
+            String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
+            Map<String, Object> payload = requestLogService.getLatestRequests(state.timelineStart, end);
             String sig = requestsSig(payload);
             if (force || !sig.equals(state.prevReqSig)) {
                 state.prevReqSig = sig;
