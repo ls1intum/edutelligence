@@ -1,4 +1,6 @@
 import json
+import logging
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -7,6 +9,7 @@ import pytest
 import logos as main
 from logos import ExecutionResult
 from logos.errors import UpstreamStreamError
+from logos.terminal_logging import strip_ansi
 
 
 def _make_dummy_db(cost_micro_cents=None):
@@ -1160,3 +1163,68 @@ async def test_proxy_sync_response_logs_status_and_skips_ttft_on_error(monkeypat
             "error_message": "proxy failed",
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# _log_request_completion — prefix-cache hit rate field (issue 748)
+# ---------------------------------------------------------------------------
+
+
+def _completion_log_line(monkeypatch, caplog, usage, status="success"):
+    """Run _log_request_completion and return the emitted INFO line (ANSI-stripped)."""
+    monkeypatch.setattr(main, "model_name_cache", {"get": lambda model_id: "test-model"})
+    with caplog.at_level(logging.INFO, logger="LogosLogger"):
+        main._log_request_completion(
+            model_id=1,
+            request_id="req-1",
+            start_time=time.perf_counter() - 1.0,
+            usage=usage,
+            status=status,
+            is_streaming=False,
+        )
+    lines = [record.getMessage() for record in caplog.records if "done " in record.getMessage()]
+    return strip_ansi(lines[-1]) if lines else ""
+
+
+def test_log_request_completion_includes_prefix_hit_rate(monkeypatch, caplog):
+    """Flattened usage (prompt_cached_tokens) → prefix_hit=NN% on the log line."""
+    line = _completion_log_line(
+        monkeypatch,
+        caplog,
+        {"prompt_tokens": 1000, "completion_tokens": 100, "prompt_cached_tokens": 420},
+    )
+    assert "prefix_hit=42%" in line
+
+
+def test_log_request_completion_includes_prefix_hit_rate_from_nested_details(monkeypatch, caplog):
+    """Raw streaming usage (prompt_tokens_details.cached_tokens) is also reported."""
+    line = _completion_log_line(
+        monkeypatch,
+        caplog,
+        {
+            "prompt_tokens": 1000,
+            "completion_tokens": 100,
+            "prompt_tokens_details": {"cached_tokens": 750},
+        },
+    )
+    assert "prefix_hit=75%" in line
+
+
+def test_log_request_completion_includes_zero_prefix_hit(monkeypatch, caplog):
+    """An explicit cached_tokens=0 is a real 0% hit, not 'not reported'."""
+    line = _completion_log_line(
+        monkeypatch,
+        caplog,
+        {"prompt_tokens": 1000, "completion_tokens": 100, "prompt_cached_tokens": 0},
+    )
+    assert "prefix_hit=0%" in line
+
+
+def test_log_request_completion_omits_prefix_hit_when_unreported(monkeypatch, caplog):
+    """Providers that do not report cached tokens add no prefix_hit field."""
+    line = _completion_log_line(
+        monkeypatch,
+        caplog,
+        {"prompt_tokens": 1000, "completion_tokens": 100},
+    )
+    assert "prefix_hit" not in line

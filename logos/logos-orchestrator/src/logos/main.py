@@ -491,10 +491,13 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
                 "gpu_cache_usage_percent_avg": None,
                 "gpu_cache_usage_percent_max": None,
                 "prefix_cache_hit_rate_avg": None,
+                "mtp_acceptance_rate_avg": None,
                 "_gpu_cache_usage_percent_sum": 0.0,
                 "_gpu_cache_usage_percent_count": 0,
                 "_prefix_cache_hit_rate_sum": 0.0,
                 "_prefix_cache_hit_rate_count": 0,
+                "_mtp_draft_tokens_total": 0.0,
+                "_mtp_accepted_tokens_total": 0.0,
             },
         )
 
@@ -528,6 +531,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
             "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
             "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
+            "mtp_acceptance_rate": _safe_float(backend_metrics.get("mtp_acceptance_rate")),
             "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
             "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
             "ttft_histogram": ttft_histogram,
@@ -597,6 +601,17 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
             entry["_prefix_cache_hit_rate_count"] += 1
 
+        # Token-weighted MTP aggregation: sum the cumulative draft/accepted
+        # token counters per model (an unweighted mean of per-lane rates would
+        # misstate the model rate when lanes have different draft volumes).
+        mtp_draft_tokens_total = _safe_float(backend_metrics.get("mtp_draft_tokens_total"))
+        if mtp_draft_tokens_total is not None:
+            entry["_mtp_draft_tokens_total"] += mtp_draft_tokens_total
+
+        mtp_accepted_tokens_total = _safe_float(backend_metrics.get("mtp_accepted_tokens_total"))
+        if mtp_accepted_tokens_total is not None:
+            entry["_mtp_accepted_tokens_total"] += mtp_accepted_tokens_total
+
         _merge_histogram_buckets(entry["ttft_histogram"], ttft_histogram)
 
     for entry in model_signals.values():
@@ -609,6 +624,11 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         prefix_sum = float(entry.pop("_prefix_cache_hit_rate_sum", 0.0) or 0.0)
         if prefix_count > 0:
             entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
+
+        mtp_draft = float(entry.pop("_mtp_draft_tokens_total", 0.0) or 0.0)
+        mtp_accepted = float(entry.pop("_mtp_accepted_tokens_total", 0.0) or 0.0)
+        if mtp_draft > 0:
+            entry["mtp_acceptance_rate_avg"] = mtp_accepted / mtp_draft
 
         entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
 
@@ -2262,6 +2282,24 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     )
 
 
+def _cached_prompt_tokens(usage: Dict[str, Any]) -> Optional[int]:
+    """Cached-prompt tokens as reported by the provider, or None when absent.
+
+    Handles both shapes that reach the completion log: the flattened dict
+    from ``extract_token_usage`` (``prompt_cached_tokens``) and the raw
+    streaming usage (``prompt_tokens_details.cached_tokens``).
+    """
+    cached = usage.get("prompt_cached_tokens")
+    if isinstance(cached, int) and not isinstance(cached, bool):
+        return cached
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if isinstance(cached, int) and not isinstance(cached, bool):
+            return cached
+    return None
+
+
 def _log_request_completion(
     model_id: int,
     request_id: Optional[str],
@@ -2274,6 +2312,7 @@ def _log_request_completion(
     duration_ms = (time.perf_counter() - start_time) * 1000.0
     prompt_tokens = usage.get("prompt_tokens", 0) or 0
     completion_tokens = usage.get("completion_tokens", 0) or 0
+    cached_tokens = _cached_prompt_tokens(usage)
     generation_s = duration_ms / 1000.0
     tps = (completion_tokens / generation_s) if generation_s > 0 and completion_tokens > 0 else 0.0
 
@@ -2302,6 +2341,10 @@ def _log_request_completion(
         )
         if tps > 0:
             parts.append(f"tps={tps:.1f}")
+    # Prefix-cache hit share of this request's prompt; only shown when the
+    # provider reports cached tokens (vLLM, Azure, OpenAI prompt caching).
+    if prompt_tokens > 0 and cached_tokens is not None:
+        parts.append(f"prefix_hit={cached_tokens / prompt_tokens:.0%}")
     logger.info(" ".join(parts))
 
 
