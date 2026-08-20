@@ -11,7 +11,7 @@ import os
 import re
 import secrets
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
@@ -3600,6 +3600,53 @@ async def route_and_execute(
         raise
 
 
+_CLIENT_DISCONNECT_POLL_SECONDS = 1.0
+
+
+async def _wait_for_client_disconnect(request: Request) -> None:
+    """Return once the client has gone away."""
+    while not await request.is_disconnected():
+        await asyncio.sleep(_CLIENT_DISCONNECT_POLL_SECONDS)
+
+
+async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
+    """Run ``route_and_execute``, dropping the work if the client leaves.
+
+    Uvicorn does not tear the handler down when a client vanishes mid-request,
+    so a non-streaming call kept a worker generating a response nobody would
+    read — a ghost request holding a GPU lane for as long as the generation
+    took. Cancelling the task unwinds the executor's ``httpx.AsyncClient``
+    context, which closes the upstream connection so vLLM aborts the sequence.
+    """
+    work = asyncio.create_task(route_and_execute(**kwargs))
+    watcher = asyncio.create_task(_wait_for_client_disconnect(request))
+    try:
+        done, _ = await asyncio.wait({work, watcher}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        work.cancel()
+        raise
+    finally:
+        watcher.cancel()
+
+    if work in done:
+        return work.result()
+
+    work.cancel()
+    with suppress(asyncio.CancelledError):
+        await work
+
+    request_id = kwargs.get("request_id")
+    logger.info("Cancelled request %s: client disconnected before the response was ready", request_id)
+    _record_log_failure(
+        kwargs.get("log_id"),
+        request_id,
+        "Client disconnected before the response was ready; upstream request cancelled.",
+    )
+    # 499, as nginx uses it: the client closed the request. Nobody is left to
+    # read this, but the status keeps the access log honest.
+    return JSONResponse(status_code=499, content={"detail": "Client closed request"})
+
+
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
@@ -3633,7 +3680,7 @@ async def handle_sync_request(path: str, request: Request):
         _record_log_failure(log_id, request_id, msg, result_status="error")
         raise HTTPException(status_code=404, detail=msg)
 
-    return await route_and_execute(
+    execute_kwargs = dict(
         deployments=deployments,
         body=body,
         headers=headers,
@@ -3642,6 +3689,13 @@ async def handle_sync_request(path: str, request: Request):
         log_id=log_id,
         request_id=request_id,
     )
+    # While a StreamingResponse is being consumed Starlette watches for the
+    # disconnect itself and cancels the generator, which unwinds the executor's
+    # stream context. Polling the receive channel here would race that watcher
+    # for the http.disconnect message, so only whole responses get the guard.
+    if payload_requests_streaming(body) and not is_whisper_payload(body):
+        return await route_and_execute(**execute_kwargs)
+    return await _execute_cancelling_on_disconnect(request, **execute_kwargs)
 
 
 async def auth_parse_log(request: Request, use_profile_auth: bool = False):
