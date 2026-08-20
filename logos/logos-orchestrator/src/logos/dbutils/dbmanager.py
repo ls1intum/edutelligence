@@ -154,6 +154,37 @@ def _stringify_error_message(value: Any) -> str:
     return str(value)
 
 
+def _strip_nul(value: Any) -> Any:
+    """Drop NUL characters from every string nested inside ``value``.
+
+    Stripping has to happen on the object, not on serialised JSON: after
+    ``json.dumps`` the escape for a NUL also occurs as a substring of an escaped
+    backslash, so replacing it in the text would leave a dangling backslash
+    behind and corrupt the document.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {_strip_nul(key): _strip_nul(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_strip_nul(item) for item in value]
+    return value
+
+
+def _json_for_jsonb(value: Any) -> str:
+    """Serialise ``value`` for a ``jsonb`` column or cast.
+
+    ``json.dumps`` renders a NUL as the one escape sequence Postgres refuses
+    inside ``jsonb`` — *unsupported Unicode escape sequence ... cannot be
+    converted to text*. A single such byte anywhere in a request body therefore
+    turned the logging insert into an unhandled 500, raised from
+    ``auth_parse_log`` before the request ever reached a worker: a client
+    replaying a conversation that had captured raw binary output got an instant
+    server error on every retry, and nothing was logged either.
+    """
+    return json.dumps(_strip_nul(value))
+
+
 # noinspection PyUnresolvedReferences
 class DBManager:
     def __init__(self):
@@ -381,7 +412,7 @@ class DBManager:
             ),
             {
                 "status": status,
-                "payload": json.dumps(payload),
+                "payload": _json_for_jsonb(payload),
                 "aki": api_key_id,
                 "tid": team_id,
                 "uid": user_id,
@@ -975,10 +1006,10 @@ class DBManager:
                 "total_vram_used_bytes": total_vram_used_bytes,
                 "total_memory_bytes": (int(total_memory_bytes) if total_memory_bytes is not None else None),
                 "free_memory_bytes": (int(free_memory_bytes) if free_memory_bytes is not None else None),
-                "loaded_models": json.dumps(loaded_models),
+                "loaded_models": _json_for_jsonb(loaded_models),
                 "snapshot_source": snapshot_source or "unknown",
-                "runtime_payload": json.dumps(runtime_payload or {}),
-                "scheduler_signals": json.dumps(scheduler_signals or {}),
+                "runtime_payload": _json_for_jsonb(runtime_payload or {}),
+                "scheduler_signals": _json_for_jsonb(scheduler_signals or {}),
                 "poll_success": poll_success,
                 "error_message": error_message,
             },
@@ -1137,7 +1168,7 @@ class DBManager:
                 "error": payload.get("error") or None,
                 "unsupported_reason": payload.get("unsupported_reason"),
                 "node_unhealthy_reason": payload.get("node_unhealthy_reason"),
-                "summary": json.dumps(payload),
+                "summary": _json_for_jsonb(payload),
                 "log_text": log_text or None,
                 "recorded_at": recorded_at,
             },
@@ -2093,8 +2124,8 @@ class DBManager:
         request_id: Optional[str] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        payload_str = json.dumps(input_payload) if log_level == "FULL" and input_payload else None
-        headers_str = json.dumps(dict(headers)) if log_level == "FULL" and headers else None
+        payload_str = _json_for_jsonb(input_payload) if log_level == "FULL" and input_payload else None
+        headers_str = _json_for_jsonb(dict(headers)) if log_level == "FULL" and headers else None
 
         row = self.session.execute(
             text(
@@ -2205,13 +2236,13 @@ class DBManager:
         self.session.execute(
             sql,
             {
-                "payload": json.dumps(payload) if payload else None,
+                "payload": _json_for_jsonb(payload) if payload else None,
                 "provider_id": provider_id,
                 "model_id": model_id,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc),
                 "log_id": log_id,
                 "policy_id": policy_id if policy_id != -1 else None,
-                "classification_statistics": json.dumps(classified),
+                "classification_statistics": _json_for_jsonb(classified),
                 "request_id": kwargs.get("request_id"),
                 "queue_depth": kwargs.get("queue_depth_at_arrival"),
                 "utilization": kwargs.get("utilization_at_arrival"),
@@ -2287,7 +2318,7 @@ class DBManager:
                 """
             ),
             {
-                "usage": json.dumps(billable_usage),
+                "usage": _json_for_jsonb(billable_usage),
                 "model_id": int(model_id),
                 "provider_id": int(provider_id),
                 "response_at": response_at,
@@ -2480,7 +2511,7 @@ class DBManager:
                 "uid": user_id,
                 "env": environment,
                 "log": log,
-                "settings": json.dumps(settings) if settings else None,
+                "settings": _json_for_jsonb(settings) if settings else None,
                 "dprio": default_priority,
                 "custom": use_custom_permissions,
             },
