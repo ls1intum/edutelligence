@@ -1,0 +1,79 @@
+# Logos – CI – Cleanup of PR builds from Harbor
+#
+# Deletes the PR's build images from Harbor when the PR is merged (or closed).
+#
+# What it deletes:
+#   1. The artifacts tagged `pr-<number>` (the manifest lists created by the
+#      build's `finalize` step). These are only ever touched for THIS PR, so
+#      there is no risk of hitting another PR's in-flight build.
+#   2. Untagged "by-digest" artifacts older than 24 h. Every build pushes its
+#      image by digest (untagged) and only later tags it, so a short-lived
+#      untagged artifact is left behind. The 24 h age margin guarantees we
+#      never delete an artifact that is still mid-build (builds finish in
+#      minutes, not hours), which is what the old cleanup accidentally did.
+#
+# The Harbor retention policy is the backstop for everything else.
+
+name: Logos - Cleanup PR builds from Harbor
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Delete PR builds from Harbor
+    if: ${{ github.event.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete PR builds from Harbor
+        run: |
+          set -euo pipefail
+          HARBOR_REGISTRY="${{ vars.LOGOS_HARBOR_REGISTRY }}"
+          HARBOR_USER="${{ vars.LOGOS_HARBOR_USER }}"
+          HARBOR_PASSWORD="${{ secrets.LOGOS_HARBOR_PASSWORD }}"
+          PROJECT="logos"
+          TAG="pr-${{ github.event.pull_request.number }}"
+          # Safety margin: never delete an untagged artifact that is still
+          # mid-build (a build + finalize finishes in minutes, not hours).
+          UNTAGGED_AGE_MARGIN_SECONDS=86400
+
+          REPOS=("logos/logos" "logos/logos-webservice" "logos/logos-ui" "logos/logos-db" "logos/logos-workernode-vllm")
+
+          API_BASE="https://${HARBOR_REGISTRY%/}/api/v2.0"
+
+          # Robot sign-in -> API token
+          TOKEN=$(curl -sfS -X POST "${API_BASE}/users/signin" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${HARBOR_USER}\",\"password\":\"${HARBOR_PASSWORD}\"}" \
+            | jq -r '.token')
+
+          CUTOFF=$(( $(date -u +%s) - UNTAGGED_AGE_MARGIN_SECONDS ))
+
+          for repo in "${REPOS[@]}"; do
+            # 1) Delete the artifacts that carry this PR's tag
+            PR_ARTIFACTS=$(curl -sfS -H "Authorization: Bearer ${TOKEN}" \
+              "${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts?tag=${TAG}" \
+              | jq -r '.[].id')
+            for id in ${PR_ARTIFACTS}; do
+              curl -sfS -X DELETE -H "Authorization: Bearer ${TOKEN}" \
+                "${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts/${id}"
+              echo "Deleted ${repo}:${TAG} (artifact ${id})"
+            done
+
+            # 2) Delete untagged by-digest artifacts older than the margin
+            UNTAGGED=$(curl -sfS -H "Authorization: Bearer ${TOKEN}" \
+              "${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts?page_size=1000" \
+              | jq -r --argjson cutoff "${CUTOFF}" \
+                  '.[] | select(((.tags // []) | length) == 0 and (.push_time < $cutoff)) | .id')
+            for id in ${UNTAGGED}; do
+              curl -sfS -X DELETE -H "Authorization: Bearer ${TOKEN}" \
+                "${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts/${id}"
+            done
+            [ -z "${UNTAGGED}" ] || echo "Deleted ${repo}: untagged by-digest artifacts older than 24h"
+          done
+
+          echo "Cleanup done for PR tag ${TAG}"
