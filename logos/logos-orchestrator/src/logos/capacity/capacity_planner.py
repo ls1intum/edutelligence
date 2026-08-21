@@ -551,7 +551,20 @@ class CapacityPlanner:
         itself is the expected path. Say it out loud once it stops being
         plausible, then repeat on a cooldown so the outage is visible for as
         long as it lasts.
+
+        A worker with no live session is excluded too, but that is reported
+        everywhere already — the cycle panel prints it offline and the
+        connected count is short. Warning about it would fire forever for any
+        node that is simply switched off, and the point of this line is to
+        surface the case nothing else names: a *connected* worker that no lane
+        can be placed on. Its clock is reset so a reconnect starts fresh
+        rather than inheriting the downtime.
         """
+        registry = self._registry
+        if registry is not None and not registry.is_provider_online(provider_id):
+            self._clear_unplannable(provider_id)
+            logger.debug("Skipping worker=%s: offline this cycle", provider_id)
+            return
         now = time.time()
         first_seen = self._unplannable_since.setdefault(provider_id, now)
         worker = self._facade.get_provider_name(provider_id) or provider_id
@@ -562,11 +575,10 @@ class CapacityPlanner:
         if now - self._unplannable_warned_at.get(provider_id, 0.0) < _UNPLANNABLE_WARN_EVERY_SECONDS:
             return
         self._unplannable_warned_at[provider_id] = now
-        registry = self._registry
         logger.warning(
-            "worker=%s excluded from lane placement for %.0f min "
-            "(calibrating=%s, first_status_received=%s) — no lane can be "
-            "placed on it while this holds",
+            "worker=%s is connected but has been excluded from lane placement "
+            "for %.0f min (calibrating=%s, first_status_received=%s) — no lane "
+            "can be placed on it while this holds",
             worker,
             stuck_for / 60.0,
             registry.is_calibrating(provider_id) if registry else "n/a",
@@ -2756,6 +2768,24 @@ class CapacityPlanner:
         # provider always claiming the model.
         if awake_lanes:
             return (0.0, free_vram)
+
+        # A cold load this worker just failed cannot serve the model, so it
+        # must not win the ranking either. The execution pass drops a load in
+        # cooldown (see the pre-pass in _validate_vram_budget), but the ranker runs
+        # first: leaving the failed worker as winner makes every other worker
+        # skip the model with "best-first ranker picked worker=X", and then X's
+        # own action is thrown away — nothing is placed anywhere until the
+        # cooldown expires. Observed in production on 2026-08-21, where a
+        # worker whose vLLM died during startup kept winning the ranking for
+        # the next two minutes while the other worker that could have served
+        # the model sat idle.
+        #
+        # Only the cold-load path is gated: a sleeping lane is a wake, which
+        # has its own cooldown and is already filtered above.
+        if not sleeping_lanes and self._lane_is_in_load_failure_cooldown(
+            provider_id, self._planner_lane_id(model_name)
+        ):
+            return None
 
         profile = profiles.get(model_name)
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -32,6 +33,56 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 _EMA_ALPHA = 0.3  # weight for new measurement vs historical average
+
+
+def atomic_write_yaml(path: Path, payload: dict[str, Any]) -> None:
+    """Write *payload* to *path* as YAML, atomically and race-free.
+
+    Two unrelated writers keep model_profiles.yml: this module's registry and
+    calibration's ``save_profiles``. A fixed ``<name>.tmp`` sidecar makes them
+    collide — both truncate the same scratch file, so one publishes the
+    other's half-written YAML, and the loser's cleanup can delete the winner's
+    temp file out from under its rename. That reintroduces exactly the torn
+    store the atomic write is here to prevent, so the temp name is unique per
+    call. The rename itself is what makes readers safe: they see the old file
+    or the new one, never a truncated one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        prior_mode: int | None = path.stat().st_mode & 0o777
+    except OSError:
+        prior_mode = None
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as f:
+            yaml.safe_dump(payload, f, default_flow_style=False)
+            f.flush()
+            os.fsync(f.fileno())
+        # mkstemp creates 0600. Carry the store's own mode across the replace
+        # so writing it never quietly narrows who can read it; a store being
+        # created for the first time gets the usual umask default instead.
+        if prior_mode is not None:
+            os.chmod(tmp_path, prior_mode)
+        else:
+            os.chmod(tmp_path, 0o666 & ~_current_umask())
+        os.replace(tmp_path, path)
+    finally:
+        # A successful replace already moved it; this only catches the
+        # failure paths, and must never remove the file we just published.
+        tmp_path.unlink(missing_ok=True)
+
+
+def _current_umask() -> int:
+    """Read the process umask without leaving it changed.
+
+    os.umask both sets and returns, so reading it means setting it twice. The
+    window is tiny but real, which is why this is only used for a store that
+    does not exist yet — every later write copies the mode already on disk.
+    """
+    mask = os.umask(0o022)
+    os.umask(mask)
+    return mask
 
 
 def _ema(previous: float | None, current: float) -> float:
@@ -680,22 +731,16 @@ class ModelProfileRegistry:
             )
             return
         try:
+            # Snapshot and write under one lock. Releasing it between the two
+            # lets a second writer's older snapshot land after this one — the
+            # rename is atomic per call, but two calls still race for which
+            # version ends up on disk.
             with self._lock:
                 data = {name: profile.to_dict() for name, profile in self._profiles.items()}
-            if not data:
-                return
-
-            self._state_dir.mkdir(parents=True, exist_ok=True)
-            state_path = self._state_dir / "model_profiles.yml"
-            tmp_path = state_path.with_name(state_path.name + ".tmp")
-            try:
-                with tmp_path.open("w") as f:
-                    yaml.safe_dump({"model_profiles": data}, f, default_flow_style=False)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(tmp_path, state_path)
-            finally:
-                tmp_path.unlink(missing_ok=True)
+                if not data:
+                    return
+                self._state_dir.mkdir(parents=True, exist_ok=True)
+                atomic_write_yaml(self._state_dir / "model_profiles.yml", {"model_profiles": data})
         except Exception:  # noqa: BLE001
             logger.exception("Failed to persist model profiles")
 

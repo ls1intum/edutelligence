@@ -2586,21 +2586,38 @@ def load_existing_profiles(profiles_path: Path) -> dict[str, Any]:
     return dict(profiles)
 
 
+# Fields the probe owns outright: it either measures them or states that they
+# do not apply, and both answers are authoritative. Everything else it leaves
+# ``None`` simply because it did not look — a flag maintained elsewhere, an
+# operator override, or a sleep level this run did not exercise — and for
+# those ``None`` must not erase what is already known.
+#
+# ``sleeping_residual_mb`` is on this list because a run has exactly one
+# reason to report it null: the model is not allowed to sleep here, so the
+# sleep phases were skipped. Keeping a stale measurement then hides that. It
+# also survives an ``enable_sleep_mode`` flip back to true, where the freshness
+# check sees a value, declines to re-calibrate, and hands the planner a
+# residual measured under a configuration that no longer exists.
+_PROBE_OWNED_PROFILE_FIELDS = frozenset({"sleeping_residual_mb"})
+
+
 def merge_profile(prior: dict[str, Any] | None, measured: dict[str, Any]) -> dict[str, Any]:
     """Layer a fresh calibration result over the profile already on disk.
 
     A calibration run measures what it can reach and leaves the rest ``None``:
-    ``sleeping_residual_mb`` for a model that never sleeps, the sleep host-RAM
-    transients, and every field the probe does not look at at all
-    (``disk_size_bytes``, ``sleep_mode_disabled``, ``calibration_unsupported``,
-    the operator's overrides). Assigning the result over the entry wipes those
-    — the flags included, so a nosleep model loses the very marker that says
-    its null sleep fields are expected. A measured value replaces the stored
-    one; ``None`` means "not measured here" and keeps what was already known.
+    the sleep host-RAM transients for a level it did not run, and every field
+    the probe does not look at at all (``disk_size_bytes``,
+    ``sleep_mode_disabled``, ``calibration_unsupported``, the operator's
+    overrides). Assigning the result over the entry wipes those — the flags
+    included, so a nosleep model loses the very marker that says its null
+    sleep fields are expected. A measured value replaces the stored one;
+    ``None`` means "not measured here" and keeps what was already known,
+    except for the fields in :data:`_PROBE_OWNED_PROFILE_FIELDS`, where a null
+    is itself the measurement.
     """
     merged = dict(prior or {})
     for key, value in measured.items():
-        if value is None and key in merged:
+        if value is None and key in merged and key not in _PROBE_OWNED_PROFILE_FIELDS:
             continue
         merged[key] = value
     return merged
@@ -2609,21 +2626,16 @@ def merge_profile(prior: dict[str, Any] | None, measured: dict[str, Any]) -> dic
 def save_profiles(profiles_path: Path, profiles: dict[str, Any]) -> None:
     """Persist profiles atomically.
 
-    Written to a sibling temp file and renamed, so a crash or a concurrent
-    reader never sees a truncated store: ``open(path, "w")`` truncates first,
-    and a reader hitting that window gets a parse error — which used to be
-    answered with an empty dict and a full rewrite.
+    Written to a temp file and renamed, so a crash or a concurrent reader
+    never sees a truncated store: ``open(path, "w")`` truncates first, and a
+    reader hitting that window gets a parse error — which used to be answered
+    with an empty dict and a full rewrite. Shares the writer with
+    ``ModelProfileRegistry._persist``, which keeps the same file: a temp name
+    unique per call is what stops the two from tearing each other's output.
     """
-    profiles_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = profiles_path.with_name(profiles_path.name + ".tmp")
-    try:
-        with tmp_path.open("w") as f:
-            yaml.safe_dump({"model_profiles": profiles}, f, default_flow_style=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, profiles_path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    from logos_worker_node.model_profiles import atomic_write_yaml  # noqa: PLC0415
+
+    atomic_write_yaml(profiles_path, {"model_profiles": profiles})
 
 
 # ---------------------------------------------------------------------------

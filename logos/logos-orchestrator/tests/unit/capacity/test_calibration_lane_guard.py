@@ -586,11 +586,20 @@ def _unplannable_planner(registry):
     return planner
 
 
+def _connected_but_excluded_registry():
+    return MagicMock(
+        **{
+            "is_calibrating.return_value": True,
+            "has_received_first_status.return_value": True,
+            "is_provider_online.return_value": True,
+        }
+    )
+
+
 def test_a_briefly_unplannable_worker_is_not_warned_about(caplog):
     """Skipping is the expected path for the seconds before a first status and
     the minutes of a session — it must not be noise."""
-    registry = MagicMock(**{"is_calibrating.return_value": True, "has_received_first_status.return_value": True})
-    planner = _unplannable_planner(registry)
+    planner = _unplannable_planner(_connected_but_excluded_registry())
 
     with caplog.at_level(logging.WARNING):
         planner._note_unplannable(1)
@@ -601,8 +610,7 @@ def test_a_briefly_unplannable_worker_is_not_warned_about(caplog):
 def test_a_worker_stuck_unplannable_is_reported(caplog):
     """Nothing else logs this state: the skip is silent by design, so an
     excluded worker held no lanes for hours without a single line about it."""
-    registry = MagicMock(**{"is_calibrating.return_value": True, "has_received_first_status.return_value": True})
-    planner = _unplannable_planner(registry)
+    planner = _unplannable_planner(_connected_but_excluded_registry())
     planner._note_unplannable(1)
     planner._unplannable_since[1] = time.time() - (_UNPLANNABLE_WARN_AFTER_SECONDS + 60)
 
@@ -618,10 +626,49 @@ def test_a_worker_stuck_unplannable_is_reported(caplog):
     assert caplog.records == []
 
 
+def test_an_offline_worker_is_never_warned_about(caplog):
+    """An offline worker is unplannable too, and every other surface already
+    says so — the cycle panel prints it offline, the connected count is short.
+    Warning here would fire every 15 minutes forever for any node that is
+    simply switched off, drowning the case this line exists for."""
+    registry = MagicMock(
+        **{
+            "is_calibrating.return_value": False,
+            "has_received_first_status.return_value": False,
+            "is_provider_online.return_value": False,
+        }
+    )
+    planner = _unplannable_planner(registry)
+    planner._unplannable_since[1] = time.time() - (_UNPLANNABLE_WARN_AFTER_SECONDS * 10)
+
+    with caplog.at_level(logging.WARNING):
+        planner._note_unplannable(1)
+
+    assert caplog.records == []
+
+
+def test_an_offline_worker_restarts_the_clock_on_reconnect(caplog):
+    """Downtime is not exclusion. A worker that comes back must be given the
+    full grace period again, not warned about the moment it reconnects."""
+    registry = _connected_but_excluded_registry()
+    planner = _unplannable_planner(registry)
+
+    planner._note_unplannable(1)
+    planner._unplannable_since[1] = time.time() - (_UNPLANNABLE_WARN_AFTER_SECONDS + 60)
+
+    registry.is_provider_online.return_value = False
+    planner._note_unplannable(1)
+    assert planner._unplannable_since == {}
+
+    registry.is_provider_online.return_value = True
+    with caplog.at_level(logging.WARNING):
+        planner._note_unplannable(1)
+    assert caplog.records == []
+
+
 def test_a_recovered_worker_forgets_its_stuck_history():
     """The next outage has to be timed from when it began, not from the last."""
-    registry = MagicMock(**{"is_calibrating.return_value": True, "has_received_first_status.return_value": True})
-    planner = _unplannable_planner(registry)
+    planner = _unplannable_planner(_connected_but_excluded_registry())
 
     planner._note_unplannable(1)
     planner._clear_unplannable(1)

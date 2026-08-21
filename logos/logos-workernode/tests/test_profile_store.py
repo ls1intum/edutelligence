@@ -137,6 +137,32 @@ def test_merge_writes_new_fields_including_nulls():
     assert merged == {"base_residency_mb": 1.0, "sleeping_residual_mb": None}
 
 
+def test_merge_clears_a_stale_sleep_measurement():
+    """A run reports sleeping_residual_mb null for exactly one reason: the
+    model is not allowed to sleep here, so the sleep phases were skipped.
+    Keeping the old number hides that, and survives an enable_sleep_mode flip
+    back to true — the freshness check sees a value, declines to re-calibrate,
+    and the planner sizes a wake from a configuration that no longer exists."""
+    prior = {"base_residency_mb": 98945.0, "sleeping_residual_mb": 1400.0, "sleep_mode_disabled": False}
+
+    merged = merge_profile(prior, {"base_residency_mb": 99000.0, "sleeping_residual_mb": None})
+
+    assert merged["sleeping_residual_mb"] is None
+    assert merged["sleep_mode_disabled"] is False, "still a field the probe does not own"
+
+
+def test_merge_keeps_the_sleep_transient_of_a_level_it_did_not_run():
+    """Unlike the residual, the per-level host-RAM transients are each only
+    measurable by their own level — an L1 run saying nothing about L2 is not
+    a statement that L2 has no transient."""
+    prior = {"sleep_l1_transient_host_ram_mb": 900.0, "sleep_l2_transient_host_ram_mb": 7000.0}
+
+    merged = merge_profile(prior, {"sleep_l1_transient_host_ram_mb": 950.0, "sleep_l2_transient_host_ram_mb": None})
+
+    assert merged["sleep_l1_transient_host_ram_mb"] == 950.0
+    assert merged["sleep_l2_transient_host_ram_mb"] == 7000.0
+
+
 def test_merge_without_a_prior_entry():
     assert merge_profile(None, {"base_residency_mb": 1.0}) == {"base_residency_mb": 1.0}
 
@@ -201,6 +227,74 @@ def test_registry_write_is_atomic(tmp_path):
     registry.record_loaded_vram("org/model", 8000.0, engine="vllm", kv_cache_sent_mb=2048.0)
 
     assert sorted(p.name for p in tmp_path.iterdir()) == ["model_profiles.yml"]
+
+
+def test_concurrent_writers_do_not_share_a_temp_file(tmp_path, monkeypatch):
+    """Two unrelated writers keep this file — calibration's save_profiles and
+    ModelProfileRegistry._persist. A fixed <name>.tmp sidecar makes them
+    collide: the inner write truncates the outer one's scratch file and then
+    renames it away, so the outer rename fails and whatever landed on disk is
+    a blend of the two. Atomicity per call is not enough; the temp name has to
+    be unique per call."""
+    path = tmp_path / "model_profiles.yml"
+    real_dump = yaml.safe_dump
+    calls = 0
+    temps_in_flight: set[str] = set()
+
+    def _scratch_files() -> set[str]:
+        return {p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")}
+
+    def _dump_nesting_a_second_write(data, stream, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # A second, complete write while the first one is still open.
+            save_profiles(path, {"org/inner": {"base_residency_mb": 2.0}})
+        else:
+            temps_in_flight.update(_scratch_files())
+        return real_dump(data, stream, **kwargs)
+
+    monkeypatch.setattr(yaml, "safe_dump", _dump_nesting_a_second_write)
+    save_profiles(path, {"org/outer": {"base_residency_mb": 1.0}})
+
+    # Both writes were open at once, so each needed its own scratch file. With
+    # a shared <name>.tmp there is one, and the outer rename then fails
+    # outright because the inner write already renamed it away.
+    assert len(temps_in_flight) == 2, f"writers shared a temp file: {temps_in_flight}"
+    # The outer write renamed last, so it is what is on disk — intact, and
+    # readable rather than a blend of the two.
+    assert load_existing_profiles(path) == {"org/outer": {"base_residency_mb": 1.0}}
+    assert [p.name for p in tmp_path.iterdir()] == ["model_profiles.yml"]
+
+
+def test_writing_the_store_does_not_narrow_its_permissions(tmp_path):
+    """mkstemp creates 0600. Publishing that mode over a store other processes
+    read would lock them out on the next write, not at deploy time."""
+    path = tmp_path / "model_profiles.yml"
+    save_profiles(path, {"org/model": {"base_residency_mb": 1.0}})
+    path.chmod(0o644)
+
+    save_profiles(path, {"org/model": {"base_residency_mb": 2.0}})
+
+    assert path.stat().st_mode & 0o777 == 0o644
+
+
+def test_registry_holds_its_lock_across_snapshot_and_write(tmp_path, monkeypatch):
+    """Releasing the lock between building the snapshot and writing it lets a
+    second writer's older snapshot land after this one. The rename is atomic
+    per call; which call wins is not."""
+    registry = ModelProfileRegistry(state_dir=tmp_path)
+    real_dump = yaml.safe_dump
+    locked_during_write: list[bool] = []
+
+    def _spy(data, stream, **kwargs):
+        locked_during_write.append(registry._lock.locked())
+        return real_dump(data, stream, **kwargs)
+
+    monkeypatch.setattr(yaml, "safe_dump", _spy)
+    registry.record_loaded_vram("org/model", 8000.0, engine="vllm", kv_cache_sent_mb=2048.0)
+
+    assert locked_during_write and all(locked_during_write)
 
 
 # ---------------------------------------------------------------------------
