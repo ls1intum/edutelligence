@@ -5322,11 +5322,16 @@ class CapacityPlanner:
         operator immediately instead of reporting the rejection from a
         background task nobody is waiting on.
         """
-        if self._is_plannable(provider_id):
-            return None
-        if self._registry is not None and self._registry.is_calibrating(provider_id):
-            return "Provider is calibrating; its VRAM is reserved for the calibration probes."
-        return "Provider has not reported its lanes yet; try again once it has connected."
+        if not self._is_plannable(provider_id):
+            if self._registry is not None and self._registry.is_calibrating(provider_id):
+                return "Provider is calibrating; its VRAM is reserved for the calibration probes."
+            return "Provider has not reported its lanes yet; try again once it has connected."
+        if self._safe_get_capacity(provider_id) is None:
+            # Without a snapshot the executor falls back to an unconditional VRAM
+            # reservation, i.e. it would place the lane without checking whether
+            # it fits. Request-time cold loads bail out here for the same reason.
+            return "No capacity information for this provider yet; its free VRAM is unknown."
+        return None
 
     async def load_lane_manually(self, provider_id: int, model_name: str) -> bool:
         """Operator-initiated load ("Load lane" in the statistics UI).
@@ -5347,18 +5352,28 @@ class CapacityPlanner:
           again.
 
         Returns False without acting when the provider is not in a state where a
-        lane may be placed — most importantly while it is calibrating, since the
-        worker has freed its VRAM for the probes and a lane would take the memory
-        they need. Callers that can still answer their client should consult
-        :meth:`manual_load_rejection_reason` first.
+        lane may be placed — while it is calibrating, since the worker has freed
+        its VRAM for the probes and a lane would take the memory they need, or
+        with no capacity snapshot to check the lane against. Callers that can
+        still answer their client should consult
+        :meth:`manual_load_rejection_reason` first; this re-checks because the
+        snapshot can go away between that call and this one.
         """
         rejection = self.manual_load_rejection_reason(provider_id)
         if rejection is not None:
             logger.warning("Refusing manual load of %s on worker=%s: %s", model_name, provider_id, rejection)
             return False
 
-        profile = self._safe_get_profiles(provider_id).get(model_name)
         capacity = self._safe_get_capacity(provider_id)
+        if capacity is None:
+            logger.warning(
+                "Refusing manual load of %s on worker=%s: capacity snapshot went away before dispatch",
+                model_name,
+                provider_id,
+            )
+            return False
+
+        profile = self._safe_get_profiles(provider_id).get(model_name)
         lane_id = self._planner_lane_id(model_name)
         action = CapacityPlanAction(
             action="load",

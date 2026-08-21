@@ -5,6 +5,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServletServerHttpRequest;
 import org.springframework.http.server.ServletServerHttpResponse;
@@ -105,5 +106,22 @@ class WebSocketAuthInterceptorTest {
         HandshakeResult result = handshake();
         assertThat(result.accepted()).isFalse();
         assertThat(result.status()).isEqualTo(HttpStatus.FORBIDDEN.value());
+    }
+
+    @Test
+    void failedUserSync_rejectsAsUnauthenticated() {
+        // The identity could not be established at all, so this is 401 rather
+        // than the 403 that a known user lacking the role gets.
+        Jwt jwt = Jwt.withTokenValue("the-token").header("alg", "RS256")
+            .subject("11111111-1111-1111-1111-111111111111")
+            .claim("preferred_username", "alice").build();
+        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt));
+        when(syncService.syncIfStale(any(KeycloakClaims.class)))
+            .thenThrow(new DataAccessResourceFailureException("directory unreachable"));
+
+        HandshakeResult result = handshake();
+        assertThat(result.accepted()).isFalse();
+        assertThat(result.status()).isEqualTo(HttpStatus.UNAUTHORIZED.value());
+        assertThat(result.attributes()).doesNotContainKey("logosKey");
     }
 }

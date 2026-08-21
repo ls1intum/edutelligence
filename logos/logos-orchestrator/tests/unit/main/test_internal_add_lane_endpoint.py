@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -102,12 +103,34 @@ async def test_accepts_and_loads_through_the_planner(monkeypatch):
     planner = _planner()
     monkeypatch.setattr(main_mod, "_capacity_planner", planner)
 
-    result = await main_mod.internal_logosnode_add_lane(_payload(provider_id=7), _make_request("Bearer correct-secret"))
+    response = await main_mod.internal_logosnode_add_lane(
+        _payload(provider_id=7), _make_request("Bearer correct-secret")
+    )
 
-    assert result == {"status": "accepted", "model": "org/model-a", "provider_id": 7}
+    # 202, not 200 — the lane is only scheduled at this point, not loaded.
+    assert response.status_code == 202
+    assert json.loads(response.body) == {"status": "accepted", "model": "org/model-a", "provider_id": 7}
     planner.load_lane_manually.assert_called_once_with(7, "org/model-a")
     # Let the scheduled task run so it does not outlive the test.
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_returns_409_without_a_capacity_snapshot(monkeypatch):
+    """No snapshot means the executor cannot check whether the lane fits.
+
+    Its fallback is an unconditional VRAM reservation, so the load would be
+    placed blind; request-time cold loads refuse for the same reason.
+    """
+    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    planner = _planner(rejection="No capacity information for this provider yet; its free VRAM is unknown.")
+    monkeypatch.setattr(main_mod, "_capacity_planner", planner)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await main_mod.internal_logosnode_add_lane(_payload(provider_id=7), _make_request("Bearer correct-secret"))
+
+    assert exc_info.value.status_code == 409
+    planner.load_lane_manually.assert_not_called()
 
 
 @pytest.mark.asyncio

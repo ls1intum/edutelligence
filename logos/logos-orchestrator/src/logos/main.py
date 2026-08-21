@@ -1891,7 +1891,11 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
     task = asyncio.create_task(_capacity_planner.load_lane_manually(data.provider_id, model))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-    return {"status": "accepted", "model": model, "provider_id": data.provider_id}
+    # 202, not 200: the lane is not loaded when this returns, only scheduled.
+    return JSONResponse(
+        status_code=202,
+        content={"status": "accepted", "model": model, "provider_id": data.provider_id},
+    )
 
 
 # ============================================================================
