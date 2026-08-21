@@ -1870,19 +1870,23 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
     if not model:
         raise HTTPException(status_code=400, detail="lane.model is required")
 
-    # Resolve the calibrated profile the same way the planner does for its own
-    # loads. Forwarding the caller's bare {"model": ...} would make the worker
-    # fall back to LaneConfig's defaults (vllm=False, default context/KV), i.e.
-    # start a vLLM model on the wrong backend and bypass the VRAM accounting.
     if _capacity_planner is None:
         raise HTTPException(status_code=503, detail="Capacity planner not ready")
-    params = _capacity_planner.build_manual_load_params(data.provider_id, model)
 
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="add_lane",
-        params=params,
-    )
+    # Answer a refusal synchronously — a background task has nobody to report to.
+    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id)
+    if rejection is not None:
+        raise HTTPException(status_code=409, detail=rejection)
+
+    # Loading a model takes minutes (the planner budgets 1800 s for the command),
+    # far beyond any caller's HTTP read timeout, and holding a servlet thread
+    # open that long per load is its own problem. So kick it off and return: the
+    # lane appears in the lane-status stream the statistics page already
+    # subscribes to, which is where the operator watches it come up.
+    task = asyncio.create_task(_capacity_planner.load_lane_manually(data.provider_id, model))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return {"status": "accepted", "model": model, "provider_id": data.provider_id}
 
 
 # ============================================================================
@@ -4298,7 +4302,6 @@ async def logosnode_lanes(data: LogosNodeStatusRequest):
 
 
 _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
-    "add_lane": 180,
     "apply_lanes": 180,
     "reconfigure_lane": 180,
     "sleep_lane": 30,

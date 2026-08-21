@@ -369,7 +369,14 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             sb.append(r.getOrDefault("request_id", "")).append(':')
               .append(r.getOrDefault("status", "")).append(':')
               .append(r.getOrDefault("scheduled_ts", "")).append(':')
-              .append(r.getOrDefault("request_complete_ts", "")).append(',');
+              .append(r.getOrDefault("request_complete_ts", "")).append(':')
+              // Usage and cost grow while a request streams, without any of the
+              // fields above changing — leaving them out of the signature pins
+              // the token and cost line of a running request to its first push.
+              .append(r.getOrDefault("prompt_tokens", "")).append(':')
+              .append(r.getOrDefault("completion_tokens", "")).append(':')
+              .append(r.getOrDefault("total_tokens", "")).append(':')
+              .append(r.getOrDefault("cost_microcents", "")).append(',');
         }
         return sb.toString();
     }
