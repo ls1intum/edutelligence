@@ -17,6 +17,7 @@ Persists in the state directory as model_profiles.yml.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -232,6 +233,10 @@ class ModelProfileRegistry:
         self._profiles: dict[str, ModelProfileRecord] = {}
         self._state_dir = state_dir
         self._lock = threading.Lock()
+        # True once a load of model_profiles.yml has failed. Blocks _persist,
+        # which rewrites the whole file from memory and would otherwise
+        # overwrite profiles it never managed to read.
+        self._load_failed = False
         self._manual_overrides: dict[str, dict[str, Any]] = {}
         if model_profile_overrides:
             for model_name, ov in model_profile_overrides.items():
@@ -656,8 +661,23 @@ class ModelProfileRegistry:
             return {name: profile.to_dict() for name, profile in self._profiles.items()}
 
     def _persist(self) -> None:
-        """Save model profiles to state directory as YAML."""
+        """Save model profiles to state directory as YAML.
+
+        Written atomically, and refused outright while the last load failed:
+        this rewrites the whole file from memory, so persisting on top of a
+        store we could not read replaces measured profiles with whatever
+        placeholder state the process built instead — the freshly seeded
+        capability stubs, carrying only the operator's config overrides.
+        """
         if self._state_dir is None or yaml is None:
+            return
+        if self._load_failed:
+            logger.error(
+                "Refusing to persist model profiles: %s could not be read, so what "
+                "is in memory is not a complete picture of it. Fix or move the file "
+                "to let the worker rebuild it.",
+                self._state_dir / "model_profiles.yml",
+            )
             return
         try:
             with self._lock:
@@ -667,10 +687,17 @@ class ModelProfileRegistry:
 
             self._state_dir.mkdir(parents=True, exist_ok=True)
             state_path = self._state_dir / "model_profiles.yml"
-            with state_path.open("w") as f:
-                yaml.safe_dump({"model_profiles": data}, f, default_flow_style=False)
+            tmp_path = state_path.with_name(state_path.name + ".tmp")
+            try:
+                with tmp_path.open("w") as f:
+                    yaml.safe_dump({"model_profiles": data}, f, default_flow_style=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, state_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to persist model profiles", exc_info=True)
+            logger.exception("Failed to persist model profiles")
 
     def _load_persisted(self) -> None:
         """Read persisted model profiles from state file on startup."""
@@ -678,14 +705,18 @@ class ModelProfileRegistry:
             return
         state_path = self._state_dir / "model_profiles.yml"
         if not state_path.exists():
+            self._load_failed = False
             return
         try:
             with state_path.open() as f:
                 data = yaml.safe_load(f) or {}
 
             profiles = data.get("model_profiles")
-            if not isinstance(profiles, dict):
+            if profiles is None:
+                self._load_failed = False
                 return
+            if not isinstance(profiles, dict):
+                raise ValueError(f"model_profiles is {type(profiles).__name__}, not a mapping")
             for model_name, profile_data in profiles.items():
                 if not isinstance(profile_data, dict):
                     continue
@@ -752,5 +783,14 @@ class ModelProfileRegistry:
                     prof.sleeping_residual_mb or 0,
                     prof.measurement_count,
                 )
+            self._load_failed = False
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to load persisted model profiles", exc_info=True)
+            # Loud, and latched: every calibrated profile on this node is in
+            # that file and nowhere else, and _persist would otherwise write
+            # the empty/partial in-memory state straight over it.
+            self._load_failed = True
+            logger.exception(
+                "Failed to load persisted model profiles from %s — profile "
+                "persistence is disabled until this is resolved",
+                state_path,
+            )

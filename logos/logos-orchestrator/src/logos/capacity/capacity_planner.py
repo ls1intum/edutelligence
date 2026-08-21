@@ -44,6 +44,13 @@ from .vram_ledger import VRAMLedger
 
 logger = logging.getLogger(__name__)
 
+# How long a worker may stay excluded from lane placement before the planner
+# says so. A calibration session over a handful of models runs well past ten
+# minutes, so this sits above any plausible session; anything longer means the
+# worker is holding lanes it will never get back.
+_UNPLANNABLE_WARN_AFTER_SECONDS = 45 * 60.0
+_UNPLANNABLE_WARN_EVERY_SECONDS = 15 * 60.0
+
 
 class CapacityPlanner:
     """
@@ -380,6 +387,12 @@ class CapacityPlanner:
         # subset). Suppresses new load actions on the lane until expiry.
         self._lane_load_failure_until: dict[tuple[int, str], float] = {}
 
+        # Workers the cycle is currently skipping, and when the skipping began.
+        # Backs the stuck-worker warning in _note_unplannable: a worker no
+        # lane can be placed on is otherwise invisible in the logs.
+        self._unplannable_since: dict[int, float] = {}
+        self._unplannable_warned_at: dict[int, float] = {}
+
         # Phase 4b: Atomic VRAM reservation ledger — prevents double-booking
         # when concurrent load/wake/sleep/stop operations overlap.
         self._vram_ledger = VRAMLedger()
@@ -528,6 +541,42 @@ class CapacityPlanner:
             return False
         return not self._registry.is_calibrating(provider_id)
 
+    def _note_unplannable(self, provider_id: int) -> None:
+        """Log a worker that has been skipped long enough to be a fault.
+
+        Being unplannable is normal and short-lived — the seconds before a
+        first status, the minutes of a calibration session. *Staying*
+        unplannable is not: the worker's lanes were stopped and nothing is
+        putting them back, which no other log line reports because the skip
+        itself is the expected path. Say it out loud once it stops being
+        plausible, then repeat on a cooldown so the outage is visible for as
+        long as it lasts.
+        """
+        now = time.time()
+        first_seen = self._unplannable_since.setdefault(provider_id, now)
+        worker = self._facade.get_provider_name(provider_id) or provider_id
+        stuck_for = now - first_seen
+        if stuck_for < _UNPLANNABLE_WARN_AFTER_SECONDS:
+            logger.debug("Skipping worker=%s: not plannable this cycle", worker)
+            return
+        if now - self._unplannable_warned_at.get(provider_id, 0.0) < _UNPLANNABLE_WARN_EVERY_SECONDS:
+            return
+        self._unplannable_warned_at[provider_id] = now
+        registry = self._registry
+        logger.warning(
+            "worker=%s excluded from lane placement for %.0f min "
+            "(calibrating=%s, first_status_received=%s) — no lane can be "
+            "placed on it while this holds",
+            worker,
+            stuck_for / 60.0,
+            registry.is_calibrating(provider_id) if registry else "n/a",
+            registry.has_received_first_status(provider_id) if registry else "n/a",
+        )
+
+    def _clear_unplannable(self, provider_id: int) -> None:
+        self._unplannable_since.pop(provider_id, None)
+        self._unplannable_warned_at.pop(provider_id, None)
+
     async def _run_cycle(self) -> None:
         """Execute one planner cycle."""
         cycle_start = time.time()
@@ -614,11 +663,9 @@ class CapacityPlanner:
             # we don't know what lanes are already loaded and acting on
             # stale/empty state can destroy existing lanes.
             if not self._is_plannable(provider_id):
-                logger.debug(
-                    "Skipping worker=%s: not plannable this cycle",
-                    self._facade.get_provider_name(provider_id) or provider_id,
-                )
+                self._note_unplannable(provider_id)
                 continue
+            self._clear_unplannable(provider_id)
 
             try:
                 lanes = self._facade.get_all_provider_lane_signals(provider_id)

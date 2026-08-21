@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from logos_worker_node import sharded_checkpoint as sc
 from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig, VllmEngineConfig
 from logos_worker_node.vllm_process import VllmProcessHandle
@@ -163,3 +165,113 @@ def test_maybe_prepare_convert_on_spawn_disabled(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(sc, "ensure_sharded_checkpoint", _boom)
     asyncio.run(handle._maybe_prepare_sharded_checkpoint(lane))
     assert handle._sharded_model_dir is None
+
+
+# ---------------------------------------------------------------------------
+# A checkpoint the loader rejects
+#
+# The conversion can report success — shards written, marker placed — and still
+# produce something vLLM refuses to load (observed with an MXFP4 model at tp=2:
+# "size of tensor a (1536) must match the size of tensor b (6144)"). Nothing in
+# the produced files says so, so every later spawn picks the same directory up
+# as ready. For a model the worker keeps warm that is a permanent outage of
+# that model, surfacing only as a failed add_lane.
+# ---------------------------------------------------------------------------
+
+
+def test_invalidate_removes_a_ready_checkpoint(tmp_path: Path) -> None:
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+    (target / "model-rank-0-part-0.safetensors").write_bytes(b"junk")
+
+    assert sc.invalidate_sharded_checkpoint(target) is True
+    assert not target.exists()
+    assert sc.is_sharded_checkpoint_ready(target) is False
+
+
+def test_invalidate_is_a_noop_when_nothing_is_cached(tmp_path: Path) -> None:
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    assert sc.invalidate_sharded_checkpoint(target) is False
+
+
+def test_a_rejected_checkpoint_is_detected_from_the_logs(tmp_path: Path) -> None:
+    handle = VllmProcessHandle("lane-s", 19020, OllamaConfig(), VllmEngineConfig())
+    handle._recent_logs = [
+        'File ".../vllm/model_executor/model_loader/sharded_state_loader.py", line 154, in load_weights',
+        "RuntimeError: The size of tensor a (1536) must match the size of tensor b (6144)",
+    ]
+
+    # Only while this lane actually serves a sharded checkpoint — the same
+    # traceback for a lane on the full checkpoint means something else.
+    assert handle.has_broken_sharded_checkpoint is False
+    handle._sharded_model_dir = "/cache/.sharded_cache/org__Model-A/tp2"
+    assert handle.has_broken_sharded_checkpoint is True
+
+
+def test_an_unrelated_startup_failure_is_not_blamed_on_the_checkpoint() -> None:
+    handle = VllmProcessHandle("lane-s", 19021, OllamaConfig(), VllmEngineConfig())
+    handle._sharded_model_dir = "/cache/.sharded_cache/org__Model-A/tp2"
+    handle._recent_logs = ["torch.OutOfMemoryError: CUDA out of memory."]
+
+    assert handle.has_broken_sharded_checkpoint is False
+
+
+def test_spawn_retries_from_the_full_checkpoint_after_a_rejection(tmp_path: Path, monkeypatch) -> None:
+    """The lane must come up on the full checkpoint instead of failing. Without
+    this a rejected conversion takes the model down for good: a model pinned
+    awake (enable_sleep_mode: false) has no other path back up."""
+    gc = OllamaConfig(models_path=str(tmp_path))
+    handle = VllmProcessHandle("lane-r", 19022, gc, VllmEngineConfig())
+    lane = _lane(2, tmp_path)
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+
+    monkeypatch.setattr(handle, "_purge_compile_caches_if_versions_changed", lambda: [])
+    monkeypatch.setattr(handle, "_write_compile_cache_stamp", lambda: None)
+    attempts: list[str | None] = []
+
+    async def _spawn_once(lane_config):
+        handle._sharded_model_dir = None  # as the real _spawn_once does
+        await handle._maybe_prepare_sharded_checkpoint(lane_config)
+        attempts.append(handle._sharded_model_dir)
+        if handle._sharded_model_dir:
+            handle._recent_logs = ["... sharded_state_loader.py, line 154, in load_weights"]
+            raise RuntimeError("vLLM exited during startup (return_code=1)")
+        return "ok"
+
+    monkeypatch.setattr(handle, "_spawn_once", _spawn_once)
+
+    assert asyncio.run(handle.spawn(lane)) == "ok"
+    assert attempts == [str(target), None], "second attempt must serve the full checkpoint"
+    assert not target.exists(), "the unusable conversion must be discarded"
+
+
+def test_spawn_does_not_retry_twice_for_the_same_reason(tmp_path: Path, monkeypatch) -> None:
+    """One retry. A failure that survives serving the full checkpoint is a real
+    fault and has to reach the caller."""
+    gc = OllamaConfig(models_path=str(tmp_path))
+    handle = VllmProcessHandle("lane-r2", 19023, gc, VllmEngineConfig())
+    lane = _lane(2, tmp_path)
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+
+    monkeypatch.setattr(handle, "_purge_compile_caches_if_versions_changed", lambda: [])
+    monkeypatch.setattr(handle, "_write_compile_cache_stamp", lambda: None)
+    monkeypatch.setattr(handle, "_purge_compile_caches", lambda: [])
+    attempts: list[str | None] = []
+
+    async def _spawn_once(lane_config):
+        handle._sharded_model_dir = None  # as the real _spawn_once does
+        await handle._maybe_prepare_sharded_checkpoint(lane_config)
+        attempts.append(handle._sharded_model_dir)
+        handle._recent_logs = ["... sharded_state_loader.py, line 154, in load_weights"]
+        raise RuntimeError("vLLM exited during startup (return_code=1)")
+
+    monkeypatch.setattr(handle, "_spawn_once", _spawn_once)
+
+    with pytest.raises(RuntimeError, match="exited during startup"):
+        asyncio.run(handle.spawn(lane))
+    assert len(attempts) == 2
