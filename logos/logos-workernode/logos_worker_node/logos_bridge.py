@@ -381,8 +381,11 @@ class LogosBridgeClient:
                 # derive that from the replayed event log alone, because the
                 # log is in-memory, capped, and only reaches the server a
                 # moment after the first status has already made this worker
-                # look plannable.
-                "calibrating": self._active_calibration_session is not None,
+                # look plannable. Asks the task, not the slot: a finished
+                # session lingers in _active_calibration_session until the next
+                # start clears it, and reporting that as live would exclude this
+                # worker from placement for as long as no new session begins.
+                "calibrating": self._calibration_session_is_live(),
                 "actions": [
                     "infer",
                     "infer_stream",
@@ -413,7 +416,20 @@ class LogosBridgeClient:
     async def _send_runtime_status(self, ws, force: bool = False) -> bool:
         runtime = await build_runtime_status(self._app)
         payload = runtime.model_dump(mode="json")
-        signature = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        # Every status repeats the live calibration state, so the server can
+        # settle it without depending on a lifecycle event arriving. An event
+        # is a one-shot signal: the one that ends a session can be dropped
+        # (post-connect replay filter, a connection that no longer exists) and
+        # the server is then left excluding this worker from lane placement
+        # with nothing to release it. Part of the dedupe signature because a
+        # session that starts and ends while the lanes are untouched changes
+        # nothing else in the payload, and the status would not be sent at all.
+        calibrating = self._calibration_session_is_live()
+        signature = json.dumps(
+            {"runtime": payload, "calibrating": calibrating},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         if not force and signature == self._last_runtime_signature:
             return False
         self._last_runtime_signature = signature
@@ -426,6 +442,7 @@ class LogosBridgeClient:
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
                 "configured_models": self._cfg.configured_models,
+                "calibrating": calibrating,
                 "runtime": payload,
             },
         )
@@ -865,7 +882,9 @@ class LogosBridgeClient:
                     "kv_cache_sent_mb": round(result.kv_cache_sent_mb, 1),
                     "base_residency_mb": round(result.base_residency_mb, 1),
                     "loaded_vram_mb": round(result.loaded_vram_mb, 1),
-                    "sleeping_residual_mb": round(result.sleeping_residual_mb, 1),
+                    "sleeping_residual_mb": (
+                        round(result.sleeping_residual_mb, 1) if result.sleeping_residual_mb is not None else None
+                    ),
                     "min_kv_cache_mb": round(result.min_kv_cache_mb, 1),
                     "max_kv_cache_mb": round(result.max_kv_cache_mb, 1),
                     "max_model_len": result.max_model_len,
@@ -879,15 +898,18 @@ class LogosBridgeClient:
 
         Mirrors the previous server-side selection logic so behaviour is
         unchanged — only the location of the decision moves to the worker.
-        Skips models with sleep_mode_disabled (only the sleep field would
-        be N/A) only when base_residency is already known, and models
-        flagged calibration_unsupported.
+        Models that cannot sleep on this worker are judged on their non-sleep
+        fields alone, because their sleep fields stay null by design; models
+        flagged calibration_unsupported are skipped entirely.
         """
         cfg = self._app.state.config
         model_profiles = self._app.state.model_profiles
         candidates = list(self._cfg.configured_models) or list(self._cfg.capabilities_models)
 
-        sleep_level = (
+        # A session at level 0 measures no sleep field for any model, so those
+        # fields must not count as missing — a run that cannot fill them would
+        # otherwise re-pick the same models every time.
+        session_sleep_level = (
             self._active_calibration_session.sleep_level if self._active_calibration_session is not None else 1
         )
 
@@ -899,9 +921,12 @@ class LogosBridgeClient:
             sleep_na = bool(profile is not None and profile.sleep_mode_disabled)
             # Worker-side knowledge: if config now forbids sleep but profile
             # still claims it's possible, picking this model is fine — the
-            # session driver re-checks model_can_sleep before each model
-            # and persists the new flag.
-            if sleep_level > 0 and not model_can_sleep(cfg, model_name):
+            # session driver re-checks model_can_sleep before each model,
+            # persists the new flag, and calibrates it at sleep_level 0. That
+            # run leaves the sleep fields null by design, so they must not
+            # count as missing here either. Mirrors
+            # main.py::_auto_calibrate_if_needed.
+            if session_sleep_level <= 0 or not model_can_sleep(cfg, model_name):
                 sleep_na = True
             collapsed_envelope = (
                 profile is not None
@@ -947,14 +972,24 @@ class LogosBridgeClient:
 
         terminal_event = "calibration_session_finished"
         lane_manager = getattr(self._app.state, "lane_manager", None)
+        # Push a status carrying calibrating=True right away. The server holds
+        # its optimistic mark for a bounded window after dispatching the start,
+        # and this is what confirms the session inside it.
+        if lane_manager is not None:
+            try:
+                lane_manager._mark_status_dirty()  # noqa: SLF001
+            except Exception:  # noqa: BLE001
+                logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
         try:
             from logos_worker_node.calibration import (  # noqa: PLC0415
                 _CALIBRATION_PORT,
                 _DEFAULT_VLLM,
                 _READY_TIMEOUT_S,
+                ProfileStoreUnreadableError,
                 calibrate_with_tp_escalation,
                 is_model_unsupported,
                 load_existing_profiles,
+                merge_profile,
                 plans_from_config,
                 result_to_profile_dict,
                 save_profiles,
@@ -1034,25 +1069,25 @@ class LogosBridgeClient:
                     continue
 
                 # Pre-flight: sleep gate. If the worker config forbids sleep
-                # for this model (worker kill switch or per-model override)
-                # there is no point spawning a vLLM lane with sleep_level>0 —
-                # the POST /sleep at Phase 4 of calibration will fail and the
-                # whole probe is wasted. Persist the flag and skip; the model
-                # stays uncalibrated on this worker until config or sleep
-                # level changes.
-                if session.sleep_level > 0 and not model_can_sleep(cfg, model_name):
+                # for this model (worker kill switch or per-model override),
+                # probing with sleep_level>0 would fail at the POST /sleep in
+                # Phase 4 and waste the whole run. Calibrate it at level 0
+                # instead: the sleep phases are skipped, sleeping_residual_mb
+                # is recorded as null, and everything the planner places on —
+                # base_residency_mb — is measured exactly as for any other
+                # model. Skipping the model outright, as this used to, left it
+                # permanently uncalibrated: a nosleep model is never reported
+                # as a capability without a profile, and no later session could
+                # ever produce one either.
+                model_sleep_level = session.sleep_level
+                if not model_can_sleep(cfg, model_name):
                     model_profiles.mark_sleep_mode_disabled(model_name, True)
+                    model_sleep_level = 0
                     logger.info(
-                        "[Calibration] Skipping %s — sleep mode disabled on this worker",
+                        "[Calibration] %s cannot sleep on this worker — calibrating without the sleep phases",
                         model_name,
                     )
-                    self._record_calibration_event(
-                        "calibration_model_skipped",
-                        model=model_name,
-                        details="sleep_mode_disabled",
-                    )
-                    continue
-                if model_can_sleep(cfg, model_name):
+                else:
                     # Config now permits sleep — clear any stale flag so a
                     # config flip (true → false) is picked up immediately.
                     model_profiles.mark_sleep_mode_disabled(model_name, False)
@@ -1061,12 +1096,12 @@ class LogosBridgeClient:
                 self._record_calibration_event(
                     "calibration_model_started",
                     model=model_name,
-                    details=f"sleep_level={session.sleep_level}",
+                    details=f"sleep_level={model_sleep_level}",
                 )
                 logger.info(
                     "[Calibration] Starting model=%s sleep_level=%d",
                     model_name,
-                    session.sleep_level,
+                    model_sleep_level,
                 )
 
                 # Blocking calibration runs in the default thread executor so
@@ -1077,12 +1112,12 @@ class LogosBridgeClient:
                 try:
                     result = await loop.run_in_executor(
                         None,
-                        lambda p=plan: calibrate_with_tp_escalation(
+                        lambda p=plan, sl=model_sleep_level: calibrate_with_tp_escalation(
                             p,
                             vllm_binary=_DEFAULT_VLLM,
                             port=_CALIBRATION_PORT,
                             log_dir=log_dir,
-                            sleep_level=session.sleep_level,
+                            sleep_level=sl,
                             ready_timeout_s=_READY_TIMEOUT_S,
                             nccl_p2p_available=nccl_p2p,
                             model_cache=_mc,
@@ -1111,16 +1146,34 @@ class LogosBridgeClient:
                     break
 
                 if result.success:
-                    existing = load_existing_profiles(profiles_path)
-                    prior = existing.get(model_name) or {}
-                    new_profile = result_to_profile_dict(result)
-                    for _carry in (
-                        "sleep_l1_transient_host_ram_mb",
-                        "sleep_l2_transient_host_ram_mb",
-                    ):
-                        if new_profile.get(_carry) is None and prior.get(_carry) is not None:
-                            new_profile[_carry] = prior[_carry]
-                    existing[model_name] = new_profile
+                    # An unreadable store aborts the write: load_existing_profiles
+                    # used to answer with an empty dict, and saving that back
+                    # replaced every profile on the node with this one result.
+                    # Losing one measurement is recoverable; losing the file is
+                    # not, because a model without base_residency_mb is never
+                    # announced as a capability and a model that cannot sleep
+                    # here would keep failing to be re-measured.
+                    try:
+                        existing = load_existing_profiles(profiles_path)
+                    except ProfileStoreUnreadableError as exc:
+                        logger.error(
+                            "[Calibration] %s calibrated, but %s is unreadable (%s) — "
+                            "keeping the file untouched. Fix or remove it; this model "
+                            "re-calibrates on the next session.",
+                            model_name,
+                            profiles_path,
+                            exc,
+                        )
+                        self._record_calibration_event(
+                            "calibration_model_failed",
+                            model=model_name,
+                            details=f"profile store unreadable: {exc}",
+                        )
+                        continue
+                    existing[model_name] = merge_profile(
+                        existing.get(model_name),
+                        result_to_profile_dict(result),
+                    )
                     save_profiles(profiles_path, existing)
                     model_profiles._load_persisted()  # noqa: SLF001
                     # Models that were pruned from capabilities at startup

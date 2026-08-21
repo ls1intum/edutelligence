@@ -262,6 +262,15 @@ CALIBRATION_SESSION_STARTED_EVENT = "calibration_session_started"
 START_CALIBRATION_SESSION_ACTION = "start_calibration_session"
 TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
+# How long the optimistic mark set when start_calibration_session is dispatched
+# survives a worker status that reports no session. The worker activates the
+# session inside its RPC handler, before it answers, so every snapshot built
+# after the reply already reports it — this window only has to cover a status
+# message that was already in flight when the command went out. It is bounded
+# because an unbounded wait is the failure being fixed: a start that never
+# materialises must not latch the provider out of lane placement forever.
+CALIBRATION_START_GRACE = timedelta(seconds=60)
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -297,12 +306,16 @@ class ProviderSession:
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
     max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
-    # True between the worker's calibration_session_started event and its
-    # terminal event, and seeded from the worker's hello so a reconnect
-    # mid-session is correct before the first status arrives. A calibrating
+    # True while the worker is running a calibration session, seeded from its
+    # hello and then reconciled against every status it sends. A calibrating
     # worker has freed all VRAM for its probes, so its idle lanes and free
     # VRAM are reserved rather than available.
     calibrating: bool = False
+    # Set when start_calibration_session is dispatched: until it passes, a
+    # status reporting no session is treated as a snapshot that predates the
+    # command rather than as proof the session ended. See
+    # CALIBRATION_START_GRACE.
+    optimistic_calibration_until: datetime | None = None
 
     def is_stale(self, stale_after_seconds: int) -> bool:
         return (_utc_now() - self.last_heartbeat) > timedelta(seconds=stale_after_seconds)
@@ -602,7 +615,12 @@ class LogosNodeRuntimeRegistry:
         # session starts non-calibrating and the event replay that would mark
         # it only arrives after the first status. None = worker predates the
         # field; leave the replay as the only source in that case.
+        #
+        # A hello is a fresh connection, so it also retires any pending
+        # optimistic mark: whatever command was in flight against the previous
+        # connection cannot be answered on this one.
         if calibrating is not None:
+            session.optimistic_calibration_until = None
             self._set_calibrating(session, bool(calibrating), "hello")
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
@@ -618,6 +636,7 @@ class LogosNodeRuntimeRegistry:
         runtime: dict[str, Any],
         capabilities_models: list[str] | None = None,
         configured_models: list[str] | None = None,
+        calibrating: bool | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -629,6 +648,10 @@ class LogosNodeRuntimeRegistry:
         session.last_heartbeat = _utc_now()
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
+        # None = worker predates the field; the lifecycle events stay the only
+        # source in that case.
+        if calibrating is not None:
+            self._reconcile_calibrating_from_status(session, bool(calibrating))
 
         # Detect node-health transitions and log loudly on the master side
         # so operators see the condition in the logos-orchestrator container
@@ -788,9 +811,44 @@ class LogosNodeRuntimeRegistry:
         """
         event_name = str(event.get("event", "")).strip()
         if event_name == CALIBRATION_SESSION_STARTED_EVENT:
+            session.optimistic_calibration_until = None
             self._set_calibrating(session, True, event_name)
         elif event_name in TERMINAL_CALIBRATION_SESSION_EVENTS:
+            session.optimistic_calibration_until = None
             self._set_calibrating(session, False, event_name)
+
+    def _reconcile_calibrating_from_status(self, session: ProviderSession, calibrating: bool) -> None:
+        """Settle ``session.calibrating`` from the worker's own status snapshot.
+
+        The lifecycle events are one-shot signals, which makes the flag they
+        drive a latch: a terminal event that never lands as a live event — the
+        post-connect replay filter drops it, the connection it belonged to is
+        gone — leaves the provider excluded from lane placement with nothing
+        left to release it, and the only recovery is restarting the worker.
+
+        Every status carries the worker's current session state, so this
+        converges within one status interval no matter which event was lost.
+        The events stay useful: they act within the same second, while the
+        status is the periodic ground truth behind them.
+        """
+        if calibrating:
+            session.optimistic_calibration_until = None
+            self._set_calibrating(session, True, "worker status")
+            return
+
+        deadline = session.optimistic_calibration_until
+        if deadline is not None:
+            if _utc_now() < deadline:
+                # A start we just dispatched; this snapshot may predate it.
+                return
+            session.optimistic_calibration_until = None
+            logger.warning(
+                "provider=%s reported no calibration session %ds after "
+                "start_calibration_session was dispatched — releasing it for lane placement",
+                session.worker_id or str(session.provider_id),
+                int(CALIBRATION_START_GRACE.total_seconds()),
+            )
+        self._set_calibrating(session, False, "worker status")
 
     def _set_calibrating(self, session: ProviderSession, calibrating: bool, source: str) -> None:
         """Set ``session.calibrating``, logging only actual transitions."""
@@ -932,14 +990,20 @@ class LogosNodeRuntimeRegistry:
         # own events remain the authority for the rest of the session.
         calibration_start = action == START_CALIBRATION_SESSION_ACTION
         was_calibrating = session.calibrating
+        prior_optimistic_until = session.optimistic_calibration_until
         if calibration_start:
             self._set_calibrating(session, True, "start_calibration_session dispatched")
+            # A status built before this command is still in flight and would
+            # report no session; hold it off until the worker has had time to
+            # report the one we just asked for.
+            session.optimistic_calibration_until = _utc_now() + CALIBRATION_START_GRACE
 
         def _undo_optimistic_calibration_mark() -> None:
             # Restore rather than clear: the worker refuses a start while a
             # session is already running, and clearing would then release a
             # live session for lane placement.
             if calibration_start:
+                session.optimistic_calibration_until = prior_optimistic_until
                 self._set_calibrating(session, was_calibrating, "start_calibration_session refused")
 
         try:
@@ -967,8 +1031,8 @@ class LogosNodeRuntimeRegistry:
             )
             # Deliberately not undone here: a timeout leaves it unknown whether
             # the session started, and releasing a running one is the failure
-            # this guard exists to prevent. The worker's terminal event, or its
-            # hello on the next connect, settles the flag either way.
+            # this guard exists to prevent. The worker's own status settles it
+            # once the optimistic window passes — no event or reconnect needed.
             raise LogosNodeOfflineError("Command timeout waiting for worker response") from exc
 
         if not bool(result.get("success", False)):

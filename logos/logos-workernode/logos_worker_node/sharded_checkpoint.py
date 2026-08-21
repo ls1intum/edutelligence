@@ -85,6 +85,32 @@ def is_sharded_checkpoint_ready(directory: Path) -> bool:
         return False
 
 
+def invalidate_sharded_checkpoint(directory: Path) -> bool:
+    """Discard a sharded checkpoint that vLLM refused to load.
+
+    The conversion can complete — shard files written, marker placed — and
+    still produce something the loader rejects, e.g. a quantization whose
+    weight layout does not survive the round trip (a tensor comes back a
+    factor of the packing width too small). Nothing in the produced files says
+    so; only a lane trying to serve them finds out. Removing the directory
+    puts the model back on the full checkpoint and lets a later conversion,
+    against a newer vLLM, try again.
+
+    Returns True when something was removed.
+    """
+    with _lock_for(directory):
+        if not directory.exists():
+            return False
+        shutil.rmtree(directory, ignore_errors=True)
+        # rmtree(ignore_errors=True) hides a partial failure, and a directory
+        # that still has the marker would be picked up as ready again.
+        if is_sharded_checkpoint_ready(directory):
+            logger.error("[sharded] could not fully remove %s — it still looks ready", directory)
+            return False
+        logger.warning("[sharded] discarded unusable sharded checkpoint: %s", directory)
+        return True
+
+
 def _lock_for(directory: Path) -> threading.Lock:
     key = str(directory)
     with _locks_guard:

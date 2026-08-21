@@ -827,6 +827,11 @@ def _build_vllm_cmd(
     # lane can't actually honor (vLLM rejects "needs X GiB > budget" at start).
     # Calibrate the same engine config that serves so the pair curve is exact.
     enable_prefix_caching = bool(plan.get("enable_prefix_caching", True))
+    # Probe with the same sleep support the serving lane has. For a model the
+    # worker never puts to sleep, --enable-sleep-mode would swap vLLM's
+    # allocator for CuMemAllocator and measure a footprint production never
+    # runs; calibrate_model turns it off for exactly those runs.
+    enable_sleep_mode = bool(plan.get("enable_sleep_mode", True))
     extra_args: list[str] = list(plan.get("extra_args") or [])
     # Calibrate with the lane's speculative-decoding setting: a draft model adds
     # its own weights and activation peak, so a profile measured without it
@@ -850,8 +855,9 @@ def _build_vllm_cmd(
         dtype,
         "--kv-cache-memory-bytes",
         kv_bytes,
-        "--enable-sleep-mode",
     ]
+    if enable_sleep_mode:
+        cmd.append("--enable-sleep-mode")
     if enable_prefix_caching:
         cmd.append("--enable-prefix-caching")
     if explicit_gmu is not None:
@@ -1176,7 +1182,11 @@ class CalibrationResult:
     kv_cache_sent_mb: float  # what we explicitly gave vLLM during calibration
     success: bool
     loaded_vram_mb: float = 0.0  # measured: total GPU delta while awake
-    sleeping_residual_mb: float = 0.0  # measured: total GPU delta while sleeping
+    # Measured: total GPU delta while sleeping. None when the run skipped the
+    # sleep phases because sleep is disabled for this model on this worker —
+    # the value is genuinely unknowable there, and the profile records it as
+    # null rather than as a measurement.
+    sleeping_residual_mb: float | None = 0.0
     base_residency_mb: float = 0.0  # = loaded_vram_mb (weights + KV, full footprint)
     # KV cache envelope discovered during calibration on this hardware. ``min``
     # is the smallest kv_cache_memory_bytes value at which the model loaded and
@@ -1203,6 +1213,13 @@ class CalibrationResult:
     # to a heuristic when missing.
     sleep_l1_transient_host_ram_mb: float | None = None
     sleep_l2_transient_host_ram_mb: float | None = None
+    # Host RAM the lane still holds once it is asleep and settled — distinct
+    # from the transients above, which are the peak *during* the call. sleep_l1
+    # relocates the weights to the host instead of dropping them, so this is
+    # roughly the weight footprint and it stays for the whole sleep. It is what
+    # makes sleeping and the model cache compete for one pool. None when the
+    # run skipped the sleep phases, or when /proc/meminfo was unreadable.
+    host_ram_residual_mb: float | None = None
     # Set when calibrate_model bails because the model itself can never
     # load on this worker (bad repo id, gated repo, unsupported architecture).
     # Caller persists the model into model_profiles.yml so the master's
@@ -1333,7 +1350,19 @@ def calibrate_model(
         logger.info(
             "  enforce_eager=False — graphs will be captured; loaded/sleeping VRAM include capture-pool overhead"
         )
-    plan = {**plan, "enforce_eager": eager_mode}
+    # A model the operator pinned awake (enable_sleep_mode: false, which
+    # plans_from_config carries through from the vLLM model overrides) has to be
+    # probed the same way it is served: --enable-sleep-mode swaps in
+    # CuMemAllocator and the /sleep in Phase 4 would fail anyway. Drop to
+    # level 0 for it, whatever the caller asked for — that is what makes the
+    # boot-time path and the session-driven one agree without either having to
+    # know the other's rules.
+    if sleep_level > 0 and not bool(plan.get("enable_sleep_mode", True)):
+        logger.info("  enable_sleep_mode=False for this model — probing at sleep_level 0")
+        sleep_level = 0
+    # sleep_level == 0 means "this model never sleeps here": the probe runs
+    # without vLLM's sleep allocator and the sleep phases are skipped.
+    plan = {**plan, "enforce_eager": eager_mode, "enable_sleep_mode": sleep_level > 0}
 
     model = plan["model"]
     gpu_devices = str(plan.get("gpu_devices") or "")
@@ -2307,83 +2336,125 @@ def calibrate_model(
             kv_cache_sent_mb,
         )
 
-        # Phase 4 — Sleep the model (with host-RAM transient sampling)
-        if cancel_event is not None and cancel_event.is_set():
-            logger.info("  Calibration cancelled before Phase 4.")
-            partial.error = "cancelled"
-            return partial
-        logger.info("  [4/6] Sleeping model (level=%d)...", sleep_level)
-        sleep_url = f"{base_url}/sleep?level={sleep_level}"
-        with _track_host_ram_transient() as host_ram_probe:
-            status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
-            if status not in (200, 204):
-                partial.error = f"/sleep returned HTTP {status}"
-                logger.warning("  ERROR: %s", partial.error)
+        # Phases 4 and 5 measure sleep, and only sleep. Everything the planner
+        # needs to place a lane — base_residency_mb above — is already known,
+        # so a model that is not allowed to sleep on this worker skips them and
+        # finishes with sleeping_residual_mb unknown rather than being dropped.
+        # Dropping it is what left nosleep models (enable_sleep_mode: false)
+        # permanently uncalibrated: no profile means the worker never reports
+        # them as a capability, and no later session could recover them either.
+        sleeping_residual_mb: float | None = None
+        sleep_transient_mb: float | None = None
+        host_ram_residual_mb: float | None = None
+        if sleep_level <= 0:
+            logger.info(
+                "  [4/6 + 5/6] Sleep phases skipped (sleep mode disabled for this model) — "
+                "sleeping_residual_mb stays unknown; base_residency is unaffected"
+            )
+        else:
+            # Phase 4 — Sleep the model (with host-RAM transient sampling)
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("  Calibration cancelled before Phase 4.")
+                partial.error = "cancelled"
                 return partial
+            logger.info("  [4/6] Sleeping model (level=%d)...", sleep_level)
+            sleep_url = f"{base_url}/sleep?level={sleep_level}"
+            with _track_host_ram_transient() as host_ram_probe:
+                status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
+                if status not in (200, 204):
+                    partial.error = f"/sleep returned HTTP {status}"
+                    logger.warning("  ERROR: %s", partial.error)
+                    return partial
+                try:
+                    wait_sleep_state(base_url, True, _SLEEP_TIMEOUT_S)
+                except TimeoutError as exc:
+                    partial.error = str(exc)
+                    logger.warning("  ERROR: %s", partial.error)
+                    return partial
+
+            sleep_transient_mb = host_ram_probe["transient_mb"]
+            sleep_baseline_mb = host_ram_probe["baseline_mb"]
+            if sleep_transient_mb is not None and sleep_baseline_mb is not None:
+                logger.info(
+                    "        sleep_l%d transient host RAM: baseline_available=%.0fMB, " "peak_consumption=%.0fMB",
+                    sleep_level,
+                    sleep_baseline_mb,
+                    sleep_transient_mb,
+                )
+            else:
+                logger.info(
+                    "        sleep_l%d transient host RAM: /proc/meminfo unavailable — skipped",
+                    sleep_level,
+                )
+
+            # Phase 5 — Measure sleeping VRAM. Sample twice with a settle between
+            # samples and take the max. CuMemAllocator's release is asynchronous;
+            # a single-shot sample can read mid-release and underestimate the
+            # residual (which leads to wake-time OOM when the planner trusts an
+            # artificially low value). The first sample is required; the second
+            # is a refinement and falls back silently if it fails.
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("  Calibration cancelled before Phase 5.")
+                partial.error = "cancelled"
+                return partial
+            logger.info(
+                "  [5/6] Measuring sleeping VRAM (settling %.0fs, double-sample)...",
+                _VRAM_SETTLE_S,
+            )
+            time.sleep(_VRAM_SETTLE_S)
             try:
-                wait_sleep_state(base_url, True, _SLEEP_TIMEOUT_S)
-            except TimeoutError as exc:
-                partial.error = str(exc)
+                s1 = sample_vram_mb(gpu_indices)
+            except Exception as exc:
+                partial.error = f"nvidia-smi sleep failed: {exc}"
                 logger.warning("  ERROR: %s", partial.error)
                 return partial
+            time.sleep(3.0)
+            s2: float | None = None
+            try:
+                s2 = sample_vram_mb(gpu_indices)
+            except Exception as exc:
+                logger.info("        re-sample skipped (%s) — using single sample", exc)
+            sleeping_total_mb = max(s1, s2) if s2 is not None else s1
+            sleeping_residual_mb = max(sleeping_total_mb - baseline_mb, 0.0)
+            if s2 is not None:
+                logger.info(
+                    "        sleeping samples = %.0f / %.0f MB  →  max delta = %.0f MB",
+                    s1,
+                    s2,
+                    sleeping_residual_mb,
+                )
+            else:
+                logger.info(
+                    "        sleeping sample = %.0f MB  →  delta = %.0f MB",
+                    s1,
+                    sleeping_residual_mb,
+                )
 
-        sleep_transient_mb = host_ram_probe["transient_mb"]
-        sleep_baseline_mb = host_ram_probe["baseline_mb"]
-        if sleep_transient_mb is not None and sleep_baseline_mb is not None:
-            logger.info(
-                "        sleep_l%d transient host RAM: baseline_available=%.0fMB, " "peak_consumption=%.0fMB",
-                sleep_level,
-                sleep_baseline_mb,
-                sleep_transient_mb,
-            )
-        else:
-            logger.info(
-                "        sleep_l%d transient host RAM: /proc/meminfo unavailable — skipped",
-                sleep_level,
-            )
-
-        # Phase 5 — Measure sleeping VRAM. Sample twice with a settle between
-        # samples and take the max. CuMemAllocator's release is asynchronous;
-        # a single-shot sample can read mid-release and underestimate the
-        # residual (which leads to wake-time OOM when the planner trusts an
-        # artificially low value). The first sample is required; the second
-        # is a refinement and falls back silently if it fails.
-        if cancel_event is not None and cancel_event.is_set():
-            logger.info("  Calibration cancelled before Phase 5.")
-            partial.error = "cancelled"
-            return partial
-        logger.info(
-            "  [5/6] Measuring sleeping VRAM (settling %.0fs, double-sample)...",
-            _VRAM_SETTLE_S,
-        )
-        time.sleep(_VRAM_SETTLE_S)
-        try:
-            s1 = sample_vram_mb(gpu_indices)
-        except Exception as exc:
-            partial.error = f"nvidia-smi sleep failed: {exc}"
-            logger.warning("  ERROR: %s", partial.error)
-            return partial
-        time.sleep(3.0)
-        s2: float | None = None
-        try:
-            s2 = sample_vram_mb(gpu_indices)
-        except Exception as exc:
-            logger.info("        re-sample skipped (%s) — using single sample", exc)
-        sleeping_total_mb = max(s1, s2) if s2 is not None else s1
-        sleeping_residual_mb = max(sleeping_total_mb - baseline_mb, 0.0)
-        if s2 is not None:
-            logger.info(
-                "        sleeping samples = %.0f / %.0f MB  →  max delta = %.0f MB",
-                s1,
-                s2,
-                sleeping_residual_mb,
-            )
-        else:
-            logger.info(
-                "        sleeping sample = %.0f MB  →  delta = %.0f MB",
-                s1,
-                sleeping_residual_mb,
-            )
+            # Host RAM the lane keeps for as long as it sleeps. sleep_l1 moves
+            # the weights to the host rather than dropping them, so a sleeping
+            # lane holds roughly its weight footprint in RAM until it wakes —
+            # tens of GB per model, on a host that is also lending RAM to the
+            # model cache. Only the transient peak was ever measured, which
+            # answers "can this sleep complete" and says nothing about what it
+            # costs afterwards, so the planner sees sleeping as free on the
+            # host axis and keeps choosing it.
+            #
+            # Read after the same settle as the VRAM samples: the release is
+            # asynchronous on both axes, and sampling mid-transfer would
+            # understate it. Taken against the awake baseline, so it is the
+            # delta the sleep caused, not the host's absolute usage.
+            host_ram_residual_mb = None
+            post_sleep_available_mb = _sample_host_ram_available_mb()
+            if sleep_baseline_mb is not None and post_sleep_available_mb is not None:
+                host_ram_residual_mb = max(sleep_baseline_mb - post_sleep_available_mb, 0.0)
+                logger.info(
+                    "        sleeping host RAM = %.0f MB  (available %.0f → %.0f MB)",
+                    host_ram_residual_mb,
+                    sleep_baseline_mb,
+                    post_sleep_available_mb,
+                )
+            else:
+                logger.info("        sleeping host RAM: /proc/meminfo unavailable — skipped")
 
         logger.info("  Results:")
         logger.info(
@@ -2394,10 +2465,20 @@ def calibrate_model(
             "    kv_budget_mb         = %.0f MB  (KV portion, for auditing)",
             kv_cache_sent_mb,
         )
-        logger.info(
-            "    sleeping_residual_mb = %.0f MB  (measured independently)",
-            sleeping_residual_mb,
-        )
+        if sleeping_residual_mb is None:
+            logger.info("    sleeping_residual_mb = n/a  (sleep mode disabled for this model)")
+        else:
+            logger.info(
+                "    sleeping_residual_mb = %.0f MB  (measured independently)",
+                sleeping_residual_mb,
+            )
+        if host_ram_residual_mb is None:
+            logger.info("    host_ram_residual_mb = n/a  (sleep phases skipped or /proc/meminfo unreadable)")
+        else:
+            logger.info(
+                "    host_ram_residual_mb = %.0f MB  (held on the host for the whole sleep)",
+                host_ram_residual_mb,
+            )
         logger.info(
             "    Scheduler uses base_residency directly — no KV added on top",
         )
@@ -2415,6 +2496,7 @@ def calibrate_model(
             enforce_eager=eager_mode,
             sleep_l1_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 1 else None),
             sleep_l2_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 2 else None),
+            host_ram_residual_mb=host_ram_residual_mb,
             min_kv_cache_mb=min_kv_observed_mb,
             max_kv_cache_mb=max_kv_observed_mb,
             max_model_len=partial.max_model_len,
@@ -2450,7 +2532,7 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
     """
     return {
         "loaded_vram_mb": round(r.loaded_vram_mb, 1),
-        "sleeping_residual_mb": round(r.sleeping_residual_mb, 1),
+        "sleeping_residual_mb": (round(r.sleeping_residual_mb, 1) if r.sleeping_residual_mb is not None else None),
         "disk_size_bytes": None,
         "base_residency_mb": round(r.base_residency_mb, 1),
         "kv_budget_mb": round(r.kv_cache_sent_mb, 1),
@@ -2472,6 +2554,7 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "sleep_l2_transient_host_ram_mb": (
             round(r.sleep_l2_transient_host_ram_mb, 1) if r.sleep_l2_transient_host_ram_mb is not None else None
         ),
+        "host_ram_residual_mb": (round(r.host_ram_residual_mb, 1) if r.host_ram_residual_mb is not None else None),
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
         # Discovered KV cache size for use by the lane manager at runtime
@@ -2512,22 +2595,90 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
     }
 
 
+class ProfileStoreUnreadableError(RuntimeError):
+    """Raised when model_profiles.yml exists but cannot be read back.
+
+    Callers of :func:`load_existing_profiles` write the result back over the
+    whole file, so an empty dict returned for an unreadable store deletes every
+    profile in it — including calibrated models nothing will measure again.
+    Failing loudly leaves the file alone and costs one calibration result.
+    """
+
+
 def load_existing_profiles(profiles_path: Path) -> dict[str, Any]:
+    """Read the persisted profiles, or raise if the file is there but unusable.
+
+    Returns ``{}`` only when there genuinely is no store yet.
+    """
     if not profiles_path.exists():
         return {}
     try:
         with profiles_path.open() as f:
             data = yaml.safe_load(f) or {}
-        return dict(data.get("model_profiles") or {})
     except Exception as exc:
-        logger.warning("Could not parse existing profiles (%s): %s", profiles_path, exc)
+        raise ProfileStoreUnreadableError(f"could not parse {profiles_path}: {exc}") from exc
+    profiles = data.get("model_profiles")
+    if profiles is None:
+        # A store that parsed but holds no profiles section. Distinguishable
+        # from a parse failure, and safe to treat as empty.
         return {}
+    if not isinstance(profiles, dict):
+        raise ProfileStoreUnreadableError(
+            f"{profiles_path}: model_profiles is {type(profiles).__name__}, not a mapping"
+        )
+    return dict(profiles)
+
+
+# Fields the probe owns outright: it either measures them or states that they
+# do not apply, and both answers are authoritative. Everything else it leaves
+# ``None`` simply because it did not look — a flag maintained elsewhere, an
+# operator override, or a sleep level this run did not exercise — and for
+# those ``None`` must not erase what is already known.
+#
+# ``sleeping_residual_mb`` is on this list because a run has exactly one
+# reason to report it null: the model is not allowed to sleep here, so the
+# sleep phases were skipped. Keeping a stale measurement then hides that. It
+# also survives an ``enable_sleep_mode`` flip back to true, where the freshness
+# check sees a value, declines to re-calibrate, and hands the planner a
+# residual measured under a configuration that no longer exists.
+_PROBE_OWNED_PROFILE_FIELDS = frozenset({"sleeping_residual_mb"})
+
+
+def merge_profile(prior: dict[str, Any] | None, measured: dict[str, Any]) -> dict[str, Any]:
+    """Layer a fresh calibration result over the profile already on disk.
+
+    A calibration run measures what it can reach and leaves the rest ``None``:
+    the sleep host-RAM transients for a level it did not run, and every field
+    the probe does not look at at all (``disk_size_bytes``,
+    ``sleep_mode_disabled``, ``calibration_unsupported``, the operator's
+    overrides). Assigning the result over the entry wipes those — the flags
+    included, so a nosleep model loses the very marker that says its null
+    sleep fields are expected. A measured value replaces the stored one;
+    ``None`` means "not measured here" and keeps what was already known,
+    except for the fields in :data:`_PROBE_OWNED_PROFILE_FIELDS`, where a null
+    is itself the measurement.
+    """
+    merged = dict(prior or {})
+    for key, value in measured.items():
+        if value is None and key in merged and key not in _PROBE_OWNED_PROFILE_FIELDS:
+            continue
+        merged[key] = value
+    return merged
 
 
 def save_profiles(profiles_path: Path, profiles: dict[str, Any]) -> None:
-    profiles_path.parent.mkdir(parents=True, exist_ok=True)
-    with profiles_path.open("w") as f:
-        yaml.safe_dump({"model_profiles": profiles}, f, default_flow_style=False)
+    """Persist profiles atomically.
+
+    Written to a temp file and renamed, so a crash or a concurrent reader
+    never sees a truncated store: ``open(path, "w")`` truncates first, and a
+    reader hitting that window gets a parse error — which used to be answered
+    with an empty dict and a full rewrite. Shares the writer with
+    ``ModelProfileRegistry._persist``, which keeps the same file: a temp name
+    unique per call is what stops the two from tearing each other's output.
+    """
+    from logos_worker_node.model_profiles import atomic_write_yaml  # noqa: PLC0415
+
+    atomic_write_yaml(profiles_path, {"model_profiles": profiles})
 
 
 # ---------------------------------------------------------------------------
@@ -2866,7 +3017,18 @@ def auto_calibrate_models(
         available_gpus = 1
 
     profiles_path = state_dir / _PROFILES_FILE
-    existing_profiles = load_existing_profiles(profiles_path)
+    # Every result below is written back over the whole file, so an unreadable
+    # store must stop the run rather than be treated as empty — saving an empty
+    # dict back replaces the node's profiles with just this batch's models.
+    try:
+        existing_profiles = load_existing_profiles(profiles_path)
+    except ProfileStoreUnreadableError:
+        logger.exception(
+            "Refusing to auto-calibrate: %s exists but cannot be read, and "
+            "writing results would replace it. Fix or move the file.",
+            profiles_path,
+        )
+        return {}
     log_dir = state_dir / "calibration_logs"
 
     logger.info(
@@ -2900,7 +3062,14 @@ def auto_calibrate_models(
         results[model_name] = result
 
         if result.success:
-            existing_profiles[model_name] = result_to_profile_dict(result)
+            # Merged, not assigned: the probe leaves everything it does not
+            # measure at None, including flags maintained elsewhere
+            # (sleep_mode_disabled, calibration_unsupported) that an assignment
+            # would drop.
+            existing_profiles[model_name] = merge_profile(
+                existing_profiles.get(model_name),
+                result_to_profile_dict(result),
+            )
             # Persist after every success so a later failure doesn't lose results
             save_profiles(profiles_path, existing_profiles)
             logger.info("  Saved profile for %s → %s", model_name, profiles_path)
