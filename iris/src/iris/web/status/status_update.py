@@ -298,6 +298,7 @@ class ChatRunCallback(StatusCallback):
         accessed_memories=None,
         activities=None,
         activity_seq=None,
+        suggested_context=None,
     ) -> bool:
         fields = {
             "result": final_result,
@@ -310,6 +311,8 @@ class ChatRunCallback(StatusCallback):
             fields["activities"] = activities
         if activity_seq is not None:
             fields["activity_seq"] = activity_seq
+        if suggested_context is not None:
+            fields["suggested_context"] = suggested_context
 
         success = self._send_chat_fields(fields, attempts=self._DELIVERY_RETRY_ATTEMPTS)
         if not success:

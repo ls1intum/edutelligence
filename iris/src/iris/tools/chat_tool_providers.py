@@ -13,6 +13,7 @@ from iris.common.logging_config import get_logger
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.variant.variant import Variant
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
+from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.chat.mcq_chat_mixin import retrieve_lecture_content_for_mcq
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -26,9 +27,11 @@ from iris.tools import (
     create_tool_get_exercise_list,
     create_tool_get_exercise_problem_statement,
     create_tool_get_feedbacks,
+    create_tool_get_lecture_list,
     create_tool_get_submission_details,
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
+    create_tool_switch_chat_context,
 )
 
 logger = get_logger(__name__)
@@ -116,8 +119,19 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         lecture_retriever = LectureRetrieval(state.db.client, local=state.local)
         state.lecture_retriever = lecture_retriever
     base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
-    lecture_id = state.dto.lecture.id if state.dto.lecture else None
-    lecture_unit_id = state.dto.lecture_unit_id if state.dto.lecture else None
+
+    def scope_supplier() -> tuple[Optional[int], Optional[int]]:
+        """Scope retrieval to the lecture the agent switched to, if it switched."""
+        switch = state.pending_context_switch
+        if switch is not None:
+            if switch.mode == IrisChatMode.LECTURE:
+                # The new lecture has no unit selected yet, so retrieval covers it whole.
+                return switch.entity_id, None
+            # The chat left the lecture context, so retrieval goes course-wide.
+            return None, None
+        if not state.dto.lecture:
+            return None, None
+        return state.dto.lecture.id, state.dto.lecture_unit_id
 
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
@@ -127,9 +141,24 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         state.query_text,
         state.message_history,
         state.lecture_content_storage,
-        lecture_id=lecture_id,
-        lecture_unit_id=lecture_unit_id,
+        scope_supplier=scope_supplier,
     )
+
+
+def provide_lecture_list(state: State) -> Optional[Callable]:
+    if not state.dto.course.lectures:
+        if state.allow_lecture_tool:
+            # Indexed lecture content exists, but Artemis sent no lectures field.
+            # The Artemis instance is probably not updated yet; without this log
+            # the version skew stays invisible.
+            logger.warning(
+                "Course %d has indexed lecture content but the DTO carries no "
+                "lectures. The Artemis instance probably does not send the course "
+                "lecture list yet.",
+                state.dto.course.id,
+            )
+        return None
+    return create_tool_get_lecture_list(state.dto.course.lectures, state.callback)
 
 
 def provide_faq_retrieval(state: State) -> Optional[Callable]:
@@ -171,6 +200,18 @@ def provide_find_similar_memories(state: State) -> Optional[Callable]:
     return state.memiris_wrapper.create_tool_find_similar_memories(
         state.accessed_memory_storage
     )
+
+
+# ---------------------------------------------------------------------------
+# Context switching provider
+# ---------------------------------------------------------------------------
+
+
+def provide_switch_chat_context(state: State) -> Optional[Callable]:
+    def record_switch(suggested_context) -> None:
+        state.pending_context_switch = suggested_context
+
+    return create_tool_switch_chat_context(state.dto, record_switch)
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +261,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
 
 CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_lecture_retrieval,
+    provide_lecture_list,
     provide_faq_retrieval,
     provide_course_details,
     provide_exercise_list,
@@ -233,4 +275,5 @@ CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_memory_search,
     provide_find_similar_memories,
     provide_mcq_generation,
+    provide_switch_chat_context,
 ]
