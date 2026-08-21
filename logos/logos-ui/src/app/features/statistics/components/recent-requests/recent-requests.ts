@@ -9,7 +9,7 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { formatEur } from '../../../../shared/utils/currency';
+import { formatUsd } from '../../../../shared/utils/currency';
 import { RequestItem } from '../../statistics.models';
 import {
   deriveStage,
@@ -97,10 +97,10 @@ export class RecentRequests implements OnChanges, OnDestroy {
     return item.full_name || item.username || '';
   }
 
-  /** Cloud cost in EUR; null when no price is on record for the model. */
+  /** Cloud cost in USD; null when no price is on record for the model. */
   costLabelOf(item: RequestItem): string | null {
     if (item.cost_microcents == null) return null;
-    return formatEur(item.cost_microcents);
+    return formatUsd(item.cost_microcents);
   }
 
   /** Token line "↑prompt ↓completion", only when token counts are known. */
