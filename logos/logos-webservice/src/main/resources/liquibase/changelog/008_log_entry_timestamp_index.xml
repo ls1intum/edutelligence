@@ -9,14 +9,24 @@
          the Billing/Statistics dashboards. The range predicate is sargable, but with
          no index on timestamp_request Postgres has nothing to seek with, so every
          dashboard load scans the entire log_entry table regardless of how narrow the
-         requested window is; it only gets worse as log_entry grows. -->
-    <changeSet id="008-log-entry-timestamp-request-index" author="alexandra">
+         requested window is; it only gets worse as log_entry grows.
+
+         Runs outside a transaction so CONCURRENTLY can build the index without
+         locking log_entry against the logos-orchestrator, which keeps writing to
+         this table while logos-webservice is redeployed via `docker compose up -d`.
+         A maintenance window (plain CREATE INDEX) is only needed if writes to
+         log_entry are stopped for the duration of the migration. -->
+    <changeSet id="008-log-entry-timestamp-request-index" author="alexandra" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_timestamp_request"/></not>
         </preConditions>
-        <createIndex tableName="log_entry" indexName="idx_log_entry_timestamp_request">
-            <column name="timestamp_request"/>
-        </createIndex>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_timestamp_request
+                ON log_entry (timestamp_request);
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_timestamp_request;</sql>
+        </rollback>
     </changeSet>
 
 </databaseChangeLog>

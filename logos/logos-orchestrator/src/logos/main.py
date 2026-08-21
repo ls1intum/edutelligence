@@ -3416,7 +3416,7 @@ async def _execute_resource_mode(
             _check_budget_if_cloud(
                 db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
             )
-        except HTTPException as e:
+        except Exception as e:
             try:
                 _pipeline.scheduler.release(
                     result.model_id,
@@ -3426,8 +3426,17 @@ async def _execute_resource_mode(
                 )
             except Exception:
                 logger.warning("Failed to release scheduler slot after budget reject")
-            if is_async_job:
+            if isinstance(e, HTTPException) and is_async_job:
                 _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
+                _record_log_failure(
+                    log_id,
+                    result.scheduling_stats.get("request_id") or request_id,
+                    str(e.detail),
+                    model_id=result.model_id,
+                    provider_id=result.provider_id,
+                    classification_stats=result.classification_stats,
+                    scheduling_stats=result.scheduling_stats,
+                )
                 return {"status_code": e.status_code, "data": err_body}
             raise
 
