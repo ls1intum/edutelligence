@@ -16,32 +16,34 @@ Iris settings are found on the **course overview page**, not in the general cour
 If you do not see Iris settings on your course overview page, your institution's administrator may not have enabled Iris at the system level. Contact your admin to request activation.
 :::
 
-## Enabling and Disabling Features
+## Course Settings
 
-Iris offers several features that can be toggled independently:
+Iris chat is enabled or disabled for your course as a whole. These are the settings you control:
 
-| Feature                | What It Does                                                           |
-| ---------------------- | ---------------------------------------------------------------------- |
-| **Exercise Chat**      | Students get context-aware help while working on programming exercises |
-| **Text Exercise Chat** | Guidance for written and text-based exercises                          |
-| **Course Chat**        | General-purpose assistant for course-wide questions                    |
-| **Lecture Chat**       | Questions about specific lecture materials                             |
-| **Tutor Suggestions**  | AI-generated response suggestions for tutors in discussion threads     |
-
-Each feature has its own toggle. You can enable the features that make sense for your course and disable the rest. For example, you might enable Exercise Chat and Course Chat but leave Lecture Chat disabled until you have ingested your lecture materials.
+| Setting                 | What It Does                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Enabled**             | Whether Iris appears in your course at all                                                              |
+| **Custom Instructions** | Your own additions to how Iris behaves in this course. See [Custom Instructions](./custom-instructions) |
+| **Variant**             | Which model configuration Iris uses. See [Variants](./variants)                                         |
+| **Support Level**       | How much help Iris is allowed to give                                                                   |
+| **Rate Limit**          | How many messages a student may send per time period. See [Rate Limits](./rate-limits)                  |
 
 ## What Students See
 
 When Iris is enabled for a course:
 
-- A **floating chat icon** appears in relevant contexts (exercise pages, lecture views).
-- The **Course Chat** option appears in the course sidebar.
+- **Iris** appears in the course sidebar.
+- A **floating chat icon** appears on exercise pages and lecture views. Opening it there pre-selects that exercise or lecture as the context, which students can change or remove.
 - Students who have not yet chosen an AI experience (Cloud, On-Premise, or No AI) are prompted to make a selection on their first encounter.
 
 When Iris is disabled, these elements are hidden entirely. Students will not see any Iris-related UI in your course.
 
+:::info
+Students can point the chat at any lecture or exercise in your course, and Iris moves the chat itself when a student asks about a different one.
+:::
+
 :::tip
-Enable Iris early in the semester so students can get familiar with it from the start. You can always adjust which specific features are active as the course progresses.
+Enable Iris early in the semester so students can get familiar with it from the start. You can always adjust these settings as the course progresses.
 :::
 
 ## Impact on the Student Experience

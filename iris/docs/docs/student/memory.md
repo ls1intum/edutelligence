@@ -18,7 +18,7 @@ When Memory is enabled, Iris stores summarized information about your interactio
 This means Iris can avoid repeating explanations you have already understood and focus on areas where you need more help.
 
 :::info
-Memory is currently active in **Course Chat** and **Lecture Chat**. Exercise-specific chats (programming and text exercises) do not create or use memories at this time.
+Iris creates new memories while the [active context](./chat-context) is the **course** or a **lecture**, and not while an exercise is active.
 :::
 
 :::info
