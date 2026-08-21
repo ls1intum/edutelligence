@@ -1091,16 +1091,26 @@ class CapacityPlanner:
         Returns ``(ok, effective_available_mb, required_mb)``. *ok* is True
         when ``effective_available_mb >= required_mb``.
 
-        ``required_mb`` = ``HOST_RAM_SAFETY_MARGIN_MB + transient_estimate``,
-        where ``transient_estimate`` is:
+        ``required_mb`` = ``HOST_RAM_SAFETY_MARGIN_MB`` + the larger of two
+        costs, because host RAM has to cover both and they overlap:
 
-          1. The calibrated ``sleep_l{level}_transient_host_ram_mb`` from
-             the profile when present.
-          2. For sleep_l2 only: a rough estimate from ``disk_size_bytes``
-             (the weight-transfer dominates l2 transient cost) when the
-             calibrated value is missing.
-          3. ``HOST_RAM_SLEEP_HEADROOM_MB`` as a final flat fallback for
-             pre-calibration profiles.
+          * the *transient* peak while the sleep runs, from the calibrated
+            ``sleep_l{level}_transient_host_ram_mb``; for sleep_l2 a rough
+            estimate from ``disk_size_bytes`` when that is missing (the
+            weight transfer dominates l2), and a flat
+            ``HOST_RAM_SLEEP_HEADROOM_MB`` for pre-calibration profiles.
+          * the *residency* the lane keeps for as long as it stays asleep,
+            from ``host_ram_residual_mb``. sleep_l1 relocates the weights to
+            the host instead of dropping them, so the sleep does not hand
+            that memory back when it finishes — it holds it until the lane
+            wakes or is stopped.
+
+        Only the transient used to be counted, which asks "can this sleep
+        complete" and never "what does it leave behind". A worker could pass
+        the check for every lane in turn and still end up with its RAM spoken
+        for, because each sleep quietly kept what the check had treated as
+        borrowed. Failing here escalates the action to a stop, which is the
+        honest trade when the host cannot afford a resident sleeper.
 
         Fails open if the worker has no host-RAM telemetry.
         """
@@ -1126,7 +1136,11 @@ class CapacityPlanner:
         if transient_mb is None:
             transient_mb = self.HOST_RAM_SLEEP_HEADROOM_MB
 
-        required = self.HOST_RAM_SAFETY_MARGIN_MB + transient_mb
+        residency_mb = 0.0
+        if profile is not None and profile.host_ram_residual_mb:
+            residency_mb = max(float(profile.host_ram_residual_mb), 0.0)
+
+        required = self.HOST_RAM_SAFETY_MARGIN_MB + max(transient_mb, residency_mb)
         return effective_available >= required, effective_available, required
 
     async def _stop_sleeping_lanes_for_headroom(

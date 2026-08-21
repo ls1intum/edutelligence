@@ -18,8 +18,16 @@ Why this rule exists:
 
 The algorithm is deterministic — same inputs always produce the same output:
 
-  1. Compute ``reserve_mb = sum(host_ram of every sleepable capability)``.
-  2. ``budget_mb = available_host_ram_mb − reserve_mb − safety_margin_mb``.
+  1. Compute ``reserve_mb = sum(sleeping host_ram of every sleepable
+     capability)`` — what those lanes hold while asleep, not while awake.
+  2. ``budget_mb = (available_host_ram_mb + cache_held_mb) − reserve_mb −
+     safety_margin_mb``. The cache's own footprint is added back because it
+     is reclaimable: a budget measured from ``MemAvailable`` alone is a
+     budget measured after the cache already spent it, so a full cache
+     reports no room, declines to cache anything more, and keeps every byte
+     it has. Adding it back asks the question that matters — how much may
+     the cache hold in total — and lets the answer come out lower than what
+     it currently holds, which is what produces an eviction.
      If non-positive: budget is zero (only the unsleepable models, which are
      unaffected by the sleep reserve, may still get cached up to tmpfs limits;
      see step 4).
@@ -47,7 +55,12 @@ class CacheCandidate:
 
     name: str
     can_sleep: bool
-    host_ram_mb: float  # projected host-RAM footprint when loaded
+    # Host RAM this model holds *while asleep* — what the reserve has to
+    # cover, since the reserve exists so every sleepable model can be in
+    # sleep_l1 at once. Not the awake footprint: an awake lane's RAM is
+    # spoken for whether or not the cache is holding anything, so counting
+    # it here would reserve the same memory twice.
+    sleeping_host_ram_mb: float
     size_bytes: int  # weights on disk; surrogate for tmpfs cost
 
 
@@ -58,6 +71,7 @@ class CachePlan:
     order: list[str]
     reserved_for_sleep_mb: float
     available_host_ram_mb: float
+    cache_held_mb: float
     safety_margin_mb: float
     sleepable_tmpfs_budget_mb: float
     cached_unsleepable: list[str]
@@ -70,20 +84,25 @@ def plan_cache_order(
     *,
     available_host_ram_mb: float,
     safety_margin_mb: float,
+    cache_held_mb: float = 0.0,
 ) -> CachePlan:
     """Decide which models to pre-cache and in what order.
 
     Inputs:
       - ``candidates``: every calibrated capability model the worker knows
-        about, with its sleep capability, projected host-RAM footprint, and
+        about, with its sleep capability, sleeping host-RAM footprint, and
         tmpfs cost.
-      - ``available_host_ram_mb``: worker's MemAvailable at startup.
+      - ``available_host_ram_mb``: worker's current MemAvailable.
       - ``safety_margin_mb``: fixed host-RAM buffer for OS file cache,
         malloc fragmentation, vLLM mm processor caches, etc.
+      - ``cache_held_mb``: what the tmpfs cache already holds. Added back
+        into the pool because it is reclaimable — see the module docstring.
+        Zero reproduces the original from-scratch behaviour.
 
     Returns a CachePlan describing the ordering and the budget arithmetic
     used to derive it. ``order`` is the list to pass to
-    ``ModelRamCache.cache_models_by_priority``.
+    ``ModelRamCache.cache_models_by_priority``; anything cached but absent
+    from it is what the caller should reclaim.
     """
     unsleepable = sorted(
         (c for c in candidates if not c.can_sleep),
@@ -94,8 +113,9 @@ def plan_cache_order(
         key=lambda c: c.size_bytes,
     )
 
-    reserved_for_sleep_mb = sum(c.host_ram_mb for c in sleepable)
-    sleepable_tmpfs_budget_mb = available_host_ram_mb - reserved_for_sleep_mb - safety_margin_mb
+    reserved_for_sleep_mb = sum(c.sleeping_host_ram_mb for c in sleepable)
+    pool_mb = available_host_ram_mb + max(cache_held_mb, 0.0)
+    sleepable_tmpfs_budget_mb = pool_mb - reserved_for_sleep_mb - safety_margin_mb
 
     # Unsleepable models are always queued — they can't sleep, so they cannot
     # reduce anyone else's sleep capacity by being in the cache (the rule
@@ -122,6 +142,7 @@ def plan_cache_order(
         order=order,
         reserved_for_sleep_mb=reserved_for_sleep_mb,
         available_host_ram_mb=available_host_ram_mb,
+        cache_held_mb=cache_held_mb,
         safety_margin_mb=safety_margin_mb,
         sleepable_tmpfs_budget_mb=sleepable_tmpfs_budget_mb,
         cached_unsleepable=cached_unsleepable,

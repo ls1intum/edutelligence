@@ -357,6 +357,15 @@ class ModelProfile:
     # weight-transfer size and is more predictive.
     sleep_l1_transient_host_ram_mb: Optional[float] = None
     sleep_l2_transient_host_ram_mb: Optional[float] = None
+    # Host RAM the lane keeps for the whole time it sleeps, as opposed to the
+    # peak during the call above. sleep_l1 relocates the weights to the host
+    # rather than dropping them, so a sleeping lane holds roughly its weight
+    # footprint until it wakes. The worker has measured this all along — from
+    # calibration and from lane telemetry — but never sent it, so the planner
+    # priced sleeping as free on the host axis and kept choosing it while the
+    # same RAM was also lent to the model cache. None from a worker that
+    # predates the field, or for a model that has never slept here.
+    host_ram_residual_mb: Optional[float] = None
     # Worker reports True when this model cannot sleep here (worker-wide
     # disable_sleep_mode kill switch or per-model enable_sleep_mode=false
     # override). The calibration orchestrator treats this as
@@ -423,6 +432,7 @@ class ModelProfile:
             "residency_source": self.residency_source,
             "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
             "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "host_ram_residual_mb": self.host_ram_residual_mb,
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,
             "calibration_unsupported_reason": self.calibration_unsupported_reason,

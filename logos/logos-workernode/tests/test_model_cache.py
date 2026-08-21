@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -149,9 +150,79 @@ async def test_ensure_cached_copies_model(ram_cache_env):
     cached_dir = os.path.join(cached_hub, "models--Qwen--Qwen2.5-7B")
     assert os.path.isdir(cached_dir)
 
-    # Blob should be a regular file (rsync -aL dereferences symlinks)
+    # The blob itself is a real file — it is the one copy of the weights.
     blob_path = os.path.join(cached_dir, "blobs", "sha256-abc123")
     assert os.path.isfile(blob_path)
+    assert not os.path.islink(blob_path)
+
+    # The snapshot entry stays a link into it. Materialising it here is what
+    # made every cached model cost twice its size.
+    snap_path = os.path.join(cached_dir, "snapshots", "abc123", "model.safetensors")
+    assert os.path.islink(snap_path), "snapshot entry was dereferenced — the copy holds the weights twice"
+    assert os.path.isfile(snap_path), "the relative link must resolve inside the copy"
+    assert os.readlink(snap_path) == "../../blobs/sha256-abc123"
+
+
+@pytest.mark.asyncio
+async def test_cached_copy_is_not_larger_than_the_source(ram_cache_env):
+    """The whole point of the cache is RAM, so a copy that inflates is a bug
+    with no symptom other than the host running out. 12 MB of weights became
+    24 MB; across six models that was ~170 GB of pure duplication."""
+    from logos_worker_node.model_cache import _tree_size_bytes
+
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    await cache.ensure_cached(ram_cache_env["model_name"])
+
+    source = Path(ram_cache_env["source_hf"]) / "models--Qwen--Qwen2.5-7B"
+    cached = Path(ram_cache_env["tmpfs"]) / "hub" / "models--Qwen--Qwen2.5-7B"
+
+    assert _tree_size_bytes(cached) <= _tree_size_bytes(source)
+
+
+def test_model_size_bytes_counts_the_weights_once(ram_cache_env):
+    """It feeds the capacity check, and resolving the snapshot links made it
+    report double — so the cache believed it needed twice the room it does."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    blob_bytes = 12 * 1024 * 1024
+
+    size = cache.model_size_bytes(ram_cache_env["model_name"])
+
+    assert blob_bytes <= size < 2 * blob_bytes
+
+
+@pytest.mark.asyncio
+async def test_a_dereferenced_copy_from_an_older_worker_is_rebuilt(ram_cache_env):
+    """Copies already on the workers hold every weight twice. They load fine,
+    so nothing else would ever notice — the staleness path has to, or the RAM
+    is only reclaimed by hand."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    cached = Path(ram_cache_env["tmpfs"]) / "hub" / "models--Qwen--Qwen2.5-7B"
+
+    # An old-style copy: the snapshot entry is a real file, not a link.
+    await cache.ensure_cached(model)
+    snap = cached / "snapshots" / "abc123" / "model.safetensors"
+    snap.unlink()
+    with open(snap, "wb") as f:
+        f.seek(12 * 1024 * 1024 - 1)
+        f.write(b"\x00")
+
+    source = Path(ram_cache_env["source_hf"]) / "models--Qwen--Qwen2.5-7B"
+    assert cache._is_stale(source, cached) is True
+
+    await cache._copy_model(model)
+    assert os.path.islink(snap), "the rebuild should have restored the link"
 
 
 @pytest.mark.asyncio
@@ -462,3 +533,123 @@ async def test_wait_for_cached_respects_timeout(ram_cache_env, monkeypatch):
     got = await cache.wait_for_cached(ram_cache_env["model_name"], timeout=0.1)
     assert got is False
     await cache.stop_background_caching()
+
+
+# ---------------------------------------------------------------------------
+# The cache yields host RAM back
+#
+# tmpfs pages are anonymous shared memory, so a cached model is RAM the host
+# cannot use for anything else — and unlike page cache it is never reclaimed
+# under pressure. sleep_l1 wants the same RAM for a lane's weights. Until
+# these existed the cache filled to its tmpfs limit on first boot and kept
+# every byte, whatever the lanes needed later.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_held_bytes_reports_what_the_cache_costs_the_host(ram_cache_env):
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    assert cache.held_bytes() == 0
+
+    await cache.ensure_cached(ram_cache_env["model_name"])
+
+    assert cache.held_bytes() >= 12 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_reclaim_drops_what_the_plan_no_longer_wants(ram_cache_env):
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    await cache.ensure_cached(model)
+    assert model in cache.cached_models()
+
+    removed = cache.reclaim(keep=set())
+
+    assert removed == [model]
+    assert cache.cached_models() == []
+    assert cache.held_bytes() == 0
+    assert not (Path(ram_cache_env["tmpfs"]) / "hub" / "models--Qwen--Qwen2.5-7B").exists()
+
+
+@pytest.mark.asyncio
+async def test_reclaim_keeps_what_it_is_told_to(ram_cache_env):
+    """Callers pass the models a lane is serving: a lane waking from sleep_l2
+    re-reads its weights from the HF_HOME it was started with, so pulling that
+    directory away turns a wake into a failed lane."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    await cache.ensure_cached(model)
+
+    assert cache.reclaim(keep={model}) == []
+    assert model in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_the_cache_refuses_to_grow_into_the_sleep_reserve(ram_cache_env, monkeypatch):
+    """The tmpfs mount is a fixed 400G of a 503G host, so tmpfs free space is
+    no bound at all. What bounds the cache is live host RAM against the RAM
+    reserved for sleeping lanes — which is why a lane putting weights in host
+    RAM shrinks the cache's room with nobody re-planning anything."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr(
+        "logos_worker_node.model_cache._host_ram_available_bytes",
+        # 1 MB of slack for a 12 MB model: tmpfs has plenty of room, the host
+        # does not.
+        lambda: 100_001 * 1024 * 1024,
+    )
+
+    result = await cache.ensure_cached(ram_cache_env["model_name"])
+
+    assert result == str(Path(ram_cache_env["source_hf"]).parent), "should load from the source HF_HOME"
+    assert ram_cache_env["model_name"] not in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_a_roomy_host_still_gets_the_cache(ram_cache_env, monkeypatch):
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr(
+        "logos_worker_node.model_cache._host_ram_available_bytes",
+        lambda: 400_000 * 1024 * 1024,
+    )
+
+    await cache.ensure_cached(ram_cache_env["model_name"])
+
+    assert ram_cache_env["model_name"] in cache.cached_models()
+
+
+def test_no_floor_configured_leaves_the_decision_to_tmpfs(ram_cache_env, monkeypatch):
+    """Fails open: a worker with no plan yet, or no /proc/meminfo, behaves
+    exactly as it did before the floor existed."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: None)
+
+    cache.set_host_ram_floor_mb(100_000.0)
+    assert cache._would_starve_host(1) == (False, 0)
+
+    cache.set_host_ram_floor_mb(0.0)
+    assert cache._would_starve_host(10**15) == (False, 0)

@@ -1213,6 +1213,13 @@ class CalibrationResult:
     # to a heuristic when missing.
     sleep_l1_transient_host_ram_mb: float | None = None
     sleep_l2_transient_host_ram_mb: float | None = None
+    # Host RAM the lane still holds once it is asleep and settled — distinct
+    # from the transients above, which are the peak *during* the call. sleep_l1
+    # relocates the weights to the host instead of dropping them, so this is
+    # roughly the weight footprint and it stays for the whole sleep. It is what
+    # makes sleeping and the model cache compete for one pool. None when the
+    # run skipped the sleep phases, or when /proc/meminfo was unreadable.
+    host_ram_residual_mb: float | None = None
     # Set when calibrate_model bails because the model itself can never
     # load on this worker (bad repo id, gated repo, unsupported architecture).
     # Caller persists the model into model_profiles.yml so the master's
@@ -2338,6 +2345,7 @@ def calibrate_model(
         # them as a capability, and no later session could recover them either.
         sleeping_residual_mb: float | None = None
         sleep_transient_mb: float | None = None
+        host_ram_residual_mb: float | None = None
         if sleep_level <= 0:
             logger.info(
                 "  [4/6 + 5/6] Sleep phases skipped (sleep mode disabled for this model) — "
@@ -2422,6 +2430,32 @@ def calibrate_model(
                     sleeping_residual_mb,
                 )
 
+            # Host RAM the lane keeps for as long as it sleeps. sleep_l1 moves
+            # the weights to the host rather than dropping them, so a sleeping
+            # lane holds roughly its weight footprint in RAM until it wakes —
+            # tens of GB per model, on a host that is also lending RAM to the
+            # model cache. Only the transient peak was ever measured, which
+            # answers "can this sleep complete" and says nothing about what it
+            # costs afterwards, so the planner sees sleeping as free on the
+            # host axis and keeps choosing it.
+            #
+            # Read after the same settle as the VRAM samples: the release is
+            # asynchronous on both axes, and sampling mid-transfer would
+            # understate it. Taken against the awake baseline, so it is the
+            # delta the sleep caused, not the host's absolute usage.
+            host_ram_residual_mb = None
+            post_sleep_available_mb = _sample_host_ram_available_mb()
+            if sleep_baseline_mb is not None and post_sleep_available_mb is not None:
+                host_ram_residual_mb = max(sleep_baseline_mb - post_sleep_available_mb, 0.0)
+                logger.info(
+                    "        sleeping host RAM = %.0f MB  (available %.0f → %.0f MB)",
+                    host_ram_residual_mb,
+                    sleep_baseline_mb,
+                    post_sleep_available_mb,
+                )
+            else:
+                logger.info("        sleeping host RAM: /proc/meminfo unavailable — skipped")
+
         logger.info("  Results:")
         logger.info(
             "    base_residency_mb    = %.0f MB  (= full loaded VRAM, weights + KV)",
@@ -2437,6 +2471,13 @@ def calibrate_model(
             logger.info(
                 "    sleeping_residual_mb = %.0f MB  (measured independently)",
                 sleeping_residual_mb,
+            )
+        if host_ram_residual_mb is None:
+            logger.info("    host_ram_residual_mb = n/a  (sleep phases skipped or /proc/meminfo unreadable)")
+        else:
+            logger.info(
+                "    host_ram_residual_mb = %.0f MB  (held on the host for the whole sleep)",
+                host_ram_residual_mb,
             )
         logger.info(
             "    Scheduler uses base_residency directly — no KV added on top",
@@ -2455,6 +2496,7 @@ def calibrate_model(
             enforce_eager=eager_mode,
             sleep_l1_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 1 else None),
             sleep_l2_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 2 else None),
+            host_ram_residual_mb=host_ram_residual_mb,
             min_kv_cache_mb=min_kv_observed_mb,
             max_kv_cache_mb=max_kv_observed_mb,
             max_model_len=partial.max_model_len,
@@ -2512,6 +2554,7 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "sleep_l2_transient_host_ram_mb": (
             round(r.sleep_l2_transient_host_ram_mb, 1) if r.sleep_l2_transient_host_ram_mb is not None else None
         ),
+        "host_ram_residual_mb": (round(r.host_ram_residual_mb, 1) if r.host_ram_residual_mb is not None else None),
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
         # Discovered KV cache size for use by the lane manager at runtime

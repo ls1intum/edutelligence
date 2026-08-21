@@ -356,6 +356,43 @@ def test_a_result_with_a_sleep_measurement_persists_it():
     assert result_to_profile_dict(result)["sleeping_residual_mb"] == 512.4
 
 
+def test_a_result_carries_the_sleeping_host_ram_measurement():
+    """The number the cache planner's sleep reserve is sized on. It was being
+    measured from lane telemetry and stored, but calibration never produced a
+    figure of its own — so a model that had not yet slept on this worker had
+    no reserve at all, and the cache was free to take the RAM it would need."""
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="0",
+        kv_cache_sent_mb=2048.0,
+        success=True,
+        base_residency_mb=12345.0,
+        sleeping_residual_mb=512.0,
+        host_ram_residual_mb=16384.44,
+    )
+
+    assert result_to_profile_dict(result)["host_ram_residual_mb"] == 16384.4
+
+
+def test_a_nosleep_result_leaves_the_sleeping_host_ram_unknown():
+    """A level-0 run never sleeps the model, so it has nothing to say about
+    what sleeping would cost — null, not zero, which would read as "measured,
+    and it holds nothing"."""
+    result = CalibrationResult(
+        model="openai/gpt-oss-120b",
+        tensor_parallel_size=2,
+        gpu_devices="0,1",
+        kv_cache_sent_mb=8192.0,
+        success=True,
+        base_residency_mb=98945.0,
+        sleeping_residual_mb=None,
+        host_ram_residual_mb=None,
+    )
+
+    assert result_to_profile_dict(result)["host_ram_residual_mb"] is None
+
+
 def test_the_config_carries_enable_sleep_mode_into_the_plan(tmp_path):
     """This is what lets calibrate_model decide for itself, so the boot-time
     path (which asks for level 1 for everything) and the session-driven one
