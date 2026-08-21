@@ -263,7 +263,7 @@ class StruggleInterventionPipeline(
             status.closing_sentence = cc.closing_sentence
             status.episode_label = cc.episode_label
             status.rationale = cc.rationale
-            cb.finish(tokens=self.tokens)
+            cb.finish(tokens=state.tokens)
             return cc.closing_sentence or ""
         gate = parse_gate_result(state.result)
         status.action = gate.action
@@ -273,7 +273,7 @@ class StruggleInterventionPipeline(
         status.inline_hint = gate.inline_hint
         cb.finish(
             result=gate.message,
-            tokens=self.tokens,
+            tokens=state.tokens,
             confidence=gate.confidence,
         )
         return gate.message or ""
