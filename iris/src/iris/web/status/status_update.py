@@ -32,6 +32,9 @@ from iris.domain.status.rewriting_status_update_dto import (
 )
 from iris.domain.status.run_state_dto import RunStateEnum, StatusErrorDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
+from iris.domain.status.struggle_intervention_status_update_dto import (
+    StruggleInterventionStatusUpdateDTO,
+)
 from iris.tracing import TracedThreadPoolExecutor
 
 logger = get_logger(__name__)
@@ -529,4 +532,16 @@ class AutonomousTutorCallback(StatusCallback):
             url,
             run_id,
             AutonomousTutorPipelineStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+        )
+
+
+class StruggleInterventionCallback(StatusCallback):
+    """Status callback for the proactive struggle-intervention pipeline."""
+
+    def __init__(self, run_id: str, base_url: str):
+        url = f"{base_url}/{self.api_url}/struggle-intervention/runs/{run_id}/status"
+        super().__init__(
+            url,
+            run_id,
+            StruggleInterventionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
