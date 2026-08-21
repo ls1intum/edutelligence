@@ -898,8 +898,8 @@ def test_explicit_kv_auto_retries_with_max_model_len_from_vllm_suggestion():
             None,  # auto-retry with --max-model-len succeeds
         ],
     )
-    patches["read_log_tail"] = patch(
-        "logos_worker_node.calibration._read_log_tail",
+    patches["read_log_since"] = patch(
+        "logos_worker_node.calibration._read_log_since",
         return_value=suggestion_tail,
     )
 
@@ -921,8 +921,8 @@ def test_explicit_kv_does_not_loop_when_suggestion_does_not_shrink():
     patches = _patch_calibration_infra(
         wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")],
     )
-    patches["read_log_tail"] = patch(
-        "logos_worker_node.calibration._read_log_tail",
+    patches["read_log_since"] = patch(
+        "logos_worker_node.calibration._read_log_since",
         return_value=suggestion_tail,
     )
 
@@ -956,8 +956,8 @@ def test_kv_probe_auto_retries_with_max_num_seqs_for_mamba_model():
             None,  # auto-retry with --max-num-seqs succeeds
         ],
     )
-    patches["read_log_tail"] = patch(
-        "logos_worker_node.calibration._read_log_tail",
+    patches["read_log_since"] = patch(
+        "logos_worker_node.calibration._read_log_since",
         return_value=suggestion_tail,
     )
 
@@ -977,8 +977,8 @@ def test_max_num_seqs_retry_does_not_loop_when_suggestion_does_not_shrink():
     patches = _patch_calibration_infra(
         wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")],
     )
-    patches["read_log_tail"] = patch(
-        "logos_worker_node.calibration._read_log_tail",
+    patches["read_log_since"] = patch(
+        "logos_worker_node.calibration._read_log_since",
         return_value=suggestion_tail,
     )
 
@@ -1737,6 +1737,26 @@ def test_node_transient_classifier_registry_has_expected_codes():
     assert {"filesystem-eio", "filesystem-readonly"} <= codes
 
 
+def _spawn_writing_log(log_path: Path, text: str):
+    """Patch spawn_vllm so it APPENDS *text* to the probe log, like the real one.
+
+    Calibration reads a probe's log slice starting at the byte offset taken
+    just before the spawn, so simulated vLLM output has to be written by the
+    spawn itself — text present beforehand belongs to an earlier probe.
+    """
+
+    def _side_effect(plan, vllm_binary, host, port, path, kv_cache_memory_bytes, **kwargs):
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(text)
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    return patch("logos_worker_node.calibration.spawn_vllm", side_effect=_side_effect)
+
+
 def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     """The critical guarantee: when a probe fails because the node's storage
     is broken (EIO), calibrate_model must NOT pollute either the per-command
@@ -1746,16 +1766,18 @@ def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     """
     log_dir = tmp_path / "calibration_logs"
     log_dir.mkdir()
-    # Pre-seed the per-model log file with an EIO tail.
     log_path = log_dir / "Qwen__SomeModel.log"
-    log_path.write_text(
-        "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
-        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
-        encoding="utf-8",
-    )
 
     patches = _patch_calibration_infra(
         wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+    )
+    # Emit the EIO tail from inside the spawn, like the real spawn_vllm does.
+    # Text written BEFORE the spawn belongs to an earlier probe and is
+    # deliberately out of view (see _read_log_since).
+    patches["spawn"] = _spawn_writing_log(
+        log_path,
+        "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
+        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
     )
     # Make sure _record_failed_command and _record_unsupported_model are real
     # (not pre-patched out) so we can detect any accidental writes.
@@ -1803,18 +1825,17 @@ def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search
     """
     log_dir = tmp_path / "calibration_logs"
     log_dir.mkdir()
-    # Pre-seed the per-model log file with a fatal-pattern tail so the
-    # classifier matches when _try_start reads the log after the simulated
-    # spawn failure.
     log_path = log_dir / "Qwen__Bogus.log"
-    log_path.write_text(
-        "(APIServer pid=572249)   Value error, " "Invalid repository ID or local directory specified: 'Qwen/Bogus'.\n",
-        encoding="utf-8",
-    )
 
     # Patch the kv search to fail on every probe (RuntimeError = vLLM exited).
     patches = _patch_calibration_infra(
         wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+    )
+    # The fatal tail must come from the probe's own output, so write it during
+    # the spawn rather than pre-seeding the shared log file.
+    patches["spawn"] = _spawn_writing_log(
+        log_path,
+        "(APIServer pid=572249)   Value error, " "Invalid repository ID or local directory specified: 'Qwen/Bogus'.\n",
     )
 
     plan = _make_plan(model="Qwen/Bogus")
@@ -2000,3 +2021,318 @@ def test_build_vllm_cmd_enables_prefix_caching_to_match_serving():
     plan_off = {**plan, "enable_prefix_caching": False}
     cmd_off = _build_vllm_cmd(plan_off, "vllm", "127.0.0.1", 11499, "1G")
     assert "--enable-prefix-caching" not in cmd_off
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Regression: KV-starved floor probe must not flatten the whole curve
+# (Qwen/Qwen3.8-27B on deipapa/deimama, 2026-08-18)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Verbatim vLLM output from the deimama calibration of Qwen/Qwen3.8-27B.
+# The floor probe is rejected and names the model's real limits; the retry
+# with the suggested --max-model-len then starts at that shrunken context.
+_QWEN38_FLOOR_REJECT = (
+    "(EngineCore pid=105718) ERROR 08-18 08:05:08 [core.py:1349] ValueError: To serve at least one "
+    "request with the model's max seq len (262144), (8.16 GiB KV cache is needed, which is larger "
+    "than the available KV cache memory (1.0 GiB). Based on the available memory, the estimated "
+    "maximum model length is 27440. Try increasing `gpu_memory_utilization` (which also controls "
+    "CPU memory on the CPU backend) or decreasing `max_model_len` when initializing the engine.\n"
+)
+_QWEN38_FLOOR_OK = (
+    "(EngineCore pid=107776) INFO 08-18 08:08:22 [kv_cache_utils.py:2236] Maximum concurrency for "
+    "27,440 tokens per request: 1.00x\n"
+    # The config echo of OUR injected --max-model-len. Mistaking this for the
+    # model default is what pinned the whole sweep to 27440.
+    "(EngineCore pid=107776) INFO 08-18 08:08:22 [core.py:100] init engine, max_model_len=27440\n"
+)
+
+
+# vLLM prints its init summary BEFORE capturing CUDA graphs, then emits
+# hundreds of warmup lines. Measured on the deimama log: the concurrency line
+# sits 137-241 lines from the end of its probe segment. Any tail window applied
+# to parser input therefore loses it.
+_QWEN38_WARMUP_LINE_COUNT = 200
+
+
+def _qwen38_warmup_noise(lines: int = _QWEN38_WARMUP_LINE_COUNT) -> str:
+    """Post-init CUDA-graph warmup chatter, as it follows every real start."""
+    return "".join(
+        f"(EngineCore pid=112949) INFO 08-18 08:13:3{i % 10} [backends.py:634] "
+        f"Capturing CUDA graphs (decode, PIECEWISE): batch {i}\n"
+        for i in range(lines)
+    )
+
+
+def _qwen38_full_context_ok(kv_mb: float, conc: float) -> str:
+    """A probe that starts unshrunken and serves the model's full context."""
+    return (
+        f"(EngineCore pid=112949) INFO 08-18 08:13:33 [kv_cache_utils.py:2236] Maximum concurrency "
+        f"for 262,144 tokens per request: {conc:.2f}x\n"
+        f"(EngineCore pid=112949) INFO 08-18 08:13:33 [core.py:100] init engine, max_model_len=262144\n"
+    ) + _qwen38_warmup_noise()
+
+
+def test_kv_starved_floor_probe_does_not_flatten_curve(tmp_path: Path):
+    """A floor probe that had to shrink --max-model-len must not cap the curve.
+
+    Real failure (Qwen3.8-27B, deipapa/deimama 2026-08-18): at kv=1G vLLM
+    refused the model's 262144 default and suggested 27440, so calibration
+    injected --max-model-len=27440 and the probe started. Every LARGER KV probe
+    then started unshrunken and vLLM reported "Maximum concurrency for 262,144
+    tokens per request", yet the persisted curve read a flat 27440 from 1G to
+    18G. The planner therefore spawned the lane at min_kv=1024 — cheapest KV
+    for what looked like the same context — and served 27440 tokens at 1.00x
+    concurrency instead of 262144 at >2x.
+    """
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    log_path = log_dir / "Qwen__Qwen3.8-27B.log"
+
+    # (kv_mb, had_pinned_max_model_len) per spawn, newest last.
+    kv_calls: list[tuple[float, bool]] = []
+    # Concurrency rises with KV, exactly as measured on deimama.
+    conc_by_kv = {10240.0: 1.22, 15360.0: 1.84, 17408.0: 2.08, 18432.0: 2.21, 19456.0: 2.33, 20480.0: 2.45}
+
+    def spawn_side_effect(plan, vllm_binary, host, port, path, kv_cache_memory_bytes, **kwargs):
+        kv_mb = _parse_kv_to_mb(kv_cache_memory_bytes)
+        pinned = bool(plan.get("max_model_len"))
+        kv_calls.append((kv_mb, pinned))
+        if kv_mb <= 1024.0:
+            # Floor: reject unshrunken, succeed once --max-model-len is pinned.
+            log_path.open("a", encoding="utf-8").write(
+                (_QWEN38_FLOOR_OK + _qwen38_warmup_noise()) if pinned else _QWEN38_FLOOR_REJECT
+            )
+        else:
+            log_path.open("a", encoding="utf-8").write(_qwen38_full_context_ok(kv_mb, conc_by_kv.get(kv_mb, 1.50)))
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    def ready(*args, **kwargs):
+        kv_mb, pinned = kv_calls[-1]
+        # The floor only starts once --max-model-len is pinned; >20G is OOM.
+        if kv_mb <= 1024.0 and not pinned:
+            raise RuntimeError("vLLM exited before becoming ready (code=1)")
+        if kv_mb > 20480.0:
+            raise RuntimeError("OOM")
+        return None
+
+    patches = _patch_search_infra(wait_ready_side_effect=ready, gpu_vram_total_mb=49140.0)
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=spawn_side_effect)
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=ready)
+
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_model(
+            _make_search_plan(model="Qwen/Qwen3.8-27B", tensor_parallel_size=2),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success, result.error
+    pairs = dict((round(kv), mml) for kv, mml in (result.kv_max_model_len_pairs or []))
+    assert pairs, "sweep recorded no curve"
+
+    # The floor stays honest about its own limit ...
+    assert pairs[1024] == 27440
+    # ... and every probe that served the full context is recorded as such.
+    assert result.max_model_len == 262144, f"curve capped at {result.max_model_len}"
+    big = {kv: mml for kv, mml in pairs.items() if kv >= 10240}
+    assert big, "no large-KV points recorded"
+    assert all(mml == 262144 for mml in big.values()), f"large-KV points not at full context: {big}"
+    # The curve must RISE — a flat curve is what made the planner pick min_kv.
+    assert pairs[1024] < max(pairs.values())
+
+    # Concurrency must survive the warmup chatter that follows vLLM's init
+    # summary, otherwise the planner cannot tell 10G/1.22x from 17G/>2x and
+    # settles for the cheapest full-context point.
+    triples = result.kv_max_model_len_parallelity_pairs or []
+    par_by_kv = {round(kv): par for kv, _, par in triples}
+    assert par_by_kv.get(1024) == pytest.approx(1.00), par_by_kv
+    for kv_mb, expected in conc_by_kv.items():
+        if round(kv_mb) in par_by_kv:
+            assert par_by_kv[round(kv_mb)] == pytest.approx(
+                expected
+            ), f"kv={kv_mb} lost its concurrency annotation: {par_by_kv}"
+    assert any(p is not None and p > 2.0 for p in par_by_kv.values()), par_by_kv
+
+
+def test_build_vllm_cmd_uses_auto_max_model_len_by_default() -> None:
+    """A probe with no pinned length asks vLLM to size the window itself.
+
+    Probing without the flag starts at the model default, which a small KV
+    budget cannot hold — the probe then fails on purpose just so the suggested
+    length can be read out of the error and the probe restarted. "auto" returns
+    the same number from the first start, and matches what the serving lane
+    passes, so the curve is measured under the configuration that runs.
+    """
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    cmd = _build_vllm_cmd({"model": "m"}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "auto"
+
+
+def test_build_vllm_cmd_keeps_pinned_max_model_len() -> None:
+    """An injected retry value (or operator pin) still wins over "auto"."""
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    cmd = _build_vllm_cmd({"model": "m", "max_model_len": 27440}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "27440"
+
+
+def test_sweep_derives_rate_from_anchors_when_auto_never_fails():
+    """With --max-model-len auto no probe fails, so the sweep has no vLLM error
+    to read the KV->context rate from: the "needs X GiB for max seq len (M)"
+    line only appears in a KV-too-small rejection. The rate then has to come
+    from a probed anchor still below the plateau, or the curve degrades to the
+    handful of probed points and the planner loses every value in between.
+
+    Mirrors the deipapa profile for Qwen3.8-27B: 1 GiB serves 27440 tokens
+    (26.8 tokens/MiB), which puts the full 262144 window at ~9.8 GiB.
+    """
+    M = 262144
+    per_token = (1024.0 * 1024.0 * 1024.0) / 27440.0  # bytes/token: 1 GiB serves 27440
+    kv_calls: list = []
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
+        mp = MagicMock()
+        mp.pid = 1
+        mp.poll.return_value = None
+        return (mp, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*a, **k):
+        if kv_calls[-1] >= 21504.0:  # OOM above ~20G, same as the sibling test
+            raise RuntimeError("OOM")
+        return None  # "auto" always resolves — no probe is ever rejected
+
+    def served_side_effect(log_tail):
+        # What the engine reports it actually loaded, capped at the model window.
+        return min(M, int(kv_calls[-1] * 1024.0 * 1024.0 / per_token))
+
+    patches = _patch_search_infra(wait_ready_side_effect=wait_ready_side_effect, gpu_vram_total_mb=48000.0)
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=spawn_side_effect)
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    # Nothing failed, so none of the failure-derived signals are available.
+    patches["maxseq"] = patch("logos_worker_node.calibration._extract_vllm_max_seq_len", return_value=None)
+    patches["kvneeded"] = patch("logos_worker_node.calibration._extract_vllm_kv_gib_needed_for_full", return_value=None)
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion", return_value=None
+    )
+    patches["served"] = patch(
+        "logos_worker_node.calibration._extract_vllm_served_context", side_effect=served_side_effect
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    pairs = sorted(result.kv_max_model_len_pairs)
+    assert pairs
+    # The curve is filled across the whole startable window, not just at the
+    # few probed anchors — that is what the derived rate buys.
+    assert len(pairs) >= 10, f"curve collapsed to probed anchors only: {pairs}"
+    # It rises, then holds the model's full window once the budget can hold it.
+    assert pairs[0][1] < pairs[-1][1]
+    assert pairs[-1][1] == M
+    # The plateau starts where the rate predicts it (~9.8 GiB), not at the floor
+    # and not only at the ceiling.
+    first_full_kv = min(kv for kv, mml in pairs if mml >= M)
+    assert 9216.0 <= first_full_kv <= 11264.0, f"plateau at {first_full_kv} MB"
+    # No point may claim more than the model's window.
+    assert all(0 < mml <= M for _, mml in pairs)
+
+
+def test_plans_from_config_forwards_speculative_config(tmp_path: Path) -> None:
+    """A draft model must reach the calibration plan.
+
+    engines.vllm.model_overrides is filtered to the keys that change what the
+    engine allocates. speculative_config does — it loads a second model — so
+    leaving it out makes calibration measure a lane that never runs, and the
+    planner then sizes the KV budget against a residency that is too low.
+    """
+    from logos_worker_node.calibration import plans_from_config
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: Qwen/Qwen3.8-27B\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      Qwen/Qwen3.8-27B:\n"
+        '        speculative_config: \'{"method":"qwen3_5_mtp","num_speculative_tokens":3}\'\n'
+        "        enforce_eager: false\n"
+        '        env_overrides: {"IGNORED": "1"}\n'
+    )
+    plan = next(p for p in plans_from_config(cfg) if p["model"] == "Qwen/Qwen3.8-27B")
+    assert plan["speculative_config"] == '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    assert plan["enforce_eager"] is False
+
+
+def test_build_vllm_cmd_passes_speculative_config_from_plan() -> None:
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    spec = '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    cmd = _build_vllm_cmd({"model": "m", "speculative_config": spec}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--speculative-config")
+    assert cmd[idx + 1] == spec
+
+
+def test_plans_from_config_forwards_extra_args(tmp_path: Path) -> None:
+    """--hf-overrides has to reach calibration, or it measures another model.
+
+    hochbruegge pins a YaRN rope_scaling for Qwen2.5-Coder (quadrupling the
+    context window) and deioma pins an architecture swap for Qwen3-Reranker,
+    both through extra_args. Calibrating without them profiles a model that is
+    not the one being served.
+    """
+    from logos_worker_node.calibration import _build_vllm_cmd, plans_from_config
+
+    hf = '--hf-overrides={"rope_scaling":{"rope_type":"yarn","factor":4.0}}'
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:\n"
+        "        attention_backend: TRITON_ATTN\n"
+        f"        extra_args: ['{hf}']\n"
+    )
+    plan = next(p for p in plans_from_config(cfg) if "Coder" in p["model"])
+    assert plan["extra_args"] == [hf]
+    assert hf in _build_vllm_cmd(plan, "vllm", "127.0.0.1", 9000, "4G")
+
+
+def test_plans_from_config_never_takes_internal_bookkeeping(tmp_path: Path) -> None:
+    """The retry counters steer the sweep and must not be settable from config."""
+    from logos_worker_node.calibration import plans_from_config
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: m\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      m:\n"
+        "        _max_model_len_retry_count: 99\n"
+        "        dtype: bfloat16\n"
+    )
+    plan = next(p for p in plans_from_config(cfg) if p["model"] == "m")
+    assert "_max_model_len_retry_count" not in plan
+    assert plan["dtype"] == "bfloat16"

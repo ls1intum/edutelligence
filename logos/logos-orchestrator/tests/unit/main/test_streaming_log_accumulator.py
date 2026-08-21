@@ -7,8 +7,10 @@ full response including usage). Both must yield usable usage + response
 payloads for request logging and rate limiting.
 """
 
+import datetime
 import json
 
+import logos as main
 from logos.main import _StreamingLogAccumulator, _usage_tokens_from_payload
 
 
@@ -159,3 +161,34 @@ def test_responses_stream_cut_off_falls_back_to_accumulated_text():
 
     assert acc.usage() == {}
     assert acc.response_payload() == {"content": "partial"}
+
+
+def test_responses_terminal_event_returns_eur_cost(monkeypatch):
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get_usage_cost_micro_cents(self, model_id, provider_id, usage, response_at):
+            assert (model_id, provider_id) == (27, 12)
+            assert usage == {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10}
+            assert response_at.tzinfo == datetime.timezone.utc
+            return 250
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    enricher = main._StreamingCostEnricher(provider_id=12, model_id=27)
+    event = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp-1",
+            "usage": {"input_tokens": 4, "output_tokens": 6, "total_tokens": 10},
+        },
+    }
+
+    chunks = enricher.feed(f"data: {json.dumps(event)}\n\n".encode())
+    enriched_event = json.loads(chunks[0].decode().splitlines()[0][6:])
+
+    assert enriched_event["response"]["usage"]["cost"] == 0.0000025
+    assert enriched_event["response"]["usage"]["cost_currency"] == "EUR"

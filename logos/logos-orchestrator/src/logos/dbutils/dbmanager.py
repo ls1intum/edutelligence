@@ -136,6 +136,60 @@ def generate_logos_api_key(label: str) -> str:
     return "lg-" + label + "-" + secrets.token_urlsafe(96)
 
 
+def _stringify_error_message(value: Any) -> str:
+    """Render a non-string error into a value the text column can store.
+
+    Upstream failures arrive as OpenAI-shaped dicts (``{"message": ..., "type":
+    ...}``). psycopg2 cannot adapt a dict, so passing one through turned every
+    failed cloud request into an unhandled 500 that masked the real status —
+    an authentication error upstream surfaced to the client as a Logos crash.
+    """
+    if isinstance(value, dict):
+        message = value.get("message")
+        if isinstance(message, str) and message:
+            return message
+        return json.dumps(value, separators=(",", ":"), default=str)
+    if isinstance(value, (list, tuple)):
+        return json.dumps(value, separators=(",", ":"), default=str)
+    return str(value)
+
+
+def _strip_nul(value: Any) -> Any:
+    """Drop NUL characters from every string nested inside ``value``.
+
+    Stripping has to happen on the object, not on serialised JSON: after
+    ``json.dumps`` the escape for a NUL also occurs as a substring of an escaped
+    backslash, so replacing it in the text would leave a dangling backslash
+    behind and corrupt the document.
+
+    Keys that differ only in NULs collapse into one, and the last one wins —
+    a JSON object cannot hold both. That only arises for deliberately crafted
+    payloads, and these values feed audit logs rather than behaviour, so losing
+    one member of such a pair beats rejecting the request.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {_strip_nul(key): _strip_nul(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_strip_nul(item) for item in value]
+    return value
+
+
+def _json_for_jsonb(value: Any) -> str:
+    """Serialise ``value`` for a ``jsonb`` column or cast.
+
+    ``json.dumps`` renders a NUL as the one escape sequence Postgres refuses
+    inside ``jsonb`` — *unsupported Unicode escape sequence ... cannot be
+    converted to text*. A single such byte anywhere in a request body therefore
+    turned the logging insert into an unhandled 500, raised from
+    ``auth_parse_log`` before the request ever reached a worker: a client
+    replaying a conversation that had captured raw binary output got an instant
+    server error on every retry, and nothing was logged either.
+    """
+    return json.dumps(_strip_nul(value))
+
+
 # noinspection PyUnresolvedReferences
 class DBManager:
     def __init__(self):
@@ -277,6 +331,8 @@ class DBManager:
             db_col = field_map.get(key, key)
             if key == "result_status" and isinstance(value, ResultStatus):
                 value = value.value
+            if key == "error_message" and not isinstance(value, str):
+                value = _stringify_error_message(value)
             update_data[db_col] = value
 
         if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
@@ -361,7 +417,7 @@ class DBManager:
             ),
             {
                 "status": status,
-                "payload": json.dumps(payload),
+                "payload": _json_for_jsonb(payload),
                 "aki": api_key_id,
                 "tid": team_id,
                 "uid": user_id,
@@ -386,9 +442,16 @@ class DBManager:
             "updated_at": datetime.datetime.now(datetime.timezone.utc),
         }
         if result_payload is not None:
-            update_data["result_payload"] = result_payload
+            # jobs.result_payload is jsonb and the reflected update binds this
+            # dict directly, so SQLAlchemy serialises it — _json_for_jsonb would
+            # store its string as a JSON scalar instead of an object. A NUL in a
+            # model's answer would otherwise fail the write and leave the job
+            # without its result.
+            update_data["result_payload"] = _strip_nul(result_payload)
         if error_message is not None:
-            update_data["error_message"] = error_message
+            update_data["error_message"] = (
+                error_message if isinstance(error_message, str) else _stringify_error_message(error_message)
+            )
         self.update("jobs", job_id, update_data)
 
     def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
@@ -953,10 +1016,10 @@ class DBManager:
                 "total_vram_used_bytes": total_vram_used_bytes,
                 "total_memory_bytes": (int(total_memory_bytes) if total_memory_bytes is not None else None),
                 "free_memory_bytes": (int(free_memory_bytes) if free_memory_bytes is not None else None),
-                "loaded_models": json.dumps(loaded_models),
+                "loaded_models": _json_for_jsonb(loaded_models),
                 "snapshot_source": snapshot_source or "unknown",
-                "runtime_payload": json.dumps(runtime_payload or {}),
-                "scheduler_signals": json.dumps(scheduler_signals or {}),
+                "runtime_payload": _json_for_jsonb(runtime_payload or {}),
+                "scheduler_signals": _json_for_jsonb(scheduler_signals or {}),
                 "poll_success": poll_success,
                 "error_message": error_message,
             },
@@ -1115,7 +1178,7 @@ class DBManager:
                 "error": payload.get("error") or None,
                 "unsupported_reason": payload.get("unsupported_reason"),
                 "node_unhealthy_reason": payload.get("node_unhealthy_reason"),
-                "summary": json.dumps(payload),
+                "summary": _json_for_jsonb(payload),
                 "log_text": log_text or None,
                 "recorded_at": recorded_at,
             },
@@ -2073,8 +2136,8 @@ class DBManager:
         request_id: Optional[str] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        payload_str = json.dumps(input_payload) if log_level == "FULL" and input_payload else None
-        headers_str = json.dumps(dict(headers)) if log_level == "FULL" and headers else None
+        payload_str = _json_for_jsonb(input_payload) if log_level == "FULL" and input_payload else None
+        headers_str = _json_for_jsonb(dict(headers)) if log_level == "FULL" and headers else None
 
         row = self.session.execute(
             text(
@@ -2185,13 +2248,13 @@ class DBManager:
         self.session.execute(
             sql,
             {
-                "payload": json.dumps(payload) if payload else None,
+                "payload": _json_for_jsonb(payload) if payload else None,
                 "provider_id": provider_id,
                 "model_id": model_id,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc),
                 "log_id": log_id,
                 "policy_id": policy_id if policy_id != -1 else None,
-                "classification_statistics": json.dumps(classified),
+                "classification_statistics": _json_for_jsonb(classified),
                 "request_id": kwargs.get("request_id"),
                 "queue_depth": kwargs.get("queue_depth_at_arrival"),
                 "utilization": kwargs.get("utilization_at_arrival"),
@@ -2199,6 +2262,83 @@ class DBManager:
         )
         self.session.commit()
         return {"result": "response_payload set"}, 200
+
+    def get_usage_cost_micro_cents(
+        self,
+        model_id: int,
+        provider_id: int,
+        usage: Dict[str, int],
+        response_at: datetime.datetime,
+    ) -> Optional[int]:
+        """Return the configured cloud cost for one response in micro-cents.
+
+        The lookup mirrors the ``budget_usage`` view: model/provider-specific
+        prices take precedence over generic prices and only prices valid at
+        ``response_at`` are considered. ``None`` identifies a local provider;
+        cloud providers without a matching price retain the existing billing
+        semantics and cost zero.
+        """
+        billable_usage = {
+            token_type: token_count
+            for token_type, token_count in usage.items()
+            if isinstance(token_type, str)
+            and isinstance(token_count, int)
+            and not isinstance(token_count, bool)
+            and token_count >= 0
+        }
+        if not billable_usage:
+            return None
+
+        row = self.session.execute(
+            text(
+                """
+                WITH response_usage AS (
+                    SELECT usage.key AS token_type,
+                           usage.value::BIGINT AS token_count
+                    FROM jsonb_each_text(CAST(:usage AS JSONB)) AS usage
+                ),
+                cloud_provider AS (
+                    SELECT id
+                    FROM providers
+                    WHERE id = :provider_id
+                      AND LOWER(provider_type::text) = 'cloud'
+                )
+                SELECT CASE
+                    WHEN EXISTS (SELECT 1 FROM cloud_provider)
+                    THEN COALESCE(SUM(
+                        CASE WHEN price.price_per_k_token IS NOT NULL
+                             THEN (ru.token_count * price.price_per_k_token / 1000)::BIGINT
+                             ELSE 0
+                        END
+                    ), 0)
+                    ELSE NULL
+                END AS cost_micro_cents
+                FROM response_usage ru
+                LEFT JOIN token_types tt ON tt.name = ru.token_type
+                LEFT JOIN LATERAL (
+                    SELECT tp.price_per_k_token
+                    FROM token_prices tp
+                    WHERE tp.type_id = tt.id
+                      AND (tp.model_id = :model_id OR tp.model_id IS NULL)
+                      AND (tp.provider_id = :provider_id OR tp.provider_id IS NULL)
+                      AND tp.valid_from <= :response_at
+                    ORDER BY (tp.model_id = :model_id) DESC NULLS LAST,
+                             (tp.provider_id = :provider_id) DESC NULLS LAST,
+                             tp.valid_from DESC
+                    LIMIT 1
+                ) price ON true
+                """
+            ),
+            {
+                "usage": _json_for_jsonb(billable_usage),
+                "model_id": int(model_id),
+                "provider_id": int(provider_id),
+                "response_at": response_at,
+            },
+        ).fetchone()
+        if row is None or row.cost_micro_cents is None:
+            return None
+        return int(row.cost_micro_cents)
 
     def check_authorization(self, logos_key: str):
         sql = text(
@@ -2383,7 +2523,7 @@ class DBManager:
                 "uid": user_id,
                 "env": environment,
                 "log": log,
-                "settings": json.dumps(settings) if settings else None,
+                "settings": _json_for_jsonb(settings) if settings else None,
                 "dprio": default_priority,
                 "custom": use_custom_permissions,
             },

@@ -157,9 +157,20 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
     ("internlm", "internlm"),
     # AI21 Labs Jamba
     ("jamba", "jamba"),
-    # Alibaba Qwen (coder→qwen3_xml per docs, then general qwen3→hermes)
-    ("qwen3-coder", "qwen3_xml"),
-    ("qwen3_coder", "qwen3_xml"),
+    # Alibaba Qwen.  vLLM registers "qwen3_coder" and "qwen3_xml" as two names
+    # for the same Qwen3EngineToolParser; "qwen3_coder" is the one vLLM's own
+    # deployment recipes name, so it is the one used here.
+    ("qwen3-coder", "qwen3_coder"),
+    ("qwen3_coder", "qwen3_coder"),
+    # Qwen3 point releases (3.5, 3.6, 3.8, …) emit the same XML dialect as
+    # Qwen3-Coder, not the JSON-in-<tool_call> that hermes expects: their
+    # bundled chat templates render '<tool_call>\n<function=NAME>\n<parameter=…>'
+    # verbatim.  This rule has to sit above the "qwen3-"/"qwen3_" entries,
+    # which never matched a dotted name and so let every point release fall
+    # through to the generic ("qwen", "hermes") catch-all — hermes then failed
+    # to parse the XML and vLLM returned the raw markup as assistant text.
+    ("qwen3.", "qwen3_coder"),
+    # Qwen3 (dot-free, e.g. Qwen3-32B) still emits hermes-style JSON.
     ("qwen3-", "hermes"),
     ("qwen3_", "hermes"),
     ("qwen", "hermes"),
@@ -210,6 +221,11 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
 _REASONING_PARSER_RULES: tuple[tuple[str, str], ...] = (
     ("gemma-4", "gemma4"),
     ("gpt-oss", "openai_gptoss"),
+    # Qwen3 point releases think by default.  Without a reasoning parser the
+    # <think> block is returned inline in the assistant message instead of in
+    # reasoning_content, so clients render it as the answer.  Only the dotted
+    # releases are mapped: dot-free Qwen3 predates the parser.
+    ("qwen3.", "qwen3"),
 )
 
 # Model-name → default --default-chat-template-kwargs mapping.  Applied as a
@@ -306,6 +322,20 @@ def _infer_tool_call_parser(model: str) -> str:
         if pattern in model_lower:
             return parser
     return "hermes"
+
+
+def _speculative_decoding_requested(vc: Any) -> bool:
+    """True when this lane runs vLLM with a draft model.
+
+    Covers both the ``speculative_config`` field and a raw
+    ``--speculative-config`` in ``extra_args``, because either one produces a
+    lane whose draft model vLLM loads with the main model's ``--load-format``.
+    """
+    if vc is None:
+        return False
+    if str(getattr(vc, "speculative_config", "") or "").strip():
+        return True
+    return any(str(a).startswith("--speculative-config") for a in (getattr(vc, "extra_args", None) or []))
 
 
 class VllmProcessHandle:
@@ -817,6 +847,9 @@ class VllmProcessHandle:
             "requests_running": None,
             "gpu_cache_usage_percent": None,
             "prefix_cache_hit_rate": None,
+            "mtp_acceptance_rate": None,
+            "mtp_draft_tokens_total": None,
+            "mtp_accepted_tokens_total": None,
             "prompt_tokens_total": None,
             "generation_tokens_total": None,
             "ttft_histogram": {},
@@ -830,6 +863,8 @@ class VllmProcessHandle:
                 return metrics
             _prefix_queries: float = 0.0
             _prefix_hits: float = 0.0
+            _spec_draft_tokens_total: float = 0.0
+            _spec_accepted_tokens_total: float = 0.0
             for raw_line in resp.text.splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -870,6 +905,18 @@ class VllmProcessHandle:
                     or metric_name.endswith(":prefix_cache_hits")
                 ):
                     _prefix_hits += value
+                elif metric_name.endswith("spec_decode_num_draft_tokens") or metric_name.endswith(
+                    "spec_decode_num_draft_tokens_total"
+                ):
+                    # vLLM speculative decoding (e.g. MTP draft heads):
+                    # cumulative tokens proposed by the draft model.
+                    _spec_draft_tokens_total += value
+                elif metric_name.endswith("spec_decode_num_accepted_tokens") or metric_name.endswith(
+                    "spec_decode_num_accepted_tokens_total"
+                ):
+                    # Cumulative draft tokens accepted by the target model.
+                    # Only present when --speculative-config is active.
+                    _spec_accepted_tokens_total += value
                 elif metric_name.endswith("prompt_tokens_total"):
                     metrics["prompt_tokens_total"] = value
                 elif metric_name.endswith("generation_tokens_total"):
@@ -888,6 +935,16 @@ class VllmProcessHandle:
             # gauge was not present.
             if metrics["prefix_cache_hit_rate"] is None and _prefix_queries > 0:
                 metrics["prefix_cache_hit_rate"] = _prefix_hits / _prefix_queries
+            # Speculative decoding (MTP) — only reported when spec decode is
+            # enabled (vLLM exposes no spec_decode_* counters otherwise).
+            if _spec_draft_tokens_total > 0 or _spec_accepted_tokens_total > 0:
+                # Acceptance rate: accepted / draft tokens since process start.
+                if _spec_draft_tokens_total > 0:
+                    metrics["mtp_acceptance_rate"] = _spec_accepted_tokens_total / _spec_draft_tokens_total
+                # Expose the underlying cumulative counters (for per-model
+                # token-weighted aggregation in the orchestrator).
+                metrics["mtp_draft_tokens_total"] = _spec_draft_tokens_total
+                metrics["mtp_accepted_tokens_total"] = _spec_accepted_tokens_total
         except httpx.HTTPError:
             return metrics
         return metrics
@@ -1088,27 +1145,6 @@ class VllmProcessHandle:
         )
         return clamped
 
-    def _calibrated_max_model_len(self, lane_config: LaneConfig) -> int | None:
-        """Return the auto-shrunk --max-model-len recorded by calibration.
-
-        Calibration parses vLLM's "estimated maximum model length is N"
-        suggestion and re-probes with --max-model-len=N when the operator's
-        pinned KV budget can't fit one request at the model's default
-        max_seq_len. The value is persisted on the profile so the lane
-        spawner reuses the same flag — without this, vLLM would refuse to
-        start at the default max_seq_len even though the budget was proven
-        viable at the shrunk value.
-        """
-        if self._model_profiles is None:
-            return None
-        profile = self._model_profiles.get_profile(lane_config.model)
-        if profile is None:
-            return None
-        value = getattr(profile, "calibration_max_model_len", None)
-        if not value or int(value) <= 0:
-            return None
-        return int(value)
-
     def _calibrated_max_num_seqs(self, lane_config: LaneConfig) -> int | None:
         """Return the --max-num-seqs cap recorded by calibration.
 
@@ -1147,6 +1183,21 @@ class VllmProcessHandle:
             return
         ec = self._vllm_engine_config
         if not getattr(ec, "sharded_checkpoint_enabled", True):
+            return
+        if _speculative_decoding_requested(vc):
+            # vLLM loads the draft model with the same --load-format as the main
+            # model, and the sharded cache holds shards only for the main one, so
+            # the lane dies at startup with "Could not find checkpoint files
+            # model-rank-N-part-*.safetensors, only pre-sharded checkpoints are
+            # currently supported". Serve this lane from the full checkpoint
+            # instead — that is a per-lane decision, so speculative decoding on
+            # one model does not cost every other model on the node its cache.
+            logger.info(
+                "[%s] skipping sharded checkpoint for %s: speculative decoding needs the "
+                "full checkpoint for the draft model",
+                self.lane_id,
+                lane_config.model,
+            )
             return
         tp = int(vc.tensor_parallel_size)
         min_tp = max(2, int(getattr(ec, "sharded_checkpoint_min_tensor_parallel_size", 2)))
@@ -1268,15 +1319,18 @@ class VllmProcessHandle:
         elif lane_config.context_length > 0 and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         else:
-            # Reuse calibration's auto-shrunk --max-model-len so production
-            # matches the configuration that actually passed the binary search.
-            # Without this, vLLM falls back to the model's default max_seq_len
-            # (e.g. Gemma-3-12B's 131072), which the operator-pinned KV budget
-            # may not be able to hold for a single request — vLLM then refuses
-            # to start even though calibration proved a shrunk value works.
-            calibrated_max_len = self._calibrated_max_model_len(lane_config)
-            if calibrated_max_len:
-                cmd.extend(["--max-model-len", str(calibrated_max_len)])
+            # Let vLLM size the context itself: "auto" serves the model's
+            # full window when the KV budget holds it, and otherwise the
+            # largest window that does.
+            #
+            # This replaces reusing calibration's recorded max_model_len. That
+            # value was derived by parsing vLLM's rejection during a sweep and
+            # re-probing, and it is only valid for the KV budget it was found
+            # at — a lane started with a different budget then serves a context
+            # that no longer matches, in either direction. "auto" is resolved
+            # against the budget the lane actually gets, so it cannot go stale,
+            # and it removes the second start the retry needed.
+            cmd.extend(["--max-model-len", "auto"])
         # max_num_seqs: explicit per-model override wins; otherwise reuse the
         # cap calibration discovered for hybrid Mamba/SSM models so the lane
         # matches the configuration that passed the binary search. Without
@@ -1292,6 +1346,8 @@ class VllmProcessHandle:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.kv_cache_dtype:
             cmd.extend(["--kv-cache-dtype", vc.kv_cache_dtype])
+        if vc.speculative_config.strip():
+            cmd.extend(["--speculative-config", vc.speculative_config.strip()])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
         # enforce_eager defaults to False (CUDA graph capture enabled).

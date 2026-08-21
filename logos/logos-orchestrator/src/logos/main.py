@@ -8,9 +8,10 @@ import json
 import logging
 import math
 import os
+import re
 import secrets
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
@@ -490,10 +491,13 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
                 "gpu_cache_usage_percent_avg": None,
                 "gpu_cache_usage_percent_max": None,
                 "prefix_cache_hit_rate_avg": None,
+                "mtp_acceptance_rate_avg": None,
                 "_gpu_cache_usage_percent_sum": 0.0,
                 "_gpu_cache_usage_percent_count": 0,
                 "_prefix_cache_hit_rate_sum": 0.0,
                 "_prefix_cache_hit_rate_count": 0,
+                "_mtp_draft_tokens_total": 0.0,
+                "_mtp_accepted_tokens_total": 0.0,
             },
         )
 
@@ -527,6 +531,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
             "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
             "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
+            "mtp_acceptance_rate": _safe_float(backend_metrics.get("mtp_acceptance_rate")),
             "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
             "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
             "ttft_histogram": ttft_histogram,
@@ -596,6 +601,17 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
             entry["_prefix_cache_hit_rate_count"] += 1
 
+        # Token-weighted MTP aggregation: sum the cumulative draft/accepted
+        # token counters per model (an unweighted mean of per-lane rates would
+        # misstate the model rate when lanes have different draft volumes).
+        mtp_draft_tokens_total = _safe_float(backend_metrics.get("mtp_draft_tokens_total"))
+        if mtp_draft_tokens_total is not None:
+            entry["_mtp_draft_tokens_total"] += mtp_draft_tokens_total
+
+        mtp_accepted_tokens_total = _safe_float(backend_metrics.get("mtp_accepted_tokens_total"))
+        if mtp_accepted_tokens_total is not None:
+            entry["_mtp_accepted_tokens_total"] += mtp_accepted_tokens_total
+
         _merge_histogram_buckets(entry["ttft_histogram"], ttft_histogram)
 
     for entry in model_signals.values():
@@ -608,6 +624,11 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         prefix_sum = float(entry.pop("_prefix_cache_hit_rate_sum", 0.0) or 0.0)
         if prefix_count > 0:
             entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
+
+        mtp_draft = float(entry.pop("_mtp_draft_tokens_total", 0.0) or 0.0)
+        mtp_accepted = float(entry.pop("_mtp_accepted_tokens_total", 0.0) or 0.0)
+        if mtp_draft > 0:
+            entry["mtp_acceptance_rate_avg"] = mtp_accepted / mtp_draft
 
         entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
 
@@ -1178,6 +1199,121 @@ def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
             return {}
         return extract_token_usage({"seconds": parsed_duration})
     return {}
+
+
+_MICRO_CENTS_PER_EUR = 100_000_000
+
+
+def _response_with_cost(
+    response_payload: Any,
+    provider_id: Optional[int],
+    model_id: Optional[int],
+    response_at: datetime.datetime,
+) -> tuple[Any, bool]:
+    """Add the configured EUR cost to a cloud response's usage object.
+
+    Cost enrichment is deliberately best-effort: a billing lookup must never
+    turn a successful inference into an error. The DB method returns ``None``
+    for local providers, so proxy mode can safely use the same helper without
+    separately resolving the provider type.
+    """
+    if not isinstance(response_payload, dict) or provider_id is None or model_id is None:
+        return response_payload, False
+    usage = response_payload.get("usage")
+    if not isinstance(usage, dict):
+        return response_payload, False
+    usage_tokens = extract_token_usage(usage)
+    if not usage_tokens:
+        return response_payload, False
+
+    try:
+        with DBManager() as db:
+            cost_micro_cents = db.get_usage_cost_micro_cents(
+                model_id,
+                provider_id,
+                usage_tokens,
+                response_at,
+            )
+    except Exception:
+        logger.exception(
+            "Failed to calculate response cost (model_id=%s, provider_id=%s)",
+            model_id,
+            provider_id,
+        )
+        return response_payload, False
+    if cost_micro_cents is None:
+        return response_payload, False
+
+    enriched_usage = dict(usage)
+    enriched_usage["cost"] = round(cost_micro_cents / _MICRO_CENTS_PER_EUR, 8)
+    enriched_usage["cost_currency"] = "EUR"
+    enriched_payload = dict(response_payload)
+    enriched_payload["usage"] = enriched_usage
+    return enriched_payload, True
+
+
+@dataclass
+class _StreamingCostEnricher:
+    """Enrich terminal SSE usage events while preserving all other frames."""
+
+    provider_id: Optional[int]
+    model_id: Optional[int]
+    buffer: bytes = b""
+
+    def feed(self, chunk: bytes | str) -> list[bytes]:
+        self.buffer += chunk.encode("utf-8") if isinstance(chunk, str) else chunk
+        frames: list[bytes] = []
+        while True:
+            delimiter = re.search(rb"\r?\n\r?\n", self.buffer)
+            if delimiter is None:
+                break
+            end = delimiter.end()
+            frame = self.buffer[:end]
+            self.buffer = self.buffer[end:]
+            frames.append(self._enrich_frame(frame, delimiter.start(), delimiter.group()))
+        return frames
+
+    def finish(self) -> list[bytes]:
+        if not self.buffer:
+            return []
+        remainder = self.buffer
+        self.buffer = b""
+        return [remainder]
+
+    def _enrich_frame(self, frame: bytes, payload_end: int, delimiter: bytes) -> bytes:
+        event = frame[:payload_end]
+        newline = b"\r\n" if b"\r\n" in event else b"\n"
+        lines = event.split(newline)
+        for index, line in enumerate(lines):
+            if not line.startswith(b"data:"):
+                continue
+            raw_data = line[5:].lstrip()
+            if raw_data == b"[DONE]":
+                return frame
+            try:
+                blob = json.loads(raw_data)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(blob, dict):
+                continue
+
+            target = blob.get("response") if isinstance(blob.get("response"), dict) else blob
+            enriched_target, changed = _response_with_cost(
+                target,
+                self.provider_id,
+                self.model_id,
+                datetime.datetime.now(datetime.timezone.utc),
+            )
+            if not changed:
+                continue
+            if target is blob:
+                blob = enriched_target
+            else:
+                blob = dict(blob)
+                blob["response"] = enriched_target
+            lines[index] = b"data: " + json.dumps(blob, separators=(",", ":")).encode("utf-8")
+            return newline.join(lines) + delimiter
+        return frame
 
 
 @asynccontextmanager
@@ -2146,6 +2282,24 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     )
 
 
+def _cached_prompt_tokens(usage: Dict[str, Any]) -> Optional[int]:
+    """Cached-prompt tokens as reported by the provider, or None when absent.
+
+    Handles both shapes that reach the completion log: the flattened dict
+    from ``extract_token_usage`` (``prompt_cached_tokens``) and the raw
+    streaming usage (``prompt_tokens_details.cached_tokens``).
+    """
+    cached = usage.get("prompt_cached_tokens")
+    if isinstance(cached, int) and not isinstance(cached, bool):
+        return cached
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if isinstance(cached, int) and not isinstance(cached, bool):
+            return cached
+    return None
+
+
 def _log_request_completion(
     model_id: int,
     request_id: Optional[str],
@@ -2158,6 +2312,7 @@ def _log_request_completion(
     duration_ms = (time.perf_counter() - start_time) * 1000.0
     prompt_tokens = usage.get("prompt_tokens", 0) or 0
     completion_tokens = usage.get("completion_tokens", 0) or 0
+    cached_tokens = _cached_prompt_tokens(usage)
     generation_s = duration_ms / 1000.0
     tps = (completion_tokens / generation_s) if generation_s > 0 and completion_tokens > 0 else 0.0
 
@@ -2186,6 +2341,10 @@ def _log_request_completion(
         )
         if tps > 0:
             parts.append(f"tps={tps:.1f}")
+    # Prefix-cache hit share of this request's prompt; only shown when the
+    # provider reports cached tokens (vLLM, Azure, OpenAI prompt caching).
+    if prompt_tokens > 0 and cached_tokens is not None:
+        parts.append(f"prefix_hit={cached_tokens / prompt_tokens:.0%}")
     logger.info(" ".join(parts))
 
 
@@ -2481,14 +2640,23 @@ async def _streaming_response(
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
+        cost_enricher = (
+            _StreamingCostEnricher(provider_id, model_id)
+            if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
+            else None
+        )
         error_message = None
         ttft_recorded = False
+
+        def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
+            return cost_enricher.feed(chunk) if cost_enricher else [chunk]
 
         try:
             # Yield the already-peeked first chunk
             if first_chunk:
-                yield first_chunk
-                stream_log.feed(first_chunk)
+                for outgoing_chunk in enriched_chunks(first_chunk):
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
                 if not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
@@ -2496,15 +2664,24 @@ async def _streaming_response(
                     ttft_recorded = True
 
             async for chunk in chunk_iter:
-                yield chunk
+                for outgoing_chunk in enriched_chunks(chunk):
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
                 if chunk and not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
                     ttft_recorded = True
-                stream_log.feed(chunk)
+            if cost_enricher:
+                for outgoing_chunk in cost_enricher.finish():
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
         except Exception as exc:
             error_message = str(exc)
+            if cost_enricher:
+                for outgoing_chunk in cost_enricher.finish():
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
             # Once bytes have reached the client, only SSE can carry the
             # synthetic OpenAI error frame without corrupting its protocol.
             if upstream_media_type == "text/event-stream":
@@ -2700,6 +2877,7 @@ async def _sync_response(
                 )
         else:
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+        response_at = datetime.datetime.now(datetime.timezone.utc)
 
         # Update rate limits from response headers
         if exec_result.headers:
@@ -2731,6 +2909,9 @@ async def _sync_response(
                 f"Request failed (model_id={model_id}, provider_id={provider_id}): "
                 f"{exec_result.error}, response={response_payload}"
             )
+
+        if exec_result.success and context.provider_type == "cloud":
+            response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
 
         usage_tokens = _usage_tokens_from_payload(response_payload)
 
@@ -2893,6 +3074,7 @@ def _proxy_streaming_response(
 
     async def streamer():
         stream_log = _StreamingLogAccumulator()
+        cost_enricher = _StreamingCostEnricher(provider_id, model_id)
         stream_status = StreamingExecutionStatus()
         ttft = None
         error_message = None
@@ -2911,11 +3093,17 @@ def _proxy_streaming_response(
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
 
-                yield chunk
-
-                stream_log.feed(chunk)
+                for outgoing_chunk in cost_enricher.feed(chunk):
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
+            for outgoing_chunk in cost_enricher.finish():
+                yield outgoing_chunk
+                stream_log.feed(outgoing_chunk)
         except Exception as exc:  # noqa: BLE001
             error_message = str(exc)
+            for outgoing_chunk in cost_enricher.finish():
+                yield outgoing_chunk
+                stream_log.feed(outgoing_chunk)
             raise
         finally:
             if error_message is None:
@@ -2969,10 +3157,13 @@ async def _proxy_sync_response(
     from fastapi.responses import JSONResponse
 
     exec_result = await _pipeline.executor.execute_sync(forward_url, proxy_headers, payload)
+    response_at = datetime.datetime.now(datetime.timezone.utc)
 
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
         response_payload = {"error": exec_result.error}
+    if exec_result.success:
+        response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
 
     if log_id:
         usage_tokens = _usage_tokens_from_payload(response_payload)
@@ -3430,6 +3621,90 @@ async def route_and_execute(
         raise
 
 
+_CLIENT_DISCONNECT_POLL_SECONDS = 1.0
+
+
+async def _wait_for_client_disconnect(request: Request) -> None:
+    """Return once the client has gone away."""
+    while not await request.is_disconnected():
+        await asyncio.sleep(_CLIENT_DISCONNECT_POLL_SECONDS)
+
+
+async def _settle(task: asyncio.Task) -> Any:
+    """Cancel ``task`` and wait for its cleanup to finish.
+
+    The pipeline releases the scheduler slot in a ``finally`` block, so the
+    caller must not unwind before that has run — otherwise the lane stays
+    booked for a request that is already gone.
+    """
+    task.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        return await task
+    return None
+
+
+async def _discard_response(response: Any) -> None:
+    """Close a response nobody is left to read.
+
+    ``_streaming_response`` pulls the first chunk before handing the response
+    over, so by then the upstream connection is already open. Closing the body
+    iterator unwinds the executor's stream contexts instead of leaving them to
+    the garbage collector.
+    """
+    iterator = getattr(response, "body_iterator", None)
+    if iterator is None:
+        return
+    with suppress(Exception):
+        await iterator.aclose()
+
+
+async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
+    """Run ``route_and_execute``, dropping the work if the client leaves.
+
+    Uvicorn does not tear the handler down when a client vanishes mid-request,
+    so the call kept a worker generating a response nobody would read — a ghost
+    request holding a GPU lane for as long as the generation took. Cancelling
+    the task unwinds the executor's ``httpx.AsyncClient`` context, which closes
+    the upstream connection so vLLM aborts the sequence.
+
+    Whether the response ends up streaming is decided deep inside the pipeline:
+    resource mode can resolve to Whisper and answer synchronously even for
+    ``stream: true``. So this reacts to what came back rather than predicting
+    it. Once a streaming response is handed on, Starlette's own watcher takes
+    over — it listens for the disconnect while the body is consumed and cancels
+    the generator, which unwinds the same stream context.
+    """
+    work = asyncio.create_task(route_and_execute(**kwargs))
+    watcher = asyncio.create_task(_wait_for_client_disconnect(request))
+    try:
+        done, _ = await asyncio.wait({work, watcher}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        await _settle(work)
+        raise
+    finally:
+        watcher.cancel()
+
+    # The watcher may land in the same batch as a finished task. Its probe
+    # consumes the http.disconnect message, so a response produced in that
+    # same tick can no longer be handed to Starlette's watcher — drop it here
+    # instead of streaming it into a closed socket.
+    if work in done and watcher not in done:
+        return work.result()
+
+    await _discard_response(await _settle(work))
+
+    request_id = kwargs.get("request_id")
+    logger.info("Cancelled request %s: client disconnected before the response was ready", request_id)
+    _record_log_failure(
+        kwargs.get("log_id"),
+        request_id,
+        "Client disconnected before the response was ready; upstream request cancelled.",
+    )
+    # 499, as nginx uses it: the client closed the request. Nobody is left to
+    # read this, but the status keeps the access log honest.
+    return JSONResponse(status_code=499, content={"detail": "Client closed request"})
+
+
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
@@ -3463,7 +3738,7 @@ async def handle_sync_request(path: str, request: Request):
         _record_log_failure(log_id, request_id, msg, result_status="error")
         raise HTTPException(status_code=404, detail=msg)
 
-    return await route_and_execute(
+    execute_kwargs = dict(
         deployments=deployments,
         body=body,
         headers=headers,
@@ -3472,6 +3747,7 @@ async def handle_sync_request(path: str, request: Request):
         log_id=log_id,
         request_id=request_id,
     )
+    return await _execute_cancelling_on_disconnect(request, **execute_kwargs)
 
 
 async def auth_parse_log(request: Request, use_profile_auth: bool = False):
@@ -3892,6 +4168,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     max_lanes=(
                         int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
+                    calibrating=(
+                        bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
+                    ),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -3913,6 +4192,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
                     event=event,
+                    replay=bool(payload.get("replay", False)),
                 )
                 if event.get("event") == "calibration_probe_log":
                     try:
