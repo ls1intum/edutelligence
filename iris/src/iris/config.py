@@ -162,6 +162,31 @@ class Settings(BaseModel):
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
+    global_search_rerank_threshold: float = Field(
+        default=0.30,
+        description="Minimum reranker relevance score for a global-search "
+        "candidate to be kept. Calibrated on test-server score distributions: "
+        "junk and no-content candidates scored <=0.28, relevant winners "
+        ">=0.40. Candidates below the threshold are dropped "
+        "(below_rerank_threshold); a query whose candidates ALL fall below it "
+        "returns no sources — the honest empty state, skipping the answer LLM "
+        "entirely. Set to 0.0 for log-only calibration.",
+    )
+    global_search_rerank_results_list: bool = Field(
+        default=True,
+        description="Also rerank the instant results list (SKIP_AI / REST "
+        "search). The AI answer path is always reranked. The list adds the "
+        "reranker's latency to an otherwise ~400ms response — disable if list "
+        "latency matters more than mid-list ranking quality.",
+    )
+    global_search_rerank_list_timeout_s: float = Field(
+        default=2.0,
+        description="Rerank wall-clock budget for the instant results list, in "
+        "seconds. A slow rerank call degrades to the fused ordering at this "
+        "budget instead of pinning the list at the answer path's longer "
+        "timeout (which can exceed the caller's own timeout and surface as a "
+        "failed search in the UI).",
+    )
 
     @classmethod
     def get_settings(cls):

@@ -1,9 +1,13 @@
+import time
+from collections import Counter
+from dataclasses import dataclass, field
 from typing import Any
 
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter, MetadataQuery
 
 from iris.common.logging_config import get_logger
+from iris.config import settings
 from iris.domain.search.lecture_search_dto import (
     CourseInfo,
     LectureInfo,
@@ -11,7 +15,8 @@ from iris.domain.search.lecture_search_dto import (
     LectureUnitInfo,
 )
 from iris.llm import LlmRequestHandler
-from iris.llm.llm_configuration import resolve_model
+from iris.llm.llm_configuration import LlmConfigurationError, resolve_model
+from iris.llm.llm_manager import LlmManager
 from iris.retrieval.lecture.lecture_visibility import (
     is_segment_visible,
     is_transcription_visible,
@@ -21,10 +26,6 @@ from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
-)
-from iris.vector_database.lecture_unit_page_chunk_schema import (
-    LectureUnitPageChunkSchema,
-    init_lecture_unit_page_chunk_schema,
 )
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -37,9 +38,118 @@ from iris.vector_database.lecture_unit_segment_schema import (
 
 logger = get_logger(__name__)
 
-# Segments whose summary starts with this prefix are placeholders written during ingestion
-# when a slide had no extractable content. They must be excluded from search results.
-_EMPTY_SEGMENT_PREFIX = "There is no content"
+# Qwen3-Embedding is instruction-tuned for ASYMMETRIC retrieval: the query is
+# embedded with this instruction prefix while documents stay raw (ingestion must
+# never use it — both sides shifting cancels the benefit). The wording keeps the
+# scaffold the model was trained on ("Given a ... query, retrieve ... passages
+# that answer the query") with the domain injected: student queries against
+# lecture materials, covering both question-type queries ("answer") and
+# navigational/topic queries ("cover").
+QWEN3_RETRIEVAL_INSTRUCTION = (
+    "Instruct: Given a search query from a university student, retrieve relevant "
+    "passages from lecture materials that answer or cover the query\nQuery: "
+)
+
+# Default hybrid weight: the instruct-prefixed vector separates relevant content
+# far better than BM25 on this substrate (census A/B), so lean semantic.
+_DEFAULT_ALPHA = 0.75
+
+# Weaviate autocut groups for the generation path: cut each sub-search at its
+# natural score cliffs so the answer LLM's context is not padded with
+# below-cliff distractors. Not applied to the UI results list.
+_AUTOCUT_GROUPS = 2
+
+# Per-search cap on per-drop detail log lines.
+_MAX_DROP_DETAILS = 10
+
+# Near-duplicate slides (the same deck ingested by several courses) are collapsed
+# by comparing this many leading snippet characters.
+_DEDUP_KEY_CHARS = 100
+
+# --- Two-stage retrieval (recall lanes -> shared reranker) ------------------ #
+# Per-lane candidate depth. Weaviate search cost is flat (~5-10ms) at this depth
+# and the fused order only selects CANDIDATES now — the reranker does the final
+# ordering on one calibrated scale, so recall depth is nearly free quality.
+_LANE_DEPTH = 25
+# Upper bound on candidates sent to the reranker (one search unit covers 100).
+_RERANK_MAX_CANDIDATES = 60
+# Hard wall-clock bound on the ANSWER-PATH rerank call: on timeout the search
+# falls back to the fused ordering instead of blocking the request. The results
+# list uses the shorter settings.global_search_rerank_list_timeout_s budget.
+_RERANK_TIMEOUT_S = 4.0
+# Reranker roles tried in order: a global-search-specific role first, then the
+# lecture-chat reranker that existing deployments already configure.
+_RERANKER_ROLES = [
+    ("global_search_pipeline", "reranker"),
+    ("lecture_retrieval_pipeline", "reranker"),
+]
+
+
+def resolve_reranker_model(local: bool = False) -> str | None:
+    """Resolve the shared global-search reranker model id, or None if unset.
+
+    Shared with the startup census's entity rerank rehearsal so both probe the
+    exact reranker production retrieval would use.
+    """
+    for pipeline_id, role in _RERANKER_ROLES:
+        try:
+            return resolve_model(pipeline_id, "default", role, local=local)
+        except LlmConfigurationError:
+            continue
+    logger.info("[LectureSearch] no reranker configured — using fused ordering")
+    return None
+
+
+@dataclass
+class _SearchTelemetry:
+    """Counters and timings accumulated across the search phases, emitted as
+    one [LectureSearch] summary line so every hit, drop, and stage cost of a
+    production query is reconstructible from a single log paste."""
+
+    drop_counts: Counter = field(default_factory=Counter)
+    drop_details: list[str] = field(default_factory=list)
+    seg_hits: int = 0
+    trans_hits: int = 0
+    mapped: int = 0
+    search_ms: float = 0.0
+    meta_ms: float = 0.0
+    rerank_ms: float | None = None
+    reranked: bool = False
+
+    def record_drop(self, kind: str, reason: str | None, props: dict[str, Any]) -> None:
+        self.drop_counts[f"{kind}_{reason}"] += 1
+        if len(self.drop_details) < _MAX_DROP_DETAILS:
+            course = props.get("course_id")
+            unit = props.get("lecture_unit_id")
+            base_url = props.get("base_url")
+            self.drop_details.append(
+                f"{kind}:{reason} course={course} unit={unit} base_url={base_url}"
+            )
+
+
+def _fused_score(obj: Any) -> float:
+    return (
+        obj.metadata.score if obj.metadata and obj.metadata.score is not None else 0.0
+    )
+
+
+def _dedupe_by_snippet(
+    scored: list[tuple[float, "LectureSearchResultDTO"]],
+    telemetry: _SearchTelemetry,
+) -> list[tuple[float, "LectureSearchResultDTO"]]:
+    """Collapse near-identical slides (the same deck ingested by several
+    courses): keep the highest-scoring copy so the list carries distinct
+    evidence."""
+    deduped: list[tuple[float, LectureSearchResultDTO]] = []
+    seen_keys: set[str] = set()
+    for score, dto in scored:
+        key = (dto.snippet or "")[:_DEDUP_KEY_CHARS].casefold().strip()
+        if key in seen_keys:
+            telemetry.drop_counts["duplicate_snippet"] += 1
+            continue
+        seen_keys.add(key)
+        deduped.append((score, dto))
+    return deduped
 
 
 class LectureGlobalSearchRetrieval:
@@ -55,58 +165,46 @@ class LectureGlobalSearchRetrieval:
         self.llm_embedding = LlmRequestHandler(model_id=embedding_model)
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
-        self.page_chunk_collection = init_lecture_unit_page_chunk_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
+        self.reranker_model_id = resolve_reranker_model(local)
+
+    def embed_retrieval_query(self, query: str) -> list[float]:
+        """Embed a USER QUERY with the Qwen3 retrieval instruction prefix.
+
+        Query-side only (asymmetric retrieval): documents are ingested raw and
+        must stay raw — both sides carrying the instruction cancels the
+        benefit. Never apply this to document-shaped text.
+        """
+        return self.llm_embedding.embed(QWEN3_RETRIEVAL_INSTRUCTION + query)
 
     def search(
         self,
         query: str,
         limit: int,
-        alpha: float = 0.5,
+        alpha: float = _DEFAULT_ALPHA,
         course_ids: list[int] | None = None,
+        auto_cut: bool = False,
     ) -> list[LectureSearchResultDTO]:
         """
         Search for lecture content based on a query.
 
-        :param query: The search query.
+        :param query: The search query (embedded with the retrieval instruction).
         :param limit: The maximum number of results to return.
         :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
         :param course_ids: Optional list of course IDs to restrict the search scope.
                            When None, searches all ingested courses (global search).
+        :param auto_cut: Cut each sub-search at its natural score cliff (use for
+                         generation contexts, not for the UI results list).
         :return: Segments sorted by relevance.
         """
-        query_embedding = self.llm_embedding.embed(query)
+        query_embedding = self.embed_retrieval_query(query)
         return self._run_hybrid_search(
             query=query,
             vector=query_embedding,
             alpha=alpha,
             limit=limit,
             course_ids=course_ids,
-        )
-
-    def search_with_vector_override(
-        self,
-        query: str,
-        vector_text: str,
-        alpha: float,
-        limit: int,
-        course_ids: list[int] | None = None,
-    ) -> list[LectureSearchResultDTO]:
-        """
-        Search using a custom text to generate the search vector, while keeping the
-        original query for BM25 keyword matching. Used by HyDE: pass the hypothetical
-        answer as ``vector_text`` so the semantic search operates in answer-space.
-
-        :param query: The original query used for BM25 keyword matching.
-        :param vector_text: The text to embed and use as the semantic search vector.
-        :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
-        :param limit: The maximum number of results to return.
-        :param course_ids: Optional list of course IDs to restrict the search scope.
-        :return: Segments sorted by relevance.
-        """
-        vector = self.llm_embedding.embed(vector_text)
-        return self._run_hybrid_search(
-            query=query, vector=vector, alpha=alpha, limit=limit, course_ids=course_ids
+            auto_cut=auto_cut,
         )
 
     def _run_hybrid_search(
@@ -116,80 +214,83 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        auto_cut: bool = False,
     ) -> list[LectureSearchResultDTO]:
-        """Run hybrid searches, expanding candidates until visible results are filled."""
-        candidate_limit = max(limit, 1)
-        while True:
-            with TracedThreadPoolExecutor(max_workers=2) as executor:
-                seg_future = executor.submit(
-                    self._search_segments,
-                    query,
-                    vector,
-                    alpha,
-                    candidate_limit,
-                    course_ids,
-                )
-                trans_future = executor.submit(
-                    self._search_video_transcriptions,
-                    query,
-                    vector,
-                    alpha,
-                    candidate_limit,
-                    course_ids,
-                )
-            seg_objects = seg_future.result()
-            trans_objects = trans_future.result()
-            logger.debug(
-                "Segment hits: %d | Transcription hits: %d",
-                len(seg_objects),
-                len(trans_objects),
-            )
-            scored = self._map_search_objects(seg_objects, trans_objects)
-            segment_scored = [
-                item
-                for item in scored
-                if item[1].lecture_unit.source_type != "lecture_unit_video"
-            ]
-            transcription_scored = [
-                item
-                for item in scored
-                if item[1].lecture_unit.source_type == "lecture_unit_video"
-            ]
-            segment_complete = (
-                len(segment_scored) >= limit or len(seg_objects) < candidate_limit
-            )
-            transcription_complete = (
-                len(transcription_scored) >= limit
-                or len(trans_objects) < candidate_limit
-            )
-            if (
-                segment_complete and transcription_complete
-            ) or candidate_limit >= 10_000:
-                scored.sort(key=lambda item: item[0], reverse=True)
-                return [dto for _, dto in scored[:limit]]
-            candidate_limit = min(candidate_limit * 2, 10_000)
+        """Run the recall lanes, rerank the candidate pool, map to DTOs."""
+        telemetry = _SearchTelemetry()
+        seg_objects, trans_objects = self._search_lanes(
+            query, vector, alpha, limit, course_ids, auto_cut, telemetry
+        )
+        units_by_id, start_times = self._fetch_metadata(
+            seg_objects, trans_objects, telemetry
+        )
+        scored = self._map_candidates(
+            seg_objects, trans_objects, units_by_id, start_times, telemetry
+        )
+        deduped = _dedupe_by_snippet(scored, telemetry)
+        top = self._rerank_and_gate(query, deduped, limit, auto_cut, telemetry)
+        self._log_results(query, course_ids, alpha, auto_cut, telemetry, top)
+        return [dto for _, dto in top]
 
-    def _map_search_objects(
-        self, seg_objects: list[Any], trans_objects: list[Any]
-    ) -> list[tuple[float, LectureSearchResultDTO]]:
-        """Map one candidate window and discard unreleased or hidden objects."""
+    def _search_lanes(
+        self,
+        query: str,
+        vector: list[float],
+        alpha: float,
+        limit: int,
+        course_ids: list[int] | None,
+        auto_cut: bool,
+        telemetry: "_SearchTelemetry",
+    ) -> tuple[list[Any], list[Any]]:
+        """Query both collection lanes in parallel.
 
-        # Single pass over seg_objects: collect unit_ids and page_pairs together
+        Lanes fetch CANDIDATES at _LANE_DEPTH; the final ordering is decided
+        by the reranker (or the fused scores when no reranker is available).
+        """
+        auto_limit = _AUTOCUT_GROUPS if auto_cut else None
+        lane_depth = max(limit, _LANE_DEPTH)
+        t_search = time.perf_counter()
+        with TracedThreadPoolExecutor(max_workers=2) as executor:
+            seg_future = executor.submit(
+                self._search_segments,
+                query,
+                vector,
+                alpha,
+                lane_depth,
+                course_ids,
+                auto_limit,
+            )
+            trans_future = executor.submit(
+                self._search_video_transcriptions,
+                query,
+                vector,
+                alpha,
+                lane_depth,
+                course_ids,
+                auto_limit,
+            )
+        seg_objects = seg_future.result()
+        trans_objects = trans_future.result()
+        telemetry.search_ms = (time.perf_counter() - t_search) * 1000
+        telemetry.seg_hits = len(seg_objects)
+        telemetry.trans_hits = len(trans_objects)
+        return seg_objects, trans_objects
+
+    def _fetch_metadata(
+        self,
+        seg_objects: list[Any],
+        trans_objects: list[Any],
+        telemetry: "_SearchTelemetry",
+    ) -> tuple[dict[int, Any], dict[tuple[int, int], float]]:
+        """Fetch lecture-unit metadata and slide-sync timestamps in parallel."""
         seg_unit_ids: set[int] = set()
-        unit_page_pairs: list[tuple[str, int, int]] = []
+        unit_page_pairs: list[tuple[int, int]] = []
         for obj in seg_objects:
             uid = obj.properties.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
             page = obj.properties.get(LectureUnitSegmentSchema.PAGE_NUMBER.value)
-            base_url = obj.properties.get(LectureUnitSegmentSchema.BASE_URL.value)
-            if (
-                uid is not None
-                and page is not None
-                and page >= 0
-                and base_url is not None
-            ):
+            if uid is not None and page is not None and page >= 0:
                 seg_unit_ids.add(uid)
-                unit_page_pairs.append((base_url, uid, page))
-
+                unit_page_pairs.append((uid, page))
         trans_unit_ids = {
             obj.properties.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
             for obj in trans_objects
@@ -198,50 +299,204 @@ class LectureGlobalSearchRetrieval:
         }
         all_unit_ids = list(seg_unit_ids | trans_unit_ids)
 
-        # Phase 2: lecture unit metadata + transcription timestamps in parallel
-        with TracedThreadPoolExecutor(max_workers=3) as executor:
+        t_meta = time.perf_counter()
+        with TracedThreadPoolExecutor(max_workers=2) as executor:
             lecture_unit_future = executor.submit(
                 self._fetch_lecture_units, all_unit_ids
             )
             ts_future = executor.submit(
                 self._fetch_transcription_start_times, unit_page_pairs
             )
-            slide_future = executor.submit(
-                self._fetch_slides_by_display_page, list(trans_unit_ids)
-            )
-        lecture_unit_by_id = lecture_unit_future.result()
-        transcription_start_times = ts_future.result()
-        slide_by_display_page = slide_future.result()
-        logger.debug("unit_page_pairs: %s", unit_page_pairs)
-        logger.debug("transcription_start_times: %s", transcription_start_times)
+        units_by_id = lecture_unit_future.result()
+        start_times = ts_future.result()
+        telemetry.meta_ms = (time.perf_counter() - t_meta) * 1000
+        return units_by_id, start_times
 
+    def _map_candidates(
+        self,
+        seg_objects: list[Any],
+        trans_objects: list[Any],
+        units_by_id: dict[int, Any],
+        start_times: dict[tuple[int, int], float],
+        telemetry: "_SearchTelemetry",
+    ) -> list[tuple[float, LectureSearchResultDTO]]:
+        """Map raw hits to scored DTOs, recording every drop with its reason.
+
+        Silent drops here directly shrink the result list the user sees, so
+        each one must be visible in the logs (this accounting is how the
+        original vanishing-answer bug was found).
+        """
         scored: list[tuple[float, LectureSearchResultDTO]] = []
-
         for obj in seg_objects:
-            dto = self._segment_to_dto(
-                obj.properties, lecture_unit_by_id, transcription_start_times
+            dto, drop_reason = self._segment_to_dto(
+                obj.properties, units_by_id, start_times
             )
-            if dto is not None:
-                score = (
-                    obj.metadata.score
-                    if obj.metadata and obj.metadata.score is not None
-                    else 0.0
-                )
-                scored.append((score, dto))
-
+            if dto is None:
+                telemetry.record_drop("seg", drop_reason, obj.properties)
+                continue
+            scored.append((_fused_score(obj), dto))
         for obj in trans_objects:
-            dto = self._transcription_to_dto(
-                obj.properties, lecture_unit_by_id, slide_by_display_page
-            )
-            if dto is not None:
-                score = (
-                    obj.metadata.score
-                    if obj.metadata and obj.metadata.score is not None
-                    else 0.0
-                )
-                scored.append((score, dto))
-
+            dto, drop_reason = self._transcription_to_dto(obj.properties, units_by_id)
+            if dto is None:
+                telemetry.record_drop("trans", drop_reason, obj.properties)
+                continue
+            scored.append((_fused_score(obj), dto))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        telemetry.mapped = len(scored)
         return scored
+
+    def _rerank_and_gate(
+        self,
+        query: str,
+        deduped: list[tuple[float, LectureSearchResultDTO]],
+        limit: int,
+        auto_cut: bool,
+        telemetry: "_SearchTelemetry",
+    ) -> list[tuple[float, LectureSearchResultDTO]]:
+        """Stage 2: shared reranker over the candidate pool, then the gate.
+
+        Fused scores are per-collection-normalized and mutually incomparable;
+        the cross-encoder rescores every candidate against the query on ONE
+        calibrated scale, and candidates below the threshold are dropped — an
+        all-below pool is the honest "no content exists" state. On any rerank
+        failure the search falls back to the fused ordering. Generation
+        contexts (auto_cut=True) are always reranked; the instant results list
+        only when configured. The list also gets a tighter rerank budget: a
+        slow call there delays a ~1s response (and can trip the caller's own
+        timeout), while the answer path hides the same wait behind the LLM.
+        """
+        candidates = deduped[:_RERANK_MAX_CANDIDATES]
+        use_rerank = auto_cut or settings.global_search_rerank_results_list
+        timeout_s = (
+            _RERANK_TIMEOUT_S
+            if auto_cut
+            else settings.global_search_rerank_list_timeout_s
+        )
+        rerank_result = (
+            self._safe_rerank(query, [dto for _, dto in candidates], timeout_s)
+            if use_rerank
+            else None
+        )
+        if rerank_result is None:
+            return deduped[:limit]
+
+        telemetry.rerank_ms, relevance = rerank_result
+        telemetry.reranked = True
+        reranked = sorted(
+            zip(relevance, (dto for _, dto in candidates)),
+            key=lambda x: x[0],
+            reverse=True,
+        )
+        threshold = settings.global_search_rerank_threshold
+        kept = [(rel, dto) for rel, dto in reranked if rel >= threshold]
+        below = len(reranked) - len(kept)
+        if below:
+            telemetry.drop_counts["below_rerank_threshold"] += below
+        return kept[:limit]
+
+    @staticmethod
+    def _log_results(
+        query: str,
+        course_ids: list[int] | None,
+        alpha: float,
+        auto_cut: bool,
+        telemetry: "_SearchTelemetry",
+        top: list[tuple[float, LectureSearchResultDTO]],
+    ) -> None:
+        """One summary line plus per-drop and per-hit detail lines."""
+        logger.info(
+            "[LectureSearch] query=%r course_ids=%s alpha=%.2f auto_cut=%s "
+            "raw_hits=%d+%d mapped=%d dropped=%s reranked=%s rerank_ms=%s "
+            "hits=%d search_ms=%.0f meta_ms=%.0f",
+            query,
+            course_ids,
+            alpha,
+            auto_cut,
+            telemetry.seg_hits,
+            telemetry.trans_hits,
+            telemetry.mapped,
+            dict(telemetry.drop_counts) or "none",
+            telemetry.reranked,
+            f"{telemetry.rerank_ms:.0f}" if telemetry.rerank_ms is not None else "n/a",
+            len(top),
+            telemetry.search_ms,
+            telemetry.meta_ms,
+        )
+        for detail in telemetry.drop_details:
+            logger.info("[LectureSearch]   dropped %s", detail)
+        score_label = "rerank" if telemetry.reranked else "fused"
+        for rank, (score, dto) in enumerate(top, start=1):
+            logger.info(
+                "[LectureSearch]   #%d %s=%.4f source=%s course=%r unit=%r "
+                "page=%s snippet=%r",
+                rank,
+                score_label,
+                score,
+                dto.lecture_unit.source_type,
+                dto.course.name,
+                dto.lecture_unit.name,
+                dto.lecture_unit.page_number,
+                (dto.snippet or "")[:120],
+            )
+
+    def _safe_rerank(
+        self,
+        query: str,
+        candidates: list[LectureSearchResultDTO],
+        timeout_s: float = _RERANK_TIMEOUT_S,
+    ) -> tuple[float, list[float]] | None:
+        """Rerank candidate snippets; return (duration_ms, per-candidate relevance).
+
+        Returns None when no reranker is configured, on any API failure, or on
+        timeout — the caller then falls back to the fused ordering, so the search
+        can never degrade below pre-reranker behavior. Deliberately does NOT
+        disable itself process-wide on failure (unlike RerankRequestHandler).
+        """
+        if self.reranker_model_id is None or len(candidates) < 2:
+            return None
+        documents = [
+            (dto.snippet or dto.lecture_unit.name or "")[:2000] for dto in candidates
+        ]
+        t0 = time.perf_counter()
+        try:
+            client = LlmManager().get_llm_by_id(self.reranker_model_id)
+            if client is None:
+                return None
+            # No `with` block: __exit__ would join the worker thread and a hung
+            # rerank call would then block past the timeout. shutdown(wait=False)
+            # lets the request move on while the stray call finishes in background.
+            executor = TracedThreadPoolExecutor(max_workers=1)
+            try:
+                future = executor.submit(
+                    client.rerank,
+                    query=query,
+                    documents=documents,
+                    top_n=len(documents),
+                )
+                response = future.result(timeout=timeout_s)
+            finally:
+                executor.shutdown(wait=False)
+            results = list(getattr(response, "results", None) or [])
+            if not results:
+                return None
+            relevance = [0.0] * len(documents)
+            for item in results:
+                relevance[item.index] = float(item.relevance_score)
+            return (time.perf_counter() - t0) * 1000, relevance
+        except Exception as e:  # noqa: BLE001 - rerank is best-effort by design
+            # Log the exception TYPE too: a bare TimeoutError has an empty str(),
+            # which previously logged as `error=` and hid whether the 4s tail was
+            # a genuine slow call or the SDK retrying rate limits under the hood.
+            logger.warning(
+                "[LectureSearch] rerank_failed model=%s after_ms=%.0f "
+                "timeout_s=%.1f error=%s: %s — falling back to fused ordering",
+                self.reranker_model_id,
+                (time.perf_counter() - t0) * 1000,
+                timeout_s,
+                type(e).__name__,
+                str(e)[:200],
+            )
+            return None
 
     def _search_segments(
         self,
@@ -250,6 +505,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        auto_limit: int | None = None,
     ) -> list[Any]:
         filters = (
             Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).contains_any(
@@ -264,6 +520,7 @@ class LectureGlobalSearchRetrieval:
             vector=vector,
             filters=filters,
             limit=limit,
+            auto_limit=auto_limit,
             return_metadata=MetadataQuery(score=True),
         ).objects
 
@@ -274,6 +531,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        auto_limit: int | None = None,
     ) -> list[Any]:
         """Search LectureTranscriptions restricted to segments with no associated slide
         (page_number == -1). These are video-only moments not captured in any segment.
@@ -294,128 +552,91 @@ class LectureGlobalSearchRetrieval:
             vector=vector,
             filters=filters,
             limit=limit,
+            auto_limit=auto_limit,
             return_metadata=MetadataQuery(score=True),
         ).objects
 
     def _fetch_transcription_start_times(
-        self, unit_page_pairs: list[tuple[str, int, int]]
-    ) -> dict[tuple[str, int, int], float]:
-        """Batch-fetch min start time per Artemis instance, unit, and page."""
+        self, unit_page_pairs: list[tuple[int, int]]
+    ) -> dict[tuple[int, int], float]:
+        """Batch-fetch min start_time per (unit_id, page_number) for slide-sync detection."""
         if not unit_page_pairs:
             return {}
-        unit_ids = list({uid for _, uid, _ in unit_page_pairs})
+        unit_ids = list({uid for uid, _ in unit_page_pairs})
         transcriptions = self.transcription_collection.query.fetch_objects(
             filters=Filter.by_property(
                 LectureTranscriptionSchema.LECTURE_UNIT_ID.value
             ).contains_any(unit_ids),
             limit=10_000,
-            return_properties=[
-                LectureTranscriptionSchema.LECTURE_UNIT_ID.value,
-                LectureTranscriptionSchema.PAGE_NUMBER.value,
-                LectureTranscriptionSchema.BASE_URL.value,
-                LectureTranscriptionSchema.SEGMENT_START_TIME.value,
-            ],
         ).objects
-        result: dict[tuple[str, int, int], float] = {}
+        result: dict[tuple[int, int], float] = {}
         for t in transcriptions:
             props = t.properties
             uid = props.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
             page = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
-            base_url = props.get(LectureTranscriptionSchema.BASE_URL.value)
             start = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
-            if (
-                uid is None
-                or page is None
-                or base_url is None
-                or start is None
-                or page == -1
-            ):
+            if uid is None or page is None or start is None or page == -1:
                 continue
-            key = (str(base_url), int(uid), int(page))
+            key = (int(uid), int(page))
             if key not in result or start < result[key]:
                 result[key] = float(start)
         return result
 
-    def _fetch_lecture_units(
-        self, unit_ids: list[int]
-    ) -> dict[tuple[str | None, int], Any]:
-        """Fetch lecture unit metadata for the given IDs in a single Weaviate query."""
+    def _fetch_lecture_units(self, unit_ids: list[int]) -> dict[int, Any]:
+        """Fetch lecture unit metadata for the given IDs in a single Weaviate query.
+
+        The limit is deliberately larger than ``len(unit_ids)``: multiple Artemis
+        instances can share one Weaviate, their numeric unit ids collide, and one
+        id may map to several LectureUnits rows. With ``limit=len(unit_ids)``
+        those duplicates crowd out other requested ids, which then look like
+        missing metadata and get their hits silently dropped.
+        """
         if not unit_ids:
             return {}
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
             filters=Filter.by_property(
                 LectureUnitSchema.LECTURE_UNIT_ID.value
             ).contains_any(unit_ids),
-            limit=10_000,
+            limit=max(100, len(unit_ids) * 10),
         ).objects
-        return {
-            (
-                lecture_unit.properties.get(LectureUnitSchema.BASE_URL.value),
-                lecture_unit.properties[LectureUnitSchema.LECTURE_UNIT_ID.value],
-            ): lecture_unit.properties
+        result = {
+            lecture_unit.properties[
+                LectureUnitSchema.LECTURE_UNIT_ID.value
+            ]: lecture_unit.properties
             for lecture_unit in lecture_units
         }
-
-    def _fetch_slides_by_display_page(
-        self, unit_ids: list[int]
-    ) -> dict[tuple[str | None, int, int], list[Any]]:
-        if not unit_ids:
-            return {}
-        chunks = self.page_chunk_collection.query.fetch_objects(
-            filters=Filter.by_property(
-                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
-            ).contains_any(unit_ids),
-            limit=10_000,
-            return_properties=[
-                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
-                LectureUnitPageChunkSchema.BASE_URL.value,
-                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
-                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
-                LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
-            ],
-        ).objects
-        result_by_physical_page: dict[tuple[str | None, int, int], dict[int, Any]] = {}
-        for chunk in chunks:
-            properties = chunk.properties
-            unit_id = properties.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
-            display_page = properties.get(
-                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
-                properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
+        missing = set(unit_ids) - set(result)
+        if len(lecture_units) > len(result) or missing:
+            logger.info(
+                "[LectureSearch] lecture_units_fetch requested=%d rows=%d "
+                "distinct=%d duplicate_rows=%d missing_ids=%s",
+                len(unit_ids),
+                len(lecture_units),
+                len(result),
+                len(lecture_units) - len(result),
+                sorted(missing) or "none",
             )
-            physical_page = properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)
-            if unit_id is None or display_page is None or physical_page is None:
-                continue
-            key = (
-                properties.get(LectureUnitPageChunkSchema.BASE_URL.value),
-                int(unit_id),
-                int(display_page),
-            )
-            result_by_physical_page.setdefault(key, {})[int(physical_page)] = properties
-        return {
-            key: list(slides_by_physical_page.values())
-            for key, slides_by_physical_page in result_by_physical_page.items()
-        }
+        return result
 
     @staticmethod
     def _segment_to_dto(
         props: dict[str, Any],
-        lecture_unit_by_id: dict[tuple[str | None, int], Any],
-        transcription_start_times: dict[tuple[str, int, int], float],
-    ) -> LectureSearchResultDTO | None:
-        if not is_segment_visible(props):
-            return None
-
+        lecture_unit_by_id: dict[int, Any],
+        transcription_start_times: dict[tuple[int, int], float],
+    ) -> tuple[LectureSearchResultDTO | None, str | None]:
+        """Map a segment hit to a DTO; on failure return (None, drop_reason)."""
         snippet = props.get(LectureUnitSegmentSchema.SEGMENT_SUMMARY.value)
-        if not snippet or snippet.startswith(_EMPTY_SEGMENT_PREFIX):
-            return None
+        if not snippet:
+            return None, "no_snippet"
+        if not is_segment_visible(props):
+            return None, "segment_hidden"
 
         unit_id = props.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
-        base_url = props.get(LectureUnitSegmentSchema.BASE_URL.value)
-        lecture_unit = (
-            lecture_unit_by_id.get((base_url, unit_id)) if unit_id is not None else None
-        )
-        if lecture_unit is None or not is_unit_released(lecture_unit):
-            return None
+        lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
+        if lecture_unit is None:
+            return None, "missing_unit_metadata"
+        if not is_unit_released(lecture_unit):
+            return None, "unit_unreleased"
 
         course_id = props.get(LectureUnitSegmentSchema.COURSE_ID.value)
         lecture_id = props.get(LectureUnitSegmentSchema.LECTURE_ID.value)
@@ -426,11 +647,9 @@ class LectureGlobalSearchRetrieval:
             or page_number is None
             or page_number < 0
         ):
-            return None
+            return None, "bad_page_or_ids"
 
-        start_time = transcription_start_times.get(
-            (str(base_url), int(unit_id), int(page_number))
-        )
+        start_time = transcription_start_times.get((int(unit_id), int(page_number)))
         if start_time is not None:
             source_type = "lecture_unit_slide_video"
             query_params: dict[str, str | int | float] = {
@@ -446,83 +665,77 @@ class LectureGlobalSearchRetrieval:
             query_params = {"unit": unit_id, "page": page_number}
             display_meta = f"p. {page_number}"
 
-        return LectureSearchResultDTO(
-            course=CourseInfo(
-                id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+        return (
+            LectureSearchResultDTO(
+                course=CourseInfo(
+                    id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+                ),
+                lecture=LectureInfo(
+                    id=lecture_id,
+                    name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                ),
+                lectureUnit=LectureUnitInfo(
+                    id=unit_id,
+                    name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                    link=f"/courses/{course_id}/lectures/{lecture_id}",
+                    pageNumber=page_number,
+                    sourceType=source_type,
+                    queryParams=query_params,
+                    displayMeta=display_meta,
+                ),
+                snippet=snippet,
             ),
-            lecture=LectureInfo(
-                id=lecture_id, name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value]
-            ),
-            lectureUnit=LectureUnitInfo(
-                id=unit_id,
-                name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-                link=f"/courses/{course_id}/lectures/{lecture_id}",
-                pageNumber=page_number,
-                sourceType=source_type,
-                queryParams=query_params,
-                displayMeta=display_meta,
-            ),
-            snippet=snippet,
+            None,
         )
 
     @staticmethod
     def _transcription_to_dto(
         props: dict[str, Any],
-        lecture_unit_by_id: dict[tuple[str | None, int], Any],
-        slide_by_display_page: (
-            dict[tuple[str | None, int, int], list[Any]] | None
-        ) = None,
-    ) -> LectureSearchResultDTO | None:
+        lecture_unit_by_id: dict[int, Any],
+    ) -> tuple[LectureSearchResultDTO | None, str | None]:
+        """Map a transcription hit to a DTO; on failure return (None, drop_reason)."""
         snippet = props.get(
             LectureTranscriptionSchema.SEGMENT_SUMMARY.value
         ) or props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value)
         if not snippet:
-            return None
+            return None, "no_snippet"
 
         unit_id = props.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
-        base_url = props.get(LectureTranscriptionSchema.BASE_URL.value)
-        lecture_unit = (
-            lecture_unit_by_id.get((base_url, unit_id)) if unit_id is not None else None
-        )
-        page_number = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
-        associated_slide = None
-        if slide_by_display_page is not None and page_number is not None:
-            try:
-                associated_slide = slide_by_display_page.get(
-                    (base_url, int(unit_id), int(page_number))
-                )
-            except (TypeError, ValueError):
-                return None
-        if lecture_unit is None or not is_transcription_visible(
-            props, lecture_unit, associated_slide
-        ):
-            return None
+        lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
+        if lecture_unit is None:
+            return None, "missing_unit_metadata"
+        if not is_transcription_visible(props, lecture_unit):
+            return None, "transcription_hidden"
 
         course_id = props.get(LectureTranscriptionSchema.COURSE_ID.value)
         lecture_id = props.get(LectureTranscriptionSchema.LECTURE_ID.value)
         start_time = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
         if course_id is None or lecture_id is None or start_time is None:
-            return None
+            return None, "missing_fields"
 
         start_time = float(start_time)
         minutes = int(start_time // 60)
         seconds = int(start_time % 60)
 
-        return LectureSearchResultDTO(
-            course=CourseInfo(
-                id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+        return (
+            LectureSearchResultDTO(
+                course=CourseInfo(
+                    id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
+                ),
+                lecture=LectureInfo(
+                    id=lecture_id,
+                    name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                ),
+                lectureUnit=LectureUnitInfo(
+                    id=unit_id,
+                    name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                    link=f"/courses/{course_id}/lectures/{lecture_id}",
+                    pageNumber=-1,
+                    sourceType="lecture_unit_video",
+                    queryParams={"unit": unit_id, "timestamp": start_time},
+                    displayMeta=f"{minutes}:{seconds:02d}",
+                ),
+                snippet=snippet,
             ),
-            lecture=LectureInfo(
-                id=lecture_id, name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value]
-            ),
-            lectureUnit=LectureUnitInfo(
-                id=unit_id,
-                name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-                link=f"/courses/{course_id}/lectures/{lecture_id}",
-                pageNumber=-1,
-                sourceType="lecture_unit_video",
-                queryParams={"unit": unit_id, "timestamp": start_time},
-                displayMeta=f"{minutes}:{seconds:02d}",
-            ),
-            snippet=snippet,
+            None,
         )
