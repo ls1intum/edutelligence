@@ -13,5 +13,6 @@
     <include file="liquibase/changelog/005_usage_billing_indexes.xml"/>
     <include file="liquibase/changelog/006_calibration_probe_logs.xml"/>
     <include file="liquibase/changelog/007_calibration_probe_logs_log_text.xml"/>
+    <include file="liquibase/changelog/008_log_entry_timestamp_index.xml"/>
 
 </databaseChangeLog>
