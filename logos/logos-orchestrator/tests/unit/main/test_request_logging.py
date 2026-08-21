@@ -233,7 +233,7 @@ async def test_cloud_streaming_response_returns_eur_cost_in_terminal_usage(monke
         json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: {") and '"usage"' in line
     )
     assert usage_event["usage"]["cost"] == 0.00000375
-    assert usage_event["usage"]["cost_currency"] == "EUR"
+    assert usage_event["usage"]["cost_currency"] == "USD"
     assert dummy_db.payload_calls[0]["payload"]["usage"]["cost"] == 0.00000375
 
 
@@ -275,7 +275,7 @@ async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
 
     body = json.loads(response.body)
     assert body["usage"]["cost"] == 0.00012345
-    assert body["usage"]["cost_currency"] == "EUR"
+    assert body["usage"]["cost_currency"] == "USD"
     assert dummy_db.payload_calls[0]["usage"] == {
         "prompt_tokens": 10,
         "completion_tokens": 5,

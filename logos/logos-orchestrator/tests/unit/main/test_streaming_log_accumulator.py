@@ -191,4 +191,4 @@ def test_responses_terminal_event_returns_eur_cost(monkeypatch):
     enriched_event = json.loads(chunks[0].decode().splitlines()[0][6:])
 
     assert enriched_event["response"]["usage"]["cost"] == 0.0000025
-    assert enriched_event["response"]["usage"]["cost_currency"] == "EUR"
+    assert enriched_event["response"]["usage"]["cost_currency"] == "USD"

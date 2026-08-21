@@ -1204,7 +1204,12 @@ def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
     return {}
 
 
-_MICRO_CENTS_PER_EUR = 100_000_000
+# One currency unit = 100 cents = 1e8 micro-cents. The unit is USD, not EUR:
+# token_prices is filled from litellm's model catalog, whose input_cost_per_token
+# is USD per token (gpt-4o reads 2.5e-6, i.e. its $2.50 per 1M list price),
+# scaled by 1e11 = 1e8 micro-cents x 1e3 per-1k. No exchange rate is applied
+# anywhere in the stack, so reporting these amounts as EUR mislabelled them.
+_MICRO_CENTS_PER_USD = 100_000_000
 
 
 def _response_with_cost(
@@ -1248,8 +1253,8 @@ def _response_with_cost(
         return response_payload, False
 
     enriched_usage = dict(usage)
-    enriched_usage["cost"] = round(cost_micro_cents / _MICRO_CENTS_PER_EUR, 8)
-    enriched_usage["cost_currency"] = "EUR"
+    enriched_usage["cost"] = round(cost_micro_cents / _MICRO_CENTS_PER_USD, 8)
+    enriched_usage["cost_currency"] = "USD"
     enriched_payload = dict(response_payload)
     enriched_payload["usage"] = enriched_usage
     return enriched_payload, True
