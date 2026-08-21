@@ -206,11 +206,11 @@
           ariaLabel="Select provider"
           (valueChange)="setSelectedVramProvider($event)"
         />
-        @if (selectedVramProvider() && vramReady() && selectedProviderFreeVramMb() > 0 && !selectedProviderCalibrating()) {
+        @if (vramReady() && !selectedProviderCalibrating() && selectedProviderFreeVramLabel()) {
           <span
             class="stats-provider-vram-badge"
             title="Free VRAM of the selected provider (latest sample)"
-          >{{ (selectedProviderFreeVramMb() / 1024).toFixed(1) }} GB free</span>
+          >{{ selectedProviderFreeVramLabel() }}</span>
         }
         @if (selectedProviderCalibrating()) {
           <span class="stats-provider-badge stats-provider-badge--calibrating">

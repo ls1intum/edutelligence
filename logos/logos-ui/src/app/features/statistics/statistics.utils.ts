@@ -115,7 +115,7 @@ export function timeAxisLabels(
     out.push({ tsMs: ts, label: `${MONTHS_SHORT[m]} ${y}` });
   }
   return out.length > 0
-    ? thinLabels(out, Math.max(maxLabels, 6))
+    ? thinLabels(out, maxLabels)
     : evenlySpacedLabels(winStartMs, winEndMs, maxLabels, dayLabel);
 }
 
@@ -140,7 +140,11 @@ function evenlySpacedLabels(
   maxLabels: number,
   format: (tsMs: number) => string,
 ): TimeAxisLabel[] {
-  const count = Math.max(2, Math.min(maxLabels, 4));
+  const count = Math.min(Math.max(maxLabels, 1), 4);
+  if (count === 1) {
+    const mid = Math.round(winStartMs + (winEndMs - winStartMs) / 2);
+    return [{ tsMs: mid, label: format(mid) }];
+  }
   const step = (winEndMs - winStartMs) / (count - 1);
   const out: TimeAxisLabel[] = [];
   for (let i = 0; i < count; i++) {

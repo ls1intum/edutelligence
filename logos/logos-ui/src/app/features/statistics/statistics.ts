@@ -297,6 +297,20 @@ export class Statistics implements OnInit, OnDestroy {
     return extractProviderVramMb(this.latestSampleByProvider()[prov]).freeMb;
   });
 
+  /**
+   * Badge text for the selected provider's free VRAM, or null when there is no
+   * sample to report. A provider whose memory is exhausted legitimately reports
+   * 0 MB free, so absence has to be the missing sample rather than the value —
+   * gating the badge on `> 0` hid exactly the state worth seeing.
+   */
+  readonly selectedProviderFreeVramLabel = computed<string | null>(() => {
+    const prov = this.selectedVramProvider();
+    if (!prov) return null;
+    const sample = this.latestSampleByProvider()[prov];
+    if (!sample) return null;
+    return `${(extractProviderVramMb(sample).freeMb / 1024).toFixed(1)} GB free`;
+  });
+
   readonly vramPieData = computed(() => {
     const pt = this.latestVramPoint();
     const usedGb = pt?.used_vram_gb ?? 0;
