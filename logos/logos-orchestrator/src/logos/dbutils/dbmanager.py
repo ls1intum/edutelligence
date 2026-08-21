@@ -1561,7 +1561,9 @@ class DBManager:
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
                           p.provider_type    as type,
-                          p.privacy_level as privacy_level
+                          p.privacy_level    as privacy_level,
+                          p.cloud_provider_type as cloud_provider_type,
+                          p.base_url         as base_url
                    FROM models m
                         JOIN model_provider mp ON m.id = mp.model_id
                         JOIN providers p ON mp.provider_id = p.id
@@ -2299,9 +2301,9 @@ class DBManager:
                 """
                  SELECT COALESCE(SUM(bu.cost_micro_cents), 0) AS total
                  FROM budget_usage bu
-                          JOIN api_keys ak ON ak.id = bu.api_key_id
-                 WHERE ak.team_id = :tid
-                   AND ak.key_type = 'developer'
+                 WHERE bu.api_key_id = ANY(
+                         ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                       )
                    AND bu.month = :month
                  """
             ),
