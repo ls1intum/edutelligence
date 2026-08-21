@@ -1,8 +1,10 @@
-from threading import Thread
+from threading import Event, Thread
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sentry_sdk import capture_exception
 
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
@@ -19,7 +21,6 @@ from iris.domain.variant.abstract_variant import find_variant
 from iris.pipeline.lecture_metadata_update_pipeline import (
     LectureMetadataUpdatePipeline,
 )
-from iris.pipeline.lecture_update_lock import lecture_update_lock
 from iris.pipeline.lecture_visibility_update_pipeline import (
     LectureVisibilityUpdatePipeline,
 )
@@ -38,7 +39,7 @@ from ...domain.ingestion.deletion_pipeline_execution_dto import (
     FaqDeletionExecutionDto,
     LecturesDeletionExecutionDto,
 )
-from ...ingestion.ingestion_job_handler import IngestionJobHandler
+from ...ingestion.ingestion_job_handler import ingestion_job_handler
 from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_update_pipeline import LectureIngestionUpdatePipeline
@@ -53,11 +54,11 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
-ingestion_job_handler = IngestionJobHandler()
-
 
 def run_lecture_update_pipeline_worker(
-    dto: IngestionPipelineExecutionDto, variant_id: str
+    dto: IngestionPipelineExecutionDto,
+    variant_id: str,
+    cancel_event: Optional[Event] = None,
 ):
     """Run the lecture unit ingestion pipeline in a separate thread.
 
@@ -70,9 +71,15 @@ def run_lecture_update_pipeline_worker(
         if dto.lecture_unit is not None
         else dto.lecture_unit_id
     )
+    lecture_unit = dto.lecture_unit
     try:
-        pipeline = LectureIngestionUpdatePipeline(dto, variant_id=variant_id)
+        pipeline = LectureIngestionUpdatePipeline(
+            dto, variant_id=variant_id, cancel_event=cancel_event
+        )
         pipeline()
+    except IngestionCancelledException as e:
+        logger.info("[Lecture %s] Worker cancelled: %s", lecture_unit_id, e.reason)
+        return
     except Exception as e:
         logger.error(
             "[Lecture %s] Worker failed: %s",
@@ -87,6 +94,15 @@ def run_lecture_update_pipeline_worker(
         )
         callback.fail(str(e), exception=e)
         capture_exception(e)
+    finally:
+        if lecture_unit is not None and cancel_event is not None:
+            ingestion_job_handler.complete_job(
+                base_url=dto.settings.artemis_base_url,
+                course_id=lecture_unit.course_id,
+                lecture_id=lecture_unit.lecture_id,
+                lecture_unit_id=lecture_unit.lecture_unit_id,
+                cancel_event=cancel_event,
+            )
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
@@ -188,12 +204,18 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     """Webhook endpoint to trigger the lecture ingestion pipeline."""
     variant = validate_pipeline_variant(dto.settings, LectureIngestionUpdatePipeline)
 
-    thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto, variant))
+    cancel_event = ingestion_job_handler.create_cancellation_event()
+    thread = Thread(
+        target=run_lecture_update_pipeline_worker,
+        args=(dto, variant, cancel_event),
+    )
     ingestion_job_handler.add_job(
         process=thread,
+        base_url=dto.settings.artemis_base_url,
         course_id=dto.lecture_unit.course_id,
         lecture_id=dto.lecture_unit.lecture_id,
         lecture_unit_id=dto.lecture_unit.lecture_unit_id,
+        cancel_event=cancel_event,
     )
 
 
@@ -210,12 +232,9 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
 @observe(name="POST /webhooks/lectures/metadata")
 def lecture_metadata_webhook(dto: LectureUnitMetadataUpdateDTO):
     """Update lecture-unit metadata without reprocessing its content."""
-    with lecture_update_lock(
-        dto.base_url, dto.course_id, dto.lecture_id, dto.lecture_unit_id
-    ):
-        db = VectorDatabase()
-        collection = init_lecture_unit_schema(db.get_client())
-        updated = LectureMetadataUpdatePipeline(collection)(dto)
+    db = VectorDatabase()
+    collection = init_lecture_unit_schema(db.get_client())
+    updated = LectureMetadataUpdatePipeline(collection)(dto)
     if updated == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -240,16 +259,13 @@ def lecture_metadata_webhook(dto: LectureUnitMetadataUpdateDTO):
 def lecture_visibility_webhook(dto: LectureUnitVisibilityUpdateDTO):
     """Update release and slide visibility without reprocessing content."""
     try:
-        with lecture_update_lock(
-            dto.base_url, dto.course_id, dto.lecture_id, dto.lecture_unit_id
-        ):
-            db = VectorDatabase()
-            client = db.get_client()
-            result = LectureVisibilityUpdatePipeline(
-                init_lecture_unit_page_chunk_schema(client),
-                init_lecture_unit_schema(client),
-                init_lecture_unit_segment_schema(client),
-            )(dto)
+        db = VectorDatabase()
+        client = db.get_client()
+        result = LectureVisibilityUpdatePipeline(
+            init_lecture_unit_page_chunk_schema(client),
+            init_lecture_unit_schema(client),
+            init_lecture_unit_segment_schema(client),
+        )(dto)
     except WeaviateRateLimitExhausted as error:
         logger.error(
             "Weaviate remained rate-limited during a lecture visibility update | "
