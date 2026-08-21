@@ -1,12 +1,15 @@
 import os
-from typing import Callable, List, cast
+from typing import Callable, List, Tuple, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from iris.common.logging_config import get_logger
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
 )
+from iris.domain.data.post_dto import PostDTO
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.variant import Dep, Variant
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
@@ -24,14 +27,18 @@ from iris.pipeline.shared.uncertainty_scoring import (
 )
 from iris.pipeline.shared.utils import (
     REDACTED_ANSWER_PLACEHOLDER,
-    format_post_discussion,
     get_current_utc_datetime_string,
+)
+from iris.retrieval.course_memory_retrieval import CourseMemoryRetrieval
+from iris.retrieval.course_memory_retrieval_utils import (
+    should_allow_course_memory_tool,
 )
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.tools import (
+    create_tool_course_memory_retrieval,
     create_tool_faq_content_retrieval,
     create_tool_get_additional_exercise_details,
     create_tool_get_example_solution,
@@ -43,6 +50,20 @@ from iris.tracing import observe
 from iris.web.status.status_update import AutonomousTutorCallback
 
 logger = get_logger(__name__)
+
+# Author role Artemis assigns to Iris's own replies in a thread.
+IRIS_AUTHOR_ROLE = "IRIS"
+
+# Human-readable labels prefixed to each thread message so the model can tell the
+# participants apart. Roles are supplied by Artemis; unknown/missing roles fall back
+# to a neutral label rather than silently claiming the author is a student.
+AUTHOR_ROLE_LABELS = {
+    IRIS_AUTHOR_ROLE: "Iris (you)",
+    "INSTRUCTOR": "Instructor",
+    "TUTOR": "Tutor",
+    "STUDENT": "Student",
+}
+UNKNOWN_AUTHOR_LABEL = "Course member"
 
 
 class AutonomousTutorPipeline(
@@ -67,12 +88,14 @@ class AutonomousTutorPipeline(
         Dep("lecture_unit_segment_retrieval_pipeline"),
         Dep("lecture_transcriptions_retrieval_pipeline"),
         Dep("faq_retrieval_pipeline"),
+        Dep("course_memory_retrieval_pipeline"),
     ]
 
     def __init__(self):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.lecture_retriever = None
         self.faq_retriever = None
+        self.course_memory_retriever = None
 
         template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
         self.jinja_env = Environment(
@@ -102,6 +125,9 @@ class AutonomousTutorPipeline(
     ) -> list[Callable]:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
         allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
+        allow_course_memory_tool = should_allow_course_memory_tool(
+            state.db, state.dto.course.id
+        )
         is_programming_exercise = state.dto.programming_exercise is not None
         is_text_exercise = state.dto.text_exercise is not None
 
@@ -109,11 +135,12 @@ class AutonomousTutorPipeline(
             setattr(state, "lecture_content_storage", {})
         if not hasattr(state, "faq_storage"):
             setattr(state, "faq_storage", {})
+        if not hasattr(state, "memory_storage"):
+            setattr(state, "memory_storage", {})
 
         callback = state.callback
         if not isinstance(callback, AutonomousTutorCallback):
             callback = cast(AutonomousTutorCallback, state.callback)
-        discussion = format_post_discussion(state.dto.post)
 
         tool_list: List[Callable] = []
         if is_programming_exercise:
@@ -138,7 +165,7 @@ class AutonomousTutorPipeline(
                 ]
             )
 
-        query_text = self._generate_retrieval_query_text(discussion)
+        query_text = self._generate_retrieval_query_text(state.dto.post)
 
         if allow_lecture_tool:
             self.lecture_retriever = LectureRetrieval(
@@ -172,6 +199,24 @@ class AutonomousTutorPipeline(
                     query_text,
                     state.message_history,
                     getattr(state, "faq_storage", {}),
+                )
+            )
+
+        if allow_course_memory_tool:
+            self.course_memory_retriever = CourseMemoryRetrieval(
+                state.db.client,
+                local=state.dto.settings is not None and state.dto.settings.is_local(),
+            )
+            tool_list.append(
+                create_tool_course_memory_retrieval(
+                    self.course_memory_retriever,
+                    state.dto.course.id,
+                    state.dto.course.name,
+                    (state.dto.settings.artemis_base_url if state.dto.settings else ""),
+                    callback,
+                    query_text,
+                    state.message_history,
+                    getattr(state, "memory_storage", {}),
                 )
             )
 
@@ -213,7 +258,8 @@ class AutonomousTutorPipeline(
         ],
     ) -> str:
         post = state.dto.post
-        has_discussion = post.answers and len(post.answers) > 0
+        target_label, target_content = self._target_message(post)
+        has_thread_context = bool(post and post.answers)
 
         template_context = {
             "current_date": get_current_utc_datetime_string(),
@@ -221,13 +267,16 @@ class AutonomousTutorPipeline(
                 state.db, state.dto.course.id
             ),
             "allow_faq_tool": should_allow_faq_tool(state.db, state.dto.course.id),
+            "allow_course_memory_tool": should_allow_course_memory_tool(
+                state.db, state.dto.course.id
+            ),
             "is_programming_exercise": state.dto.programming_exercise is not None,
             "is_text_exercise": state.dto.text_exercise is not None,
-            "student_question": post.content if post else "No question provided.",
-            "has_discussion": has_discussion,
-            "discussion_responses": (
-                self._format_discussion_responses(post) if has_discussion else ""
-            ),
+            "target_author": target_label,
+            "target_message": target_content or "No message content provided.",
+            "target_is_own_message": target_label
+            == AUTHOR_ROLE_LABELS[IRIS_AUTHOR_ROLE],
+            "has_thread_context": has_thread_context,
             "course_name": (
                 state.dto.course.name
                 if state.dto.course and state.dto.course.name
@@ -277,6 +326,34 @@ class AutonomousTutorPipeline(
 
     NO_RESPONSE_MARKER = "NO_RESPONSE_NEEDED"
 
+    def pre_agent_hook(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+    ) -> None:
+        """Log which model mode this run resolved to, before the agent starts.
+
+        Whether a run goes to on-premise or cloud inference is decided by the
+        Artemis-side selection of everyone in the thread, so it is not obvious from
+        the outside which one a given post triggered. This makes it visible at a
+        glance while testing.
+        """
+        mode = "ON-PREMISE (local)" if state.local else "CLOUD"
+        selection = (
+            state.dto.settings.artemis_llm_selection
+            if state.dto.settings
+            else "unknown"
+        )
+        logger.info(
+            "Autonomous tutor model mode: %s | model=%s | selection=%s | course=%s | post=%s",
+            mode,
+            state.llm.model_name if state.llm else "unknown",
+            selection,
+            state.dto.course.id if state.dto.course else "unknown",
+            state.dto.post.id if state.dto.post else "unknown",
+        )
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
@@ -294,6 +371,7 @@ class AutonomousTutorPipeline(
             return ""
 
         confidence = self._estimate_confidence(state)
+        state.result = self._strip_author_label(state.result)
 
         logger.info("Generated response: %s", state.result)
         logger.info("Confidence score | score=%.4f", confidence)
@@ -304,6 +382,24 @@ class AutonomousTutorPipeline(
             confidence=confidence,
         )
         return state.result
+
+    def _strip_author_label(self, result: str) -> str:
+        """Drop a role label the model copied from the thread onto its own answer.
+
+        The thread reaches the model with each other participant's message prefixed
+        by their role, and models sometimes reproduce that prefix in the reply they
+        write. Only the exact known labels are removed, so an answer that genuinely
+        opens with a markdown link (``[Title](url)``) is left alone.
+        """
+        if not result:
+            return result
+        stripped = result.lstrip()
+        for label in AUTHOR_ROLE_LABELS.values():
+            prefix = f"[{label}]"
+            if stripped.startswith(prefix):
+                logger.info("Stripped author label %s from the response.", prefix)
+                return stripped[len(prefix) :].lstrip()  # noqa: E203
+        return result
 
     def _estimate_confidence(
         self,
@@ -365,21 +461,102 @@ class AutonomousTutorPipeline(
         logger.info("Confidence strategy: verbalized | confidence=%.4f", confidence)
         return confidence
 
-    def _generate_retrieval_query_text(self, discussion: str) -> str:
-        """Generate query text for retrieval tools."""
-        return f"Find relevant content for the following discussion: {discussion}"
+    def get_recent_history_from_dto(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+        limit: int | None = None,
+    ) -> list[PyrisMessage]:
+        """Represent the thread as chat history, oldest message first.
 
-    def _format_discussion_responses(self, post) -> str:
-        """Format the discussion responses (answers) from a post."""
-        if not post or not post.answers:
-            return ""
-        responses = []
-        for answer in post.answers:
-            if answer.redacted:
-                responses.append(f"- {REDACTED_ANSWER_PLACEHOLDER}")
-            elif answer.content:
-                responses.append(f"- {answer.content}")
-        return "\n".join(responses)
+        The base implementation reads ``dto.chat_history``, which this pipeline does
+        not have: its input is a communication-channel thread, not a chat session.
+        Turning the thread into history is what makes the newest message the one the
+        agent answers, and it gives the retrieval query rewriter the context it needs
+        to resolve a follow-up ("Then what is a strategy pattern") against what came
+        before it.
+
+        Iris's own earlier replies become assistant turns so it does not repeat them;
+        everyone else's become user turns, prefixed with their role.
+
+        Only the other participants' turns carry a role prefix. Iris's own turns are
+        already identified by the assistant role, and prefixing them too made the
+        model read "[Iris (you)] " as part of how its replies are written and copy it
+        into the answer it posted.
+        """
+        effective_limit = limit if limit is not None else self.get_history_limit(state)
+        history = [
+            PyrisMessage(
+                sender=(
+                    IrisMessageRole.ASSISTANT
+                    if role == IRIS_AUTHOR_ROLE
+                    else IrisMessageRole.USER
+                ),
+                contents=[
+                    TextMessageContentDTO(
+                        textContent=(
+                            text if role == IRIS_AUTHOR_ROLE else f"[{label}] {text}"
+                        )
+                    )
+                ],
+            )
+            for role, label, text in self._thread_turns(state.dto.post)
+        ]
+        return history[-effective_limit:] if history else []
+
+    def _thread_turns(self, post: PostDTO) -> List[Tuple[str, str, str]]:
+        """Flatten a thread into ``(author_role, author_label, text)`` turns, oldest first.
+
+        Redacted messages are kept as placeholders: Iris should know a message exists
+        in the thread without seeing content its author opted out of sharing.
+        """
+        if not post:
+            return []
+
+        turns: List[Tuple[str, str, str]] = []
+
+        def add(role: str | None, redacted: bool, content: str | None) -> None:
+            text = REDACTED_ANSWER_PLACEHOLDER if redacted else (content or "")
+            if not text:
+                return
+            # Case-insensitive: the course-memory ingestion webhook spells the same
+            # roles in lower case, so accept either spelling rather than silently
+            # falling back to the neutral label.
+            role = (role or "").strip().upper()
+            turns.append(
+                (role, AUTHOR_ROLE_LABELS.get(role, UNKNOWN_AUTHOR_LABEL), text)
+            )
+
+        add(post.author_role, False, post.content)
+        for answer in post.answers or []:
+            add(answer.author_role, answer.redacted, answer.content)
+        return turns
+
+    def _target_message(self, post: PostDTO) -> Tuple[str, str]:
+        """Return ``(author_label, content)`` of the message Iris has to respond to.
+
+        Artemis re-runs this pipeline on every new message in a thread and sends the
+        whole thread, ordered oldest first — so the message that triggered the run is
+        the newest one, not the thread's opening post.
+        """
+        turns = self._thread_turns(post)
+        if not turns:
+            return UNKNOWN_AUTHOR_LABEL, ""
+        _, label, text = turns[-1]
+        return label, text
+
+    def _generate_retrieval_query_text(self, post: PostDTO) -> str:
+        """Generate query text for retrieval tools.
+
+        Only the message being responded to is used. Querying with the whole thread
+        lets the opening question dominate the embedding, which made every follow-up
+        retrieve — and course memory re-serve — the answer to the first question.
+        Earlier messages still reach retrieval through the chat history, which the
+        query rewriter uses to make context-poor follow-ups self-contained.
+        """
+        _, target_content = self._target_message(post)
+        return target_content or ""
 
     @observe(name="Autonomous Tutor Pipeline")
     def __call__(

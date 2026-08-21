@@ -15,3 +15,13 @@ class LecturesDeletionExecutionDto(PipelineExecutionDTO):
 class FaqDeletionExecutionDto(PipelineExecutionDTO):
     faq: FaqDTO = Field(..., alias="pyrisFaqWebhookDTO")
     settings: Optional[PipelineExecutionSettingsDTO]
+
+
+class CourseMemoryDeletionExecutionDto(PipelineExecutionDTO):
+    """Removes a thread's course-memory entry when the thread stops being resolved
+    in Artemis — the resolving answer was un-marked or deleted, or the thread
+    itself was removed (keyed on the thread root ``postId``)."""
+
+    course_id: int = Field(..., alias="courseId")
+    post_id: str = Field(..., alias="postId")
+    settings: Optional[PipelineExecutionSettingsDTO]

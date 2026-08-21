@@ -5,6 +5,9 @@ from sentry_sdk import capture_exception
 
 from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
+from iris.domain.ingestion.course_memory_ingestion_dto import (
+    CourseMemoryIngestionExecutionDTO,
+)
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
@@ -35,14 +38,19 @@ from iris.vector_database.write_retry import WeaviateRateLimitExhausted
 from iris.web.utils import validate_pipeline_variant
 
 from ...domain.ingestion.deletion_pipeline_execution_dto import (
+    CourseMemoryDeletionExecutionDto,
     FaqDeletionExecutionDto,
     LecturesDeletionExecutionDto,
 )
 from ...ingestion.ingestion_job_handler import IngestionJobHandler
+from ...pipeline.course_memory_ingestion_pipeline import CourseMemoryIngestionPipeline
 from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_update_pipeline import LectureIngestionUpdatePipeline
 from ...vector_database.database import VectorDatabase
+from ..status.course_memory_ingestion_status_callback import (
+    CourseMemoryIngestionStatus,
+)
 from ..status.faq_ingestion_status_callback import FaqIngestionStatus
 from ..status.ingestion_status_callback import IngestionStatusCallback
 from ..status.lecture_deletion_status_callback import (
@@ -309,4 +317,126 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     variant = validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto, variant))
+    thread.start()
+
+
+def run_course_memory_ingestion_worker(
+    dto: CourseMemoryIngestionExecutionDTO, variant_id: str
+):
+    """Run the course memory ingestion pipeline in a separate thread."""
+    callback = None
+    try:
+        callback = CourseMemoryIngestionStatus(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+        )
+        db = VectorDatabase()
+        client = db.get_client()
+        variant = find_variant(CourseMemoryIngestionPipeline.get_variants(), variant_id)
+        is_local = bool(
+            dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
+        )
+        pipeline = CourseMemoryIngestionPipeline(
+            client=client,
+            dto=dto,
+            callback=callback,
+            variant=variant,
+            local=is_local,
+        )
+        pipeline()
+    except Exception as e:
+        logger.error("Error in course memory ingestion pipeline", exc_info=e)
+        # If the pipeline never ran (e.g. Weaviate/variant init failed), its own
+        # error handling did not fire; notify Artemis so the job doesn't hang.
+        if callback is not None:
+            callback.fail(str(e), exception=e)
+        capture_exception(e)
+
+
+@router.post(
+    "/course-memory/ingest",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+@observe(name="POST /webhooks/course-memory/ingest")
+def course_memory_ingestion_webhook(dto: CourseMemoryIngestionExecutionDTO):
+    """Webhook endpoint to trigger course memory ingestion (Triggers A and B).
+
+    The ``source`` field on the DTO distinguishes tutor verification
+    (IRIS_AUTO / TUTOR_WRITTEN / IRIS_CORRECTED) from thread resolution
+    (THREAD_RESOLVED).
+    """
+    # Logged before anything else runs: this is the line that says an ingestion was
+    # *requested*, so a silent skip further down can be told apart from a trigger that
+    # never fired at all. Rejected payloads never reach here — the validation handler in
+    # main.py logs those at ERROR with the request path.
+    logger.info(
+        "Course memory ingestion webhook received: course=%s thread=%s message=%s "
+        "source=%s public=%s thread_size=%d verified_flags=%d resolving_flags=%d",
+        dto.course_id,
+        dto.post_id,
+        dto.message_id,
+        dto.source.value,
+        dto.is_public_channel,
+        len(dto.thread),
+        sum(1 for message in dto.thread if message.is_verified_answer),
+        sum(1 for message in dto.thread if message.resolves_post),
+    )
+    variant = validate_pipeline_variant(dto.settings, CourseMemoryIngestionPipeline)
+
+    thread = Thread(target=run_course_memory_ingestion_worker, args=(dto, variant))
+    thread.start()
+
+
+def run_course_memory_deletion_worker(
+    dto: CourseMemoryDeletionExecutionDto, variant_id: str
+):
+    """Delete a single course memory entry in a separate thread."""
+    callback = None
+    try:
+        callback = CourseMemoryIngestionStatus(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+        )
+        db = VectorDatabase()
+        client = db.get_client()
+        variant = find_variant(CourseMemoryIngestionPipeline.get_variants(), variant_id)
+        is_local = bool(
+            dto.settings and dto.settings.artemis_llm_selection == "LOCAL_AI"
+        )
+        pipeline = CourseMemoryIngestionPipeline(
+            client=client,
+            dto=None,
+            callback=callback,
+            variant=variant,
+            local=is_local,
+        )
+        if pipeline.delete_for_thread(dto.post_id, dto.course_id):
+            callback.finish()
+        else:
+            callback.fail("Error while deleting course memory entry")
+    except Exception as e:
+        logger.error("Error in course memory deletion pipeline", exc_info=e)
+        if callback is not None:
+            callback.fail(str(e), exception=e)
+        capture_exception(e)
+
+
+@router.post(
+    "/course-memory/delete",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+@observe(name="POST /webhooks/course-memory/delete")
+def course_memory_deletion_webhook(dto: CourseMemoryDeletionExecutionDto):
+    """Webhook endpoint to remove a course memory entry when its source answer is
+    deleted or its verification is retracted in Artemis."""
+    logger.info(
+        "Course memory deletion webhook received: course=%s thread=%s",
+        dto.course_id,
+        dto.post_id,
+    )
+    variant = validate_pipeline_variant(dto.settings, CourseMemoryIngestionPipeline)
+
+    thread = Thread(target=run_course_memory_deletion_worker, args=(dto, variant))
     thread.start()
