@@ -30,6 +30,7 @@ function formatBucketLabel(ts: string, preset: TimePreset): string {
       return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     case 'week':
     case 'month':
+    case '30d':
     case '6m':
       return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     case 'year':
@@ -151,6 +152,7 @@ export class BillingTabComponent {
       case 'week':
         return 7;
       case 'month':
+      case '30d':
         return Math.round((currEnd.getTime() - currStart.getTime()) / 86_400_000);
       case '6m':
         return 6;

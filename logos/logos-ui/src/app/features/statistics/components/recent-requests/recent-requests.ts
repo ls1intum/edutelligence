@@ -1,126 +1,62 @@
 import {
   Component,
   Input,
-  OnInit,
   OnChanges,
   OnDestroy,
-  inject,
   signal,
   computed,
+  SimpleChanges,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { StatisticsService } from '../../services/statistics.service';
-import {
-  RequestItem,
-  PaginatedRequestItem,
-  PaginatedRequestResponse,
-} from '../../statistics.models';
+import { formatUsd } from '../../../../shared/utils/currency';
+import { RequestItem } from '../../statistics.models';
 import {
   deriveStage,
   getRequestBorderColor,
   formatTimeAgo,
   formatElapsed,
-  mergeWithLive,
   RequestStage,
 } from '../../statistics.utils';
-import { StatsSkeletonComponent } from '../skeletons/skeletons';
 
-const PER_PAGE = 5;
+const MAX_ROWS = 10;
 
 @Component({
   selector: 'app-stats-recent-requests',
   standalone: true,
-  imports: [CommonModule, StatsSkeletonComponent],
+  imports: [CommonModule],
   templateUrl: './recent-requests.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './recent-requests.scss',
 })
-export class RecentRequests implements OnInit, OnChanges, OnDestroy {
+export class RecentRequests implements OnChanges, OnDestroy {
+  /** Live rows pushed by the stats WS (already scoped to the selected time range). */
   @Input() liveRequests: RequestItem[] = [];
-  @Input() nowMs = Date.now();
-
-  private statsService = inject(StatisticsService);
-
-  readonly PER_PAGE = PER_PAGE;
-
-  page = signal(1);
-  pageData = signal<PaginatedRequestResponse | null>(null);
-  loading = signal(false);
-  fetchError = signal<string | null>(null);
 
   /** Shared ticker: ms since epoch, updated by setInterval. */
   now = signal(Date.now());
 
   private intervalId: ReturnType<typeof setInterval> | null = null;
-  private prevLiveSignature = '';
 
-  displayItems = computed((): PaginatedRequestItem[] => {
-    const data = this.pageData();
-    if (!data) return [];
-    if (this.page() === 1) {
-      return mergeWithLive(this.liveRequests, data.requests, PER_PAGE);
-    }
-    return data.requests;
-  });
+  // Input mirror signal so the computed()s below actually react: a plain
+  // @Input() is not a tracked producer, so reading it inside computed() would
+  // cache the very first value (an empty list) forever.
+  private readonly _liveRequests = signal<RequestItem[]>([]);
+
+  displayItems = computed(() => this._liveRequests().slice(0, MAX_ROWS));
 
   private hasLive = computed(() =>
     this.displayItems().some((it) => deriveStage(it) !== 'complete'),
   );
 
-  ngOnInit(): void {
-    this.load(1);
-    this.scheduleTicker();
-  }
-
-  private static liveSignature(items: RequestItem[]): string {
-    return items
-      .map((r) => `${r.request_id}:${r.status}:${r.scheduled_ts ?? ''}:${r.request_complete_ts ?? ''}`)
-      .join(',');
-  }
-
-  ngOnChanges(): void {
-    if (this.page() === 1) {
-      const sig = RecentRequests.liveSignature(this.liveRequests);
-      if (sig !== this.prevLiveSignature) {
-        this.prevLiveSignature = sig;
-        this.silentRefresh();
-      }
-    }
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['liveRequests']) this._liveRequests.set(this.liveRequests ?? []);
     // Re-schedule ticker whenever inputs change so cadence stays correct.
     this.scheduleTicker();
   }
 
   ngOnDestroy(): void {
     this.clearTicker();
-  }
-
-  async load(targetPage: number): Promise<void> {
-    this.loading.set(true);
-    this.fetchError.set(null);
-    try {
-      const data = await this.statsService.getPaginatedRequests(targetPage, PER_PAGE);
-      this.pageData.set(data);
-      this.page.set(targetPage);
-      this.scheduleTicker();
-    } catch (err: unknown) {
-      const e = err as { message?: string };
-      this.fetchError.set(e?.message ?? 'Failed to load requests');
-    } finally {
-      this.loading.set(false);
-    }
-  }
-
-  private async silentRefresh(): Promise<void> {
-    try {
-      const data = await this.statsService.getPaginatedRequests(1, PER_PAGE);
-      if (this.page() === 1) {
-        this.pageData.set(data);
-        this.scheduleTicker();
-      }
-    } catch {
-      /* silent: don't surface background refresh failures */
-    }
   }
 
   private scheduleTicker(): void {
@@ -136,31 +72,46 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  totalPages(): number {
-    return this.pageData()?.total_pages ?? 1;
-  }
-
   // ── Template helpers ─────────────────────────────────────────────────────
 
-  stageOf(item: PaginatedRequestItem): RequestStage {
+  stageOf(item: RequestItem): RequestStage {
     return deriveStage(item);
   }
 
-  borderColorOf(item: PaginatedRequestItem): string {
+  borderColorOf(item: RequestItem): string {
     return getRequestBorderColor(deriveStage(item), item.status);
   }
 
-  bgTintOf(item: PaginatedRequestItem): string {
+  bgTintOf(item: RequestItem): string {
     const color = getRequestBorderColor(deriveStage(item), item.status);
     // wrap with low-opacity version for tinted background
-    return color.replace('rgb(var(', 'rgb(var(').replace('))', ') / 0.07)');
+    return color.replace('))', ') / 0.07)');
   }
 
-  timeAgoOf(item: PaginatedRequestItem): string {
+  timeAgoOf(item: RequestItem): string {
     return formatTimeAgo(item.enqueue_ts ?? item.timestamp, this.now());
   }
 
-  totalTimeLabelOf(item: PaginatedRequestItem): string {
+  /** Full name ("First Last"), falling back to the username. */
+  requesterOf(item: RequestItem): string {
+    return item.full_name || item.username || '';
+  }
+
+  /** Cloud cost in USD; null when no price is on record for the model. */
+  costLabelOf(item: RequestItem): string | null {
+    if (item.cost_microcents == null) return null;
+    return formatUsd(item.cost_microcents);
+  }
+
+  /** Token line "↑prompt ↓completion", only when token counts are known. */
+  tokensLabelOf(item: RequestItem): string | null {
+    const p = item.prompt_tokens;
+    const c = item.completion_tokens;
+    if (p == null && c == null) return null;
+    return `↑${p ?? 0} ↓${c ?? 0}`;
+  }
+
+  totalTimeLabelOf(item: RequestItem): string {
     const stage = deriveStage(item);
     if (stage === 'complete' && item.total_seconds != null) {
       return `${item.total_seconds.toFixed(2)}s`;
@@ -171,7 +122,7 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
     return '...';
   }
 
-  elapsedOf(item: PaginatedRequestItem): string {
+  elapsedOf(item: RequestItem): string {
     if (!item.scheduled_ts) return '0.0s';
     return formatElapsed((this.now() - new Date(item.scheduled_ts).getTime()) / 1000);
   }
@@ -181,7 +132,7 @@ export class RecentRequests implements OnInit, OnChanges, OnDestroy {
     return msg.length > 60 ? msg.slice(0, 60) + '...' : msg;
   }
 
-  trackById(_: number, item: PaginatedRequestItem): string {
+  trackById(_: number, item: RequestItem): string {
     return item.request_id;
   }
 }

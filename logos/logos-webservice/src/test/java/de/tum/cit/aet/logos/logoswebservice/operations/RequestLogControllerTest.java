@@ -40,7 +40,7 @@ class RequestLogControllerTest {
     @Test
     void latestRequests_returnsUpToTenRows() throws Exception {
         mvc.perform(post("/logosdb/latest_requests")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -54,6 +54,17 @@ class RequestLogControllerTest {
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void latestRequests_rejectsNonAdmin() throws Exception {
+        // The feed is system-wide and carries requester names, teams and cloud
+        // cost, with no per-user scoping to fall back on.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
     }
 
     @Test

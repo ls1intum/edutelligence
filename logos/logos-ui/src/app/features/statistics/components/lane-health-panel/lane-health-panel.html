@@ -1,9 +1,12 @@
-@if (lanes.length === 0) {
+@if (!canAdd && lanes.length === 0) {
   <app-stats-empty-state message="No lane data available yet." />
 } @else {
   <div class="lane-panel">
     @if (unloadError()) {
       <div class="action-error">{{ unloadError() }}</div>
+    }
+    @if (lanes.length === 0) {
+      <div class="lane-empty">No lanes loaded.</div>
     }
     @for (row of lanes; track row.laneId) {
       <div class="lane-row">
@@ -31,6 +34,12 @@
               </div>
             </div>
             <div class="lane-model">{{ row.lane.model }}</div>
+            @if (gpuLabel(row.lane)) {
+              <div class="lane-gpu">
+                <i class="pi pi-microchip" aria-hidden="true"></i>
+                <span>{{ gpuLabel(row.lane) }}</span>
+              </div>
+            }
 
             @if (row.lane.vllm) {
               <div class="lane-stats">
@@ -74,6 +83,56 @@
             }
           </div>
         </div>
+      </div>
+    }
+
+    <!-- Manual lane load (counterpart to per-lane Unload) -->
+    @if (canAdd) {
+      <div class="lane-load">
+        @if (pickerOpen()) {
+          <div class="lane-load__row">
+            @if (modelsLoading()) {
+              <span class="lane-load__hint">
+                <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Loading models…
+              </span>
+            } @else if (loadableModels.length === 0) {
+              <span class="lane-load__hint">No models available to load.</span>
+            } @else {
+              <select
+                class="lane-load__select"
+                [value]="selectedModel() ?? ''"
+                (change)="selectModel($event)"
+                aria-label="Model to load"
+              >
+                <option value="" disabled>Select a model…</option>
+                @for (m of loadableModels; track m.model_name) {
+                  <option [value]="m.model_name">{{ m.model_name }}</option>
+                }
+              </select>
+              <button
+                class="btn-load"
+                [disabled]="selectedModel() == null || addingLane()"
+                (click)="handleAddLane()"
+              >
+                @if (addingLane()) {
+                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Loading…
+                } @else {
+                  Load
+                }
+              </button>
+            }
+            <button class="lane-load__close" type="button" (click)="closePicker()" aria-label="Close">
+              <i class="pi pi-times" aria-hidden="true"></i>
+            </button>
+          </div>
+          @if (addError()) {
+            <div class="action-error">{{ addError() }}</div>
+          }
+        } @else {
+          <button class="btn-load" type="button" (click)="openPicker()">
+            <i class="pi pi-plus" aria-hidden="true"></i> Load lane
+          </button>
+        }
       </div>
     }
   </div>

@@ -157,6 +157,40 @@
       } @else {
         <app-stats-skeleton variant="kpi" />
       }
+
+      <!-- Tokens processed (historic, selected range) -->
+      @if (statsReady()) {
+        <app-stats-kpi-card
+          [label]="'Tokens · ' + periodLabel()"
+          [accent]="CHART_ROLE.total"
+          [value]="formatTokenCount(totalTokens())"
+        >
+          <span kpiHint>
+            processed in range
+            @if (cloudRequests() > 0) {
+              (cloud incl.)
+            }
+          </span>
+        </app-stats-kpi-card>
+      } @else {
+        <app-stats-skeleton variant="kpi" />
+      }
+
+      <!-- Cloud cost (historic, selected range) -->
+      @if (statsReady()) {
+        <app-stats-kpi-card
+          [label]="'Cloud cost · ' + periodLabel()"
+          [accent]="CHART_ROLE.cloud"
+          [value]="formatCloudCost(cloudCostMicroCents())"
+        >
+          <span kpiHint>
+            across
+            <strong>{{ cloudRequests().toLocaleString() }}</strong> cloud requests
+          </span>
+        </app-stats-kpi-card>
+      } @else {
+        <app-stats-skeleton variant="kpi" />
+      }
     </div>
 
     <!-- ── Provider-scoped glass row ─────────────────────────────────────── -->
@@ -172,6 +206,17 @@
           ariaLabel="Select provider"
           (valueChange)="setSelectedVramProvider($event)"
         />
+        @if (vramReady() && !selectedProviderCalibrating() && selectedProviderFreeVramLabel()) {
+          <span
+            class="stats-provider-vram-badge"
+            title="Free VRAM of the selected provider (latest sample)"
+          >{{ selectedProviderFreeVramLabel() }}</span>
+        }
+        @if (selectedProviderCalibrating()) {
+          <span class="stats-provider-badge stats-provider-badge--calibrating">
+            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Calibrating…
+          </span>
+        }
       </div>
 
       <!-- Three chart panels -->
@@ -259,7 +304,6 @@
     >
       <app-stats-recent-requests
         [liveRequests]="latestRequests()"
-        [nowMs]="nowMs()"
       />
     </app-stats-chart-panel>
 
@@ -314,12 +358,11 @@
             <app-stats-vram-remaining-chart
               [vramDataByProvider]="vramRawDataByProvider()"
               [providerMetaByName]="vramProviderMetaByName()"
-              [vramDayOffset]="vramDayOffset()"
+              [timeRange]="selectedTimeRangeMs()"
               [isVramLoading]="isVramLoading()"
               [vramError]="vramError()"
               [nowMs]="nowMs()"
               [laneStateByProvider]="lanesByProvider()"
-              (vramDayOffsetChange)="setVramDayOffset($event)"
               (refresh)="onRefresh()"
             />
           }

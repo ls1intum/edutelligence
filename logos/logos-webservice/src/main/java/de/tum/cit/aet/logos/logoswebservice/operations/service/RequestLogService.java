@@ -1,6 +1,9 @@
 package de.tum.cit.aet.logos.logoswebservice.operations.service;
 
+import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,13 +25,30 @@ public class RequestLogService {
         this.logEntryRepository = logEntryRepository;
     }
 
-    public Map<String, Object> getLatestRequests() {
-        List<Map<String, Object>> rows = logEntryRepository.findLatestRequests().stream()
+    /**
+     * @param startDate ISO-8601 start of the window (inclusive); {@code null}
+     *                  defaults to 30 days before {@code endDate}
+     * @param endDate   ISO-8601 end of the window (inclusive); {@code null}
+     *                  defaults to now
+     */
+    public Map<String, Object> getLatestRequests(String startDate, String endDate) {
+        ZonedDateTime endDt = parseInstantOrNow(endDate);
+        // Same lenient parse as the end: a malformed range must fall back to the
+        // default window, not surface as a 500.
+        ZonedDateTime startDt = parseInstantOrNull(startDate);
+        if (startDt == null || startDt.isAfter(endDt)) {
+            startDt = endDt.minusDays(30);
+        }
+        Timestamp startTs = Timestamp.from(startDt.toInstant());
+        Timestamp endTs = Timestamp.from(endDt.toInstant());
+
+        List<Map<String, Object>> rows = logEntryRepository.findLatestRequests(startTs, endTs).stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("request_id", p.getRequestId());
                 m.put("model_name", p.getModelName());
                 m.put("provider_name", p.getProviderName());
+                m.put("is_cloud", isCloudProviderType(p.getProviderType()));
                 m.put("status", p.getResultStatus() != null ? p.getResultStatus() : "pending");
                 m.put("timestamp", ts(p.getTimestampRequest()));
                 m.put("enqueue_ts", ts(p.getTimestampRequest()));
@@ -42,10 +62,37 @@ public class RequestLogService {
                 m.put("priority_when_scheduled", p.getPriorityWhenScheduled());
                 m.put("queue_depth_at_enqueue", p.getQueueDepthAtEnqueue());
                 m.put("error_message", p.getErrorMessage());
+                m.put("team_name", p.getTeamName());
+                m.put("username", p.getUsername());
+                m.put("full_name", p.getFullName());
+                m.put("prompt_tokens", p.getPromptTokens());
+                m.put("completion_tokens", p.getCompletionTokens());
+                m.put("total_tokens", p.getTotalTokens());
+                m.put("cost_microcents", p.getCostMicroCents());
                 return m;
             })
             .toList();
         return Map.of("requests", rows);
+    }
+
+    private static ZonedDateTime parseInstantOrNow(String iso) {
+        ZonedDateTime parsed = parseInstantOrNull(iso);
+        return parsed != null ? parsed : ZonedDateTime.now(ZoneOffset.UTC);
+    }
+
+    private static ZonedDateTime parseInstantOrNull(String iso) {
+        if (iso == null || iso.isBlank()) return null;
+        try {
+            return ZonedDateTime.parse(iso).withZoneSameInstant(ZoneOffset.UTC);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean isCloudProviderType(String providerType) {
+        return providerType != null && !providerType.isEmpty()
+               && !providerType.equalsIgnoreCase("logosnode")
+               && !providerType.equalsIgnoreCase("ollama");
     }
 
     /**
@@ -127,10 +174,7 @@ public class RequestLogService {
         List<Map<String, Object>> rows = projections.stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
-                String pt = p.getProviderType();
-                boolean isCloud = pt != null && !pt.equalsIgnoreCase("logosnode")
-                                             && !pt.equalsIgnoreCase("ollama")
-                                             && !pt.isEmpty();
+                boolean isCloud = isCloudProviderType(p.getProviderType());
                 m.put("request_id", p.getRequestId());
                 m.put("model_name", p.getModelName());
                 m.put("provider_name", p.getProviderName());

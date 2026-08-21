@@ -73,6 +73,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         SELECT le.request_id AS requestId,
                COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
                COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
+               p.provider_type::text AS providerType,
                le.result_status::text AS resultStatus,
                le.timestamp_request AS timestampRequest,
                le.timestamp_forwarding AS timestampForwarding,
@@ -90,15 +91,64 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                     ELSE NULL END AS queueSeconds,
                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request))
-                    ELSE NULL END AS totalSeconds
+                    ELSE NULL END AS totalSeconds,
+               t.name AS teamName,
+               u.username AS username,
+               NULLIF(TRIM(COALESCE(u.prename, '') || ' ' || COALESCE(u.name, '')), '') AS fullName,
+               tk.prompt_tokens AS promptTokens,
+               tk.completion_tokens AS completionTokens,
+               tk.total_tokens AS totalTokens,
+               c.cost_micro_cents AS costMicroCents
         FROM log_entry le
         LEFT JOIN models m ON m.id = le.model_id
         LEFT JOIN providers p ON p.id = le.provider_id
+        LEFT JOIN teams t ON t.id = le.team_id
+        LEFT JOIN users u ON u.id = le.user_id
+        LEFT JOIN LATERAL (
+            SELECT MAX(CASE WHEN tt.name = 'prompt_tokens'     THEN ut.token_count END) AS prompt_tokens,
+                   MAX(CASE WHEN tt.name = 'completion_tokens' THEN ut.token_count END) AS completion_tokens,
+                   MAX(CASE WHEN tt.name = 'total_tokens'      THEN ut.token_count END) AS total_tokens
+            FROM usage_tokens ut
+            JOIN token_types tt ON tt.id = ut.type_id
+            WHERE ut.log_entry_id = le.id
+        ) tk ON true
+        LEFT JOIN LATERAL (
+            -- No COALESCE to 0: a request whose model has no token_prices row
+            -- must come back as NULL so the UI can omit the cost line instead
+            -- of asserting a confident "€0.00".
+            SELECT SUM(
+                CASE WHEN tp.price_per_k_token IS NOT NULL
+                     THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+                END
+            ) AS cost_micro_cents
+            FROM usage_tokens ut
+            LEFT JOIN LATERAL (
+                SELECT price_per_k_token
+                FROM token_prices
+                WHERE type_id = ut.type_id
+                  AND (model_id = le.model_id OR model_id IS NULL)
+                  AND (provider_id = le.provider_id OR provider_id IS NULL)
+                  AND valid_from <= le.timestamp_request
+                ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+                         (provider_id = le.provider_id) DESC NULLS LAST,
+                         valid_from DESC
+                LIMIT 1
+            ) tp ON true
+            WHERE ut.log_entry_id = le.id
+        ) c ON true
         WHERE le.request_id IS NOT NULL
+          AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :startTs AND :endTs
         ORDER BY le.timestamp_request DESC NULLS LAST
+        -- Matches MAX_ROWS in the recent-requests component. Every row here
+        -- costs two correlated LATERALs (one of them re-running the token_prices
+        -- specificity lookup per usage_tokens row) and this runs once per open
+        -- stats session every 2 s — fetching rows the UI then slices away is
+        -- the most expensive kind of dead work in this query.
         LIMIT 10
         """, nativeQuery = true)
-    List<LatestRequestProjection> findLatestRequests();
+    List<LatestRequestProjection> findLatestRequests(
+        @Param("startTs") Timestamp startTs,
+        @Param("endTs") Timestamp endTs);
 
     @Transactional(readOnly = true)
     @Query(value = """
@@ -333,7 +383,43 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                AVG(CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
                    THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END) AS avgQueueSeconds,
                AVG(CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                   THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END) AS avgRunSeconds
+                   THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END) AS avgRunSeconds,
+               (SELECT COALESCE(SUM(ut.token_count), 0)
+                  FROM usage_tokens ut
+                  JOIN token_types tt ON tt.id = ut.type_id
+                  JOIN log_entry re2 ON re2.id = ut.log_entry_id
+                 WHERE tt.name = 'total_tokens'
+                   AND COALESCE(re2.timestamp_forwarding, re2.timestamp_request, re2.timestamp_response) BETWEEN :start AND :end
+               ) AS totalTokens,
+               -- "Cloud" here must mean exactly what cloudRequests above means:
+               -- the statistics page shows this sum and that count in the same
+               -- KPI card ("… across N cloud requests"), so a second predicate
+               -- (e.g. on provider_type) would let the card pair a non-zero cost
+               -- with a zero count.
+               (SELECT COALESCE(SUM(
+                   CASE WHEN tp.price_per_k_token IS NOT NULL
+                        THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+                        ELSE 0
+                   END
+               ), 0)
+                  FROM log_entry re3
+                  JOIN providers p3 ON p3.id = re3.provider_id
+                  JOIN usage_tokens ut ON ut.log_entry_id = re3.id
+                  LEFT JOIN LATERAL (
+                      SELECT price_per_k_token
+                      FROM token_prices
+                      WHERE type_id = ut.type_id
+                        AND (model_id = re3.model_id OR model_id IS NULL)
+                        AND (provider_id = re3.provider_id OR provider_id IS NULL)
+                        AND valid_from <= re3.timestamp_request
+                      ORDER BY (model_id = re3.model_id) DESC NULLS LAST,
+                               (provider_id = re3.provider_id) DESC NULLS LAST,
+                               valid_from DESC
+                      LIMIT 1
+                  ) tp ON true
+                 WHERE p3.privacy_level != 'LOCAL' AND p3.privacy_level IS NOT NULL
+                   AND COALESCE(re3.timestamp_forwarding, re3.timestamp_request, re3.timestamp_response) BETWEEN :start AND :end
+               ) AS cloudCostMicroCents
         FROM log_entry le
         LEFT JOIN providers p ON p.id = le.provider_id
         WHERE COALESCE(timestamp_forwarding, timestamp_request, timestamp_response) BETWEEN :start AND :end

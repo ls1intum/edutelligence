@@ -7,43 +7,6 @@
   width: 100%;
 }
 
-// ── Error banner ─────────────────────────────────────────────────────────────
-
-.rr-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 10px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: rgb(var(--color-error)  / var(--opacity-soft));
-  border: 1px solid rgb(var(--color-error)  / var(--opacity-border));
-}
-
-.rr-error__msg {
-  font-size: var(--font-size-md);
-  color: rgb(var(--color-error));
-  flex: 1;
-  min-width: 0;
-}
-
-.rr-error__retry {
-  flex-shrink: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: rgb(var(--color-error));
-  background: transparent;
-  border: 1px solid rgb(var(--color-error)  / var(--opacity-strong));
-  border-radius: 8px;
-  padding: 3px 10px;
-  cursor: pointer;
-
-  &:hover {
-    background: rgb(var(--color-error)  / var(--opacity-soft));
-  }
-}
-
 // ── Empty ────────────────────────────────────────────────────────────────────
 
 .rr-empty {
@@ -60,6 +23,8 @@
   flex-direction: column;
   gap: 0;
   width: 100%;
+  max-height: 460px;
+  overflow-y: auto;
 }
 
 // ── Card ─────────────────────────────────────────────────────────────────────
@@ -180,6 +145,14 @@
   color: rgb(var(--color-typography-300));
 }
 
+.rr-card__cost {
+  color: rgb(var(--color-accent-cyan));
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+}
+
 // ── Badges ───────────────────────────────────────────────────────────────────
 
 .rr-badge {
@@ -199,55 +172,6 @@
 .rr-badge--cold,
 .rr-badge--hot {
   background: rgb(var(--color-outline-200)  / var(--opacity-soft));
-  color: rgb(var(--color-typography-300));
-}
-
-// ── Pagination ───────────────────────────────────────────────────────────────
-
-.rr-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-top: 8px;
-  padding-bottom: 4px;
-  margin-top: 4px;
-  border-top: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity, 0.12));
-}
-
-.rr-page-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: rgb(var(--color-typography-300));
-  background: transparent;
-  border: none;
-  padding: 4px 6px;
-  cursor: pointer;
-  border-radius: 8px;
-  transition: color 0.15s, background 0.15s;
-
-  .pi {
-    font-size: var(--font-size-xs);
-  }
-
-  &:hover:not(:disabled) {
-    color: rgb(var(--color-typography-0));
-    background: rgb(var(--glass-fill)  / var(--opacity-faint));
-  }
-
-  &:disabled {
-    opacity: var(--opacity-dimmed);
-    cursor: not-allowed;
-  }
-}
-
-.rr-page-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-300));
 }
 
