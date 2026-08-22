@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCapabilitiesRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
@@ -50,17 +51,16 @@ public class ModelController {
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addModel(
             @RequestBody AddModelRequestDTO req) {
-        try {
-            Map<String, Object> serviceResult = (Map<String, Object>) modelService.addModel(req);
-            Integer newModelId = (Integer) serviceResult.get("model_id");
-            if (newModelId != null && req.name() != null) {
-                priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
-                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(newModelId, req.name());
-            }
-            return ResponseEntity.ok(serviceResult);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        Map<String, Object> serviceResult = modelService.addModel(req);
+        Integer newModelId = (Integer) serviceResult.get("model_id");
+        if (newModelId != null && req.name() != null) {
+            priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
+            modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
+                newModelId,
+                req.name()
+            );
         }
+        return ResponseEntity.ok(serviceResult);
     }
 
     @PostMapping("/update_model_info")
@@ -134,16 +134,13 @@ public class ModelController {
 
     @PostMapping("/get_model_capabilities")
     public ResponseEntity<?> getModelCapabilities(
-        @RequestBody GetModelRequestDTO req) {
-            if (req.id() == null) {
-                return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
-            }
-            return modelService.getModelCapabilities(req.id())
-                .map(ResponseEntity::ok)
-                .<ResponseEntity<?>>map(r -> r)
-                .orElse(
-                    ResponseEntity.status(404)
-                        .body(Map.of("error", "Model capabilities not found"))
-                );
+            @RequestBody GetModelCapabilitiesRequestDTO req) {
+
+        if (req.ids() == null || req.ids().isEmpty()) {
+            return ResponseEntity.badRequest()
+                .body(Map.of("error", "ids are required"));
         }
+
+        return ResponseEntity.ok(modelService.getModelCapabilities(req.ids()));
+    }
 }

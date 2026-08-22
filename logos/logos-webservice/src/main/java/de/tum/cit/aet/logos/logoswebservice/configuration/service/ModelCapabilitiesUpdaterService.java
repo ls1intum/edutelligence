@@ -20,11 +20,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelReposi
 
 @Service
 public class ModelCapabilitiesUpdaterService {
-
     private static final Logger log = LoggerFactory.getLogger(ModelCapabilitiesUpdaterService.class);
-
     private static final String LOCAL_JSON_PATH = "classpath:model_prices_and_context_window.json";
-
     private final ObjectMapper objectMapper;
     private final ResourceLoader resourceLoader;
     private final ModelRepository modelRepository;
@@ -34,7 +31,6 @@ public class ModelCapabilitiesUpdaterService {
                                            ResourceLoader resourceLoader,
                                            ModelRepository modelRepository,
                                            ModelCapabilitiesPersistenceService modelCapabilitiesPersistenceService) {
-
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
         this.modelRepository = modelRepository;
@@ -44,23 +40,19 @@ public class ModelCapabilitiesUpdaterService {
     @Scheduled(initialDelay = 0, fixedDelay = 86_400_000)
     public void updateAllModelCapabilities() {
         log.info("capabilities_updater: starting local catalog refresh for all models");
-
         Map<String, Object> fullCatalog = loadLocalCatalog();
         if (fullCatalog == null || fullCatalog.isEmpty()) {
             log.error("capabilities_updater: local JSON catalog could not be loaded or is empty!");
             return;
         }
-
         List<Model> allModels = modelRepository.findAll();
         if (allModels.isEmpty()) {
             log.info("capabilities_updater: no models found in database, nothing to refresh");
             return;
         }
-
         int count = 0;
         for (Model model : allModels) {
             if (model.getName() == null || model.getName().isBlank()) continue;
-
             try {
                 boolean success = extractAndStoreCapabilities(fullCatalog, model.getId(), model.getName());
                 if (success) count++;
@@ -76,7 +68,6 @@ public class ModelCapabilitiesUpdaterService {
     public void updateCapabilitiesForModelAsync(int modelId, String modelName) {
         Map<String, Object> fullCatalog = loadLocalCatalog();
         if (fullCatalog == null) return;
-
         try {
             extractAndStoreCapabilities(fullCatalog, modelId, modelName);
         } catch (Exception e) {
@@ -89,50 +80,40 @@ public class ModelCapabilitiesUpdaterService {
             Map<String, Object> catalog,
             int modelId,
             String modelName) {
-
         String normalizedModelName = normalizeModelName(modelName);
         boolean found = false;
         boolean supportsFunctionCalling = false;
         boolean supportsVision = false;
         boolean supportsReasoning = false;
-
         for (Map.Entry<String, Object> entry : catalog.entrySet()) {
             String catalogKey = entry.getKey();
-
-            if (catalogKey == null || !(entry.getValue() instanceof Map)) {
+            if ("sample_spec".equals(catalogKey) || catalogKey == null || !(entry.getValue() instanceof Map)) {
                 continue;
             }
-
             String catalogModelName = extractModelName(catalogKey);
             if (catalogModelName == null) {
                 continue;
             }
-
             if (!modelNamesMatch(normalizedModelName, catalogModelName)) {
                 continue;
             }
-
             Map<String, Object> modelData = (Map<String, Object>) entry.getValue();
             found = true;
             supportsFunctionCalling |= Boolean.TRUE.equals(
                 modelData.get("supports_function_calling")
             );
-
             supportsVision |= Boolean.TRUE.equals(
                 modelData.get("supports_vision")
             );
-
             supportsReasoning |= Boolean.TRUE.equals(
                 modelData.get("supports_reasoning")
             );
-
             log.debug(
                 "capabilities_updater: matched '{}' for model '{}'",
                 catalogKey,
                 modelName
             );
         }
-
         if (!found) {
             log.debug(
                 "capabilities_updater: model '{}' not found in local JSON registry",
@@ -140,14 +121,12 @@ public class ModelCapabilitiesUpdaterService {
             );
             return false;
         }
-
         modelCapabilitiesPersistenceService.updateModelCapabilities(
             modelId,
             supportsFunctionCalling,
             supportsVision,
             supportsReasoning
         );
-
         return true;
     }
 
@@ -168,15 +147,11 @@ public class ModelCapabilitiesUpdaterService {
         if (catalogKey == null || catalogKey.isBlank()) {
             return null;
         }
-
         String key = catalogKey.trim().toLowerCase(Locale.ROOT);
-
         int lastSlash = key.lastIndexOf('/');
-
         String modelName = lastSlash >= 0
             ? key.substring(lastSlash + 1)
             : key;
-
         return normalizeModelName(modelName);
     }
 
@@ -184,27 +159,21 @@ public class ModelCapabilitiesUpdaterService {
         if (modelName == null) {
             return null;
         }
-
         String normalized = modelName.trim().toLowerCase(Locale.ROOT);
-
         int lastSlash = normalized.lastIndexOf('/');
         if (lastSlash >= 0) {
             normalized = normalized.substring(lastSlash + 1);
         }
-
         normalized = normalized.replaceFirst("-(pt|it)$", "");
-
         return normalized;
     }
 
     private boolean modelNamesMatch(
             String requestedModelName,
             String catalogModelName) {
-
         if (requestedModelName == null || catalogModelName == null) {
             return false;
         }
-
         return requestedModelName.equals(catalogModelName);
     }
 }

@@ -94,26 +94,24 @@ export class Models implements OnInit {
   }
 
   async fetchModels(): Promise<void> {
-    this.loading.set(true);
-    this.loadError.set(false);
-    try {
-      const models = await this.modelService.getModels();
-      this.models.set(models);
-      const results = await Promise.allSettled(
-        models.map((model) => this.modelService.getModelCapabilities(model.id)),
-      );
-      const capabilityEntries = results.flatMap((result, index) =>
-        result.status === 'fulfilled'
-          ? [[models[index].id, result.value] as const]
-          : [],
-        );
-      this.capabilities.set(Object.fromEntries(capabilityEntries));
-    } catch {
-      this.loadError.set(true);
-    } finally {
-      this.loading.set(false);
-    }
+  this.loading.set(true);
+  this.loadError.set(false);
+
+  try {
+    const models = await this.modelService.getModels();
+    this.models.set(models);
+
+    const capabilities = await this.modelService.getModelCapabilities(
+      models.map((model) => model.id),
+    );
+
+    this.capabilities.set(capabilities);
+  } catch {
+    this.loadError.set(true);
+  } finally {
+    this.loading.set(false);
   }
+}
       
   getCapabilities(modelId: number): ModelCapability | undefined {
     return this.capabilities()[modelId];

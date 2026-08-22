@@ -27,15 +27,16 @@ export class ModelManagementService {
   deleteModel(id: number): Promise<void> {
     return firstValueFrom(this.http.post<void>('/api/logosdb/delete_model', { id }));
   }
-  async getModelCapabilities(modelId: number): Promise<ModelCapability> {
+  async getModelCapabilities(modelIds: number[]): Promise<Record<number, ModelCapability>> {
     return firstValueFrom(
-      this.http.post<ModelCapability>(
+      this.http.post<Record<number, ModelCapability>>(
         '/api/logosdb/get_model_capabilities',
-        { id: modelId },
+        { ids: modelIds },
       ),
     );
   }
 }
+
 export interface ModelCapability {
   id: number;
   model_id: number;

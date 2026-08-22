@@ -4,12 +4,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ModelCapabilitiesDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
@@ -119,10 +122,6 @@ public class ModelService {
         return Map.of("totalModels", modelRepository.count());
     }
 
-    private static boolean isAdmin(AuthContext auth) {
-        return Role.LOGOS_ADMIN.matches(auth.role()) || Role.APP_ADMIN.matches(auth.role());
-    }
-
     private static boolean isLogosAdmin(AuthContext auth) {
         return Role.LOGOS_ADMIN.matches(auth.role());
     }
@@ -145,7 +144,27 @@ public class ModelService {
         return m;
     }
 
-    public Optional<ModelCapabilities> getModelCapabilities(Integer modelId) {
-        return modelCapabilitiesRepository.findByModelId(modelId);
+    public Optional<ModelCapabilitiesDTO> getModelCapabilities(Integer modelId) {
+        return modelCapabilitiesRepository.findByModelId(modelId)
+            .map(ModelService::toModelCapabilitiesDTO);
+    }
+    
+    public Map<Integer, ModelCapabilitiesDTO> getModelCapabilities(List<Integer> modelIds) {
+        return modelCapabilitiesRepository.findByModelIdIn(modelIds)
+            .stream()
+            .map(ModelService::toModelCapabilitiesDTO)
+            .collect(Collectors.toMap(
+                ModelCapabilitiesDTO::modelId,
+                Function.identity()
+            ));
+    }
+    
+    private static ModelCapabilitiesDTO toModelCapabilitiesDTO(ModelCapabilities capabilities) {
+        return new ModelCapabilitiesDTO(
+            capabilities.getModelId(),
+            capabilities.getSupportsFunctionCalling(),
+            capabilities.getSupportsVision(),
+            capabilities.getSupportsReasoning()
+        );
     }
 }

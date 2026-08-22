@@ -1,0 +1,21 @@
+===============================================================================
+PROVENANCE NOTICE
+===============================================================================
+
+The following files:
+  - model_prices_and_context_window.json
+  - model_prices_and_context_window.schema.json
+
+are derived from the upstream project BerriAI/litellm: https://github.com/BerriAI/litellm.
+
+Upstream Repository: https://github.com
+Upstream File Paths:
+  - litellm/model_prices_and_context_window.json
+
+License Attribution:
+  MIT License, Copyright (c) 2023 Berri AI
+  The full license text is available in the accompanying LITELLM_LICENSE file.
+
+Vendored Snapshot Provenance:
+  - Upstream Commit: 539a61be080b9ed8100ef00fca77f5b6175d8853
+  - Snapshot Date: 2026-08-17
