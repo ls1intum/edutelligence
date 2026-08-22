@@ -214,7 +214,12 @@
             This model reports no window, so this is a conservative fallback.
           }
           Claude Code otherwise assumes 200,000 tokens for models it does not know and lets
-          requests overflow before it compacts, so the config below states the real number.
+          requests overflow before it compacts, and its compact threshold does not account
+          for the output reservation. So the config below states the real number minus both
+          the output reservation and a
+          <strong>{{ contextHeadroom() | number }}</strong>-token headroom: the CLI's token
+          estimate also runs slightly under what the worker counts, and the margin keeps its
+          auto-compact ahead of the hard limit.
         </p>
 
         @if (windowUnenforced()) {

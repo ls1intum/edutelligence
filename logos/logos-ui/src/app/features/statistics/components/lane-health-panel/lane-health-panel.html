@@ -53,6 +53,12 @@
                   @if (row.ttftLabel != null) {
                     <span class="stat-label">TTFT p95 <span class="stat-value" [style.color]="row.ttftColor">{{ row.ttftLabel }}</span></span>
                   }
+                  @if (row.lane.prefix_cache_hit_rate != null) {
+                    <span class="stat-label">Prefix hit <span class="stat-value neutral">{{ (row.lane.prefix_cache_hit_rate * 100).toFixed(1) }}%</span></span>
+                  }
+                  @if (row.lane.mtp_acceptance_rate != null) {
+                    <span class="stat-label">MTP accept <span class="stat-value neutral">{{ (row.lane.mtp_acceptance_rate * 100).toFixed(1) }}%</span></span>
+                  }
                   @if (row.lane.queue_waiting != null) {
                     <span class="stat-label">Queue <span class="stat-value neutral">{{ row.lane.queue_waiting }}</span></span>
                   }

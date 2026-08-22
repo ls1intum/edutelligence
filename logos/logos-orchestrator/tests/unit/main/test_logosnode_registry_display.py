@@ -46,11 +46,14 @@ def test_snapshot_with_backend_metrics_uses_scrape_values() -> None:
             "requests_running": 1.0,
             "gpu_cache_usage_percent": 42.5,
             "prefix_cache_hit_rate": 0.511,
+            "mtp_acceptance_rate": 0.611,
         },
     )
     snap = _lane_log_snapshot(lane)
     assert snap["queue_waiting"] == 2.0
     assert snap["requests_running"] == 1.0
+    assert snap["prefix_cache_hit_rate"] == 0.511
+    assert snap["mtp_acceptance_rate"] == 0.611
 
 
 def test_snapshot_without_backend_metrics_returns_none_for_waiting_and_running() -> None:
@@ -114,6 +117,23 @@ def test_render_summary_does_not_expose_active_counter() -> None:
     assert "active=" not in rendered
 
 
+def test_render_summary_shows_prefix_hit_and_mtp_acceptance() -> None:
+    snap = _snap(
+        backend_metrics={"prefix_cache_hit_rate": 0.511, "mtp_acceptance_rate": 0.61},
+    )
+    rendered = "\n".join(_render_lane_summary(snap))
+    assert "prefix_hit=51.1%" in rendered
+    assert "mtp_accept=61.0%" in rendered
+
+
+def test_render_summary_missing_hit_rates_show_dashes() -> None:
+    """Lanes without the metrics (ollama, idle vLLM) render -- placeholders."""
+    snap = _snap(backend_metrics={})
+    rendered = "\n".join(_render_lane_summary(snap))
+    assert "prefix_hit=--" in rendered
+    assert "mtp_accept=--" in rendered
+
+
 # ---------------------------------------------------------------------------
 # _render_lane_diff
 # ---------------------------------------------------------------------------
@@ -131,6 +151,7 @@ def _make_snap(**overrides) -> dict:
         "requests_running": None,
         "gpu_cache_usage_percent": None,
         "prefix_cache_hit_rate": None,
+        "mtp_acceptance_rate": None,
         "ttft_p95_seconds": None,
         "gpu_devices": "0",
     }

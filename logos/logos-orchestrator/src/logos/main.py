@@ -11,7 +11,7 @@ import os
 import re
 import secrets
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
@@ -491,10 +491,13 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
                 "gpu_cache_usage_percent_avg": None,
                 "gpu_cache_usage_percent_max": None,
                 "prefix_cache_hit_rate_avg": None,
+                "mtp_acceptance_rate_avg": None,
                 "_gpu_cache_usage_percent_sum": 0.0,
                 "_gpu_cache_usage_percent_count": 0,
                 "_prefix_cache_hit_rate_sum": 0.0,
                 "_prefix_cache_hit_rate_count": 0,
+                "_mtp_draft_tokens_total": 0.0,
+                "_mtp_accepted_tokens_total": 0.0,
             },
         )
 
@@ -528,6 +531,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
             "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
             "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
+            "mtp_acceptance_rate": _safe_float(backend_metrics.get("mtp_acceptance_rate")),
             "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
             "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
             "ttft_histogram": ttft_histogram,
@@ -597,6 +601,17 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
             entry["_prefix_cache_hit_rate_count"] += 1
 
+        # Token-weighted MTP aggregation: sum the cumulative draft/accepted
+        # token counters per model (an unweighted mean of per-lane rates would
+        # misstate the model rate when lanes have different draft volumes).
+        mtp_draft_tokens_total = _safe_float(backend_metrics.get("mtp_draft_tokens_total"))
+        if mtp_draft_tokens_total is not None:
+            entry["_mtp_draft_tokens_total"] += mtp_draft_tokens_total
+
+        mtp_accepted_tokens_total = _safe_float(backend_metrics.get("mtp_accepted_tokens_total"))
+        if mtp_accepted_tokens_total is not None:
+            entry["_mtp_accepted_tokens_total"] += mtp_accepted_tokens_total
+
         _merge_histogram_buckets(entry["ttft_histogram"], ttft_histogram)
 
     for entry in model_signals.values():
@@ -609,6 +624,11 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         prefix_sum = float(entry.pop("_prefix_cache_hit_rate_sum", 0.0) or 0.0)
         if prefix_count > 0:
             entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
+
+        mtp_draft = float(entry.pop("_mtp_draft_tokens_total", 0.0) or 0.0)
+        mtp_accepted = float(entry.pop("_mtp_accepted_tokens_total", 0.0) or 0.0)
+        if mtp_draft > 0:
+            entry["mtp_acceptance_rate_avg"] = mtp_accepted / mtp_draft
 
         entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
 
@@ -2262,6 +2282,24 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     )
 
 
+def _cached_prompt_tokens(usage: Dict[str, Any]) -> Optional[int]:
+    """Cached-prompt tokens as reported by the provider, or None when absent.
+
+    Handles both shapes that reach the completion log: the flattened dict
+    from ``extract_token_usage`` (``prompt_cached_tokens``) and the raw
+    streaming usage (``prompt_tokens_details.cached_tokens``).
+    """
+    cached = usage.get("prompt_cached_tokens")
+    if isinstance(cached, int) and not isinstance(cached, bool):
+        return cached
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if isinstance(cached, int) and not isinstance(cached, bool):
+            return cached
+    return None
+
+
 def _log_request_completion(
     model_id: int,
     request_id: Optional[str],
@@ -2274,6 +2312,7 @@ def _log_request_completion(
     duration_ms = (time.perf_counter() - start_time) * 1000.0
     prompt_tokens = usage.get("prompt_tokens", 0) or 0
     completion_tokens = usage.get("completion_tokens", 0) or 0
+    cached_tokens = _cached_prompt_tokens(usage)
     generation_s = duration_ms / 1000.0
     tps = (completion_tokens / generation_s) if generation_s > 0 and completion_tokens > 0 else 0.0
 
@@ -2302,6 +2341,10 @@ def _log_request_completion(
         )
         if tps > 0:
             parts.append(f"tps={tps:.1f}")
+    # Prefix-cache hit share of this request's prompt; only shown when the
+    # provider reports cached tokens (vLLM, Azure, OpenAI prompt caching).
+    if prompt_tokens > 0 and cached_tokens is not None:
+        parts.append(f"prefix_hit={cached_tokens / prompt_tokens:.0%}")
     logger.info(" ".join(parts))
 
 
@@ -3557,6 +3600,90 @@ async def route_and_execute(
         raise
 
 
+_CLIENT_DISCONNECT_POLL_SECONDS = 1.0
+
+
+async def _wait_for_client_disconnect(request: Request) -> None:
+    """Return once the client has gone away."""
+    while not await request.is_disconnected():
+        await asyncio.sleep(_CLIENT_DISCONNECT_POLL_SECONDS)
+
+
+async def _settle(task: asyncio.Task) -> Any:
+    """Cancel ``task`` and wait for its cleanup to finish.
+
+    The pipeline releases the scheduler slot in a ``finally`` block, so the
+    caller must not unwind before that has run — otherwise the lane stays
+    booked for a request that is already gone.
+    """
+    task.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        return await task
+    return None
+
+
+async def _discard_response(response: Any) -> None:
+    """Close a response nobody is left to read.
+
+    ``_streaming_response`` pulls the first chunk before handing the response
+    over, so by then the upstream connection is already open. Closing the body
+    iterator unwinds the executor's stream contexts instead of leaving them to
+    the garbage collector.
+    """
+    iterator = getattr(response, "body_iterator", None)
+    if iterator is None:
+        return
+    with suppress(Exception):
+        await iterator.aclose()
+
+
+async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
+    """Run ``route_and_execute``, dropping the work if the client leaves.
+
+    Uvicorn does not tear the handler down when a client vanishes mid-request,
+    so the call kept a worker generating a response nobody would read — a ghost
+    request holding a GPU lane for as long as the generation took. Cancelling
+    the task unwinds the executor's ``httpx.AsyncClient`` context, which closes
+    the upstream connection so vLLM aborts the sequence.
+
+    Whether the response ends up streaming is decided deep inside the pipeline:
+    resource mode can resolve to Whisper and answer synchronously even for
+    ``stream: true``. So this reacts to what came back rather than predicting
+    it. Once a streaming response is handed on, Starlette's own watcher takes
+    over — it listens for the disconnect while the body is consumed and cancels
+    the generator, which unwinds the same stream context.
+    """
+    work = asyncio.create_task(route_and_execute(**kwargs))
+    watcher = asyncio.create_task(_wait_for_client_disconnect(request))
+    try:
+        done, _ = await asyncio.wait({work, watcher}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        await _settle(work)
+        raise
+    finally:
+        watcher.cancel()
+
+    # The watcher may land in the same batch as a finished task. Its probe
+    # consumes the http.disconnect message, so a response produced in that
+    # same tick can no longer be handed to Starlette's watcher — drop it here
+    # instead of streaming it into a closed socket.
+    if work in done and watcher not in done:
+        return work.result()
+
+    await _discard_response(await _settle(work))
+
+    request_id = kwargs.get("request_id")
+    logger.info("Cancelled request %s: client disconnected before the response was ready", request_id)
+    _record_log_failure(
+        kwargs.get("log_id"),
+        request_id,
+        "Client disconnected before the response was ready; upstream request cancelled.",
+    )
+    # 499, as nginx uses it: the client closed the request. Nobody is left to
+    # read this, but the status keeps the access log honest.
+    return JSONResponse(status_code=499, content={"detail": "Client closed request"})
+
+
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
@@ -3590,7 +3717,7 @@ async def handle_sync_request(path: str, request: Request):
         _record_log_failure(log_id, request_id, msg, result_status="error")
         raise HTTPException(status_code=404, detail=msg)
 
-    return await route_and_execute(
+    execute_kwargs = dict(
         deployments=deployments,
         body=body,
         headers=headers,
@@ -3599,6 +3726,7 @@ async def handle_sync_request(path: str, request: Request):
         log_id=log_id,
         request_id=request_id,
     )
+    return await _execute_cancelling_on_disconnect(request, **execute_kwargs)
 
 
 async def auth_parse_log(request: Request, use_profile_auth: bool = False):

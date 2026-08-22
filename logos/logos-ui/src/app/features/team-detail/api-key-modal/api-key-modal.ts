@@ -104,11 +104,8 @@ export class ApiKeyModalComponent implements OnChanges {
   rotateLoading = signal(false);
   rotateError = signal('');
 
-  /** Live key value updated after a successful rotation. */
-  private liveKeyValue = signal<string | null>(null);
-
   effectiveKeyValue(): string | null {
-    return this.liveKeyValue() ?? this.key?.key_value ?? null;
+    return this.key?.key_value ?? null;
   }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -131,7 +128,6 @@ export class ApiKeyModalComponent implements OnChanges {
     this.fCustom.set(!!key.use_custom_permissions);
     this.saveError.set('');
     this.copied.set(false);
-    this.liveKeyValue.set(null);
     this.rotateConfirm.set(false);
     this.rotateError.set('');
   }
@@ -236,7 +232,12 @@ export class ApiKeyModalComponent implements OnChanges {
     this.rotateError.set('');
     try {
       const res = await this.svc.rotateApiKey(key.id);
-      this.liveKeyValue.set(res.api_key);
+      // Update the shared key object in place so a reopened modal shows the
+      // rotated value instead of the pre-rotation one from the parent's
+      // cached list. The object is the same reference held by the team-detail
+      // apiKeys signal and the tab that opened this modal (no refetch happens
+      // in between), so both keep displaying the new key.
+      key.key_value = res.api_key;
       this.rotateConfirm.set(false);
     } catch {
       this.rotateError.set('Failed to rotate key, please try again.');
