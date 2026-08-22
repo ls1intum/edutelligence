@@ -6,11 +6,12 @@ The following files:
   - model_prices_and_context_window.json
   - model_prices_and_context_window.schema.json
 
-are derived from the upstream project BerriAI/litellm: https://github.com/BerriAI/litellm.
+are derived from the upstream project BerriAI/litellm.
 
-Upstream Repository: https://github.com
+Upstream Repository: https://github.com/BerriAI/litellm
 Upstream File Paths:
   - litellm/model_prices_and_context_window.json
+  - litellm/model_prices_and_context_window.schema.json
 
 License Attribution:
   MIT License, Copyright (c) 2023 Berri AI
