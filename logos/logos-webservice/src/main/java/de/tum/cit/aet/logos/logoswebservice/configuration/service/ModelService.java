@@ -148,7 +148,7 @@ public class ModelService {
         return modelCapabilitiesRepository.findByModelId(modelId)
             .map(ModelService::toModelCapabilitiesDTO);
     }
-    
+
     public Map<Integer, ModelCapabilitiesDTO> getModelCapabilities(List<Integer> modelIds) {
         return modelCapabilitiesRepository.findByModelIdIn(modelIds)
             .stream()
@@ -158,7 +158,7 @@ public class ModelService {
                 Function.identity()
             ));
     }
-    
+
     private static ModelCapabilitiesDTO toModelCapabilitiesDTO(ModelCapabilities capabilities) {
         return new ModelCapabilitiesDTO(
             capabilities.getModelId(),
