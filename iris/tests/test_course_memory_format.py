@@ -5,14 +5,18 @@ from iris.domain.data.course_memory_dto import CourseMemorySource
 from iris.domain.ingestion.course_memory_ingestion_dto import (
     CourseMemoryIngestionExecutionDTO,
 )
+from iris.domain.ingestion.deletion_pipeline_execution_dto import (
+    CourseMemoryDeletionExecutionDto,
+)
 from iris.retrieval.course_memory_retrieval_utils import format_course_memories
 from iris.vector_database.course_memory_schema import CourseMemorySchema
 
 
-def _memory(source, message_id="m1", post_id="p1"):
+def _memory(source, message_id="m1", post_id="p1", course_id=3):
     return {
         CourseMemorySchema.QUESTION.value: "How do I submit?",
         CourseMemorySchema.ANSWER.value: "Use the submit button.",
+        CourseMemorySchema.COURSE_ID.value: course_id,
         CourseMemorySchema.POST_ID.value: post_id,
         CourseMemorySchema.MESSAGE_ID.value: message_id,
         CourseMemorySchema.CONVERSATION_ID.value: "c1",
@@ -38,16 +42,51 @@ def test_thread_resolved_is_labeled_unverified():
     assert not out.startswith("[Verified prior answer")
 
 
-def test_backlink_ids_present_in_output():
+def test_backlink_is_a_followable_thread_link():
     out = format_course_memories(
-        [_memory("TUTOR_WRITTEN", message_id="answer-42", post_id="post-7")]
+        [_memory("TUTOR_WRITTEN", post_id="7", course_id=3)],
+        base_url="https://artemis.example.com",
     )
-    assert "answer-42" in out
-    assert "c1" in out
-    # The thread backlink must point at the thread root, not the channel: the
-    # channel id is what conversation_id actually holds.
-    assert "thread: post-7" in out
-    assert "channel: c1" in out
+    # The link must open the thread itself, so it carries the channel as conversationId and
+    # the thread root as focusPostId — conversation_id holds the channel, not the thread.
+    assert (
+        "https://artemis.example.com/courses/3/communication"
+        "?conversationId=c1&focusPostId=7&openThreadOnFocus=1" in out
+    )
+
+
+def test_backlink_omits_raw_ids():
+    # A bare id is ambiguous (posts and answers have independent id sequences) and means
+    # nothing to a student, so it must not be offered as something to cite.
+    out = format_course_memories(
+        [_memory("TUTOR_WRITTEN", message_id="99", post_id="7")],
+        base_url="https://artemis.example.com",
+    )
+    assert "source message" not in out
+    assert "thread: 7" not in out
+
+
+def test_entry_without_base_url_has_no_link():
+    # Half a URL is worse than none: without a base url the entry is still usable, just
+    # not citable.
+    out = format_course_memories([_memory("TUTOR_WRITTEN")])
+    assert "http" not in out
+    assert "source:" not in out
+    assert "Use the submit button." in out
+
+
+def test_entry_missing_backlink_fields_has_no_link():
+    memory = _memory("TUTOR_WRITTEN")
+    del memory[CourseMemorySchema.CONVERSATION_ID.value]
+    out = format_course_memories([memory], base_url="https://artemis.example.com")
+    assert "http" not in out
+
+
+def _settings():
+    return {
+        "authenticationToken": "token",
+        "artemisBaseUrl": "http://localhost:8080",
+    }
 
 
 def _message(message_id, *, verified=False, resolves=False):
@@ -77,9 +116,92 @@ def test_ingestion_dto_fails_closed_on_public_channel():
         messageId="answer-1",
         thread=_thread("post-1", "answer-1"),
         source=CourseMemorySource.THREAD_RESOLVED,
-        settings=None,
+        settings=_settings(),
     )
     assert dto.is_public_channel is False
+
+
+def _public_channel_dto(value):
+    return CourseMemoryIngestionExecutionDTO(
+        courseId=1,
+        conversationId="c1",
+        postId="post-1",
+        messageId="answer-1",
+        thread=_thread("post-1", "answer-1"),
+        source=CourseMemorySource.THREAD_RESOLVED,
+        isPublicChannel=value,
+        settings=_settings(),
+    )
+
+
+def test_non_boolean_public_channel_is_rejected_not_coerced():
+    # Pydantic's lax mode reads "yes"/"TRUE"/1 as True. Coercing a malformed
+    # payload into permission to ingest would defeat the fail-closed default, so
+    # the field is strict: a non-boolean is a rejected payload, not a private
+    # thread in the store.
+    for value in ("yes", "true", "TRUE", 1, 0, "false"):
+        with pytest.raises(ValidationError):
+            _public_channel_dto(value)
+
+
+def test_boolean_public_channel_is_accepted():
+    assert _public_channel_dto(True).is_public_channel is True
+    assert _public_channel_dto(False).is_public_channel is False
+
+
+def test_ingestion_requires_settings():
+    # The worker reads settings.authentication_token before the pipeline (and its
+    # callback) exist, so a null must fail at request validation rather than in a
+    # background thread that can no longer report it.
+    with pytest.raises(ValidationError):
+        CourseMemoryIngestionExecutionDTO(
+            courseId=1,
+            conversationId="c1",
+            postId="post-1",
+            messageId="answer-1",
+            thread=_thread("post-1", "answer-1"),
+            source=CourseMemorySource.THREAD_RESOLVED,
+            settings=None,
+        )
+
+
+def test_deletion_requires_settings():
+    with pytest.raises(ValidationError):
+        CourseMemoryDeletionExecutionDto(courseId=1, postId="post-1", settings=None)
+
+
+def test_deletion_dto_accepts_settings():
+    dto = CourseMemoryDeletionExecutionDto(
+        courseId=1, postId="post-1", settings=_settings()
+    )
+    assert dto.post_id == "post-1"
+    assert dto.settings.artemis_base_url == "http://localhost:8080"
+
+
+def test_deletion_requires_exactly_one_scope():
+    # Neither scope would delete nothing while reporting success; both would leave the
+    # blast radius ambiguous. Reject at the boundary instead.
+    with pytest.raises(ValidationError):
+        CourseMemoryDeletionExecutionDto.model_validate(
+            {"courseId": 1, "settings": _settings()}
+        )
+    with pytest.raises(ValidationError):
+        CourseMemoryDeletionExecutionDto.model_validate(
+            {
+                "courseId": 1,
+                "postId": "7",
+                "conversationId": "c1",
+                "settings": _settings(),
+            }
+        )
+
+
+def test_deletion_accepts_channel_scope():
+    dto = CourseMemoryDeletionExecutionDto.model_validate(
+        {"courseId": 1, "conversationId": "c1", "settings": _settings()}
+    )
+    assert dto.conversation_id == "c1"
+    assert dto.post_id is None
 
 
 def _correction_dto(existing_answer):
@@ -91,7 +213,7 @@ def _correction_dto(existing_answer):
         thread=_thread("post-1", "answer-1"),
         source=CourseMemorySource.IRIS_CORRECTED,
         existingAnswer=existing_answer,
-        settings=None,
+        settings=_settings(),
     )
 
 
@@ -116,7 +238,7 @@ def _thread_dto(thread, message_id="answer-1"):
         messageId=message_id,
         thread=thread,
         source=CourseMemorySource.TUTOR_WRITTEN,
-        settings=None,
+        settings=_settings(),
     )
 
 
@@ -170,10 +292,12 @@ def test_colliding_post_and_answer_ids_are_accepted():
     # independent IDENTITY sequences, so a root post and one of its answers
     # routinely share a number. The anchor comes from the flags, never from an id
     # match, so the collision is irrelevant.
+    # Same id on both, which is the case the namespace qualification exists to
+    # survive: nothing may key off id equality.
     thread = [
-        _message("post-7"),
-        _message("answer-7", verified=True),
+        _message("7"),
+        _message("7", verified=True),
     ]
-    dto = _thread_dto(thread, message_id="answer-7")
+    dto = _thread_dto(thread, message_id="7")
     assert sum(m.is_verified_answer for m in dto.thread) == 1
-    assert dto.thread[1].id == "answer-7"
+    assert dto.thread[1].id == "7"

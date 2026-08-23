@@ -1,4 +1,5 @@
 from threading import Thread
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sentry_sdk import capture_exception
@@ -303,9 +304,16 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
 
 
 def run_course_memory_ingestion_worker(
-    dto: CourseMemoryIngestionExecutionDTO, variant_id: str
+    dto: CourseMemoryIngestionExecutionDTO,
+    variant_id: str,
+    start_delete_gen: Optional[int] = None,
 ):
-    """Run the course memory ingestion pipeline in a separate thread."""
+    """Run the course memory ingestion pipeline in a separate thread.
+
+    ``start_delete_gen`` is the thread's delete counter as sampled when the
+    request was accepted, so a delete accepted afterwards cannot be undone by
+    this ingestion even if the OS schedules this worker later.
+    """
     callback = None
     try:
         callback = CourseMemoryIngestionStatus(
@@ -325,7 +333,7 @@ def run_course_memory_ingestion_worker(
             variant=variant,
             local=is_local,
         )
-        pipeline()
+        pipeline(start_delete_gen=start_delete_gen)
     except Exception as e:
         logger.error("Error in course memory ingestion pipeline", exc_info=e)
         # If the pipeline never ran (e.g. Weaviate/variant init failed), its own
@@ -366,7 +374,16 @@ def course_memory_ingestion_webhook(dto: CourseMemoryIngestionExecutionDTO):
     )
     variant = validate_pipeline_variant(dto.settings, CourseMemoryIngestionPipeline)
 
-    thread = Thread(target=run_course_memory_ingestion_worker, args=(dto, variant))
+    # Sampled here, not in the worker: the thread may not be scheduled before a
+    # deletion request that arrives after this one completes, and an ingestion
+    # accepted earlier must never resurrect an entry deleted later.
+    start_delete_gen = CourseMemoryIngestionPipeline.delete_generation_for(
+        dto.post_id, dto.course_id
+    )
+    thread = Thread(
+        target=run_course_memory_ingestion_worker,
+        args=(dto, variant, start_delete_gen),
+    )
     thread.start()
 
 
@@ -393,7 +410,13 @@ def run_course_memory_deletion_worker(
             variant=variant,
             local=is_local,
         )
-        if pipeline.delete_for_thread(dto.post_id, dto.course_id):
+        if dto.conversation_id:
+            deleted = pipeline.delete_for_conversation(
+                dto.conversation_id, dto.course_id
+            )
+        else:
+            deleted = pipeline.delete_for_thread(dto.post_id, dto.course_id)
+        if deleted:
             callback.finish()
         else:
             callback.fail("Error while deleting course memory entry")
@@ -414,9 +437,10 @@ def course_memory_deletion_webhook(dto: CourseMemoryDeletionExecutionDto):
     """Webhook endpoint to remove a course memory entry when its source answer is
     deleted or its verification is retracted in Artemis."""
     logger.info(
-        "Course memory deletion webhook received: course=%s thread=%s",
+        "Course memory deletion webhook received: course=%s thread=%s channel=%s",
         dto.course_id,
         dto.post_id,
+        dto.conversation_id,
     )
     variant = validate_pipeline_variant(dto.settings, CourseMemoryIngestionPipeline)
 

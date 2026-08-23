@@ -159,6 +159,20 @@ def test_history_keeps_the_newest_messages_when_truncated(pipeline):
     assert texts == ["[Student] reply 5", "[Student] reply 6"]
 
 
+def test_zero_history_limit_sends_no_history(pipeline):
+    # ``history[-0:]`` is the whole list, so a zero limit must be handled
+    # explicitly or it would send the entire thread instead of nothing.
+    post = _post(
+        *[
+            {"id": index, "content": f"reply {index}", "authorRole": "STUDENT"}
+            for index in range(2, 5)
+        ]
+    )
+    state = SimpleNamespace(dto=SimpleNamespace(post=post))
+
+    assert pipeline.get_recent_history_from_dto(state, limit=0) == []
+
+
 def test_redacted_replies_stay_in_the_history_as_placeholders(pipeline):
     post = _post(
         {"id": 2, "content": None, "redacted": True, "authorRole": "STUDENT"},

@@ -9,6 +9,7 @@ from iris.domain.data.thread_message_dto import ThreadMessageDTO
 from iris.pipeline.course_memory_ingestion_pipeline import (
     CourseMemoryIngestionPipeline,
 )
+from iris.pipeline.shared.utils import REDACTED_ANSWER_PLACEHOLDER
 
 # pylint: disable=protected-access
 
@@ -175,6 +176,45 @@ def test_format_thread_marks_every_resolving_message():
 
     assert sum("VERIFIED ANSWER" in line for line in lines) == 2
     assert "VERIFIED ANSWER" not in lines[0] and "VERIFIED ANSWER" not in lines[2]
+
+
+def test_format_thread_renders_redacted_messages_as_placeholder():
+    # A participant who opted out of AI keeps their slot so the thread still reads in order,
+    # but none of their words reach the model.
+    dto = SimpleNamespace(
+        thread=[
+            ThreadMessageDTO(id="post-1", authorRole="student", content="Q?"),
+            ThreadMessageDTO(id="answer-2", authorRole="student", redacted=True),
+            ThreadMessageDTO(
+                id="answer-3",
+                authorRole="tutor",
+                content="verified answer",
+                isVerifiedAnswer=True,
+            ),
+        ],
+        message_id="answer-3",
+    )
+    pipeline = _pipeline_with_mocked_llm(dto)
+
+    lines = pipeline._format_thread().split("\n")
+
+    assert len(lines) == 3
+    assert REDACTED_ANSWER_PLACEHOLDER in lines[1]
+    # The placeholder is never presented as part of the answer.
+    assert "VERIFIED ANSWER" not in lines[1]
+
+
+def test_redacted_message_carries_no_content_over_the_wire():
+    # Artemis serializes with NON_EMPTY, so an empty content is dropped from the payload
+    # entirely; the field has to survive that as a default rather than 422 the request.
+    message = ThreadMessageDTO.model_validate(
+        {"id": "answer-2", "authorRole": "student", "redacted": True}
+    )
+
+    assert message.content == ""
+    assert message.redacted is True
+    # Flags are cleared by Artemis; a placeholder must never anchor the extracted answer.
+    assert message.is_verified_answer is False and message.resolves_post is False
 
 
 def test_format_thread_ignores_id_collisions():

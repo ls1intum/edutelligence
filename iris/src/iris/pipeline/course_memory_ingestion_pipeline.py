@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
+from weaviate.classes.query import Filter
 from weaviate.util import generate_uuid5
 
 from iris.common.logging_config import get_logger
@@ -26,6 +27,7 @@ from ..llm.llm_configuration import LlmConfigurationError, resolve_model
 from ..pipeline.prompts.course_memory_prompts import (
     course_memory_extraction_system_prompt,
 )
+from ..pipeline.shared.utils import REDACTED_ANSWER_PLACEHOLDER
 from ..tracing import observe
 from ..vector_database.course_memory_schema import (
     CourseMemorySchema,
@@ -136,8 +138,24 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
                 retrieval_embedding_model,
             )
 
+    @classmethod
+    def delete_generation_for(cls, post_id: str, course_id: int) -> int:
+        """Current delete counter for a thread, for sampling at webhook accept time.
+
+        The webhook returns 202 and hands the work to a background thread, so a
+        delete accepted later can still run first. Sampling the counter when the
+        request is *accepted* — rather than when the worker happens to be
+        scheduled — makes the ordering follow the requests, not the scheduler.
+        """
+        return _current_delete_generation(cls._deterministic_uuid(post_id, course_id))
+
     @observe(name="Course Memory Ingestion Pipeline")
-    def __call__(self) -> bool:
+    def __call__(self, start_delete_gen: Optional[int] = None) -> bool:
+        """Run the ingestion.
+
+        ``start_delete_gen`` is the delete counter sampled by the caller when the
+        request was accepted; omitted, it is sampled here instead.
+        """
         try:
             # Kill-switch: disabling course memory must stop writes, not just
             # reads. (Deletion stays available so operators can purge entries
@@ -164,8 +182,11 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
 
             # Snapshot the delete counter before the slow extraction so a delete
             # arriving during it can be detected at write time (see upsert).
-            obj_uuid = self._deterministic_uuid(self.dto.post_id, self.dto.course_id)
-            start_delete_gen = _current_delete_generation(obj_uuid)
+            if start_delete_gen is None:
+                obj_uuid = self._deterministic_uuid(
+                    self.dto.post_id, self.dto.course_id
+                )
+                start_delete_gen = _current_delete_generation(obj_uuid)
 
             self.callback.update()
             question, answer = self.extract_qa()
@@ -293,6 +314,10 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
         pick them out among ordinary replies. On long threads only
         ``context_message_limit`` messages are kept, but the root post (the
         original question) and all flagged messages are always retained.
+
+        Messages whose author opted out of AI keep their slot but carry the shared
+        placeholder instead of their text, so the transcript still reads in order
+        without their words ever reaching the model.
         """
         thread = self._truncate_thread(self.dto.thread)
         lines = []
@@ -303,7 +328,10 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
             marker = (
                 f" — {self.VERIFIED_ANSWER_TAG}" if self._is_verified(message) else ""
             )
-            lines.append(f"[{role}{marker}]: {message.content}")
+            content = (
+                REDACTED_ANSWER_PLACEHOLDER if message.redacted else message.content
+            )
+            lines.append(f"[{role}{marker}]: {content}")
         return "\n".join(lines)
 
     def _truncate_thread(self, thread):
@@ -436,6 +464,45 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
             return True
         except Exception as e:  # noqa: BLE001
             logger.error("Error deleting course memory: %s", e, exc_info=True)
+            return False
+
+    def delete_for_conversation(self, conversation_id: str, course_id: int) -> bool:
+        """Delete every entry mined from a channel.
+
+        Called when the channel is deleted in Artemis or stops being public. Channel
+        eligibility is only checked when an entry is written, so without this an entry
+        would keep being served after its source stopped being readable by the course.
+
+        Unlike :meth:`delete_for_thread` this cannot bump the per-key delete counters:
+        the keys are not known up front, and an ingestion already in flight for one of
+        those threads may still land afterwards. Deleting a channel is a rare
+        administrative action and Artemis stops emitting ingestions for it at the same
+        moment, so the window is small; re-running the deletion clears any straggler.
+        """
+        try:
+            with _write_coordination_lock, batch_update_lock:
+                result = self.collection.data.delete_many(
+                    where=Filter.by_property(
+                        CourseMemorySchema.CONVERSATION_ID.value
+                    ).equal(conversation_id)
+                    & Filter.by_property(CourseMemorySchema.COURSE_ID.value).equal(
+                        course_id
+                    )
+                )
+            logger.info(
+                "Deleted %s course memory entries for channel %s in course %s",
+                getattr(result, "successful", "?"),
+                conversation_id,
+                course_id,
+            )
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Error deleting course memory for channel %s: %s",
+                conversation_id,
+                e,
+                exc_info=True,
+            )
             return False
 
     def chunk_data(self, path: str) -> List[Dict[str, str]]:

@@ -87,7 +87,9 @@ def test_ingestion_webhook_logs_receipt_before_dispatch(monkeypatch, caplog):
 
 
 def test_deletion_webhook_logs_receipt(monkeypatch, caplog):
-    dto = SimpleNamespace(course_id=42, post_id="post-7", settings=None)
+    dto = SimpleNamespace(
+        course_id=42, post_id="post-7", conversation_id=None, settings=None
+    )
     monkeypatch.setattr(webhooks, "validate_pipeline_variant", lambda *_: "default")
     monkeypatch.setattr(webhooks, "Thread", lambda **kw: MagicMock())
 
@@ -96,6 +98,21 @@ def test_deletion_webhook_logs_receipt(monkeypatch, caplog):
 
     assert "Course memory deletion webhook received" in caplog.text
     assert "course=42" in caplog.text and "thread=post-7" in caplog.text
+
+
+def test_deletion_webhook_logs_channel_scope(monkeypatch, caplog):
+    # A channel-wide purge and a single-thread retraction have very different blast
+    # radii, so the log line has to say which one was asked for.
+    dto = SimpleNamespace(
+        course_id=42, post_id=None, conversation_id="channel-3", settings=None
+    )
+    monkeypatch.setattr(webhooks, "validate_pipeline_variant", lambda *_: "default")
+    monkeypatch.setattr(webhooks, "Thread", lambda **kw: MagicMock())
+
+    with caplog.at_level(logging.INFO, logger="iris.web.routers.webhooks"):
+        webhooks.course_memory_deletion_webhook(dto)
+
+    assert "channel=channel-3" in caplog.text
 
 
 def _skippable_pipeline(is_public_channel: bool):

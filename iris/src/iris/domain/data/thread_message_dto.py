@@ -20,7 +20,9 @@ class ThreadMessageDTO(BaseModel):
 
     id: str
     author_role: str = Field(alias="authorRole")
-    content: str
+    # Defaulted, not required: a redacted message carries no content, and Artemis serializes the
+    # payload with NON_EMPTY, which drops an empty string from the wire entirely.
+    content: str = ""
     created_at: Optional[str] = Field(default=None, alias="createdAt")
     is_iris_draft: bool = Field(default=False, alias="isIrisDraft")
     # The answer whose event triggered this ingestion (Trigger A: the just-verified
@@ -29,3 +31,8 @@ class ThreadMessageDTO(BaseModel):
     # The durable ``resolvesPost`` flag. A thread may carry several, since Artemis
     # marks a post resolved if *any* of its answers resolves it.
     resolves_post: bool = Field(default=False, alias="resolvesPost")
+    # The author opted out of having their content used by AI. ``content`` is empty and the
+    # message is rendered as a placeholder: Iris may know a message sits at this point in the
+    # thread, but never sees its text. Artemis clears the flags above on redacted messages, so a
+    # placeholder can never be pulled into the extracted answer.
+    redacted: bool = Field(default=False)

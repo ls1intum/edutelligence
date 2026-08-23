@@ -1,10 +1,11 @@
 from typing import List, Optional
 
-from pydantic import Field, model_validator
+from pydantic import Field, StrictBool, model_validator
 
 from iris.domain.data.course_memory_dto import CourseMemorySource
 from iris.domain.data.thread_message_dto import ThreadMessageDTO
 from iris.domain.pipeline_execution_dto import PipelineExecutionDTO
+from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
 
 
 class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
@@ -15,6 +16,11 @@ class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
     ``IRIS_AUTO`` / ``TUTOR_WRITTEN`` / ``IRIS_CORRECTED``; Trigger B (thread
     resolved) sends ``THREAD_RESOLVED``.
     """
+
+    # Narrowed from the optional base field: the ingestion worker reads
+    # settings.authentication_token / artemis_base_url before the pipeline exists, so a
+    # null would fail in a background thread with no callback left to report it.
+    settings: PipelineExecutionSettingsDTO
 
     course_id: int = Field(alias="courseId")
     # The channel the thread lives in, NOT the thread itself. Backlinking only.
@@ -29,7 +35,10 @@ class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
     verified_by: Optional[str] = Field(default=None, alias="verifiedBy")
     verified_at: Optional[str] = Field(default=None, alias="verifiedAt")
     # Fail closed: an omitted/malformed flag must NOT ingest private content.
-    is_public_channel: bool = Field(default=False, alias="isPublicChannel")
+    # Strict on purpose — Pydantic's lax mode coerces "yes"/"TRUE"/1 to True, which
+    # would turn a malformed payload into permission to ingest a private channel.
+    # Rejecting it is the fail-closed reading; the default only covers omission.
+    is_public_channel: StrictBool = Field(default=False, alias="isPublicChannel")
     existing_answer: Optional[str] = Field(default=None, alias="existingAnswer")
 
     @model_validator(mode="after")

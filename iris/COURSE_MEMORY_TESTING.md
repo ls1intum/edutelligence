@@ -20,12 +20,16 @@ All commands assume you are in `edutelligence/iris`.
 poetry run pytest tests/test_course_memory_*.py -q
 ```
 
-15 tests cover:
+64 tests cover:
 
 - schema index flags (`question` searchable, all metadata not),
 - retrieval threshold filtering, course scoping, graceful degradation, backlink ids,
 - LLM Q/A extraction JSON parsing (incl. the correction path),
-- upsert insert‑vs‑replace + question‑only embedding + non‑public‑channel skip.
+- upsert insert‑vs‑replace keyed on `postId` + question‑only embedding, provenance
+  (Trigger B never downgrades a tutor-verified entry), and the delete/ingest race,
+- wire-contract validation: strict `isPublicChannel`, required `settings`, exactly one
+  answer anchor, non-blank `existingAnswer` for corrections,
+- non‑public‑channel and feature‑disabled skips.
 
 Run the full suite to confirm no regressions:
 
@@ -43,8 +47,9 @@ collection so your Weaviate is left clean.
 
 It verifies: ingest + retrieve with backlink ids, **course scoping** (one course's
 entries never leak into another), **correction overwrite** (re‑ingesting the same
-`messageId` updates the answer in place — no duplicate), and **graceful degradation**
-(embedding error → empty result, no crash).
+`postId` updates the answer in place — no duplicate, even though the corrected answer
+carries a new `messageId`), and **graceful degradation** (embedding error → empty
+result, no crash).
 
 ### Prerequisites
 
@@ -99,10 +104,12 @@ def make_ingestion(dto):
 
 
 class DTO:
-    def __init__(self, message_id, course_id, source, verified_by=None):
+    def __init__(self, post_id, message_id, course_id, source, verified_by=None):
+        # post_id is the upsert key (the thread root); message_id is provenance.
+        self.post_id = post_id
         self.message_id = message_id
         self.course_id = course_id
-        self.conversation_id = f"conv-{message_id}"
+        self.conversation_id = f"channel-{course_id}"
         self.source = source
         self.verified_at = "2026-06-21T10:00:00Z"
         self.verified_by = verified_by
@@ -115,17 +122,17 @@ settings.course_memory.similarity_threshold = 0.0
 
 try:
     print("1) Ingest two verified Q/A pairs for course", COURSE)
-    make_ingestion(DTO("msg-1", COURSE, CourseMemorySource.THREAD_RESOLVED)).upsert(
+    make_ingestion(DTO("post-1", "answer-1", COURSE, CourseMemorySource.THREAD_RESOLVED)).upsert(
         "How do I submit the programming exercise?",
         "Push to your personal repository before the deadline; the latest push is graded.",
     )
-    make_ingestion(DTO("msg-2", COURSE, CourseMemorySource.TUTOR_WRITTEN)).upsert(
+    make_ingestion(DTO("post-2", "answer-2", COURSE, CourseMemorySource.TUTOR_WRITTEN)).upsert(
         "When is the exam?",
         "The exam is on July 30th, 14:00, in lecture hall MI HS1.",
     )
 
     print("2) Ingest one entry for a DIFFERENT course (scoping check)")
-    make_ingestion(DTO("msg-9", OTHER_COURSE, CourseMemorySource.THREAD_RESOLVED)).upsert(
+    make_ingestion(DTO("post-9", "answer-9", OTHER_COURSE, CourseMemorySource.THREAD_RESOLVED)).upsert(
         "How do I submit?", "Other course answer — must NOT appear for course 90001."
     )
 
@@ -137,23 +144,25 @@ try:
     results = retr(chat_history=[], student_query="how to submit exercise",
                    course_id=COURSE, rewrite=False)
     for r in results:
-        print(f"   - [src msg={r['message_id']} thread={r['conversation_id']}] "
+        print(f"   - [thread={r['post_id']} src msg={r['message_id']}] "
               f"Q={r['question']!r} A={r['answer'][:40]!r}...")
 
     print("\n4) Course scoping: querying OTHER_COURSE returns only its own entry:")
     other = retr(chat_history=[], student_query="how to submit", course_id=OTHER_COURSE, rewrite=False)
-    print("   message_ids:", [r["message_id"] for r in other],
-          "->", "OK" if all(r["message_id"] == "msg-9" for r in other) else "LEAK!")
+    print("   post_ids:", [r["post_id"] for r in other],
+          "->", "OK" if all(r["post_id"] == "post-9" for r in other) else "LEAK!")
 
-    print("\n5) Correction overwrite: re-ingest msg-2 with a corrected answer + source IRIS_CORRECTED")
-    make_ingestion(DTO("msg-2", COURSE, CourseMemorySource.IRIS_CORRECTED, verified_by="tutor-42")).upsert(
+    print("\n5) Correction overwrite: re-ingest thread post-2 with a corrected answer + source IRIS_CORRECTED")
+    # New answer message on the SAME thread: keyed on post_id, so it replaces
+    # the entry rather than adding a near-duplicate.
+    make_ingestion(DTO("post-2", "answer-2b", COURSE, CourseMemorySource.IRIS_CORRECTED, verified_by="tutor-42")).upsert(
         "When is the exam?", "CORRECTED: the exam moved to August 5th, 09:00, MI HS2.",
     )
     count = db.course_memory.aggregate.over_all(total_count=True).total_count
     after = retr(chat_history=[], student_query="when is the exam", course_id=COURSE, rewrite=False)
-    exam = [r for r in after if r["message_id"] == "msg-2"]
-    print(f"   total objects in collection = {count} (no duplicate for msg-2)")
-    print(f"   msg-2 answer now = {exam[0]['answer']!r}")
+    exam = [r for r in after if r["post_id"] == "post-2"]
+    print(f"   total objects in collection = {count} (no duplicate for post-2)")
+    print(f"   post-2 answer now = {exam[0]['answer']!r}")
 
     print("\n6) Graceful degradation: embedding service raises -> retrieval returns []")
     class Boom:
@@ -179,12 +188,12 @@ poetry run python /tmp/cm_verify.py
 
 ```
 3) Retrieve for course 90001 (rewrite off, no LLM):
-   - [src msg=msg-1 thread=conv-msg-1] Q='How do I submit the programming exercise?' A='Push to your personal repository before '...
-   - [src msg=msg-2 thread=conv-msg-2] Q='When is the exam?' A='The exam is on July 30th, 14:00, in lect'...
+   - [thread=post-1 src msg=answer-1] Q='How do I submit the programming exercise?' A='Push to your personal repository before '...
+   - [thread=post-2 src msg=answer-2] Q='When is the exam?' A='The exam is on July 30th, 14:00, in lect'...
 
-4) Course scoping: ... message_ids: ['msg-9'] -> OK
-5) Correction overwrite: total objects in collection = 3 (no duplicate for msg-2)
-   msg-2 answer now = 'CORRECTED: the exam moved to August 5th, 09:00, MI HS2.'
+4) Course scoping: ... post_ids: ['post-9'] -> OK
+5) Correction overwrite: total objects in collection = 3 (no duplicate for post-2)
+   post-2 answer now = 'CORRECTED: the exam moved to August 5th, 09:00, MI HS2.'
 6) Graceful degradation: ... result: []
 ALL CHECKS DONE ✅
 ```
@@ -223,11 +232,11 @@ curl -X POST http://localhost:8000/api/v1/webhooks/course-memory/ingest \
   -H "Authorization: secret" -H "Content-Type: application/json" \
   -d '{
     "settings": {"authenticationToken":"tok","artemisBaseUrl":"http://localhost:9999","selection":"CLOUD_AI","variant":"default"},
-    "courseId": 1, "conversationId": "c1", "messageId": "m1",
+    "courseId": 1, "conversationId": "c1", "postId": "post-1", "messageId": "answer-1",
     "source": "THREAD_RESOLVED", "isPublicChannel": true,
     "thread": [
-      {"id":"m0","authorRole":"student","content":"How do I submit the exercise?"},
-      {"id":"m1","authorRole":"tutor","content":"Push to your repo before the deadline; the latest push is graded."}
+      {"id":"post-1","authorRole":"student","content":"How do I submit the exercise?"},
+      {"id":"answer-1","authorRole":"tutor","content":"Push to your repo before the deadline; the latest push is graded.","isVerifiedAnswer":true,"resolvesPost":true}
     ]
   }'
 ```
@@ -235,8 +244,16 @@ curl -X POST http://localhost:8000/api/v1/webhooks/course-memory/ingest \
 - Returns `202 Accepted` immediately; the pipeline runs in a background thread.
 - The status callback POSTs to `artemisBaseUrl/.../status`. If no Artemis is
   listening, that failure is **logged and non-fatal** — the entry still stores.
-- **Correction test:** re-send the same `messageId` with `"source": "IRIS_CORRECTED"`
-  and `"existingAnswer": "..."` to confirm the entry is overwritten in place (no duplicate).
+- **Correction test:** re-send the same `postId` with `"source": "IRIS_CORRECTED"` and a
+  non-blank `"existingAnswer": "..."` to confirm the entry is overwritten in place (no
+  duplicate), even with a different `messageId`.
+- **Validation tests (expect `422`, nothing stored):** drop `postId`; send
+  `"isPublicChannel": "true"` as a string; send a thread where no message sets
+  `isVerifiedAnswer`/`resolvesPost`; set two messages to `isVerifiedAnswer`; send
+  `IRIS_CORRECTED` with a blank `existingAnswer`.
+- **Deletion test:** `POST /api/v1/webhooks/course-memory/delete` with
+  `{"settings": {...}, "courseId": 1, "postId": "post-1"}` — the delete key is the
+  thread root, not the answer message.
 
 ### Confirm retrieval via the autonomous tutor
 
@@ -269,7 +286,9 @@ tool calls.
   lower `course_memory.similarity_threshold` in `application.local.yml` while testing if
   retrieval comes back empty. (Empirical calibration is future work.)
 - **Public channels only.** Ingestion with `"isPublicChannel": false` is skipped by
-  design; Artemis should only emit public-channel events.
+  design; Artemis should only emit public-channel events. The field is a **strict**
+  boolean — `"true"` or `1` is rejected with a `422` rather than coerced, so a malformed
+  payload can never be read as permission to ingest a private thread.
 
 ## Configuration reference
 

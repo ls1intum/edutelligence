@@ -176,6 +176,43 @@ def test_ingestion_writes_when_no_delete_during_extraction():
     pipeline.collection.data.insert.assert_called_once()
 
 
+def test_accepted_generation_survives_a_late_worker_start():
+    """An ingestion accepted before a delete must not resurrect the entry.
+
+    The webhook returns 202 and hands the run to a background thread, so the
+    worker can start *after* a later-accepted delete already finished. Sampling
+    the counter at accept time is what keeps the ordering tied to the requests.
+    """
+    pipeline = _make_pipeline(exists=False)
+    # Accept time: the request is queued and the counter sampled here.
+    accepted_gen = CourseMemoryIngestionPipeline.delete_generation_for("post-1", 7)
+    # A deletion accepted afterwards runs to completion first.
+    pipeline.delete_for_thread("post-1", 7)
+    # Only now is the ingestion worker scheduled.
+    pipeline.dto.is_public_channel = True
+    pipeline.tokens = []
+    pipeline.callback = _real_callback()
+    pipeline.extract_qa = MagicMock(return_value=("q", "a"))
+
+    assert pipeline(start_delete_gen=accepted_gen) is True
+
+    pipeline.collection.data.insert.assert_not_called()
+    pipeline.collection.data.replace.assert_not_called()
+
+
+def test_generation_sampled_in_the_worker_still_writes_without_a_delete():
+    """Omitting the accept-time sample falls back to sampling inside the run."""
+    pipeline = _make_pipeline(exists=False, post_id="post-fresh")
+    pipeline.dto.is_public_channel = True
+    pipeline.tokens = []
+    pipeline.callback = _real_callback()
+    pipeline.extract_qa = MagicMock(return_value=("q", "a"))
+
+    assert pipeline() is True
+
+    pipeline.collection.data.insert.assert_called_once()
+
+
 def test_delete_targets_the_thread_entry():
     """Un-resolving or deleting the answer removes the thread's single entry."""
     pipeline = _make_pipeline(exists=True)

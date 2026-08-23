@@ -486,6 +486,10 @@ class AutonomousTutorPipeline(
         into the answer it posted.
         """
         effective_limit = limit if limit is not None else self.get_history_limit(state)
+        # ``history[-0:]`` is the whole list, so a zero limit would send the entire
+        # thread instead of none of it.
+        if effective_limit <= 0:
+            return []
         history = [
             PyrisMessage(
                 sender=(
