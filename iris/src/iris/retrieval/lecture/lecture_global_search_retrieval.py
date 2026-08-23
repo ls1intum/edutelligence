@@ -27,6 +27,10 @@ from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
@@ -165,6 +169,7 @@ class LectureGlobalSearchRetrieval:
         self.llm_embedding = LlmRequestHandler(model_id=embedding_model)
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
+        self.page_chunk_collection = init_lecture_unit_page_chunk_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
         self.reranker_model_id = resolve_reranker_model(local)
 
@@ -221,11 +226,16 @@ class LectureGlobalSearchRetrieval:
         seg_objects, trans_objects = self._search_lanes(
             query, vector, alpha, limit, course_ids, auto_cut, telemetry
         )
-        units_by_id, start_times = self._fetch_metadata(
+        units_by_id, start_times, slides_by_display_page = self._fetch_metadata(
             seg_objects, trans_objects, telemetry
         )
         scored = self._map_candidates(
-            seg_objects, trans_objects, units_by_id, start_times, telemetry
+            seg_objects,
+            trans_objects,
+            units_by_id,
+            start_times,
+            slides_by_display_page,
+            telemetry,
         )
         deduped = _dedupe_by_snippet(scored, telemetry)
         top = self._rerank_and_gate(query, deduped, limit, auto_cut, telemetry)
@@ -281,8 +291,12 @@ class LectureGlobalSearchRetrieval:
         seg_objects: list[Any],
         trans_objects: list[Any],
         telemetry: "_SearchTelemetry",
-    ) -> tuple[dict[int, Any], dict[tuple[int, int], float]]:
-        """Fetch lecture-unit metadata and slide-sync timestamps in parallel."""
+    ) -> tuple[
+        dict[int, Any],
+        dict[tuple[int, int], float],
+        dict[tuple[int, int], list[Any]],
+    ]:
+        """Fetch unit metadata, slide-sync timestamps and slide visibility."""
         seg_unit_ids: set[int] = set()
         unit_page_pairs: list[tuple[int, int]] = []
         for obj in seg_objects:
@@ -300,17 +314,21 @@ class LectureGlobalSearchRetrieval:
         all_unit_ids = list(seg_unit_ids | trans_unit_ids)
 
         t_meta = time.perf_counter()
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
+        with TracedThreadPoolExecutor(max_workers=3) as executor:
             lecture_unit_future = executor.submit(
                 self._fetch_lecture_units, all_unit_ids
             )
             ts_future = executor.submit(
                 self._fetch_transcription_start_times, unit_page_pairs
             )
+            slide_future = executor.submit(
+                self._fetch_slides_by_display_page, list(trans_unit_ids)
+            )
         units_by_id = lecture_unit_future.result()
         start_times = ts_future.result()
+        slides_by_display_page = slide_future.result()
         telemetry.meta_ms = (time.perf_counter() - t_meta) * 1000
-        return units_by_id, start_times
+        return units_by_id, start_times, slides_by_display_page
 
     def _map_candidates(
         self,
@@ -318,6 +336,7 @@ class LectureGlobalSearchRetrieval:
         trans_objects: list[Any],
         units_by_id: dict[int, Any],
         start_times: dict[tuple[int, int], float],
+        slides_by_display_page: dict[tuple[int, int], list[Any]],
         telemetry: "_SearchTelemetry",
     ) -> list[tuple[float, LectureSearchResultDTO]]:
         """Map raw hits to scored DTOs, recording every drop with its reason.
@@ -336,7 +355,9 @@ class LectureGlobalSearchRetrieval:
                 continue
             scored.append((_fused_score(obj), dto))
         for obj in trans_objects:
-            dto, drop_reason = self._transcription_to_dto(obj.properties, units_by_id)
+            dto, drop_reason = self._transcription_to_dto(
+                obj.properties, units_by_id, slides_by_display_page
+            )
             if dto is None:
                 telemetry.record_drop("trans", drop_reason, obj.properties)
                 continue
@@ -618,6 +639,43 @@ class LectureGlobalSearchRetrieval:
             )
         return result
 
+    def _fetch_slides_by_display_page(
+        self, unit_ids: list[int]
+    ) -> dict[tuple[int, int], list[Any]]:
+        """Group each unit's slides by the display page they are shown on.
+
+        A display page can carry several physical slides (an overlay build),
+        and a transcription segment is only visible when every slide behind
+        its display page is visible, so all of them are returned per key.
+        """
+        if not unit_ids:
+            return {}
+        chunks = self.page_chunk_collection.query.fetch_objects(
+            filters=Filter.by_property(
+                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+            ).contains_any(unit_ids),
+            limit=10_000,
+            return_properties=[
+                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+            ],
+        ).objects
+        by_physical_page: dict[tuple[int, int], dict[int, Any]] = {}
+        for chunk in chunks:
+            properties = chunk.properties
+            unit_id = properties.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
+            physical_page = properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)
+            display_page = properties.get(
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value, physical_page
+            )
+            if unit_id is None or display_page is None or physical_page is None:
+                continue
+            key = (int(unit_id), int(display_page))
+            by_physical_page.setdefault(key, {})[int(physical_page)] = properties
+        return {key: list(slides.values()) for key, slides in by_physical_page.items()}
+
     @staticmethod
     def _segment_to_dto(
         props: dict[str, Any],
@@ -692,6 +750,7 @@ class LectureGlobalSearchRetrieval:
     def _transcription_to_dto(
         props: dict[str, Any],
         lecture_unit_by_id: dict[int, Any],
+        slides_by_display_page: dict[tuple[int, int], list[Any]] | None = None,
     ) -> tuple[LectureSearchResultDTO | None, str | None]:
         """Map a transcription hit to a DTO; on failure return (None, drop_reason)."""
         snippet = props.get(
@@ -704,7 +763,20 @@ class LectureGlobalSearchRetrieval:
         lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
         if lecture_unit is None:
             return None, "missing_unit_metadata"
-        if not is_transcription_visible(props, lecture_unit):
+        # A transcription segment inherits the visibility of the slide shown
+        # over it: an unhidden segment on a hidden overlay slide must stay
+        # hidden, so the associated slides are part of the check.
+        associated_slides = None
+        if slides_by_display_page:
+            page_number = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
+            if page_number is not None:
+                try:
+                    associated_slides = slides_by_display_page.get(
+                        (int(unit_id), int(page_number))
+                    )
+                except (TypeError, ValueError):
+                    return None, "bad_page_or_ids"
+        if not is_transcription_visible(props, lecture_unit, associated_slides):
             return None, "transcription_hidden"
 
         course_id = props.get(LectureTranscriptionSchema.COURSE_ID.value)
