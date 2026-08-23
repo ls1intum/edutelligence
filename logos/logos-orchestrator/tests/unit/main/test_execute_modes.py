@@ -70,6 +70,46 @@ async def test_execute_resource_mode_failure_records_error(monkeypatch):
     assert exc.value.status_code == 503
 
 
+async def test_execute_resource_mode_uses_sync_response_for_resolved_whisper_alias(monkeypatch):
+    """A client alias resolving to Whisper must not be framed as SSE."""
+
+    class Result:
+        success = True
+        error = None
+        execution_context = MagicMock(model_name="whisper-1")
+        provider_id = 1
+        model_id = 10
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-whisper-alias", "provider_type": "cloud"}
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type("P", (), {"process": AsyncMock(return_value=Result())}),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+    sync_response = AsyncMock(return_value={"mode": "sync"})
+    streaming_response = AsyncMock(return_value={"mode": "stream"})
+    monkeypatch.setattr(main, "_sync_response", sync_response)
+    monkeypatch.setattr(main, "_streaming_response", streaming_response)
+
+    response = await main._execute_resource_mode(
+        deployments=[{"model_id": 10, "provider_id": 1, "type": "cloud"}],
+        body={"model": "transcription-production", "stream": True},
+        headers={"h": "v"},
+        auth=MagicMock(key_value="lg-test", api_key_id=1, cloud_rl=None, local_rl=None),
+        log_id=1,
+        is_async_job=False,
+        allowed_models_override=[10],
+        request_path="v1/audio/transcriptions",
+    )
+
+    assert response == {"mode": "sync"}
+    sync_response.assert_awaited_once()
+    streaming_response.assert_not_awaited()
+
+
 async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
     """_execute_proxy_mode keeps classification/scheduling but narrows deployments to one model."""
 

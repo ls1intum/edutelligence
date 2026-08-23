@@ -14,6 +14,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.mockito.Mockito.verify;
+
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
@@ -35,6 +38,9 @@ class ProviderControllerTest {
 
     @Autowired MockMvc mvc;
     @MockitoBean JwtDecoder jwtDecoder;
+    // Mocked so the price refresh triggered by connect_model_provider does not
+    // reach the live litellm catalog during tests.
+    @MockitoBean PriceUpdaterService priceUpdaterService;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
@@ -107,6 +113,19 @@ class ProviderControllerTest {
                 .content("{\"provider_id\":6001,\"model_id\":5002}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.result").isString());
+    }
+
+    @Test
+    void connectModelProvider_refreshesPricesForTheLinkedModel() throws Exception {
+        mvc.perform(post("/logosdb/connect_model_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"model_id\":5002}"))
+           .andExpect(status().isOk());
+
+        // Without this refresh a freshly linked cloud model kept reporting a
+        // cost of zero until the next daily full refresh.
+        verify(priceUpdaterService).updatePricesForModelAsync(5002);
     }
 
     @Test

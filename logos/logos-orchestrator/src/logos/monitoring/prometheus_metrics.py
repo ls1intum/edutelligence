@@ -35,7 +35,7 @@ REQUESTS_IN_FLIGHT = Gauge(
 COLD_STARTS_TOTAL = Counter(
     "logos_cold_starts_total",
     "Number of requests served by a cold (freshly loaded) model",
-    ["model"],
+    ["model", "provider"],
     registry=registry,
 )
 

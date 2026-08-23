@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from logos_worker_node.logos_bridge import LogosBridgeClient
+from logos_worker_node.logos_bridge import LogosBridgeClient, _CalibrationSession
 from logos_worker_node.models import LaneStatus, LogosConfig, ProcessState, ProcessStatus
 
 
@@ -163,6 +163,183 @@ async def test_execute_infer_command_passthrough(monkeypatch):
     assert result["body"] == {"ok": True}
     lane_manager.acquire_lane_for_infer.assert_awaited_once_with("lane-a")
     lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+@pytest.mark.asyncio
+async def test_execute_infer_command_preserves_plain_text_that_is_valid_json(monkeypatch):
+    app = _DummyApp()
+    lane_manager = SimpleNamespace(
+        acquire_lane_for_infer=AsyncMock(return_value=_make_lane_status()),
+        decrement_active_requests=AsyncMock(return_value=None),
+    )
+    app.state.lane_manager = lane_manager
+
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _Resp:
+        status_code = 200
+        text = "null"
+
+        def __init__(self):
+            self.headers = {"content-type": "text/plain; charset=utf-8"}
+
+        @staticmethod
+        def json():
+            return None
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _HttpClient(),
+    )
+
+    result = await client._execute_infer_command(  # noqa: SLF001
+        {
+            "lane_id": "lane-a",
+            "request_path": "v1/audio/transcriptions",
+            "payload": {
+                "model": "whisper-1",
+                "_logos_multipart": {
+                    "fields": [["model", "whisper-1"]],
+                    "files": [],
+                },
+            },
+        }
+    )
+
+    assert result == {
+        "status_code": 200,
+        "body": "null",
+        "headers": {"content-type": "text/plain; charset=utf-8"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_infer_command_base64_encodes_binary_multipart_response(monkeypatch):
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        acquire_lane_for_infer=AsyncMock(return_value=_make_lane_status()),
+        decrement_active_requests=AsyncMock(return_value=None),
+    )
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _Resp:
+        status_code = 200
+        content = b"\xff\x00ID3"
+        text = "\ufffd\x00ID3"
+
+        def __init__(self):
+            self.headers = {"content-type": "audio/mpeg"}
+
+        @staticmethod
+        def json():
+            raise ValueError("not JSON")
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _HttpClient(),
+    )
+
+    result = await client._execute_infer_command(  # noqa: SLF001
+        {
+            "lane_id": "lane-a",
+            "request_path": "v1/audio/transcriptions",
+            "payload": {
+                "model": "audio-binary-model",
+                "_logos_multipart": {
+                    "fields": [["model", "audio-binary-model"]],
+                    "files": [],
+                },
+            },
+        }
+    )
+
+    assert result == {
+        "status_code": 200,
+        "body": None,
+        "headers": {"content-type": "audio/mpeg"},
+        "body_base64": "/wBJRDM=",
+        "body_encoding": "base64",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_headers", [{}, {"content-type": "application/json"}])
+async def test_execute_infer_command_preserves_binary_when_json_parsing_fails(monkeypatch, response_headers):
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        acquire_lane_for_infer=AsyncMock(return_value=_make_lane_status()),
+        decrement_active_requests=AsyncMock(return_value=None),
+    )
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _Resp:
+        status_code = 200
+        headers = response_headers
+        content = b"\xff\x00ID3"
+        text = "\ufffd\x00ID3"
+
+        @staticmethod
+        def json():
+            raise ValueError("not JSON")
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _HttpClient(),
+    )
+
+    result = await client._execute_infer_command(  # noqa: SLF001
+        {
+            "lane_id": "lane-a",
+            "request_path": "v1/audio/transcriptions",
+            "payload": {
+                "model": "audio-binary-model",
+                "_logos_multipart": {"fields": [], "files": []},
+            },
+        }
+    )
+
+    assert result["body"] is None
+    assert result["body_base64"] == "/wBJRDM="
+    assert result["body_encoding"] == "base64"
 
 
 @pytest.mark.asyncio
@@ -936,3 +1113,244 @@ async def test_stream_200_with_no_output_fails_clean_without_start(monkeypatch):
     assert [f["type"] for f in frames] == ["stream_end"]
     assert frames[-1]["success"] is False
     assert "stream_start" not in [f["type"] for f in frames]
+
+
+# ---------------------------------------------------------------------------
+# VRAM-growing commands are refused while a calibration session holds the GPU
+# ---------------------------------------------------------------------------
+
+
+def _client_with_calibration_session(session_done: bool = False) -> LogosBridgeClient:
+    app = _DummyApp()
+    app.state.lane_manager = object()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    session = _CalibrationSession(sleep_level=1)
+    session.task = SimpleNamespace(done=lambda: session_done)
+    client._active_calibration_session = session  # noqa: SLF001
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["add_lane", "apply_lanes", "wake_lane", "reconfigure_lane"])
+async def test_vram_growing_commands_are_refused_during_calibration(action):
+    """The session freed this node's VRAM for its probes. A lane placed now
+    takes the memory they need and the kv-cache search fails at sizes that
+    would otherwise fit — so the node refuses locally, whatever the server
+    currently believes."""
+    client = _client_with_calibration_session()
+
+    result = await client._execute_command(action, {"lane_id": "lane-a"})  # noqa: SLF001
+
+    assert result["ok"] is False
+    assert result["calibrating"] is True
+    assert action in result["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["delete_lane", "sleep_lane"])
+async def test_vram_freeing_commands_are_still_accepted_during_calibration(action):
+    """Only growth is refused — the guard must not block the server from
+    freeing memory the session could use."""
+    client = _client_with_calibration_session()
+    calls: list[str] = []
+
+    async def _remove_lane(lane_id):
+        calls.append(f"remove:{lane_id}")
+
+    async def _sleep_lane(lane_id, level=1, mode="wait"):  # noqa: ARG001
+        calls.append(f"sleep:{lane_id}")
+        return _make_lane_status()
+
+    client._app.state.lane_manager = SimpleNamespace(  # noqa: SLF001
+        remove_lane=_remove_lane,
+        sleep_lane=_sleep_lane,
+    )
+
+    await client._execute_command(action, {"lane_id": "lane-a"})  # noqa: SLF001
+
+    assert calls, f"{action} must reach the lane manager"
+
+
+@pytest.mark.asyncio
+async def test_a_finished_session_does_not_keep_refusing():
+    """_active_calibration_session lingers until the next start clears it, so
+    the task state is what decides — otherwise the node would refuse lanes
+    forever after its first session."""
+    client = _client_with_calibration_session(session_done=True)
+    added: list[str] = []
+
+    async def _add_lane(lane_config):
+        added.append(lane_config.lane_id)
+        return _make_lane_status()
+
+    client._app.state.lane_manager = SimpleNamespace(add_lane=_add_lane)  # noqa: SLF001
+
+    await client._execute_command(  # noqa: SLF001
+        "add_lane",
+        {"lane_id": "lane-a", "model": "qwen2.5-coder:32b"},
+    )
+
+    assert added == ["lane-a"]
+
+
+def _event_stub(event_id: str, name: str):
+    return SimpleNamespace(
+        event_id=event_id,
+        model_dump=lambda mode="json", _n=name: {"event": _n},
+    )
+
+
+def _bridge_client(app) -> LogosBridgeClient:
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    return LogosBridgeClient(app, cfg)
+
+
+@pytest.mark.asyncio
+async def test_event_loop_flags_only_the_backlog_that_existed_at_connect():
+    """The first drain runs a second after the connect, so it carries both the
+    backlog and anything created in that second. Only the backlog is history:
+    a session ending inside that second produces a live terminal event, and
+    dismissing it as backlog would leave the provider excluded from lane
+    placement with no further event coming to release it."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    log = [_event_stub("evt-1", "calibration_session_finished")]
+    replay_ids = frozenset({"evt-1"})
+    # The session ends between the connect and the drain.
+    log.append(_event_stub("calib-9", "calibration_session_cancelled"))
+    app.state.lane_manager = SimpleNamespace(event_log=log)
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if len(sent) == 2:
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object(), replay_event_ids=replay_ids)  # noqa: SLF001
+
+    assert [p["event"]["event"] for p in sent] == [
+        "calibration_session_finished",
+        "calibration_session_cancelled",
+    ]
+    assert [p["replay"] for p in sent] == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_a_live_event_in_a_full_log_is_not_mistaken_for_backlog():
+    """The log is capped and trims from the front, so on a full log a live event
+    lands at a position the backlog used to occupy. Keyed on position it would
+    be sent as replay, the server would ignore it, and a terminal event lost
+    that way leaves the provider excluded with nothing left to release it."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    cap = 500
+    backlog = [_event_stub(f"evt-{n}", "lane_started") for n in range(1, cap + 1)]
+    replay_ids = frozenset(event.event_id for event in backlog)
+
+    # A live terminal event arrives; the append trims the oldest entry, so the
+    # log length is unchanged and the new event sits at the last position.
+    full_log = backlog[1:] + [_event_stub("calib-1", "calibration_session_finished")]
+    assert len(full_log) == cap
+    app.state.lane_manager = SimpleNamespace(event_log=full_log)
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if payload["event"]["event"] == "calibration_session_finished":
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object(), replay_event_ids=replay_ids)  # noqa: SLF001
+
+    terminal = [p for p in sent if p["event"]["event"] == "calibration_session_finished"]
+    assert terminal, "the live terminal event must be forwarded"
+    assert terminal[0]["replay"] is False
+
+
+@pytest.mark.asyncio
+async def test_event_loop_keeps_forwarding_once_the_log_is_full():
+    """A positional cursor equals the log length once the log is full and never
+    advances again, so no further event would reach the server at all."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    cap = 500
+    log = [_event_stub(f"evt-{n}", "lane_started") for n in range(1, cap + 1)]
+    drains = {"count": 0}
+
+    class _LaneManager:
+        @property
+        def event_log(self):
+            drains["count"] += 1
+            if drains["count"] == 1:
+                return list(log)
+            # Second drain: one new event, oldest trimmed — same length.
+            return log[1:] + [_event_stub("evt-501", "lane_stopped")]
+
+    app.state.lane_manager = _LaneManager()
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if payload["event"]["event"] == "lane_stopped":
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object())  # noqa: SLF001
+
+    assert len(sent) == cap + 1, "the event added to a full log must still be forwarded"
+    assert sent[-1]["event"]["event"] == "lane_stopped"
+
+
+@pytest.mark.asyncio
+async def test_event_loop_does_not_resend_events_it_already_forwarded():
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    log = [_event_stub("evt-1", "lane_started")]
+    drains = {"count": 0}
+
+    class _LaneManager:
+        @property
+        def event_log(self):
+            drains["count"] += 1
+            if drains["count"] >= 2:
+                client._stopping.set()  # noqa: SLF001
+            return list(log)
+
+    app.state.lane_manager = _LaneManager()
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object())  # noqa: SLF001
+
+    assert len(sent) == 1
+
+
+def test_current_event_ids_snapshots_the_log():
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        event_log=[_event_stub("evt-1", "lane_started"), _event_stub("calib-1", "calibration_session_started")]
+    )
+    client = _bridge_client(app)
+
+    assert client._current_event_ids() == frozenset({"evt-1", "calib-1"})  # noqa: SLF001
+
+    app.state.lane_manager = None
+    assert client._current_event_ids() == frozenset()  # noqa: SLF001

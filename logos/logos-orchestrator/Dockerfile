@@ -7,12 +7,12 @@ WORKDIR /build
 
 # Install system packages needed for compiling C-extension wheels
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends gcc build-essential \
+  && apt-get install -y --no-install-recommends gcc build-essential rustc cargo \
   && rm -rf /var/lib/apt/lists/*
 
 # Install uv – a drop-in pip replacement written in Rust (10-100× faster)
 # Pinned to a specific version to mitigate supply-chain risk (update explicitly)
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv
 
 # Create an isolated virtual-env that we will copy into the runtime image
 RUN uv venv /opt/venv
@@ -29,6 +29,13 @@ RUN mkdir -p src/logos && echo '__version__ = "0.1.0"' > src/logos/__init__.py \
  && touch README.md
 
 # Install all dependencies with uv (replaces poetry install ~436 s → ~30-60 s)
+# sentence-transformers pulls in torch as a transitive dep; this container has
+# no GPU (see docker-compose.yaml — no device reservation for this service),
+# so pull the CPU-only build instead of PyPI's default CUDA wheels (which drag
+# in ~15 nvidia-cu12 packages and blow the install up from ~1 min to ~8 min).
+# torch is pinned to PyTorch's CPU-only wheel index via tool.uv.sources + an
+# explicit index in pyproject.toml, so no extra install-time flags are needed
+# here to steer it away from PyPI's default CUDA build.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install .
 

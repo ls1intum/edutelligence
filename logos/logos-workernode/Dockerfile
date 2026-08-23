@@ -63,9 +63,9 @@
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
 # =============================================================================
 
-ARG BASE_IMAGE=python:3.12-slim
+ARG BASE_IMAGE=python:3.14-slim
 ARG INSTALL_VLLM=0
-ARG VLLM_PIP_SPEC="vllm==v0.25.1"
+ARG VLLM_PIP_SPEC="vllm==v0.27.1"
 # TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
 # installs, which already includes CUDA support matching its nvidia-* deps.
 # Only set this to override with a specific CUDA wheel index (e.g.
@@ -79,7 +79,7 @@ ARG INSTALL_OLLAMA=1
 # uv — pinned to a specific version to mitigate supply-chain risk (update
 # explicitly). Used via RUN --mount so the binary is never stored in a layer.
 # ---------------------------------------------------------------------------
-FROM ghcr.io/astral-sh/uv:0.10.3 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.5 AS uv
 
 # ---------------------------------------------------------------------------
 # Stage: Fetch latest Ollama release binary (no GPU libs needed here)

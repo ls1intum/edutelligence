@@ -14,6 +14,7 @@ import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { Router } from '@angular/router';
 
 @Component({
   selector: 'app-models',
@@ -32,6 +33,7 @@ import { ErrorMessageComponent } from '../../shared/components/error-message/err
 })
 export class Models implements OnInit {
   private modelService = inject(ModelManagementService);
+  private router = inject(Router);
 
   // ── List state ──────────────────────────────────────────────────────────
   models = signal<Model[]>([]);
@@ -99,6 +101,10 @@ export class Models implements OnInit {
     } finally {
       this.loading.set(false);
     }
+  }
+
+  openReport(model: Model): void {
+    this.router.navigate(['/models', model.id, 'errors']);
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

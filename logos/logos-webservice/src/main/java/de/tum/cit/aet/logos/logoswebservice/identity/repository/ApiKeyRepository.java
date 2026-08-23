@@ -51,23 +51,84 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
           t.default_local_tpm_limit AS team_default_local_tpm_limit,
           t.default_monthly_budget_micro_cents AS team_default_monthly_budget_micro_cents,
           COALESCE(bu.cost_micro_cents, 0) AS used_micro_cents,
-          COALESCE((
-              SELECT SUM(bu2.cost_micro_cents)
-              FROM budget_usage bu2
-              JOIN api_keys ak2 ON ak2.id = bu2.api_key_id
-              WHERE ak2.team_id = ak.team_id
-                AND bu2.month = DATE_TRUNC('month', CURRENT_DATE)::date
-          ), 0) AS team_budget_used_micro_cents,
+          COALESCE(team_bu.cost_micro_cents, 0) AS team_budget_used_micro_cents,
           (
               SELECT MAX(COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response))
               FROM log_entry le
               WHERE le.api_key_id = ak.id
           ) AS last_used_at
         FROM api_keys ak
-        LEFT JOIN budget_usage bu
-          ON bu.api_key_id = ak.id
-          AND bu.month = DATE_TRUNC('month', CURRENT_DATE)::date
+        -- Per-key spend, restricted up front to this user's own key ids instead of
+        -- going through the budget_usage view (which groups the entire platform's
+        -- log_entry/usage_tokens by api_key_id before anything can be filtered).
+        -- Same grouping column and predicates as the view, just scoped early so
+        -- Postgres can use idx_log_entry_api_key_id instead of scanning everyone's
+        -- current-month usage to find this user's few keys.
+        LEFT JOIN (
+            SELECT le.api_key_id, COALESCE(SUM(
+                CASE WHEN tp.price_per_k_token IS NOT NULL
+                    THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+                    ELSE 0
+                END
+            ), 0) AS cost_micro_cents
+            FROM log_entry le
+            JOIN usage_tokens ut ON ut.log_entry_id = le.id
+            LEFT JOIN LATERAL (
+                SELECT price_per_k_token
+                FROM token_prices
+                WHERE type_id = ut.type_id
+                  AND (model_id = le.model_id OR model_id IS NULL)
+                  AND (provider_id = le.provider_id OR provider_id IS NULL)
+                  AND valid_from <= le.timestamp_request
+                ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+                         (provider_id = le.provider_id) DESC NULLS LAST,
+                         valid_from DESC
+                LIMIT 1
+            ) tp ON true
+            WHERE le.api_key_id IN (
+                SELECT id FROM api_keys WHERE user_id = :userId AND is_active = true
+            )
+            AND DATE_TRUNC('month', le.timestamp_request)::date = DATE_TRUNC('month', CURRENT_DATE)::date
+            GROUP BY le.api_key_id
+        ) bu ON bu.api_key_id = ak.id
         LEFT JOIN teams t ON t.id = ak.team_id
+        -- Team spend, computed once per request (not once per key). Attributed via
+        -- api_keys.team_id (ak2), matching the old budget_usage-based subquery
+        -- exactly -- log_entry.team_id itself cannot be used as the filter here:
+        -- it's nullable (ON DELETE SET NULL) and can disagree with the owning
+        -- key's current team, so filtering on it directly under-counts spend.
+        -- Restricting ak2 up front to this user's own team(s) still avoids
+        -- re-aggregating the entire platform's log_entry/usage_tokens history once
+        -- per key the user owns.
+        LEFT JOIN (
+            SELECT ak2.team_id, COALESCE(SUM(
+                CASE WHEN tp.price_per_k_token IS NOT NULL
+                    THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+                    ELSE 0
+                END
+            ), 0) AS cost_micro_cents
+            FROM log_entry le
+            JOIN usage_tokens ut ON ut.log_entry_id = le.id
+            JOIN api_keys ak2 ON ak2.id = le.api_key_id
+            LEFT JOIN LATERAL (
+                SELECT price_per_k_token
+                FROM token_prices
+                WHERE type_id = ut.type_id
+                  AND (model_id = le.model_id OR model_id IS NULL)
+                  AND (provider_id = le.provider_id OR provider_id IS NULL)
+                  AND valid_from <= le.timestamp_request
+                ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+                         (provider_id = le.provider_id) DESC NULLS LAST,
+                         valid_from DESC
+                LIMIT 1
+            ) tp ON true
+            WHERE ak2.team_id IN (
+                SELECT DISTINCT team_id FROM api_keys
+                WHERE user_id = :userId AND is_active = true AND team_id IS NOT NULL
+            )
+            AND DATE_TRUNC('month', le.timestamp_request)::date = DATE_TRUNC('month', CURRENT_DATE)::date
+            GROUP BY ak2.team_id
+        ) team_bu ON team_bu.team_id = ak.team_id
         WHERE ak.user_id = :userId AND ak.is_active = true
         ORDER BY ak.id
         """, nativeQuery = true)

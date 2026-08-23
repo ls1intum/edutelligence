@@ -183,6 +183,9 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
     facade = _MockFacade(providers)
     registry = MagicMock()
     registry.has_received_first_status.return_value = True
+    # Explicit: a bare MagicMock returns a truthy mock, which would make the
+    # planner treat every provider as mid-calibration and skip it.
+    registry.is_calibrating.return_value = False
     registry.peek_runtime_snapshot.return_value = {"runtime": {"lanes": [], "devices": {}}}
     demand = MagicMock()
     demand.get_ranked_models.return_value = []

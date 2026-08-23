@@ -50,7 +50,6 @@ export class MembersTabComponent {
   @Input() teamId!: number;
   @Input() members: TeamMember[] = [];
   @Input() apiKeys: TeamApiKey[] = [];
-  @Input() isLogosAdmin = false;
   @Input() canEdit = false;
   @Output() refresh = new EventEmitter<void>();
 

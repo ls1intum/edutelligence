@@ -5,6 +5,7 @@ from __future__ import annotations
 import enum
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -159,10 +160,29 @@ class VllmConfig(BaseModel):
             "IPC mm cache entirely; the post-wake re-sync is then skipped."
         ),
     )
+    chat_template: str = Field(
+        default="",
+        description="Custom Jinja chat template passed to vLLM via --chat-template. "
+        "Value is a file name (optionally with subdirectories) resolved against the "
+        "worker's persistent chat-template directory, /opt/logos-workernode/chat-templates "
+        "(override with LOGOS_CHAT_TEMPLATE_DIR). Absolute paths are accepted only when "
+        "they point inside that directory. Empty (default) = use the template bundled "
+        "with the model's tokenizer. The lane fails to spawn when the file is missing, "
+        "so a template typo can never silently fall back to the model default.",
+    )
     chat_template_kwargs: dict[str, Any] = Field(
         default_factory=dict,
         description="Default chat_template_kwargs passed to vLLM via --default-chat-template-kwargs. "
         'e.g. {"enable_thinking": false} to disable Qwen3/3.5 thinking mode.',
+    )
+    speculative_config: str = Field(
+        default="",
+        description="vLLM --speculative-config as a JSON string, e.g. "
+        '\'{"method":"qwen3_5_mtp","num_speculative_tokens":3}\' to enable the '
+        "model's built-in MTP draft head. Empty (default) = no speculative decoding. "
+        "Setting this disables the sharded-checkpoint cache for the lane: vLLM loads the "
+        "draft model in the same format as the main model, and a pre-sharded cache has no "
+        'shards for it ("only pre-sharded checkpoints are currently supported").',
     )
     extra_args: list[str] = Field(default_factory=list)
     env_overrides: dict[str, str] = Field(
@@ -171,6 +191,25 @@ class VllmConfig(BaseModel):
         'e.g. {"VLLM_USE_V1": "0"} to force V0 engine for models '
         "whose head dimensions exceed V1 attention kernel limits.",
     )
+
+    @field_validator("chat_template")
+    @classmethod
+    def _validate_chat_template(cls, value: str) -> str:
+        """Reject values that could escape the persistent chat-template directory.
+
+        Only the syntactic check lives here — whether the file actually exists
+        inside the directory is decided at lane spawn time, where the runtime
+        directory (and any LOGOS_CHAT_TEMPLATE_DIR override) is known.
+        """
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return ""
+        if ".." in Path(cleaned).parts:
+            raise ValueError(
+                f"Invalid chat_template: {value!r}. Path traversal ('..') is not allowed; "
+                "templates must live under the worker's chat-template directory."
+            )
+        return cleaned
 
     @field_validator("kv_cache_memory_bytes")
     @classmethod
