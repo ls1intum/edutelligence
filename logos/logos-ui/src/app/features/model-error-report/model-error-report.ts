@@ -259,6 +259,8 @@ export class ModelErrorReport implements OnInit {
 
   readonly selectedLogProviderId = signal<number | null>(null);
 
+  readonly logCopied = signal(false);
+
   private readonly rawLogsByProviderId =
     signal<ReadonlyMap<number, string>>(new Map());
 
@@ -555,6 +557,14 @@ export class ModelErrorReport implements OnInit {
     if (!Number.isNaN(providerId)) {
       this.selectedLogProviderId.set(providerId);
     }
+  }
+
+  async copyLog(): Promise<void> {
+    const text = this.completeLog();
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    this.logCopied.set(true);
+    setTimeout(() => this.logCopied.set(false), 2000);
   }
 
   openNodeLog(
