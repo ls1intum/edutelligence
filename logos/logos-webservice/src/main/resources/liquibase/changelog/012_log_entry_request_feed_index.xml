@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- LogEntryRepository.findLatestRequests backs the statistics request feed,
+         which StatsV2WebSocketHandler pushes every 2 s for every open statistics
+         session. log_entry carried no index on any of its timestamps, so finding
+         the newest ten rows meant reading and sorting the whole selected range
+         (30 days by default) on every push - and paying the query's two
+         correlated LATERALs over the sorted set rather than over ten rows.
+
+         The column list mirrors that query's ORDER BY exactly, including
+         "NULLS LAST": for a DESC index Postgres defaults to NULLS FIRST, and it
+         matches sort orderings by their nulls flag rather than deducing from the
+         NOT NULL constraint on timestamp_request that the two are equivalent
+         here. A plain (timestamp_request DESC) index would therefore not serve
+         the ordering and Postgres would sort anyway. Keep the two in step.
+
+         Partial on request_id IS NOT NULL, which the query requires and which
+         keeps rows that never became a routed request out of the index.
+
+         CONCURRENTLY (and so runInTransaction="false"): log_entry takes a row
+         per request, and this must not lock it against live traffic while the
+         index builds on an already-populated database. -->
+    <changeSet id="012-log-entry-request-feed-index" author="tobias" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_request_feed"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_request_feed
+                ON log_entry (timestamp_request DESC NULLS LAST, request_id DESC)
+                WHERE request_id IS NOT NULL;
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_request_feed;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
