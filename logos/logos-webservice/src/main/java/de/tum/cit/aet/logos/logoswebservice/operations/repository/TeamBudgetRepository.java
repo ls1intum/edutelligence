@@ -14,7 +14,7 @@ public interface TeamBudgetRepository extends JpaRepository<LogEntry, Integer> {
         SELECT COALESCE(SUM(bu.cost_micro_cents), 0) AS budgetUsed
         FROM budget_usage bu
         WHERE bu.api_key_id = ANY(
-                ARRAY(SELECT id FROM api_keys WHERE team_id = :teamId)
+                ARRAY(SELECT id FROM api_keys WHERE team_id = :teamId AND key_type = 'developer')
               )
           AND bu.month = DATE_TRUNC('month', CURRENT_DATE)::date
         """, nativeQuery = true)

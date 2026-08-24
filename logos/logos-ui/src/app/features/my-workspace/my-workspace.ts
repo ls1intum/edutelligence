@@ -297,7 +297,7 @@ export class MyWorkspace implements OnInit {
 
   budgetExhaustedMessage(team: MyTeam, key: MyKey): string | null {
     if (this.isTeamBudgetExhausted(team)) {
-      return `Team budget exhausted: all ${team.name} keys are currently inactive.`;
+      return `Monthly member budget exhausted: your ${team.name} keys are currently inactive.`;
     }
     if (this.isKeyBudgetExhausted(key)) {
       return 'Key budget exhausted: this key is currently inactive.';
