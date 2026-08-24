@@ -6,8 +6,9 @@ class AnswerSet:
     """Hardcoded student answers for the assess_user_answer LLM tests,
     grouped by the verdict they are expected to elicit."""
 
-    # Detailed and factually correct -> expected verdict UNSUSPICIOUS.
-    correct: str
+    # Detailed and factually correct -> expected verdict UNSUSPICIOUS. Add as
+    # many variations as useful (differing in detail/phrasing, all complete).
+    correct: list[str]
     # Not factually wrong, but too vague/incomplete -> expected verdict
     # NEXT_QUESTION.
     half_correct: list[str]

@@ -13,10 +13,13 @@ class AskUserVariant(Variant):
         description: str,
         agent_model: str,
         guide_model: str | None = None,
+        assessment_model: str | None = None,
         local_agent_model: str | None = None,
         local_guide_model: str | None = None,
+        local_assessment_model: str | None = None,
     ):
         guide_model = guide_model or agent_model
+        assessment_model = assessment_model or agent_model
 
         # Mirror resolve_model()'s deployment-wide kill switch: when local LLM
         # support is disabled outright, "local" must resolve to the cloud id
@@ -25,9 +28,11 @@ class AskUserVariant(Variant):
         if settings.local_llm_enabled:
             local_agent_model = local_agent_model or agent_model
             local_guide_model = local_guide_model or guide_model
+            local_assessment_model = local_assessment_model or assessment_model
         else:
             local_agent_model = agent_model
             local_guide_model = guide_model
+            local_assessment_model = assessment_model
 
         role_models = {
             "chat": {
@@ -37,6 +42,10 @@ class AskUserVariant(Variant):
             "guide": {
                 "local": local_guide_model,
                 "cloud": guide_model,
+            },
+            "assessment": {
+                "local": local_assessment_model,
+                "cloud": assessment_model,
             },
         }
         super().__init__(
@@ -49,7 +58,10 @@ class AskUserVariant(Variant):
                 agent_model,
                 local_guide_model,
                 guide_model,
+                local_assessment_model,
+                assessment_model,
             },
         )
         self.agent_model = agent_model
         self.guide_model = guide_model
+        self.assessment_model = assessment_model

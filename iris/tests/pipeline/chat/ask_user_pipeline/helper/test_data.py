@@ -41,11 +41,7 @@ the given code of the task.
 * Detect parts labeled as optional, bonus, extra, advanced, etc.
 * Avoid any question whose topic intersects these optional sections.
 
-### 3. The question must be short
-
-* Keep the question concise, clear, and max. 1–2 sentences.
-
-### 4. The question must not be too easy
+### 3. The question must not be too easy
 
 * Avoid trivial questions such as:
 
@@ -58,13 +54,12 @@ the given code of the task.
 * “Explain the logic behind the condition in your second loop.”
 * “How does your swapping mechanism ensure the array stays sorted?”
 
-### 5. Ask about only one concept
+### 4. Ask about only one concept
 
 * Focus on exactly one part of the implementation.
 * Do not combine multiple topics.
-* Avoid broad or open-ended questions.
 
-### 7. No hints, no explanations
+### 5. No hints, no explanations
 
 * Generate only the question, without hints or commentary.
 
@@ -85,21 +80,23 @@ You must follow these rules strictly:
 Your entire output must follow exactly this format:
 !ok! <one short sentence explanation>
 OR
-!bad! <one short sentence explanation>
+!bad! <one short sentence explanation mentioning the property of the five that was decisive>
 """
 
-LLM_REPEATING_TOPICS_PROMPT = """
+LLM_PAIRWISE_DIVERSITY_PROMPT = """
 You are an impartial and super strict jury member evaluating assessment questions about programming \
 exercises written by a tutor.
 The goal of these generated questions is to assess whether the students wrote the submissions to \
 these exercises themselves.
 
-Your task is to judge whether the topic of the given questions are different from each other.
-It is important that multiple questions cover a new concept, instead of covering the same small \
-structures like loops or conditional branches.
-It is important that a question cannot be answered with parts of a previous one.
-Use the given exercise context to rate the questions in the last user message in context of each \
-other and the programming exercise.
+Your task is to judge whether the topics of the two questions given in the last user message are \
+sufficiently different from each other.
+* It is important that the two questions cover different concepts, instead of both covering the same \
+small structure like a loop or a conditional branch.
+* It is important that the second question cannot be answered using parts of the answer to the first \
+one.
+Use the given exercise context to rate the two questions in relation to each other and to the \
+programming exercise.
 
 ## Exercise Context
 - **Problem Statement:** {{ task }}
@@ -107,8 +104,8 @@ other and the programming exercise.
 - **Submitted Code:** {{ code }}
 
 You must follow these rules strictly:
-- If the assessment questions are acceptable, respond with: !ok!
-- If any assessment question is unacceptable, respond with: !bad!
+- If the two questions are sufficiently diverse, respond with: !ok!
+- If the two questions are not sufficiently diverse (too similar / overlapping), respond with: !bad!
 - After !ok! or !bad!, add exactly ONE short sentence explaining your decision.
 - Do NOT output anything else.
 - Do NOT add formatting, markdown, bullet points, or multiple sentences.
@@ -151,8 +148,10 @@ DTO = AskUserPipelineExecutionDTO(
 VARIANT = AskUserVariant(
     variant_id="ask_user_v1",
     name="Ask User",
-    description="Variant for assessing user understanding",
-    agent_model="oai-gpt-5-mini",
+    description="Variants used in tests",
+    agent_model="oai-gpt-5.5",
+    guide_model="oai-gpt-5.5",
+    assessment_model="oai-gpt-5.5",
 )
 
 FIRST_MESSAGE_TIME = datetime.datetime(2026, 1, 1, 12, 0, 0)

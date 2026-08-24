@@ -467,14 +467,21 @@ SORTING_EXERCISE = Exercise(
         "of the bubble sort algorithm?"
     ),
     answers=AnswerSet(
-        correct=(
+        correct=[
             "I store arr[j] in temp, then assign arr[j] = arr[j+1], and "
-            "finally set arr[j+1] = temp."
-        ),
+            "finally set arr[j+1] = temp.",
+            "I use a temporary variable called temp to hold the value of "
+            "arr[j] before overwriting it, then I copy arr[j+1] into arr[j], "
+            "and finally write the saved temp value into arr[j+1]. This way "
+            "both elements are exchanged without losing either value.",
+            "Before overwriting anything I save arr[j] in a temp variable, "
+            "then arr[j] gets arr[j+1]'s value, and temp is written back "
+            "into arr[j+1] afterwards.",
+        ],
         half_correct=[
-            "I use a temporary variable to swap two elements, but I don't "
+            "I use a variable to swap two elements, but I don't "
             "remember exactly which array positions are involved.",
-            "I swap the two elements using XOR swapping, that's basically it.",
+            "I swap the two elements by changing their values, that's basically it.",
             "I think I used a helper variable somewhere in the loop to swap "
             "the values, but I'm not 100% sure anymore.",
             "I follow the definition of the bubble sort algorithm.",

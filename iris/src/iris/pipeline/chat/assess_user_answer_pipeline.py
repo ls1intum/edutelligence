@@ -62,18 +62,15 @@ class AssessUserAnswerPipeline(SubPipeline):
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
-    callback: StatusCallback
     prompt: ChatPromptTemplate
     output_parser: StrOutputParser
     tokens: Optional[TokenUsageDTO]
 
     def __init__(
         self,
-        callback: Optional[StatusCallback] = None,
-        model: str = "oai-gpt-5-mini",
+        model: str,
     ):
         super().__init__(implementation_id="assess_user_answer_pipeline_reference_impl")
-        self.callback = callback
         self.tokens = None
 
         # Set up the language model

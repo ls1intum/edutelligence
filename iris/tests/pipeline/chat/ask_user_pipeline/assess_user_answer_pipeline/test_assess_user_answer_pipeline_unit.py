@@ -17,6 +17,7 @@ from iris.pipeline.prompts.assess_user_answer_prompt import (
     over_equal_max_questions_rules,
     under_min_questions_rules,
 )
+from tests.pipeline.chat.ask_user_pipeline.helper.test_data import VARIANT
 
 RESPONSE_TEXT = '{"verdict": "NEXT_QUESTION", "reasoning": "Too vague."}'
 
@@ -56,7 +57,7 @@ def _make_dto(questions_asked, min_questions, max_questions):
 
 
 def _run(dto):
-    pipeline = AssessUserAnswerPipeline()
+    pipeline = AssessUserAnswerPipeline(VARIANT.assessment_model)
     # The real llm/pipeline runnable would hit the network; format_messages()
     # capture below fully replaces the chain, so only .tokens needs a stand-in.
     pipeline.llm = MagicMock()
@@ -147,7 +148,7 @@ def test_exercise_data_is_a_separate_human_message_not_in_the_system_message():
     placed after the system message."""
     dto = _make_dto(questions_asked=3, min_questions=2, max_questions=5)
 
-    pipeline = AssessUserAnswerPipeline()
+    pipeline = AssessUserAnswerPipeline(VARIANT.assessment_model)
     pipeline.llm = MagicMock()
     pipeline.llm.tokens = SimpleNamespace(pipeline=None)
     pipeline.pipeline = MagicMock()
@@ -214,7 +215,7 @@ def test_conversation_history_is_a_separate_human_message_not_native_chat_turns(
         ),
     ]
 
-    pipeline = AssessUserAnswerPipeline()
+    pipeline = AssessUserAnswerPipeline(VARIANT.assessment_model)
     pipeline.llm = MagicMock()
     pipeline.llm.tokens = SimpleNamespace(pipeline=None)
     pipeline.pipeline = MagicMock()

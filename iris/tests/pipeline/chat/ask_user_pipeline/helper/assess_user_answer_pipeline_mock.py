@@ -19,7 +19,7 @@ class AssessUserAnswerPipelineMock(SubPipeline):
     tokens: TokenUsageDTO = None
 
     def __init__(
-        self, callback: Optional[StatusCallback] = None, model: str = "oai-gpt-5-mini", variant: str = "default",
+        self, callback: Optional[StatusCallback] = None, model: str = "oai-gpt-5.5", variant: str = "default",
     ):
         super().__init__(implementation_id="assess_user_answer_pipeline_reference_impl")
         self.callback = callback

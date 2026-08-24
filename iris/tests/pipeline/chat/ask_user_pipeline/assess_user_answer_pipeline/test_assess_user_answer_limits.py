@@ -1,26 +1,24 @@
 import copy
 import json
-import logging
 import unittest
 
 import pytest
 
 from iris.pipeline.chat.assess_user_answer_pipeline import AssessUserAnswerPipeline
+from tests.pipeline.chat.ask_user_pipeline.helper.test_data import VARIANT
 from tests.pipeline.chat.ask_user_pipeline.helper.helper import (
     get_pass_ratio,
     to_ai_message,
     to_user_message,
 )
-from tests.pipeline.chat.ask_user_pipeline.helper.test_callback import (
-    AskUserStatusCallbackMock,
+from tests.pipeline.chat.ask_user_pipeline.helper.logging_utils import (
+    ResultLog,
+    exercise_slug,
 )
 from tests.pipeline.chat.ask_user_pipeline.helper.test_data import DTO, EXERCISE
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-
-# This class tests the decision process of assessing a student's answer to a given question with different question limits.
+# This class tests the decision process of assessing a student's answer
+# to a given question with different question limits.
 #
 # Marked "integration" and excluded from the default pytest run (see the
 # addopts/markers config in pyproject.toml): setUpClass below constructs a
@@ -56,111 +54,67 @@ class TestAssessUserAnswerLimits(unittest.TestCase):
                 verdict = None
             verdicts.append(verdict)
 
-        logger.info("Pipeline results:")
-        logger.info("\n".join(str(v) for v in verdicts))
-
         return verdicts
+
+    # Logs one row of the "Question-Bound Scenarios":
+    # the question-count state and answer category are not the concrete
+    # question/answer text (those are shared with the verdict test, see
+    # the class docstring below), only the category and the observed
+    # ratio/decision.
+    def log_scenario(
+        self, scenario_id: str, count_state: str, answer_category: str, permissible_outcome: str, pass_ratio: float
+    ):
+        self.results_log.append_row(
+            [scenario_id, count_state, answer_category, permissible_outcome, f"{pass_ratio:.2f}"]
+        )
 
     @classmethod
     def setUpClass(cls):
-        cls.number_of_verdicts_to_test = 5
-        cls.required_test_pass_rate = 0.8
+        # 10 executions per scenario
+        cls.number_of_verdicts_to_test = 10
+        cls.required_test_pass_rate = 0.9
 
         cls.question = to_ai_message(EXERCISE.tutor_question)
 
-        cls.callback = AskUserStatusCallbackMock()
-        cls.pipeline = AssessUserAnswerPipeline(callback=cls.callback)
+        cls.pipeline = AssessUserAnswerPipeline(VARIANT.assessment_model)
 
         cls.dto = copy.deepcopy(DTO)
+
+        slug = exercise_slug(EXERCISE.title)
+        cls.results_log = ResultLog(
+            f"TestAssessUserAnswerLimits_{slug}.csv",
+            ["ID", "Question_count", "Answer", "Permissible_outcome", "Ratio"],
+            comment=(
+                f"Exercise: {EXERCISE.title} | Question: {EXERCISE.tutor_question}"
+            ),
+        )
 
     def setUp(self):
         self.dto.chat_history = [self.question]
 
-    def test_answer_correct_between_min_max(self):
-        verdicts = self.get_verdicts(
-            EXERCISE.answers.correct,
-            min_questions=1,
-            max_questions=2,
-            questions_asked=1,
-        )
-
-        print(verdicts)
-
-        pass_ratio = get_pass_ratio(verdicts, lambda v: v in ("NEXT_QUESTION", "UNSUSPICIOUS"))
-
-        assert pass_ratio >= self.required_test_pass_rate
-
-    def test_answer_wrong_between_min_max(self):
-        verdicts = self.get_verdicts(
-            EXERCISE.answers.wrong[0],
-            min_questions=1,
-            max_questions=2,
-            questions_asked=1,
-        )
-
-        pass_ratio = get_pass_ratio(verdicts, lambda v: v == "SUSPICIOUS")
-
-        assert pass_ratio >= self.required_test_pass_rate
-
-    def test_answer_vague_between_min_max(self):
-        verdicts = self.get_verdicts(
-            EXERCISE.answers.half_correct[-1],
-            min_questions=1,
-            max_questions=2,
-            questions_asked=1,
-        )
-
-        pass_ratio = get_pass_ratio(verdicts, lambda v: v == "NEXT_QUESTION")
-
-        assert pass_ratio >= self.required_test_pass_rate
-
-    def test_answer_correct_over_max(self):
-        verdicts = self.get_verdicts(
-            EXERCISE.answers.correct,
-            min_questions=1,
-            max_questions=1,
-            questions_asked=1,
-        )
-
-        pass_ratio = get_pass_ratio(verdicts, lambda v: v == "UNSUSPICIOUS")
-
-        assert pass_ratio >= self.required_test_pass_rate
-
-    def test_answer_wrong_over_max(self):
-        verdicts = self.get_verdicts(
-            EXERCISE.answers.wrong[0],
-            min_questions=1,
-            max_questions=1,
-            questions_asked=1,
-        )
-
-        pass_ratio = get_pass_ratio(verdicts, lambda v: v == "SUSPICIOUS")
-
-        assert pass_ratio >= self.required_test_pass_rate
-
-    def test_answer_vague_over_max(self):
-        verdicts = self.get_verdicts(
-            EXERCISE.answers.half_correct[-1],
-            min_questions=1,
-            max_questions=1,
-            questions_asked=1,
-        )
-
-        pass_ratio = get_pass_ratio(
-            verdicts, lambda v: v in ("SUSPICIOUS", "UNSUSPICIOUS")
-        )
-
-        assert pass_ratio >= self.required_test_pass_rate
-
     def test_answer_correct_under_min(self):
         verdicts = self.get_verdicts(
-            EXERCISE.answers.correct,
+            EXERCISE.answers.correct[0],
             min_questions=2,
             max_questions=2,
             questions_asked=1,
         )
 
         pass_ratio = get_pass_ratio(verdicts, lambda v: v == "NEXT_QUESTION")
+        self.log_scenario("B01", "Below minimum", "Correct", "NEXT_QUESTION", pass_ratio)
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+    def test_answer_vague_under_min(self):
+        verdicts = self.get_verdicts(
+            EXERCISE.answers.half_correct[0],
+            min_questions=2,
+            max_questions=2,
+            questions_asked=1,
+        )
+
+        pass_ratio = get_pass_ratio(verdicts, lambda v: v == "NEXT_QUESTION")
+        self.log_scenario("B02", "Below minimum", "Vague", "NEXT_QUESTION", pass_ratio)
 
         assert pass_ratio >= self.required_test_pass_rate
 
@@ -173,18 +127,48 @@ class TestAssessUserAnswerLimits(unittest.TestCase):
         )
 
         pass_ratio = get_pass_ratio(verdicts, lambda v: v == "NEXT_QUESTION")
+        self.log_scenario("B03", "Below minimum", "Incorrect", "NEXT_QUESTION", pass_ratio)
 
         assert pass_ratio >= self.required_test_pass_rate
 
-    def test_answer_vague_under_min(self):
+    def test_answer_correct_over_max(self):
         verdicts = self.get_verdicts(
-            EXERCISE.answers.half_correct[-1],
-            min_questions=2,
-            max_questions=2,
+            EXERCISE.answers.correct[0],
+            min_questions=1,
+            max_questions=1,
             questions_asked=1,
         )
 
-        pass_ratio = get_pass_ratio(verdicts, lambda v: v == "NEXT_QUESTION")
+        pass_ratio = get_pass_ratio(verdicts, lambda v: v == "UNSUSPICIOUS")
+        self.log_scenario("B04", "Maximum reached", "Correct", "any final verdict", pass_ratio)
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+    def test_answer_vague_over_max(self):
+        verdicts = self.get_verdicts(
+            EXERCISE.answers.half_correct[0],
+            min_questions=1,
+            max_questions=1,
+            questions_asked=1,
+        )
+
+        pass_ratio = get_pass_ratio(
+            verdicts, lambda v: v in ("SUSPICIOUS", "UNSUSPICIOUS")
+        )
+        self.log_scenario("B05", "Maximum reached", "Vague", "any final verdict", pass_ratio)
+
+        assert pass_ratio >= self.required_test_pass_rate
+
+    def test_answer_wrong_over_max(self):
+        verdicts = self.get_verdicts(
+            EXERCISE.answers.wrong[0],
+            min_questions=1,
+            max_questions=1,
+            questions_asked=1,
+        )
+
+        pass_ratio = get_pass_ratio(verdicts, lambda v: v == "SUSPICIOUS")
+        self.log_scenario("B06", "Maximum reached", "Incorrect", "any final verdict", pass_ratio)
 
         assert pass_ratio >= self.required_test_pass_rate
 

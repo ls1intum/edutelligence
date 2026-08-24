@@ -113,6 +113,7 @@ node_modules/
 # Test Results
 ######################
 athena/test-results/
+iris/test-results/
 .coverage
 **/.coverage
 .superpowers/
