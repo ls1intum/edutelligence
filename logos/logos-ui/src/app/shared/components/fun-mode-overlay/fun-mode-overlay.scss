@@ -1,0 +1,72 @@
+:host {
+  display: contents;
+}
+
+.fun-mode-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.fun-mode-overlay--active {
+  visibility: visible;
+}
+
+.fun-mode-overlay__confetti {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.fun-mode-overlay__hen-wrap {
+  position: fixed;
+  top: 0;
+  left: 0;
+
+  width: 72px;
+  height: 72px;
+
+  transform: translate(-50%, -50%);
+}
+
+.fun-mode-overlay__hen-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+
+  filter: drop-shadow(0 6px 10px rgb(0 0 0 / 0.25));
+}
+
+@keyframes fun-mode-hen-moonwalk {
+  0% { transform: translateX(0) rotate(0deg) scaleX(1); }
+  20% { transform: translateX(-14px) rotate(-25deg) scaleX(-1); }
+  50% { transform: translateX(-22px) rotate(-180deg) scaleX(-1); }
+  80% { transform: translateX(-10px) rotate(-340deg) scaleX(1); }
+  100% { transform: translateX(0) rotate(-360deg) scaleX(1); }
+}
+
+.fun-mode-overlay__hen-img--moonwalk {
+  animation: fun-mode-hen-moonwalk 0.65s ease-in-out;
+}
+
+@keyframes fun-mode-hen-drunk-sway {
+  0%, 100% { transform: rotate(0deg) translateX(0); }
+  25% { transform: rotate(8deg) translateX(3px); }
+  50% { transform: rotate(-6deg) translateX(-3px); }
+  75% { transform: rotate(5deg) translateX(2px); }
+}
+
+.fun-mode-overlay__hen-img--drunk {
+  animation: fun-mode-hen-drunk-sway 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fun-mode-overlay__hen-img--moonwalk,
+  .fun-mode-overlay__hen-img--drunk {
+    animation: none;
+  }
+}

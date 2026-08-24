@@ -1,0 +1,10 @@
+<button
+  (click)="funMode.toggle()"
+  class="fun-mode-toggle"
+  [class.fun-mode-toggle--active]="funMode.active()"
+  [title]="funMode.active() ? 'Turn off party mode' : 'Turn on party mode'"
+  [attr.aria-label]="funMode.active() ? 'Turn off party mode' : 'Turn on party mode'"
+>
+  <span class="fun-mode-toggle__glow" aria-hidden="true"></span>
+  <i class="pi pi-sparkles fun-mode-toggle__icon" aria-hidden="true"></i>
+</button>

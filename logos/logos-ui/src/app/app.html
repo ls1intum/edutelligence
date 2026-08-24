@@ -1,1 +1,11 @@
-<router-outlet />
+<div
+  class="app-content"
+  [class.app-content--fun-mode]="funMode.active()"
+  [class.app-content--shake]="shaking()"
+  [class.app-content--wobble]="tobiasParty.climax()"
+>
+  <router-outlet />
+</div>
+<app-fun-mode-toggle />
+<app-fun-mode-overlay />
+<app-tobias-celebration />

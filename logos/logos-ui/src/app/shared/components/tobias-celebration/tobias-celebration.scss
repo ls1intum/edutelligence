@@ -1,0 +1,62 @@
+:host {
+  display: contents;
+}
+
+.tobias-celebration {
+  position: fixed;
+  inset: 0;
+  z-index: 998;
+
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.tobias-celebration--active {
+  visibility: visible;
+}
+
+.tobias-celebration__confetti {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.tobias-celebration__discoball {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+
+  font-size: 64px;
+  line-height: 1;
+  transform-origin: center;
+
+  filter: drop-shadow(0 8px 16px rgb(0 0 0 / 0.35));
+  animation:
+    tobias-discoball-spin 2.4s linear infinite,
+    tobias-discoball-drop 0.6s ease;
+}
+
+@keyframes tobias-discoball-spin {
+  from {
+    transform: translateX(-50%) rotate(0deg);
+  }
+  to {
+    transform: translateX(-50%) rotate(360deg);
+  }
+}
+
+@keyframes tobias-discoball-drop {
+  from {
+    top: -80px;
+  }
+  to {
+    top: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tobias-celebration__discoball {
+    animation: none;
+  }
+}
