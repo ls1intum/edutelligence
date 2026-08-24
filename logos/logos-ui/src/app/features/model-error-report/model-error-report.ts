@@ -18,6 +18,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { Model } from '../../shared/models/model.model';
+import { ProviderPerformancePair } from '../../shared/models/provider.model';
 
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
@@ -29,7 +30,8 @@ import { ErrorMessageComponent } from '../../shared/components/error-message/err
 
 type ModelErrorTab =
   | 'error_report'
-  | 'complete_logs';
+  | 'complete_logs'
+  | 'performance';
 
 type CalibrationStatus =
   | 'success'
@@ -276,17 +278,23 @@ export class ModelErrorReport implements OnInit {
 
   readonly processesLoading = signal(false);
 
+  readonly performance = signal<readonly ProviderPerformancePair[]>([]);
+  readonly performanceLoading = signal(false);
+  readonly performanceError = signal(false);
+
   // ==========================================================================
   // Tabs
   // ==========================================================================
 
   readonly tabs: readonly ModelErrorTab[] = [
     'complete_logs',
+    'performance',
   ];
 
   readonly tabLabel: Record<ModelErrorTab, string> = {
     error_report: 'Error Report',
     complete_logs: 'Complete Logs',
+    performance: 'Performance',
   };
 
   readonly hasAnyLogText = computed(() => {
@@ -455,7 +463,10 @@ export class ModelErrorReport implements OnInit {
 
       this.model.set(foundModel);
 
-      await this.loadCalibrationLogs(foundModel.name);
+      await Promise.all([
+        this.loadCalibrationLogs(foundModel.name),
+        this.loadPerformance(id),
+      ]);
 
       const logs = this.availableLogs();
 
@@ -509,6 +520,25 @@ export class ModelErrorReport implements OnInit {
     }
   }
 
+  async loadPerformance(modelId = this.modelId()): Promise<void> {
+    if (modelId == null) {
+      return;
+    }
+
+    this.performanceLoading.set(true);
+    this.performanceError.set(false);
+
+    try {
+      const response = await this.modelService.getPerformance(modelId);
+      this.performance.set(response.pairs);
+    } catch {
+      this.performance.set([]);
+      this.performanceError.set(true);
+    } finally {
+      this.performanceLoading.set(false);
+    }
+  }
+
 
   // ==========================================================================
   // Navigation
@@ -516,6 +546,18 @@ export class ModelErrorReport implements OnInit {
 
   setTab(tab: ModelErrorTab): void {
     this.activeTab.set(tab);
+  }
+
+  formatDuration(milliseconds: number | null): string {
+    if (milliseconds === null || !Number.isFinite(milliseconds)) return '—';
+    if (milliseconds < 1) return '<1 ms';
+    if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+    const seconds = milliseconds / 1000;
+    return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} s`;
+  }
+
+  formatRate(rate: number): string {
+    return `${Math.round(rate * 100)}%`;
   }
 
   toggleProcess(id: number): void {

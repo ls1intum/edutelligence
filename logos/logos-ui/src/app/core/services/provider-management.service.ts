@@ -6,7 +6,6 @@ import {
   ModelConnection,
   AddProviderPayload,
   UpdateProviderPayload,
-  ProviderPerformanceResponse,
 } from '../../shared/models/provider.model';
 
 @Injectable({ providedIn: 'root' })
@@ -50,13 +49,6 @@ export class ProviderManagementService {
 
   getProviderModels(providerId: number): Promise<ModelConnection[]> {
     return firstValueFrom(this.http.post<ModelConnection[]>('/api/logosdb/get_provider_models', { provider_id: providerId }));
-  }
-
-  getProviderPerformance(providerId: number): Promise<ProviderPerformanceResponse> {
-    return firstValueFrom(this.http.post<ProviderPerformanceResponse>(
-      '/api/logosdb/provider_performance',
-      { provider_id: providerId },
-    ));
   }
 
   connectModel(providerId: number, modelId: number, endpoint?: string, apiKey?: string): Promise<void> {

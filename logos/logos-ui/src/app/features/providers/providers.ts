@@ -18,7 +18,6 @@ import {
   ProviderType,
   CloudProviderType,
   PrivacyLevel,
-  ProviderPerformancePair,
 } from '../../shared/models/provider.model';
 import { Model } from '../../shared/models/model.model';
 import { isInteractiveClick } from '../../shared/utils/interactive-click';
@@ -148,9 +147,6 @@ export class Providers implements OnInit {
   // ── Expand state ─────────────────────────────────────────────────────────
   expandedId = signal<number | null>(null);
   providerModels = signal<Record<number, ModelConnection[]>>({});
-  providerPerformance = signal<Record<number, ProviderPerformancePair[]>>({});
-  performanceLoading = signal<Record<number, boolean>>({});
-  performanceErrors = signal<Record<number, boolean>>({});
 
   // ── All models (for connect picker) ──────────────────────────────────────
   allModels = signal<Model[]>([]);
@@ -276,9 +272,6 @@ export class Providers implements OnInit {
     if (!this.providerModels()[provider.id]) {
       this.loadProviderModels(provider.id);
     }
-    if (!this.providerPerformance()[provider.id]) {
-      this.loadProviderPerformance(provider.id);
-    }
   }
 
   async loadProviderModels(providerId: number): Promise<void> {
@@ -288,34 +281,6 @@ export class Providers implements OnInit {
     } catch {
       this.providerModels.update((m) => ({ ...m, [providerId]: [] }));
     }
-  }
-
-  async loadProviderPerformance(providerId: number): Promise<void> {
-    this.performanceLoading.update((state) => ({ ...state, [providerId]: true }));
-    this.performanceErrors.update((state) => ({ ...state, [providerId]: false }));
-    try {
-      const response = await this.providerService.getProviderPerformance(providerId);
-      this.providerPerformance.update((state) => ({
-        ...state,
-        [providerId]: response.pairs,
-      }));
-    } catch {
-      this.performanceErrors.update((state) => ({ ...state, [providerId]: true }));
-    } finally {
-      this.performanceLoading.update((state) => ({ ...state, [providerId]: false }));
-    }
-  }
-
-  formatDuration(milliseconds: number | null): string {
-    if (milliseconds === null || !Number.isFinite(milliseconds)) return '—';
-    if (milliseconds < 1) return '<1 ms';
-    if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
-    const seconds = milliseconds / 1000;
-    return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} s`;
-  }
-
-  formatRate(rate: number): string {
-    return `${Math.round(rate * 100)}%`;
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

@@ -33,7 +33,7 @@
         </h1>
 
         <p class="model-desc">
-          Model Error Report
+          Model Details
         </p>
 
       </div>
@@ -385,6 +385,108 @@
               <p>
                 No calibration logs have been recorded for this model yet.
               </p>
+
+            </div>
+
+          }
+
+        }
+
+        <!-- Performance -->
+        @case ('performance') {
+
+          <div class="performance-header">
+            <div>
+              <h2>Provider Performance</h2>
+              <p>Statistics for this model grouped by provider configuration.</p>
+            </div>
+
+            <button
+              class="performance-refresh"
+              type="button"
+              (click)="loadPerformance()"
+              [disabled]="performanceLoading()"
+              aria-label="Refresh model performance"
+            >
+              <i
+                class="pi pi-refresh"
+                [class.pi-spin]="performanceLoading()"
+                aria-hidden="true"
+              ></i>
+              Refresh
+            </button>
+          </div>
+
+          @if (performanceLoading()) {
+
+            <div class="performance-message">Loading performance…</div>
+
+          } @else if (performanceError()) {
+
+            <app-error-message
+              variant="banner"
+              message="Failed to load model performance."
+            />
+
+          } @else if (performance().length === 0) {
+
+            <div class="empty-state">
+              <h2>No benchmark results available</h2>
+              <p>No provider configuration has performance data for this model yet.</p>
+            </div>
+
+          } @else {
+
+            <div class="performance-list">
+
+              @for (pair of performance(); track pair.provider_id) {
+
+                <article class="performance-card">
+
+                  <header class="performance-card__header">
+                    <div>
+                      <h3>{{ pair.provider_name }}</h3>
+                      <p>{{ pair.model_name }} · {{ pair.request_count }} requests</p>
+                    </div>
+
+                    <span class="success-rate">
+                      {{ formatRate(pair.success_rate) }} success
+                    </span>
+                  </header>
+
+                  <div class="metric-grid">
+
+                    <section class="metric">
+                      <strong>TTFT</strong>
+                      <span>p50 <b>{{ formatDuration(pair.ttft_ms.p50) }}</b></span>
+                      <span>p95 <b>{{ formatDuration(pair.ttft_ms.p95) }}</b></span>
+                      <span>p100 <b>{{ formatDuration(pair.ttft_ms.p100) }}</b></span>
+                    </section>
+
+                    <section class="metric">
+                      <strong>TPOT</strong>
+                      <span>p50 <b>{{ formatDuration(pair.tpot_ms.p50) }}</b></span>
+                      <span>p95 <b>{{ formatDuration(pair.tpot_ms.p95) }}</b></span>
+                      <span>p100 <b>{{ formatDuration(pair.tpot_ms.p100) }}</b></span>
+                    </section>
+
+                    <section class="metric">
+                      <strong>TTLT</strong>
+                      <span>p50 <b>{{ formatDuration(pair.ttlt_ms.p50) }}</b></span>
+                      <span>p95 <b>{{ formatDuration(pair.ttlt_ms.p95) }}</b></span>
+                      <span>p100 <b>{{ formatDuration(pair.ttlt_ms.p100) }}</b></span>
+                    </section>
+
+                  </div>
+
+                  <footer class="performance-card__footer">
+                    {{ pair.cold_start_count }} cold starts
+                    ({{ formatRate(pair.cold_start_rate) }})
+                  </footer>
+
+                </article>
+
+              }
 
             </div>
 

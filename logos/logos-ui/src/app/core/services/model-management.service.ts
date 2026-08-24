@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
+import { ProviderPerformanceResponse } from '../../shared/models/provider.model';
 
 @Injectable({ providedIn: 'root' })
 export class ModelManagementService {
@@ -9,6 +10,15 @@ export class ModelManagementService {
 
   getModels(): Promise<Model[]> {
     return firstValueFrom(this.http.post<Model[]>('/api/logosdb/get_models', {}));
+  }
+
+  getPerformance(modelId: number): Promise<ProviderPerformanceResponse> {
+    return firstValueFrom(
+      this.http.post<ProviderPerformanceResponse>(
+        '/api/logosdb/provider_performance',
+        { model_id: modelId },
+      ),
+    );
   }
 
   /** Returns the id of the newly created model (the backend replies `{ model_id }`). */
