@@ -652,6 +652,11 @@
     border-color: rgb(var(--color-success) / var(--opacity-strong));
     color: rgb(var(--color-success));
   }
+
+  &--error {
+    border-color: rgb(var(--color-error) / var(--opacity-strong));
+    color: rgb(var(--color-error));
+  }
 }
 
 .log-viewer {
