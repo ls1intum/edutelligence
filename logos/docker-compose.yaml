@@ -323,6 +323,85 @@ services:
     networks:
       - internal
 
+  logos-agent:
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent:${IMAGE_TAG:-latest}
+    container_name: logos-agent
+    restart: unless-stopped
+    # Opt-in: the service does nothing until a profile enables it, so an
+    # existing deployment that does not want agent sessions is unchanged by
+    # this file. Enable with COMPOSE_PROFILES=agent.
+    profiles: ["agent"]
+    depends_on:
+      logos-db:
+        condition: service_healthy
+    environment:
+      DB_HOST: logos-db
+      DB_PORT: 5432
+      DB_NAME: logosdb
+      DB_USER: postgres
+      DB_PASSWORD: root
+      LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+
+      # Identity: this service is reached from the browser, so it verifies
+      # Keycloak tokens itself rather than behind the Spring webservice.
+      KEYCLOAK_ISSUER_URI: "${KEYCLOAK_ISSUER_URI:?KEYCLOAK_ISSUER_URI must be set}"
+      KEYCLOAK_JWKS_URI: "${KEYCLOAK_JWKS_URI:-${KEYCLOAK_ISSUER_URI}/protocol/openid-connect/certs}"
+      KEYCLOAK_AUDIENCE: "${KEYCLOAK_AUDIENCE:-}"
+      KEYCLOAK_CLIENT_ID: "${KEYCLOAK_CLIENT_ID:-logos}"
+      LOGOS_AGENT_REQUIRED_ROLE: "${LOGOS_AGENT_REQUIRED_ROLE:-logos_admin}"
+
+      # The Logos key sessions call models with. Give it LOW priority so agent
+      # traffic never outranks a user at the scheduler.
+      LOGOS_AGENT_API_KEY: "${LOGOS_AGENT_API_KEY:-}"
+      LOGOS_AGENT_DEFAULT_MODEL: "${LOGOS_AGENT_DEFAULT_MODEL:-}"
+
+      # Sessions run in this image, on this network, under these ceilings.
+      LOGOS_AGENT_WORKSPACE_IMAGE: "${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent-workspace:${IMAGE_TAG:-latest}"
+      LOGOS_AGENT_SESSION_NETWORK: "${LOGOS_AGENT_SESSION_NETWORK:-logos-agent-net}"
+      LOGOS_AGENT_MAX_PARALLEL_SESSIONS: "${LOGOS_AGENT_MAX_PARALLEL_SESSIONS:-4}"
+      LOGOS_AGENT_SESSION_MEMORY_MB: "${LOGOS_AGENT_SESSION_MEMORY_MB:-4096}"
+      LOGOS_AGENT_SESSION_CPUS: "${LOGOS_AGENT_SESSION_CPUS:-2}"
+      LOGOS_AGENT_SESSION_TIMEOUT_S: "${LOGOS_AGENT_SESSION_TIMEOUT_S:-10800}"
+
+      # Capacity gates: start only below the first threshold, hand capacity
+      # back above the second. Pause must exceed start or sessions flap.
+      LOGOS_AGENT_START_BELOW_LOAD: "${LOGOS_AGENT_START_BELOW_LOAD:-0.60}"
+      LOGOS_AGENT_PAUSE_ABOVE_LOAD: "${LOGOS_AGENT_PAUSE_ABOVE_LOAD:-0.85}"
+
+      # What a session may reach. The workflow-scoped token stays here; the
+      # session token below should carry contents + pull-request write only.
+      LOGOS_AGENT_REPO_URL: "${LOGOS_AGENT_REPO_URL:-https://github.com/ls1intum/edutelligence.git}"
+      LOGOS_AGENT_REPO_SLUG: "${LOGOS_AGENT_REPO_SLUG:-ls1intum/edutelligence}"
+      LOGOS_AGENT_GITHUB_TOKEN: "${LOGOS_AGENT_GITHUB_TOKEN:-}"
+      LOGOS_AGENT_SESSION_GITHUB_TOKEN: "${LOGOS_AGENT_SESSION_GITHUB_TOKEN:-}"
+      LOGOS_AGENT_DEPLOY_ENABLED: "${LOGOS_AGENT_DEPLOY_ENABLED:-false}"
+      LOGOS_AGENT_DEV_BASE_URL: "${LOGOS_AGENT_DEV_BASE_URL:-https://logos-dev.aet.cit.tum.de}"
+    volumes:
+      # Needed to create session containers. This is the one privileged thing
+      # the runner holds — and precisely what it never passes on: session
+      # containers get no socket, no root, and no capabilities.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent_artifacts:/var/lib/logos-agent/artifacts
+    expose:
+      - "8082"
+    labels:
+      - "traefik.enable=true"
+
+      # === Routing: /api/agent ===
+      - "traefik.http.routers.agent-api.rule=PathPrefix(`/api/agent`)"
+      - "traefik.http.routers.agent-api.entrypoints=websecure"
+      - "traefik.http.routers.agent-api.tls=true"
+      - "traefik.http.routers.agent-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.agent-api.service=logos-agent-svc"
+      - "traefik.http.routers.agent-api.middlewares=strip-api"
+      - "traefik.http.routers.agent-api.priority=200"
+
+      - "traefik.http.services.logos-agent-svc.loadbalancer.server.port=8082"
+    networks:
+      - internal
+      - agent
+
   logos-ui:
     image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-ui:${IMAGE_TAG:-latest}
     container_name: logos-ui
@@ -352,7 +431,14 @@ services:
 volumes:
   data_volume:
   postgres_data:
+  agent_artifacts:
 
 networks:
   internal:
+    driver: bridge
+  # Session containers are attached here rather than to `internal`, so egress
+  # rules for agent workloads can be tightened without touching the stack's own
+  # traffic. The runner creates it if it does not exist.
+  agent:
+    name: ${LOGOS_AGENT_SESSION_NETWORK:-logos-agent-net}
     driver: bridge

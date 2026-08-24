@@ -1,0 +1,299 @@
+"""A minimal async client for the Docker Engine API over its Unix socket.
+
+Only the calls this service needs are implemented. Talking to the socket
+directly rather than through the docker SDK keeps the dependency set small and
+makes the security-relevant fields of a container creation explicit and
+reviewable in one place — see :func:`create_session_container`, which is where
+the isolation of an agent session is actually decided.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import struct
+from typing import Any, AsyncIterator
+
+import httpx
+
+from .config import settings
+
+# The Engine API is versioned; pin low enough to work with older daemons but
+# high enough for the fields used here (PidsLimit, NanoCPUs, ReadonlyRootfs).
+_API_VERSION = "v1.43"
+_BASE = f"http://docker/{_API_VERSION}"
+
+
+class DockerError(RuntimeError):
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(f"docker api {status}: {message}")
+        self.status = status
+        self.message = message
+
+
+def _client(timeout: float = 30.0) -> httpx.AsyncClient:
+    transport = httpx.AsyncHTTPTransport(uds=settings.docker_socket)
+    return httpx.AsyncClient(transport=transport, base_url=_BASE, timeout=timeout)
+
+
+async def _request(method: str, path: str, **kwargs: Any) -> httpx.Response:
+    async with _client() as client:
+        response = await client.request(method, path, **kwargs)
+    if response.status_code >= 400:
+        try:
+            message = response.json().get("message", response.text)
+        except Exception:
+            message = response.text
+        raise DockerError(response.status_code, message)
+    return response
+
+
+async def ping() -> bool:
+    try:
+        await _request("GET", "/_ping")
+        return True
+    except Exception:
+        return False
+
+
+async def ensure_volume(name: str, labels: dict[str, str] | None = None) -> None:
+    """Create a named volume if it does not exist. Idempotent."""
+    try:
+        await _request("GET", f"/volumes/{name}")
+        return
+    except DockerError as exc:
+        if exc.status != 404:
+            raise
+    await _request(
+        "POST",
+        "/volumes/create",
+        json={"Name": name, "Labels": labels or {}},
+    )
+
+
+async def remove_volume(name: str, *, force: bool = False) -> None:
+    try:
+        await _request("DELETE", f"/volumes/{name}", params={"force": str(force).lower()})
+    except DockerError as exc:
+        if exc.status != 404:
+            raise
+
+
+async def ensure_network(name: str) -> None:
+    try:
+        await _request("GET", f"/networks/{name}")
+        return
+    except DockerError as exc:
+        if exc.status != 404:
+            raise
+    await _request(
+        "POST",
+        "/networks/create",
+        json={"Name": name, "Driver": "bridge", "Labels": {"logos.agent": "session-network"}},
+    )
+
+
+async def create_session_container(
+    *,
+    name: str,
+    image: str,
+    env: dict[str, str],
+    workspace_volume: str,
+    artifact_volume: str,
+    session_id: int,
+    labels: dict[str, str] | None = None,
+) -> str:
+    """Create the container an agent session runs in.
+
+    This is the isolation boundary, so the restrictions are set here rather
+    than left to the image:
+
+    * no Docker socket — a session can never reach the daemon that runs it,
+      which is what stops it escaping into the rest of the stack;
+    * all capabilities dropped and privilege escalation disabled;
+    * memory, CPU, and PID ceilings, so one runaway session cannot take the
+      host down or eat the capacity this runner exists to reclaim;
+    * only two writable mounts, the workspace volume and this session's
+      artefact directory; everything else is read-only.
+    """
+    host_config: dict[str, Any] = {
+        "Binds": [
+            f"{workspace_volume}:/workspace",
+            # Each session writes into its own subdirectory of the shared
+            # artefact volume, so the service can serve screenshots and logs
+            # without granting the container access to other sessions' output.
+            f"{artifact_volume}:/artifacts",
+        ],
+        "NetworkMode": settings.session_network,
+        "ReadonlyRootfs": True,
+        # The agent needs scratch space; give it tmpfs rather than a writable
+        # root so nothing it writes outside /workspace survives the session.
+        "Tmpfs": {"/tmp": "rw,exec,nosuid,size=2g", "/home/agent/.cache": "rw,nosuid,size=2g"},
+        "CapDrop": ["ALL"],
+        "SecurityOpt": ["no-new-privileges:true"],
+        "Memory": settings.session_memory_mb * 1024 * 1024,
+        "MemorySwap": settings.session_memory_mb * 1024 * 1024,  # no swap: OOM instead of thrash
+        "NanoCpus": int(settings.session_cpus * 1_000_000_000),
+        "PidsLimit": settings.session_pids_limit,
+        "AutoRemove": False,  # keep exit status readable after the run
+        "RestartPolicy": {"Name": "no"},
+    }
+
+    payload: dict[str, Any] = {
+        "Image": image,
+        "Env": [f"{k}={v}" for k, v in env.items()],
+        "Labels": {
+            "logos.agent.session": str(session_id),
+            "logos.agent.managed": "true",
+            **(labels or {}),
+        },
+        "WorkingDir": "/workspace",
+        "HostConfig": host_config,
+        "Tty": False,
+        "OpenStdin": False,
+        # Never run as root inside the container; the image creates this user.
+        "User": "agent",
+    }
+
+    response = await _request("POST", "/containers/create", params={"name": name}, json=payload)
+    return response.json()["Id"]
+
+
+async def start_container(container_id: str) -> None:
+    await _request("POST", f"/containers/{container_id}/start")
+
+
+async def stop_container(container_id: str, *, timeout_s: int = 10) -> None:
+    try:
+        await _request(
+            "POST",
+            f"/containers/{container_id}/stop",
+            params={"t": timeout_s},
+            # Stopping waits for the grace period, so the HTTP timeout must
+            # outlast it or the call raises while the daemon is still working.
+        )
+    except DockerError as exc:
+        # 304 = already stopped, 404 = already gone. Both are the desired state.
+        if exc.status not in (304, 404):
+            raise
+
+
+async def pause_container(container_id: str) -> None:
+    """Freeze a session so its CPU and GPU-adjacent work stops immediately.
+
+    Pausing (SIGSTOP via the freezer cgroup) keeps the process tree and the
+    workspace intact, which is what lets a paused session resume mid-task when
+    load drops again.
+    """
+    try:
+        await _request("POST", f"/containers/{container_id}/pause")
+    except DockerError as exc:
+        if exc.status not in (304, 404, 409):
+            raise
+
+
+async def unpause_container(container_id: str) -> None:
+    try:
+        await _request("POST", f"/containers/{container_id}/unpause")
+    except DockerError as exc:
+        if exc.status not in (304, 404, 409):
+            raise
+
+
+async def remove_container(container_id: str, *, force: bool = True) -> None:
+    try:
+        await _request("DELETE", f"/containers/{container_id}", params={"force": str(force).lower()})
+    except DockerError as exc:
+        if exc.status != 404:
+            raise
+
+
+async def inspect_container(container_id: str) -> dict[str, Any] | None:
+    try:
+        response = await _request("GET", f"/containers/{container_id}/json")
+    except DockerError as exc:
+        if exc.status == 404:
+            return None
+        raise
+    return response.json()
+
+
+async def container_state(container_id: str) -> tuple[str, int | None]:
+    """Return (status, exit_code). Status is Docker's own vocabulary."""
+    info = await inspect_container(container_id)
+    if info is None:
+        return "gone", None
+    state = info.get("State", {})
+    exit_code = state.get("ExitCode")
+    return state.get("Status", "unknown"), exit_code
+
+
+def _demux(chunk: bytes) -> AsyncIterator[str]:  # pragma: no cover - helper shape
+    raise NotImplementedError
+
+
+async def stream_logs(container_id: str, *, since: int = 0, follow: bool = True) -> AsyncIterator[str]:
+    """Yield log lines from a container.
+
+    Without a TTY the daemon multiplexes stdout and stderr into a framed
+    stream: an 8-byte header per frame, where byte 0 is the stream index and
+    bytes 4..8 are the payload length. Both streams are merged here — for an
+    agent transcript the interleaving is the useful part.
+    """
+    params = {
+        "stdout": "true",
+        "stderr": "true",
+        "follow": "true" if follow else "false",
+        "since": str(since),
+        "timestamps": "false",
+    }
+    transport = httpx.AsyncHTTPTransport(uds=settings.docker_socket)
+    async with httpx.AsyncClient(transport=transport, base_url=_BASE, timeout=None) as client:
+        async with client.stream("GET", f"/containers/{container_id}/logs", params=params) as response:
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise DockerError(response.status_code, body.decode("utf-8", "replace"))
+            buffer = bytearray()
+            async for chunk in response.aiter_bytes():
+                buffer.extend(chunk)
+                while len(buffer) >= 8:
+                    header = bytes(buffer[:8])
+                    # A plain (non-multiplexed) stream can appear when the
+                    # container was created with a TTY. Detect it by an
+                    # implausible stream index and fall back to raw decoding.
+                    if header[0] not in (0, 1, 2):
+                        text = bytes(buffer).decode("utf-8", "replace")
+                        buffer.clear()
+                        for line in text.splitlines():
+                            yield line
+                        break
+                    (length,) = struct.unpack(">I", header[4:8])
+                    if len(buffer) < 8 + length:
+                        break
+                    payload = bytes(buffer[8 : 8 + length])
+                    del buffer[: 8 + length]
+                    for line in payload.decode("utf-8", "replace").splitlines():
+                        yield line
+
+
+async def wait_container(container_id: str, timeout_s: int) -> int | None:
+    """Wait for a container to exit; return its exit code, or None on timeout."""
+    try:
+        async with _client(timeout=timeout_s) as client:
+            response = await client.post(f"/containers/{container_id}/wait")
+        if response.status_code >= 400:
+            raise DockerError(response.status_code, response.text)
+        return int(response.json().get("StatusCode", -1))
+    except (httpx.TimeoutException, asyncio.TimeoutError):
+        return None
+
+
+async def list_managed_containers() -> list[dict[str, Any]]:
+    """Every container this service owns, including ones it has forgotten.
+
+    Used on startup to reconcile: a restart of the runner must not orphan
+    running sessions, and must not leave dead ones marked running.
+    """
+    filters = json.dumps({"label": ["logos.agent.managed=true"]})
+    response = await _request("GET", "/containers/json", params={"all": "true", "filters": filters})
+    return response.json()

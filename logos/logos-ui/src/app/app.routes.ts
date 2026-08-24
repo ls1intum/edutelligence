@@ -26,6 +26,7 @@ export const routes: Routes = [
       { path: 'user-management', title: 'Users · Logos',           data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/user-management/user-management').then(m => m.UserManagement) },
       { path: 'team-management', title: 'Teams · Logos',           data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/team-management/team-management').then(m => m.TeamManagement) },
       { path: 'teams/:id',       title: 'Team · Logos',            data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/team-detail/team-detail').then(m => m.TeamDetail) },
+      { path: 'agents',         title: 'Agent Sessions · Logos',   data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/agents/agents').then(m => m.Agents) },
       { path: 'my-workspace',    title: 'My Workspace · Logos',    canActivate: [hasKeysGuard], loadComponent: () => import('./features/my-workspace/my-workspace').then(m => m.MyWorkspace) },
       { path: 'ai-tools',        title: 'AI Tools · Logos',         canActivate: [hasKeysGuard], loadComponent: () => import('./features/ai-tools/ai-tools').then(m => m.AiTools) },
       { path: 'open-code',       redirectTo: 'ai-tools', pathMatch: 'full' },
