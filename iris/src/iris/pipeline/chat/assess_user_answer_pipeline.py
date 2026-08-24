@@ -20,7 +20,6 @@ from ...llm import (
     LlmRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
-from ...web.status.status_update import StatusCallback
 from ..prompts.assess_user_answer_prompt import (
     assess_user_answer_prompt,
     between_min_max_questions_rules,

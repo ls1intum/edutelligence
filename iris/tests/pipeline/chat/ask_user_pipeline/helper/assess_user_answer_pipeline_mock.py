@@ -1,5 +1,3 @@
-from typing import Optional
-
 from langsmith import traceable
 
 from iris.common.token_usage_dto import TokenUsageDTO
@@ -7,22 +5,17 @@ from iris.domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import 
     AskUserPipelineExecutionDTO,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
-from iris.web.status.status_update import StatusCallback
 
 
 class AssessUserAnswerPipelineMock(SubPipeline):
     """Pipeline mock that always assesses an answer as too vague, so another question must be
     generated (next_question is returned)"""
 
-    callback: StatusCallback
     variant: str
     tokens: TokenUsageDTO = None
 
-    def __init__(
-        self, callback: Optional[StatusCallback] = None, model: str = "oai-gpt-5.5", variant: str = "default",
-    ):
+    def __init__(self, model: str = "oai-gpt-5.5", variant: str = "default"):
         super().__init__(implementation_id="assess_user_answer_pipeline_reference_impl")
-        self.callback = callback
         self.variant = variant
 
     @traceable(name="Assess User Answer Pipeline Mock")
