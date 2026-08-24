@@ -3372,11 +3372,12 @@ async def _execute_resource_mode(
         else:
             raise HTTPException(status_code=503, detail=error_msg)
 
+    provider_type = result.scheduling_stats.get("provider_type", "")
+
     rl_tpm_key = None
     if auth.cloud_rl is not None or auth.local_rl is not None:
         from logos.rate_limiter import RateLimitConfig, get_rate_limiter
 
-        provider_type = result.scheduling_stats.get("provider_type", "")
         is_local = provider_type == "logosnode"
         rl_info = auth.local_rl if is_local else auth.cloud_rl
         rl_key = f"api_key:{auth.api_key_id}:{'local' if is_local else 'cloud'}"
@@ -3409,6 +3410,35 @@ async def _execute_resource_mode(
 
             if rl_info.get("tpm") is not None:
                 rl_tpm_key = rl_key
+
+    with DBManager() as db:
+        try:
+            _check_budget_if_cloud(
+                db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
+            )
+        except Exception as e:
+            try:
+                _pipeline.scheduler.release(
+                    result.model_id,
+                    result.provider_id,
+                    provider_type,
+                    result.scheduling_stats.get("request_id") or request_id,
+                )
+            except Exception:
+                logger.warning("Failed to release scheduler slot after budget reject")
+            if isinstance(e, HTTPException) and is_async_job:
+                _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
+                _record_log_failure(
+                    log_id,
+                    result.scheduling_stats.get("request_id") or request_id,
+                    str(e.detail),
+                    model_id=result.model_id,
+                    provider_id=result.provider_id,
+                    classification_stats=result.classification_stats,
+                    scheduling_stats=result.scheduling_stats,
+                )
+                return {"status_code": e.status_code, "data": err_body}
+            raise
 
     # Execute and Respond
     try:
@@ -3693,16 +3723,16 @@ async def handle_sync_request(path: str, request: Request):
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
-    if log_id:
-        with DBManager() as db:
-            db.update_log_entry_metrics(
-                log_id=log_id,
-                request_id=request_id,
-                timeout_s=body.get("timeout_s"),
-            )
 
     try:
-        deployments, allowed_models = request_setup(headers, auth.api_key_id)
+        with DBManager() as db:
+            if log_id:
+                db.update_log_entry_metrics(
+                    log_id=log_id,
+                    request_id=request_id,
+                    timeout_s=body.get("timeout_s"),
+                )
+            deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
         deployments = await _filter_logosnode_deployments(deployments)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
@@ -3772,14 +3802,12 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
         raise HTTPException(status_code=400, detail="JSON payload must be an object")
 
     if use_profile_auth:
-        import datetime
-
-        month_start = datetime.date.today().replace(day=1).isoformat()
         with DBManager() as db:
 
-            # Rate limits and budgets apply to every key, including those owned
-            # by logos_admins. Admin keys derive their limits from their team /
-            # key settings exactly like any other key.
+            # Rate limits apply to every key, including those owned by
+            # logos_admins. Admin keys derive their limits from their team /
+            # key settings exactly like any other key. Budget is checked later,
+            # once permitted deployments are known (see _check_budget_if_cloud).
             s = auth.settings or {}
             team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
 
@@ -3804,38 +3832,6 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
             if local_rpm is not None or local_tpm is not None:
                 auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
 
-            key_type = getattr(auth, "key_type", "user")
-
-            if key_type == "application":
-                app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
-                if app_budget_limit is not None:
-                    app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-                    if app_used >= app_budget_limit:
-                        raise HTTPException(
-                            status_code=402,
-                            detail="Application monthly budget exceeded.",
-                        )
-            else:
-                if auth.team_id is not None:
-                    team_info = db.get_team(auth.team_id)
-                    if team_info and team_info.get("team_monthly_budget_micro_cents"):
-                        team_limit = team_info["team_monthly_budget_micro_cents"]
-                        team_used = db.get_team_budget_usage(auth.team_id, month_start)
-                        if team_used >= team_limit:
-                            raise HTTPException(
-                                status_code=402,
-                                detail="Team monthly budget exceeded. Contact your admin.",
-                            )
-
-                personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
-                if personal_limit is not None:
-                    personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-                    if personal_used >= personal_limit:
-                        raise HTTPException(
-                            status_code=402,
-                            detail="Personal monthly budget exceeded.",
-                        )
-
             r_log, c_log = db.log_usage(
                 api_key_id=auth.api_key_id,
                 team_id=auth.team_id,
@@ -3852,6 +3848,45 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
         return headers, auth, body, client_ip, log_id
 
     return headers, None, body, client_ip, None
+
+
+def _check_budget_if_cloud(db: DBManager, auth: "AuthContext", is_cloud: bool, month_start: str) -> None:
+    """
+    Raise HTTPException(402) if this key/team is over its monthly budget.
+
+    Only cloud usage is metered (logosnode/local providers have no configured
+    token pricing in token_prices, so they always cost $0), so this is a
+    no-op when the request that actually got scheduled isn't routing to a
+    cloud provider at all. Called post-scheduling (see _execute_resource_mode)
+    with the real resolved provider type, not a guess from the permission list --
+    that's what lets this be exact for mixed cloud+local keys instead of only
+    for pure-type ones.
+    """
+    if not is_cloud:
+        return
+
+    key_type = getattr(auth, "key_type", "user")
+
+    if key_type == "application":
+        app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
+        if app_budget_limit is not None:
+            app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+            if app_used >= app_budget_limit:
+                raise HTTPException(status_code=402, detail="Application monthly budget exceeded.")
+    else:
+        if auth.team_id is not None:
+            team_info = db.get_team(auth.team_id)
+            if team_info and team_info.get("team_monthly_budget_micro_cents"):
+                team_limit = team_info["team_monthly_budget_micro_cents"]
+                team_used = db.get_team_budget_usage(auth.team_id, month_start)
+                if team_used >= team_limit:
+                    raise HTTPException(status_code=402, detail="Team monthly budget exceeded. Contact your admin.")
+
+        personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
+        if personal_limit is not None:
+            personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+            if personal_used >= personal_limit:
+                raise HTTPException(status_code=402, detail="Personal monthly budget exceeded.")
 
 
 async def submit_job_request(path: str, request: Request) -> JSONResponse:
@@ -3960,17 +3995,17 @@ async def execute_proxy_job(
     json_data = json_data or dict()
 
     request_id = secrets.token_urlsafe(16)
-    if log_id:
-        with DBManager() as db:
-            db.update_log_entry_metrics(
-                log_id=log_id,
-                request_id=request_id,
-                timeout_s=json_data.get("timeout_s"),
-            )
 
     # Get available models for this API key
     try:
-        deployments, allowed_models = request_setup(headers, auth.api_key_id)
+        with DBManager() as db:
+            if log_id:
+                db.update_log_entry_metrics(
+                    log_id=log_id,
+                    request_id=request_id,
+                    timeout_s=json_data.get("timeout_s"),
+                )
+            deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
         deployments = await _filter_logosnode_deployments(deployments)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")

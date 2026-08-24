@@ -99,7 +99,9 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         -- key's current team, so filtering on it directly under-counts spend.
         -- Restricting ak2 up front to this user's own team(s) still avoids
         -- re-aggregating the entire platform's log_entry/usage_tokens history once
-        -- per key the user owns.
+        -- per key the user owns. Scoped to developer keys only, matching
+        -- get_team_budget_usage in the orchestrator: application keys carry
+        -- their own separate budget and never count against the team cap.
         LEFT JOIN (
             SELECT ak2.team_id, COALESCE(SUM(
                 CASE WHEN tp.price_per_k_token IS NOT NULL
@@ -126,6 +128,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
                 SELECT DISTINCT team_id FROM api_keys
                 WHERE user_id = :userId AND is_active = true AND team_id IS NOT NULL
             )
+            AND ak2.key_type = 'developer'
             AND DATE_TRUNC('month', le.timestamp_request)::date = DATE_TRUNC('month', CURRENT_DATE)::date
             GROUP BY ak2.team_id
         ) team_bu ON team_bu.team_id = ak.team_id
