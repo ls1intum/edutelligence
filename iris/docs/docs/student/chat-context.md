@@ -27,11 +27,23 @@ Leave the context empty for questions that span topics: "which exercises cover r
 
 Next to the message input field you will find a context selector and, when a context is active, a chip showing it.
 
-<!-- TODO: Screenshot needed — context selector open, showing the course / lectures / exercises groups, with an active context chip next to it -->
+<div class="doc-video-container">
+  <iframe
+    src="https://live.rbg.tum.de/w/artemisintro/75424?video_only=1&t=0"
+    allowfullscreen="allowfullscreen"
+    class="doc-video-iframe"
+  >
+    Context switching in Artemis on TUM-Live.
+  </iframe>
+</div>
 
 - **Set or change it** — Open the selector and pick a lecture or an exercise. The list is grouped into Lectures and Exercises, and you can filter it by typing.
 - **Remove it** — Click the small x on the chip. The chat returns to course level.
 - **Do nothing** — Opening Iris from a lecture or exercise page fills the chip in for you.
+
+:::tip Using Iris on Mobile?
+Context selection and automatic switching work on mobile as well. Check out the [iOS walkthrough in Getting Started](./getting-started#iris-on-the-ios-app) to see how it looks in the Artemis iOS app.
+:::
 
 Your choice takes effect with your next message, not the moment you pick it. The chip shows what Iris will use, so you can still change or remove it before you hit send.
 
