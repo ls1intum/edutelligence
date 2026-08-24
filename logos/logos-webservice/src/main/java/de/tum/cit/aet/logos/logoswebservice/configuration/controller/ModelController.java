@@ -13,11 +13,13 @@ import org.springframework.web.bind.annotation.RestController;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCapabilitiesRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorCalibrationLogsClient;
 
@@ -27,14 +29,16 @@ public class ModelController {
 
     private final ModelService modelService;
     private final PriceUpdaterService priceUpdaterService;
+    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient;
 
-    public ModelController(
-            ModelService modelService,
-            PriceUpdaterService priceUpdaterService,
-            OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient) {
+    public ModelController(ModelService modelService,
+                           PriceUpdaterService priceUpdaterService,
+                           ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
+                           OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient) {
         this.modelService = modelService;
         this.priceUpdaterService = priceUpdaterService;
+        this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.orchestratorCalibrationLogsClient = orchestratorCalibrationLogsClient;
     }
 
@@ -47,7 +51,16 @@ public class ModelController {
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addModel(
             @RequestBody AddModelRequestDTO req) {
-        return ResponseEntity.ok(modelService.addModel(req));
+        Map<String, Object> serviceResult = modelService.addModel(req);
+        Integer newModelId = (Integer) serviceResult.get("model_id");
+        if (newModelId != null && req.name() != null) {
+            priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
+            modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
+                newModelId,
+                req.name()
+            );
+        }
+        return ResponseEntity.ok(serviceResult);
     }
 
     @PostMapping("/update_model_info")
@@ -58,6 +71,7 @@ public class ModelController {
             ResponseEntity<?> response = ResponseEntity.ok(modelService.updateModelInfo(req));
             if (req.name() != null) {
                 priceUpdaterService.updatePricesForModelAsync(req.modelId(), req.name());
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(req.modelId(), req.name());
             }
             return response;
         } catch (IllegalArgumentException e) {
@@ -116,5 +130,17 @@ public class ModelController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    @PostMapping("/get_model_capabilities")
+    public ResponseEntity<?> getModelCapabilities(
+            @RequestBody GetModelCapabilitiesRequestDTO req) {
+
+        if (req.ids() == null || req.ids().isEmpty()) {
+            return ResponseEntity.badRequest()
+                .body(Map.of("error", "ids are required"));
+        }
+
+        return ResponseEntity.ok(modelService.getModelCapabilities(req.ids()));
     }
 }

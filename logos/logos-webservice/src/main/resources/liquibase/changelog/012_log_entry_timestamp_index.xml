@@ -16,7 +16,7 @@
          this table while logos-webservice is redeployed via `docker compose up -d`.
          A maintenance window (plain CREATE INDEX) is only needed if writes to
          log_entry are stopped for the duration of the migration. -->
-    <changeSet id="008-log-entry-timestamp-request-index" author="alexandra" runInTransaction="false">
+    <changeSet id="012-log-entry-timestamp-request-index" author="alexandra" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_timestamp_request"/></not>
         </preConditions>
