@@ -6,6 +6,8 @@
 
 See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/README.md) for the classification, scheduling, context-resolution, LogosNode/HTTP forwarding, and completion boundaries.
 
+See [self-development](docs/self-development.md) for how Logos is developed with coding agents served by Logos, the boundary that decides what can be delegated, and the guardrails that go with it.
+
 # Setup
 
 ## Prerequisites
