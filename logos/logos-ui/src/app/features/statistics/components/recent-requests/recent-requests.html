@@ -1,12 +1,20 @@
 <div class="rr-host">
 
-  <!-- Empty state -->
-  @if (displayItems().length === 0) {
+  <!-- Range change in flight: the rows below belong to the previous range -->
+  @if (pending) {
+    <app-stats-skeleton variant="rows" />
+  } @else if (displayItems().length === 0) {
     <div class="rr-empty">No requests in this time range.</div>
-  }
+  } @else {
 
-  <!-- Request rows (WS-only, capped and scrollable) -->
-  @if (displayItems().length > 0) {
+    <!-- How much of the range is on screen — the list is a window, not the whole range -->
+    <div class="rr-count">
+      Showing <strong>{{ formatCount(shownCount()) }}</strong>
+      of <strong>{{ formatCount(totalCount()) }}</strong>
+      request{{ totalCount() === 1 ? '' : 's' }} in the selected range
+    </div>
+
+    <!-- Request rows (live push + on-demand history, scrollable) -->
     <div class="rr-list">
       @for (item of displayItems(); track trackById($index, item)) {
         <div
@@ -40,7 +48,7 @@
             </div>
             @if (item.is_cloud && costLabelOf(item)) {
               <div class="rr-card__meta rr-card__cost">
-                <i class="pi pi-euro" aria-hidden="true"></i> {{ costLabelOf(item) }}
+                <i class="pi pi-dollar" aria-hidden="true"></i> {{ costLabelOf(item) }}
               </div>
             }
             @if (tokensLabelOf(item)) {
@@ -82,7 +90,29 @@
           </div>
         </div>
       }
+
+      <!-- Walk backwards through the range, one page at a time -->
+      @if (hasMore()) {
+        <button
+          class="rr-more"
+          type="button"
+          [disabled]="loadingOlder()"
+          (click)="loadOlder()"
+        >
+          @if (loadingOlder()) {
+            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Loading…
+          } @else {
+            <i class="pi pi-angle-down" aria-hidden="true"></i> Load older requests
+          }
+        </button>
+      } @else if (shownCount() > 0) {
+        <div class="rr-end">End of the selected range.</div>
+      }
     </div>
+
+    @if (olderError()) {
+      <div class="rr-error">{{ olderError() }}</div>
+    }
   }
 
 </div>

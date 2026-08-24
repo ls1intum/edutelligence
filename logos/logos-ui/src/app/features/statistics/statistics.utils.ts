@@ -58,12 +58,22 @@ const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
 /**
- * Deterministic, unambiguous x-axis labels for a time window (all UTC):
+ * Deterministic, unambiguous x-axis labels for a time window:
  * - span ≤ 24 h   → "HH:00" at hour boundaries (hours are unique within 24 h)
  * - span ≤ 32 d   → "Mon D" at day boundaries (the month prefix keeps labels
  *                   unique, e.g. "Jul 30" vs "Aug 30" never collide)
  * - span >  32 d  → "Mon YYYY" at month boundaries
  * Labels are thinned to at most `maxLabels`, keeping the first of each step.
+ *
+ * All boundaries and labels are in the **viewer's local time**, because that is
+ * what the range selection means: `calendarRange` builds "Today" from local
+ * midnight and `periodLabel` names it in local terms. Ticking in UTC put the
+ * axis of a "Today" view hours off its own heading for anyone east or west of
+ * Greenwich — a request made at 14:00 sat under the 12:00 tick in Munich.
+ *
+ * Boundaries are stepped through a Date rather than by adding a fixed number of
+ * milliseconds, so a DST switch inside the window does not drag every later
+ * label off its hour.
  *
  * When a window is too short to contain a single boundary of its own tier
  * (a 20-minute "Today" view, a single-bucket chart), the boundaries are
@@ -81,8 +91,12 @@ export function timeAxisLabels(
 
   if (spanMs <= 24 * HOUR_MS) {
     const out: TimeAxisLabel[] = [];
-    for (let ts = Math.ceil(winStartMs / HOUR_MS) * HOUR_MS; ts < winEndMs; ts += HOUR_MS) {
-      out.push({ tsMs: ts, label: hourLabel(ts) });
+    const cursor = new Date(winStartMs);
+    cursor.setMinutes(0, 0, 0);
+    if (cursor.getTime() < winStartMs) cursor.setHours(cursor.getHours() + 1);
+    while (cursor.getTime() < winEndMs) {
+      out.push({ tsMs: cursor.getTime(), label: hourLabel(cursor.getTime()) });
+      cursor.setHours(cursor.getHours() + 1);
     }
     return out.length > 0
       ? thinLabels(out, maxLabels)
@@ -91,28 +105,31 @@ export function timeAxisLabels(
 
   if (spanMs <= 32 * DAY_MS) {
     const out: TimeAxisLabel[] = [];
-    for (let ts = Math.ceil(winStartMs / DAY_MS) * DAY_MS; ts < winEndMs; ts += DAY_MS) {
-      out.push({ tsMs: ts, label: dayLabel(ts) });
+    const cursor = new Date(winStartMs);
+    cursor.setHours(0, 0, 0, 0);
+    if (cursor.getTime() < winStartMs) cursor.setDate(cursor.getDate() + 1);
+    while (cursor.getTime() < winEndMs) {
+      out.push({ tsMs: cursor.getTime(), label: dayLabel(cursor.getTime()) });
+      cursor.setDate(cursor.getDate() + 1);
     }
     return out.length > 0
       ? thinLabels(out, maxLabels)
       : evenlySpacedLabels(winStartMs, winEndMs, maxLabels, dayLabel);
   }
 
-  // Month boundaries strictly inside the window.
+  // Month boundaries inside the window.
   const out: TimeAxisLabel[] = [];
-  const start = new Date(winStartMs);
-  let y = start.getUTCFullYear();
-  let m = start.getUTCMonth();
-  for (;;) {
-    m += 1; // next month boundary
-    if (m > 11) {
-      m = 0;
-      y += 1;
-    }
-    const ts = Date.UTC(y, m, 1);
-    if (ts >= winEndMs) break;
-    out.push({ tsMs: ts, label: `${MONTHS_SHORT[m]} ${y}` });
+  const cursor = new Date(winStartMs);
+  cursor.setHours(0, 0, 0, 0);
+  // Day first: setMonth() on the 31st would skip a 30-day month entirely.
+  cursor.setDate(1);
+  if (cursor.getTime() < winStartMs) cursor.setMonth(cursor.getMonth() + 1);
+  while (cursor.getTime() < winEndMs) {
+    out.push({
+      tsMs: cursor.getTime(),
+      label: `${MONTHS_SHORT[cursor.getMonth()]} ${cursor.getFullYear()}`,
+    });
+    cursor.setMonth(cursor.getMonth() + 1);
   }
   return out.length > 0
     ? thinLabels(out, maxLabels)
@@ -120,17 +137,17 @@ export function timeAxisLabels(
 }
 
 function hourLabel(tsMs: number): string {
-  return `${String(new Date(tsMs).getUTCHours()).padStart(2, '0')}:00`;
+  return `${String(new Date(tsMs).getHours()).padStart(2, '0')}:00`;
 }
 
 function clockLabel(tsMs: number): string {
   const d = new Date(tsMs);
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function dayLabel(tsMs: number): string {
   const d = new Date(tsMs);
-  return `${MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  return `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`;
 }
 
 /** Fallback ticks for windows that contain no boundary of their own tier. */

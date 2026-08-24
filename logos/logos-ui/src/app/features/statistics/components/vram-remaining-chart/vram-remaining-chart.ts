@@ -13,7 +13,7 @@ import { StatsSkeletonComponent } from '../skeletons/skeletons';
 import { VramRangeSliderComponent } from '../vram-range-slider/vram-range-slider';
 import { seriesColor } from '../../statistics.constants';
 import { parseVramSnapshot, timeAxisLabels } from '../../statistics.utils';
-import type { VramV2Sample, VramProviderMeta, LaneSignalData } from '../../statistics.models';
+import type { VramV2Sample } from '../../statistics.models';
 import { pointerPlotFrac } from '../chart-interaction.util';
 
 // ── SVG geometry ─────────────────────────────────────────────────────────────
@@ -99,7 +99,6 @@ function formatGb(v: number): string {
 export class VramRemainingChartComponent implements OnChanges {
   // ── Inputs ──────────────────────────────────────────────────────────────────
   @Input() vramDataByProvider: Record<string, VramV2Sample[]> = {};
-  @Input() providerMetaByName: Record<string, VramProviderMeta> = {};
   /**
    * The global (user-selected) time range. The always-live 'all' VRAM dataset
    * is windowed over this range; the range slider only zooms inside it.
@@ -108,7 +107,6 @@ export class VramRemainingChartComponent implements OnChanges {
   @Input() isVramLoading = false;
   @Input() vramError: string | null = null;
   @Input() nowMs = Date.now();
-  @Input() laneStateByProvider: Record<string, Record<string, LaneSignalData>> = {};
 
   // ── Outputs ─────────────────────────────────────────────────────────────────
   @Output() refresh = new EventEmitter<void>();
@@ -155,11 +153,11 @@ export class VramRemainingChartComponent implements OnChanges {
     const now = this._nowMs();
     const ageMs = Math.max(0, now - ts);
     const isStale = ageMs > STALENESS_LIMIT_MS;
+    // Local time, matching the x-axis ticks and the range selection above it.
     const time = d.toLocaleTimeString('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-      timeZone: 'UTC',
     });
     if (isStale) {
       const s = Math.round(ageMs / 1000);
@@ -173,9 +171,9 @@ export class VramRemainingChartComponent implements OnChanges {
             : h < 48
               ? `${h}h ago`
               : `${Math.round(h / 24)}d ago`;
-      return `${time} UTC · stale (${age})`;
+      return `${time} · stale (${age})`;
     }
-    return `${time} UTC`;
+    return time;
   });
 
   /** True if the last sample is older than STALENESS_LIMIT_MS */
@@ -392,12 +390,21 @@ export class VramRemainingChartComponent implements OnChanges {
 
     const ts = bestTs ?? hoveredMs;
     const d = new Date(ts);
-    const timeLabel = d.toLocaleTimeString('en-GB', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      timeZone: 'UTC',
-    }) + ' UTC';
+    // Ranges wider than a day put samples from several days under the crosshair,
+    // so the date has to be part of the label; local time throughout.
+    const spansDays = winEndMs - winStartMs > 24 * 3_600_000;
+    const timeLabel = spansDays
+      ? d.toLocaleString('en-GB', {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : d.toLocaleTimeString('en-GB', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
 
     return { x, rows, timeLabel };
   });

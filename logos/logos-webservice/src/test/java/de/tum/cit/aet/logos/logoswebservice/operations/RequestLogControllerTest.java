@@ -45,7 +45,49 @@ class RequestLogControllerTest {
                 .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.requests").isArray())
-           .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"));
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"))
+           // The feed shows a page of the range, so it reports how big the range is.
+           .andExpect(jsonPath("$.total").value(2))
+           .andExpect(jsonPath("$.offset").value(0))
+           .andExpect(jsonPath("$.has_more").value(false));
+    }
+
+    @Test
+    void latestRequests_pagesIntoOlderRowsWithoutRepeatingThem() throws Exception {
+        // One row per page: page 1 must hold the newest and announce more,
+        // page 2 the next one and announce the end. This is what "load older"
+        // in the statistics feed walks through.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"limit\": 1, \"offset\": 0}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"))
+           .andExpect(jsonPath("$.total").value(2))
+           .andExpect(jsonPath("$.has_more").value(true));
+
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"limit\": 1, \"offset\": 1}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-aaa-111"))
+           .andExpect(jsonPath("$.offset").value(1))
+           .andExpect(jsonPath("$.has_more").value(false));
+    }
+
+    @Test
+    void latestRequests_rangeOutsideAnyRequestIsEmptyButStillCounted() throws Exception {
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"start\": \"1990-01-01T00:00:00Z\", \"end\": \"1990-01-02T00:00:00Z\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests").isEmpty())
+           .andExpect(jsonPath("$.total").value(0))
+           .andExpect(jsonPath("$.has_more").value(false));
     }
 
     @Test

@@ -133,6 +133,13 @@
             <i class="pi pi-plus" aria-hidden="true"></i> Load lane
           </button>
         }
+        @if (acceptedModel()) {
+          <div class="lane-load__pending" aria-live="polite">
+            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+            Loading <strong>{{ acceptedModel() }}</strong> — this can take minutes; the lane
+            appears here once the worker reports it.
+          </div>
+        }
       </div>
     }
   </div>

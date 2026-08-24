@@ -19,6 +19,12 @@ import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLogProj
 @Service
 public class RequestLogService {
 
+    /** Rows the live feed pushes, and the page size of a "load older" step. */
+    public static final int LATEST_REQUESTS_PAGE_SIZE = 10;
+
+    /** Ceiling on a single page, so a hand-written call can't ask for the world. */
+    private static final int LATEST_REQUESTS_MAX_PAGE_SIZE = 50;
+
     private final LogEntryRepository logEntryRepository;
 
     public RequestLogService(LogEntryRepository logEntryRepository) {
@@ -26,12 +32,36 @@ public class RequestLogService {
     }
 
     /**
+     * The newest page of the range, without a row count.
+     *
+     * This is the websocket's push, which runs every two seconds for every open
+     * statistics session. {@code log_entry} carries no index on its timestamps,
+     * so counting the range means scanning it — the page's own size is all the
+     * live feed needs, and the statistics totals already state the range count.
+     *
      * @param startDate ISO-8601 start of the window (inclusive); {@code null}
      *                  defaults to 30 days before {@code endDate}
      * @param endDate   ISO-8601 end of the window (inclusive); {@code null}
      *                  defaults to now
      */
     public Map<String, Object> getLatestRequests(String startDate, String endDate) {
+        return getLatestRequests(startDate, endDate, LATEST_REQUESTS_PAGE_SIZE, 0, false);
+    }
+
+    /**
+     * One page of the range plus its row count, for the operator paging back
+     * through the history on demand.
+     *
+     * @param limit  rows to return, clamped to 1..50
+     * @param offset rows to skip, newest first — how the UI walks backwards
+     *               through the range without widening the live push
+     */
+    public Map<String, Object> getLatestRequests(String startDate, String endDate, int limit, int offset) {
+        return getLatestRequests(startDate, endDate, limit, offset, true);
+    }
+
+    private Map<String, Object> getLatestRequests(String startDate, String endDate,
+                                                  int limit, int offset, boolean withTotal) {
         ZonedDateTime endDt = parseInstantOrNow(endDate);
         // Same lenient parse as the end: a malformed range must fall back to the
         // default window, not surface as a 500.
@@ -42,7 +72,10 @@ public class RequestLogService {
         Timestamp startTs = Timestamp.from(startDt.toInstant());
         Timestamp endTs = Timestamp.from(endDt.toInstant());
 
-        List<Map<String, Object>> rows = logEntryRepository.findLatestRequests(startTs, endTs).stream()
+        int pageSize = Math.max(1, Math.min(LATEST_REQUESTS_MAX_PAGE_SIZE, limit));
+        int skip = Math.max(0, offset);
+
+        List<Map<String, Object>> rows = logEntryRepository.findLatestRequests(startTs, endTs, pageSize, skip).stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("request_id", p.getRequestId());
@@ -72,7 +105,24 @@ public class RequestLogService {
                 return m;
             })
             .toList();
-        return Map.of("requests", rows);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("requests", rows);
+        result.put("offset", skip);
+        result.put("limit", pageSize);
+        if (withTotal) {
+            Long total = logEntryRepository.countRequestsInRange(startTs, endTs);
+            if (total == null) total = 0L;
+            // The feed shows a window onto the range, so it has to say how big
+            // the range is — "10 of 4,312" is the difference between a capped
+            // list and a list the operator reads as complete.
+            result.put("total", total);
+            result.put("has_more", (long) skip + rows.size() < total);
+        } else {
+            // A short page is the end of the range; a full one may not be.
+            result.put("has_more", rows.size() >= pageSize);
+        }
+        return result;
     }
 
     private static ZonedDateTime parseInstantOrNow(String iso) {

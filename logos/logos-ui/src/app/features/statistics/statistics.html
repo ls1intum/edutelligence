@@ -26,12 +26,18 @@
   } @else {
 
     <!-- ── KPI strip ─────────────────────────────────────────────────────── -->
+    <!-- The period belongs here, once: inside a card label it wraps to a second
+         line and every card in the row loses its alignment. -->
+    <div class="stats-kpi-period">
+      Totals for <strong>{{ customRange() ? rangeLabel() : periodLabel() }}</strong>
+    </div>
+
     <div class="stats-kpi-strip">
 
       <!-- Total requests -->
       @if (statsReady()) {
         <app-stats-kpi-card
-          [label]="'Requests · ' + periodLabel()"
+          label="Requests"
           [accent]="CHART_ROLE.total"
           [value]="totalRequests().toLocaleString()"
         >
@@ -161,12 +167,12 @@
       <!-- Tokens processed (historic, selected range) -->
       @if (statsReady()) {
         <app-stats-kpi-card
-          [label]="'Tokens · ' + periodLabel()"
+          label="Tokens"
           [accent]="CHART_ROLE.total"
           [value]="formatTokenCount(totalTokens())"
         >
           <span kpiHint>
-            processed in range
+            processed
             @if (cloudRequests() > 0) {
               (cloud incl.)
             }
@@ -179,7 +185,7 @@
       <!-- Cloud cost (historic, selected range) -->
       @if (statsReady()) {
         <app-stats-kpi-card
-          [label]="'Cloud cost · ' + periodLabel()"
+          label="Cloud cost"
           [accent]="CHART_ROLE.cloud"
           [value]="formatCloudCost(cloudCostMicroCents())"
         >
@@ -295,6 +301,29 @@
         </app-stats-chart-panel>
 
       </div>
+
+      <!-- VRAM remaining — provider-scoped, so it lives with the provider
+           selector instead of at the bottom of the page, and it follows the
+           global time range (no range control of its own). -->
+      <app-stats-chart-panel
+        title="VRAM remaining"
+        [subtitle]="selectedVramProvider()
+          ? 'Free VRAM on ' + selectedVramProvider() + ' over the selected time range.'
+          : 'Free VRAM over the selected time range.'"
+      >
+        @if (!vramReady()) {
+          <app-stats-skeleton variant="area" />
+        } @else {
+          <app-stats-vram-remaining-chart
+            [vramDataByProvider]="selectedProviderVramData()"
+            [timeRange]="selectedTimeRangeMs()"
+            [isVramLoading]="isVramLoading()"
+            [vramError]="vramError()"
+            [nowMs]="nowMs()"
+            (refresh)="onRefresh()"
+          />
+        }
+      </app-stats-chart-panel>
     </div>
 
     <!-- ── Recent requests ───────────────────────────────────────────────── -->
@@ -304,72 +333,54 @@
     >
       <app-stats-recent-requests
         [liveRequests]="latestRequests()"
+        [totalInRange]="totalRequests()"
+        [range]="requestFeedRange()"
+        [pending]="requestsPending()"
       />
     </app-stats-chart-panel>
 
-    <!-- ── Row 2: Volume (8/12) + VRAM remaining (4/12) ─────────────────── -->
-    <div class="stats-row stats-row--8-4">
-
-      <div class="stats-col stats-col--8">
-        <app-stats-chart-panel
-          title="Request volume"
-          subtitle="Per-bucket throughput across cloud and local providers."
-        >
-          @if (customRange()) {
-            <span panelRight>
-              <span class="stats-range-badge">
-                <span class="stats-range-badge__label">{{ rangeLabel() }}</span>
-                <button
-                  class="stats-range-badge__clear"
-                  (click)="clearCustomRange()"
-                  aria-label="Clear selected range"
-                >✕</button>
-              </span>
-            </span>
-          }
-          @if (!statsReady()) {
-            <app-stats-skeleton variant="bars" />
-          } @else if (!stats()?.timeSeries?.length) {
-            <app-stats-empty-state message="No request volume data in the selected range." />
-          } @else {
-            <app-stats-request-volume-chart
-              [totalLineData]="totalLineData()"
-              [cloudLineData]="cloudLineData()"
-              [localLineData]="localLineData()"
-              [modelSeriesMap]="modelSeriesMap()"
-              [modelLabelById]="modelLabelById()"
-              [modelColors]="modelColors()"
-              [resetZoomTrigger]="resetZoomCounter()"
-              (zoom)="setCustomRange($event)"
-              (tooltipChange)="chartTooltip.set($event)"
-            />
-          }
-        </app-stats-chart-panel>
-      </div>
-
-      <div class="stats-col stats-col--4">
-        <app-stats-chart-panel
-          title="VRAM remaining"
-          subtitle="Per-provider VRAM curve with per-lane breakdown."
-        >
-          @if (!vramReady()) {
-            <app-stats-skeleton variant="area" />
-          } @else {
-            <app-stats-vram-remaining-chart
-              [vramDataByProvider]="vramRawDataByProvider()"
-              [providerMetaByName]="vramProviderMetaByName()"
-              [timeRange]="selectedTimeRangeMs()"
-              [isVramLoading]="isVramLoading()"
-              [vramError]="vramError()"
-              [nowMs]="nowMs()"
-              [laneStateByProvider]="lanesByProvider()"
-              (refresh)="onRefresh()"
-            />
-          }
-        </app-stats-chart-panel>
-      </div>
-
-    </div>
+    <!-- ── Row 2: Request volume ────────────────────────────────────────── -->
+    <app-stats-chart-panel
+      title="Request volume"
+      subtitle="Per-bucket throughput across cloud and local providers."
+    >
+      <span panelRight>
+        <!-- The chart deliberately stays mounted across a range change (it owns
+             the provider/model toggle and the hidden-series state), so it says
+             so instead of silently passing off the previous range's bars. -->
+        @if (statsPending()) {
+          <span class="stats-panel-badge">
+            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Updating…
+          </span>
+        } @else if (customRange()) {
+          <span class="stats-range-badge">
+            <span class="stats-range-badge__label">{{ rangeLabel() }}</span>
+            <button
+              class="stats-range-badge__clear"
+              (click)="clearCustomRange()"
+              aria-label="Clear selected range"
+            >✕</button>
+          </span>
+        }
+      </span>
+      @if (!statsLoaded()) {
+        <app-stats-skeleton variant="bars" />
+      } @else if (!stats()?.timeSeries?.length) {
+        <app-stats-empty-state message="No request volume data in the selected range." />
+      } @else {
+        <app-stats-request-volume-chart
+          [totalLineData]="totalLineData()"
+          [cloudLineData]="cloudLineData()"
+          [localLineData]="localLineData()"
+          [modelSeriesMap]="modelSeriesMap()"
+          [modelLabelById]="modelLabelById()"
+          [modelColors]="modelColors()"
+          [resetZoomTrigger]="resetZoomCounter()"
+          (zoom)="setCustomRange($event)"
+          (tooltipChange)="chartTooltip.set($event)"
+        />
+      }
+    </app-stats-chart-panel>
 
     <!-- ── Row 3: Distribution - Request type / Model share / Status ─────── -->
     <div class="stats-row stats-row--1-1-1">

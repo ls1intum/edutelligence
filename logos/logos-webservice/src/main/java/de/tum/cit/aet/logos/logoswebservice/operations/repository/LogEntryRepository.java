@@ -138,15 +138,37 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         ) c ON true
         WHERE le.request_id IS NOT NULL
           AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :startTs AND :endTs
-        ORDER BY le.timestamp_request DESC NULLS LAST
-        -- Matches MAX_ROWS in the recent-requests component. Every row here
-        -- costs two correlated LATERALs (one of them re-running the token_prices
-        -- specificity lookup per usage_tokens row) and this runs once per open
-        -- stats session every 2 s — fetching rows the UI then slices away is
-        -- the most expensive kind of dead work in this query.
-        LIMIT 10
+        -- request_id breaks ties: without it two rows sharing a timestamp_request
+        -- have no defined order, and OFFSET paging over an undefined order can
+        -- both repeat and skip rows at a page boundary.
+        ORDER BY le.timestamp_request DESC NULLS LAST, le.request_id DESC
+        -- The caller sizes this. Every row costs two correlated LATERALs (one of
+        -- them re-running the token_prices specificity lookup per usage_tokens
+        -- row) and the live feed runs once per open stats session every 2 s, so
+        -- it asks for exactly the rows it renders; only the operator-triggered
+        -- "load older" pages reach further back.
+        LIMIT :limitN OFFSET :offsetN
         """, nativeQuery = true)
     List<LatestRequestProjection> findLatestRequests(
+        @Param("startTs") Timestamp startTs,
+        @Param("endTs") Timestamp endTs,
+        @Param("limitN") int limitN,
+        @Param("offsetN") int offsetN);
+
+    /**
+     * How many requests the range holds — the denominator of the "showing 10 of
+     * N" line above the feed, and what tells the UI whether another page exists.
+     * The predicate has to stay identical to {@link #findLatestRequests} or the
+     * count describes a different set than the rows.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*)
+        FROM log_entry le
+        WHERE le.request_id IS NOT NULL
+          AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :startTs AND :endTs
+        """, nativeQuery = true)
+    Long countRequestsInRange(
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs);
 

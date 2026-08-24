@@ -278,6 +278,24 @@
   }
 }
 
+.lane-load__pending {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+
+  strong {
+    color: rgb(var(--color-typography-100));
+    font-weight: var(--font-weight-medium);
+  }
+
+  .pi {
+    font-size: var(--font-size-xs);
+    flex-shrink: 0;
+  }
+}
+
 .lane-load__close {
   flex-shrink: 0;
   display: inline-flex;

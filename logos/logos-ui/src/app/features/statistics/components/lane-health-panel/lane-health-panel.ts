@@ -69,6 +69,8 @@ export class LaneHealthPanel implements OnChanges {
   selectedModel = signal<string | null>(null);
   addingLane = signal(false);
   addError = signal<string | null>(null);
+  /** Model whose background load was accepted and has not shown up as a lane yet. */
+  acceptedModel = signal<string | null>(null);
   /** Fetched model lists, keyed by provider id — never shared across providers. */
   private readonly modelsByProvider = new Map<number, ProviderModel[]>();
   private readonly modelsInFlight = new Set<number>();
@@ -154,6 +156,22 @@ export class LaneHealthPanel implements OnChanges {
     return Math.min(100, pct);
   }
 
+  /**
+   * The human-readable reason out of a failed lane action.
+   *
+   * Spring wraps its own refusals as `{"error": …}` but passes an orchestrator
+   * refusal through verbatim, and FastAPI renders `HTTPException` as
+   * `{"detail": …}`. Reading only `error` turned the one message worth showing
+   * ("Provider is calibrating; its VRAM is reserved for the calibration
+   * probes.") into a bare "HTTP 409".
+   */
+  private failureDetail(err: unknown): string {
+    const e = err as { status?: number; error?: { error?: string; detail?: string } | string };
+    if (typeof e?.error === 'string' && e.error.trim()) return e.error;
+    const body = e?.error as { error?: string; detail?: string } | undefined;
+    return body?.error ?? body?.detail ?? `HTTP ${e?.status ?? 0}`;
+  }
+
   async handleUnload(laneId: string): Promise<void> {
     const pid = this.providerId;
     if (pid == null || this.unloadingLaneId() != null) return;
@@ -165,12 +183,11 @@ export class LaneHealthPanel implements OnChanges {
       this.unloadingLaneId.set(null);
     } catch (err: unknown) {
       this.unloadingLaneId.set(null);
-      const e = err as { status?: number; error?: { error?: string } };
+      const e = err as { status?: number };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.unloadError.set('Action not available on this server yet.');
       } else {
-        const detail = e.error?.error ?? `HTTP ${e.status}`;
-        this.unloadError.set(`Unload of ${laneId} failed: ${detail}`);
+        this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(err)}`);
       }
     }
   }
@@ -209,9 +226,8 @@ export class LaneHealthPanel implements OnChanges {
         if (this.pickerProviderId === pid) this.loadModels.set(models ?? []);
       })
       .catch((err: unknown) => {
-        const e = err as { error?: { error?: string } };
         if (this.pickerProviderId === pid) {
-          this.addError.set(`Could not load models: ${e?.error?.error ?? 'unknown error'}`);
+          this.addError.set(`Could not load models: ${this.failureDetail(err)}`);
         }
       })
       .finally(() => {
@@ -235,7 +251,21 @@ export class LaneHealthPanel implements OnChanges {
       this.closePicker();
       this.loadModels.set([]);
       this.modelsLoading.set(false);
+      this.acceptedModel.set(null);
     }
+    // The lane the operator asked for has arrived in the status stream — the
+    // row itself now reports its state, so the pending note has nothing to add.
+    const accepted = this.acceptedModel();
+    if (accepted !== null && changes['lanesByProvider'] && this.hasLaneFor(accepted)) {
+      this.acceptedModel.set(null);
+    }
+  }
+
+  private hasLaneFor(model: string): boolean {
+    const name = this.providerName;
+    const lanes = name ? (this.lanesByProvider[name] ?? {}) : {};
+    const wanted = model.trim().toLowerCase();
+    return Object.values(lanes).some((l) => (l.model ?? '').trim().toLowerCase() === wanted);
   }
 
   selectModel(event: Event): void {
@@ -258,11 +288,13 @@ export class LaneHealthPanel implements OnChanges {
       await this.statisticsService.addLane(pid, model);
       this.addingLane.set(false);
       this.closePicker();
+      // The orchestrator answers 202: it accepted the load and runs it in the
+      // background, which for a large model is minutes. Without a word here the
+      // picker just closes and the operator cannot tell the request from a no-op.
+      this.acceptedModel.set(model);
     } catch (err: unknown) {
       this.addingLane.set(false);
-      const e = err as { status?: number; error?: { error?: string } };
-      const detail = e.error?.error ?? `HTTP ${e.status}`;
-      this.addError.set(`Loading ${model} failed: ${detail}`);
+      this.addError.set(`Loading ${model} failed: ${this.failureDetail(err)}`);
     }
   }
 }

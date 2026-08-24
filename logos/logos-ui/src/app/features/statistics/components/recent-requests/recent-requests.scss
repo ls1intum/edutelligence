@@ -16,6 +16,19 @@
   color: rgb(var(--color-typography-300));
 }
 
+// ── Count line ───────────────────────────────────────────────────────────────
+
+.rr-count {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  padding: 0 2px 8px;
+
+  strong {
+    color: rgb(var(--color-typography-100));
+    font-weight: var(--font-weight-semibold);
+  }
+}
+
 // ── List ─────────────────────────────────────────────────────────────────────
 
 .rr-list {
@@ -25,6 +38,52 @@
   width: 100%;
   max-height: 460px;
   overflow-y: auto;
+}
+
+// ── Paging footer ────────────────────────────────────────────────────────────
+
+.rr-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: center;
+  margin: 4px 0 8px;
+  padding: 5px 14px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-accent-cyan));
+  background: transparent;
+  border: 1px solid rgb(var(--color-accent-cyan) / var(--opacity-strong));
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-accent-cyan) / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
+.rr-end {
+  align-self: center;
+  padding: 4px 0 8px;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+}
+
+.rr-error {
+  margin-top: 8px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-error));
 }
 
 // ── Card ─────────────────────────────────────────────────────────────────────

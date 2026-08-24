@@ -64,6 +64,17 @@
 }
 
 // ── KPI strip ─────────────────────────────────────────────────────────────────
+.stats-kpi-period {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  margin-bottom: -8px; // the page-level 20px gap is too much for a caption
+
+  strong {
+    color: rgb(var(--color-typography-100));
+    font-weight: var(--font-weight-semibold);
+  }
+}
+
 .stats-kpi-strip {
   display: flex;
   flex-wrap: wrap;
@@ -146,10 +157,18 @@
   }
 }
 
-// ── Panel badge (lane count) ──────────────────────────────────────────────────
+// ── Panel badge (lane count, "updating…") ─────────────────────────────────────
 .stats-panel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
+  white-space: nowrap;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
 }
 
 // ── Provider-row badges (free VRAM / calibrating) ─────────────────────────────
@@ -299,12 +318,6 @@
   min-width: 280px;
 }
 
-// Row 8/4 weighting
-.stats-row--8-4 {
-  .stats-col--8 { flex-grow: 8; min-width: 360px; }
-  .stats-col--4 { flex-grow: 4; min-width: 280px; }
-}
-
 // Row 1/1/1 (equal columns)
 .stats-row--1-1-1 {
   > .stats-col { flex-grow: 1; min-width: 280px; }
@@ -335,11 +348,8 @@
     flex-basis: 100%;
   }
 
-  .stats-row--8-4,
   .stats-row--1-1-1 {
-    .stats-col,
-    .stats-col--8,
-    .stats-col--4 {
+    .stats-col {
       flex-basis: 100%;
       min-width: 0;
     }

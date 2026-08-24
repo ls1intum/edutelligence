@@ -125,6 +125,16 @@ export class Statistics implements OnInit, OnDestroy {
   private timelineRangeMs: { startMs: number; endMs: number; bucketMs: number } | null = null;
   private hasResolvedStats = false;
 
+  /**
+   * A range change is in flight — every number on the page still describes the
+   * *previous* range until the next `timeline_init` / `requests` push lands.
+   * Without these flags the cards keep their old values while the header
+   * already says the new period, which reads as data for a range it isn't.
+   */
+  readonly statsPending = signal(false);
+  /** Starts true: the first push has not landed, so there is nothing to show yet. */
+  readonly requestsPending = signal(true);
+
   // ── Ticker ────────────────────────────────────────────────────────────────────
   private nowInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -619,13 +629,20 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Readiness flags ───────────────────────────────────────────────────────────
 
-  readonly statsReady = computed(() => this.stats() !== null);
+  /** Statistics have arrived at least once — enough to mount a chart. */
+  readonly statsLoaded = computed(() => this.stats() !== null);
+
+  /** …and they describe the range the page currently claims to show. */
+  readonly statsReady = computed(() => this.statsLoaded() && !this.statsPending());
 
   readonly vramReady = computed(() =>
     Object.values(this.vramRawDataByProvider()).some((arr) => arr && arr.length > 0),
   );
 
-  readonly showFatalError = computed(() => this.error() !== null && !this.statsReady());
+  // Deliberately not `!statsReady()`: that is also false while a range change is
+  // in flight, so an error arriving then would replace a page full of usable
+  // data with the fatal-error screen. Only never having had data is fatal.
+  readonly showFatalError = computed(() => this.error() !== null && this.stats() === null);
 
   // ── Lane KPI helpers ──────────────────────────────────────────────────────────
 
@@ -754,7 +771,14 @@ export class Statistics implements OnInit, OnDestroy {
 
   onRefresh(): void {
     this.refreshing.set(true);
+    this.markRangeChanged();
     this.statsWs.reconnect();
+  }
+
+  /** Mark every range-scoped panel as loading until the next push resolves it. */
+  private markRangeChanged(): void {
+    this.statsPending.set(true);
+    this.requestsPending.set(true);
   }
 
   setSelectedVramProvider(name: string | null): void {
@@ -774,6 +798,34 @@ export class Statistics implements OnInit, OnDestroy {
     };
   });
 
+  /**
+   * The range the request feed pages through.
+   *
+   * A live selection keeps growing, and the websocket queries it up to its own
+   * "now" on every push. So the open end is left empty here for the server to
+   * resolve the same way — pinning it to the instant the range was picked would
+   * offset the history pages against the live rows above them.
+   */
+  readonly requestFeedRange = computed(() => {
+    const cfg = this.wsTimelineConfig();
+    const endMs = new Date(cfg.end).getTime();
+    // Same 120 s tolerance the websocket uses to call a window live.
+    const isLive = Date.now() - endMs <= 120_000;
+    return { startIso: cfg.start, endIso: isLive ? '' : cfg.end };
+  });
+
+  /**
+   * VRAM samples of the selected provider only. The remaining-VRAM chart sits
+   * in the provider-scoped section, so it shows that provider's curve — every
+   * other panel in that section is scoped the same way.
+   */
+  readonly selectedProviderVramData = computed<Record<string, VramV2Sample[]>>(() => {
+    const prov = this.selectedVramProvider();
+    if (!prov) return {};
+    const samples = this.vramRawDataByProvider()[prov];
+    return samples ? { [prov]: samples } : {};
+  });
+
   /** True while the selected provider's worker is running a calibration session. */
   readonly selectedProviderCalibrating = computed(() => {
     const prov = this.selectedVramProvider();
@@ -783,12 +835,14 @@ export class Statistics implements OnInit, OnDestroy {
 
   setCustomRange(range: { start: Date; end: Date }): void {
     this.customRange.set(range);
+    this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
   }
 
   clearCustomRange(): void {
     this.customRange.set(null);
     this.resetZoomCounter.update((c) => c + 1);
+    this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
   }
 
@@ -816,6 +870,7 @@ export class Statistics implements OnInit, OnDestroy {
   private handleRequestsWsData(payload: { requests?: RequestItem[] }): void {
     if (payload.requests) {
       this.latestRequests.set(payload.requests);
+      this.requestsPending.set(false);
     }
   }
 
@@ -846,12 +901,14 @@ export class Statistics implements OnInit, OnDestroy {
     if (payload.error) {
       this.error.set(payload.error);
       this.refreshing.set(false);
+      this.statsPending.set(false);
       this.hasResolvedStats = true;
       return;
     }
     if (!payload.stats) {
       this.error.set('No statistics data available.');
       this.refreshing.set(false);
+      this.statsPending.set(false);
       this.hasResolvedStats = true;
       return;
     }
@@ -873,6 +930,7 @@ export class Statistics implements OnInit, OnDestroy {
     this.stats.set({ ...payload.stats, timeSeries: labeled });
     this.error.set(null);
     this.refreshing.set(false);
+    this.statsPending.set(false);
     this.hasResolvedStats = true;
   }
 

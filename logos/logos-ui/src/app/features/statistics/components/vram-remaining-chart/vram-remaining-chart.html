@@ -159,18 +159,22 @@
     />
 
     <!-- ── Legend ─────────────────────────────────────────────────────────── -->
-    <div class="vram-legend">
-      @for (s of chartData().series; track s.name) {
-        <div class="vram-legend-item">
-          <span
-            class="vram-legend-dot"
-            [style.background]="s.color"
-            aria-hidden="true"
-          ></span>
-          <span class="vram-legend-label">{{ s.name }}</span>
-        </div>
-      }
-    </div>
+    <!-- A single series needs no key to tell it apart; the panel subtitle
+         already names the provider it belongs to. -->
+    @if (chartData().series.length > 1) {
+      <div class="vram-legend">
+        @for (s of chartData().series; track s.name) {
+          <div class="vram-legend-item">
+            <span
+              class="vram-legend-dot"
+              [style.background]="s.color"
+              aria-hidden="true"
+            ></span>
+            <span class="vram-legend-label">{{ s.name }}</span>
+          </div>
+        }
+      </div>
+    }
   }
 
 </div>

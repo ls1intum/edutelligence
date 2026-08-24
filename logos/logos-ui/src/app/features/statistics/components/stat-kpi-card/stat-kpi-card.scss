@@ -14,6 +14,7 @@
   flex-direction: row;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .kpi-accent-dot {
@@ -29,6 +30,13 @@
   letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
   color: rgb(var(--color-typography-500));
+  // A label that wraps makes its card one line taller than its neighbours and
+  // knocks the whole KPI row out of alignment. Truncate instead — the cards sit
+  // in a fixed-height row, so this has to hold for any label passed in.
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 // Row 2: big value + right slot

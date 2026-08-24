@@ -29,12 +29,23 @@ public class RequestLogController {
      * System-wide request feed. Unlike {@code /request_logs} this has no
      * per-user scoping to fall back on — every row carries the requester's full
      * name, team and cloud cost — so it is restricted to Logos admins.
+     *
+     * <p>The statistics page gets its live rows pushed over {@code /ws/stats/v2}
+     * and calls this only when the operator asks for older ones, passing the
+     * range it has selected plus an {@code offset}. Without a body the service
+     * defaults to the newest page of the last 30 days.
      */
     @PostMapping("/latest_requests")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
-    public ResponseEntity<?> latestRequests(@RequestAttribute("authContext") AuthContext auth) {
-        // No explicit range: the service defaults to the last 30 days.
-        return ResponseEntity.ok(requestLogService.getLatestRequests(null, null));
+    public ResponseEntity<?> latestRequests(@RequestAttribute("authContext") AuthContext auth,
+                                            @RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) body = Map.of();
+        String start = body.get("start") instanceof String s ? s : null;
+        String end = body.get("end") instanceof String s ? s : null;
+        int limit = body.get("limit") instanceof Number n
+            ? n.intValue() : RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
+        int offset = body.get("offset") instanceof Number n ? n.intValue() : 0;
+        return ResponseEntity.ok(requestLogService.getLatestRequests(start, end, limit, offset));
     }
 
     @PostMapping("/request_logs")

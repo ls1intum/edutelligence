@@ -50,17 +50,19 @@ function formatCount(v: number): string {
 }
 
 /**
- * Full, unambiguous timestamp for tooltips (always carries the year). Rendered
- * in UTC so a tooltip never contradicts the x-axis tick above it — the ticks
- * come from `timeAxisLabels`, which works in UTC throughout, as does the VRAM
- * chart next to it.
+ * Full, unambiguous timestamp for tooltips (always carries the day, and the
+ * year once the span is wide enough for it to matter). Local time, like the
+ * x-axis ticks from `timeAxisLabels` and the range selection that produced
+ * them, so a tooltip never contradicts the tick above it.
  */
 function formatTimestamp(ts: number, spanMs: number): string {
   const d = new Date(ts);
   if (spanMs <= 2 * 86_400_000) {
-    return `${d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' })} UTC`;
+    return d.toLocaleString('en-US', {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    });
   }
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 // ── Internal chart types ─────────────────────────────────────────────────────
