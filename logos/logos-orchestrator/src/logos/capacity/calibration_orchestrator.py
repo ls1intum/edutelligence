@@ -31,15 +31,16 @@ from dataclasses import dataclass, field
 from datetime import time
 from typing import TYPE_CHECKING
 
+# Terminal session events that free the active-provider slot. Shared with the
+# registry, which uses the same names to track ProviderSession.calibrating —
+# one definition keeps the two from drifting apart.
+from logos.logosnode_registry import TERMINAL_CALIBRATION_SESSION_EVENTS as _TERMINAL_SESSION_EVENTS
+
 logger = logging.getLogger("logos.capacity.calibration_orchestrator")
 
 if TYPE_CHECKING:
     from logos.logosnode_registry import LogosNodeRuntimeRegistry
     from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
-
-
-# Terminal session events that free the active-provider slot.
-_TERMINAL_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
 
 # ---------------------------------------------------------------------------

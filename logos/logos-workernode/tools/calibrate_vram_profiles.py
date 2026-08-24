@@ -45,6 +45,7 @@ from logos_worker_node.calibration import (
     _PROFILES_FILE,
     _READY_TIMEOUT_S,
     CalibrationResult,
+    _reset_calibration_log,
     calibrate_model,
     load_existing_profiles,
     plans_from_config,
@@ -192,6 +193,7 @@ def main() -> int:
         # of auto-searching for the minimum.
         if args.kv_cache_memory_bytes:
             plan = {**plan, "kv_cache_memory_bytes": args.kv_cache_memory_bytes}
+        _reset_calibration_log(log_dir, plan["model"])
         result = calibrate_model(
             plan,
             vllm_binary=vllm_binary,

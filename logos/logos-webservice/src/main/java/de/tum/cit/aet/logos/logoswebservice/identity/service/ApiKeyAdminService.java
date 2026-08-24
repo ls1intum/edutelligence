@@ -156,6 +156,37 @@ public class ApiKeyAdminService {
         return Map.of("result", "API Key updated successfully");
     }
 
+    private static final int API_KEY_TOKEN_LENGTH = 128;
+
+    @Transactional
+    public Optional<Map<String, Object>> rotateKey(int keyId) {
+        Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
+        if (keyOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        ApiKey key = keyOpt.get();
+        key.setKeyValue(rotateKeyValue(key.getKeyValue()));
+        apiKeyRepository.save(key);
+        return Optional.of(Map.of(
+            "result", "API key rotated successfully",
+            "api_key", key.getKeyValue()));
+    }
+
+    private String rotateKeyValue(String currentKeyValue) {
+        if (currentKeyValue == null || currentKeyValue.isBlank()) {
+            return "lg-" + ApiKeyFactory.generateToken();
+        }
+        String prefix = null;
+        int separatorIndex = currentKeyValue.length() - API_KEY_TOKEN_LENGTH - 1;
+        if (separatorIndex >= 0 && currentKeyValue.charAt(separatorIndex) == '-') {
+            prefix = currentKeyValue.substring(0, separatorIndex);
+        }
+        if (prefix == null || prefix.isBlank()) {
+            prefix = "lg";
+        }
+        return prefix + "-" + ApiKeyFactory.generateToken();
+    }
+
     private String generateKey(int teamId, String keyType, String environment) {
         List<String> parts = new ArrayList<>();
         teamRepository.findById(teamId).ifPresent(t -> {

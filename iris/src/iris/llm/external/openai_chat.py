@@ -41,6 +41,7 @@ from iris.tracing import observe
 from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisAIMessage, PyrisMessage
+from ...common.token_logprob_dto import TokenLogprobEntry, TopLogprobCandidate
 from ...common.token_usage_dto import TokenUsageDTO
 from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 from ...domain.data.json_message_content_dto import JsonMessageContentDTO
@@ -378,6 +379,41 @@ def create_iris_tool_calls(message_tool_calls) -> list[ToolCallDTO]:
     ]
 
 
+def _extract_token_logprobs(logprobs: Any) -> Optional[list[float]]:
+    """Extract the flat list of per-token log-probabilities from a choice's
+    ``logprobs`` payload, or ``None`` if they were not requested/returned."""
+    content = getattr(logprobs, "content", None)
+    if not content:
+        return None
+    return [token.logprob for token in content]
+
+
+def _extract_token_logprob_entries(
+    logprobs: Any,
+) -> Optional[list[TokenLogprobEntry]]:
+    """Extract rich per-token entries (token string + top-k alternatives) from
+    a choice's ``logprobs`` payload, or ``None`` if it was not returned.
+
+    Tolerant of backends that return plain logprobs without ``top_logprobs``:
+    those entries get an empty candidate list, which confidence scoring treats
+    as "uncertainty method not applicable" and falls back to mean-logprob.
+    """
+    content = getattr(logprobs, "content", None)
+    if not content:
+        return None
+    return [
+        TokenLogprobEntry(
+            token=getattr(token, "token", "") or "",
+            logprob=token.logprob,
+            top_logprobs=[
+                TopLogprobCandidate(token=candidate.token, logprob=candidate.logprob)
+                for candidate in (getattr(token, "top_logprobs", None) or [])
+            ],
+        )
+        for token in content
+    ]
+
+
 def create_iris_tool_calls_from_responses(output_items) -> list[ToolCallDTO]:
     """
     Convert Responses function_call output items to Iris format.
@@ -444,6 +480,7 @@ def convert_to_iris_message(
     message: ChatCompletionMessage,
     usage: Optional[CompletionUsage],
     model: str,
+    logprobs: Any = None,
 ) -> PyrisMessage:
     """
     Convert a ChatCompletionMessage to a PyrisMessage.
@@ -452,6 +489,8 @@ def convert_to_iris_message(
         message: The ChatCompletionMessage to convert
         usage: Optional token usage information
         model: The model name used for the completion
+        logprobs: Optional ``choice.logprobs`` payload; when present its
+            per-token log-probabilities are attached to the returned message.
 
     Returns:
         PyrisMessage or PyrisAIMessage depending on presence of tool calls
@@ -473,6 +512,8 @@ def convert_to_iris_message(
         contents=[TextMessageContentDTO(textContent=content)],
         sendAt=current_time,
         token_usage=token_usage,
+        token_logprobs=_extract_token_logprobs(logprobs),
+        token_logprob_entries=_extract_token_logprob_entries(logprobs),
     )
 
 
@@ -528,11 +569,36 @@ class OpenAIChatModel(ChatModel):
     api_key: str
     supports_temperature: bool = True
     supports_reasoning_effort: bool = False
+    # Token-level log-probabilities are OPT-IN per model in llm_config.yml.
+    # The defaults are False because the flags can hard-fail or silently
+    # zero out a pipeline when wrong: reasoning models may reject `logprobs`
+    # on chat completions with a 400, Responses-API models never produce
+    # logprobs on this path, and strict OpenAI-compatible gateways reject the
+    # `top_logprobs` parameter instead of ignoring it (set only
+    # supports_logprobs there, keeping the mean-logprob fallback reachable).
+    # Verified good for both flags: gpt-4o family, gpt-4.1 family.
+    supports_logprobs: bool = False
+    supports_top_logprobs: bool = False
     reasoning_effort: Optional[ReasoningEffort] = None
     reasoning_effort_values: Optional[List[ReasoningEffortValue]] = None
     # Only enable for native OpenAI/Azure endpoints that support /responses.
     # OpenAI-compatible base_url gateways such as vLLM should keep this false.
     use_responses_api: bool = False
+
+    @model_validator(mode="after")
+    def validate_logprobs_config(self):
+        # The Responses API path neither requests nor extracts logprobs, so a
+        # model with both flags would enter logprob confidence mode and score
+        # every response 0.0 (auto-discard). Fail loudly at config load.
+        if self.use_responses_api and self.supports_logprobs:
+            raise ValueError(
+                "supports_logprobs cannot be combined with use_responses_api: "
+                "the Responses API path does not extract logprobs, so the "
+                "autonomous tutor would score every response 0.0"
+            )
+        if self.supports_top_logprobs and not self.supports_logprobs:
+            raise ValueError("supports_top_logprobs requires supports_logprobs: true")
+        return self
 
     @model_validator(mode="after")
     def validate_reasoning_effort_config(self):
@@ -903,6 +969,27 @@ class OpenAIChatModel(ChatModel):
                 if arguments.max_tokens is not None:
                     params["max_completion_tokens"] = arguments.max_tokens
 
+                # Token-level log-probabilities are requested only when the
+                # caller opts in and the model declares support. They are
+                # used downstream to derive a confidence score. The streaming
+                # path does not extract per-chunk logprobs, so skip the
+                # request there instead of silently dropping the payload.
+                if (
+                    arguments.logprobs
+                    and self.supports_logprobs
+                    and arguments.stream_handler is None
+                ):
+                    params["logprobs"] = True
+                    # Top-k alternatives per token feed the uncertainty
+                    # confidence method; the API caps top_logprobs at 20.
+                    # Gated behind its own capability: strict backends reject
+                    # unknown parameters with a 4xx instead of ignoring them,
+                    # which would make the mean-logprob fallback unreachable.
+                    if arguments.top_logprobs and self.supports_top_logprobs:
+                        params["top_logprobs"] = max(
+                            1, min(int(arguments.top_logprobs), 20)
+                        )
+
                 if arguments.response_format == "JSON":
                     params["response_format"] = ResponseFormatJSONObject(
                         type="json_object"
@@ -941,7 +1028,12 @@ class OpenAIChatModel(ChatModel):
                     ):
                         logger.error("Refusal: %s", choice.message.refusal)
 
-                return convert_to_iris_message(choice.message, usage, self.model)
+                return convert_to_iris_message(
+                    choice.message,
+                    usage,
+                    self.model,
+                    getattr(choice, "logprobs", None),
+                )
             except (RateLimitError, APIConnectionError, InternalServerError):
                 if arguments.stream_handler is not None:
                     arguments.stream_handler(None)

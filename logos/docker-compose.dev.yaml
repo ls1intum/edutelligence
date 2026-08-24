@@ -15,7 +15,7 @@
 
 services:
   traefik:
-    image: traefik:v3.6.1
+    image: traefik:v3.7.10
     container_name: traefik
     restart: unless-stopped
     command:
@@ -269,13 +269,12 @@ services:
       timeout: 5s
       retries: 10
     volumes:
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
       - postgres_data:/var/lib/postgresql/data
     networks:
       - internal
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.7
     container_name: logos-keycloak
     restart: unless-stopped
     command: ["start-dev", "--import-realm", "--health-enabled=true"]

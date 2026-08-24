@@ -1,7 +1,8 @@
 """Verify: YouTube-specific failures reach callback.error with the right code,
 and generic transcription failures surface as TRANSCRIPTION_FAILED."""
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import ANY, MagicMock, Mock, call, patch
 
 from iris.domain.data.video_source_type import VideoSourceType
 from iris.pipeline.lecture_ingestion_update_pipeline import (
@@ -39,9 +40,13 @@ def test_generic_exception_becomes_transcription_failed():
 
 def test_slide_detection_only_branches_on_video_source_type():
     """Resume-from-checkpoint: must use yt-dlp for YouTube, not FFmpeg/HLS."""
-    with patch(_HLS) as dl_hls, patch(_YT_DL) as dl_yt, patch(_YT_VAL) as v_yt, patch(
-        _LIGHT
-    ), patch(_TEMP) as storage_cls:
+    with (
+        patch(_HLS) as dl_hls,
+        patch(_YT_DL) as dl_yt,
+        patch(_YT_VAL) as v_yt,
+        patch(_LIGHT),
+        patch(_TEMP) as storage_cls,
+    ):
         storage_cls.return_value.__enter__.return_value = MagicMock()
         v_yt.return_value = {"duration": 120}
 
@@ -109,3 +114,54 @@ def test_youtube_source_type_passed_through_to_heavy_pipeline():
     # Accept either positional or keyword forwarding:
     all_args = list(called_args) + list(called_kwargs.values())
     assert VideoSourceType.YOUTUBE in all_args
+
+
+def test_metadata_baseline_is_captured_before_transcription_processing():
+    lecture_unit = SimpleNamespace(
+        course_id=30,
+        course_name="Course",
+        course_description="Description",
+        lecture_id=20,
+        lecture_name="Lecture",
+        lecture_unit_id=10,
+        lecture_unit_name="Unit",
+        lecture_unit_link="content-link",
+        video_link="video-link",
+    )
+    dto = SimpleNamespace(
+        lecture_unit=lecture_unit,
+        settings=SimpleNamespace(
+            authentication_token="token",
+            artemis_base_url="https://artemis.example",
+        ),
+    )
+    pipeline = LectureIngestionUpdatePipeline.__new__(LectureIngestionUpdatePipeline)
+    pipeline.dto = dto
+    pipeline._is_local = False  # pylint: disable=protected-access
+    baseline = {"lecture_unit_link": "before-phase-one"}
+    order = Mock()
+
+    with (
+        patch(f"{_MOD}._needs_transcription_generation", return_value=True),
+        patch(f"{_MOD}._needs_slide_detection", return_value=False),
+        patch(f"{_MOD}.IngestionStatusCallback") as callback_type,
+        patch(f"{_MOD}.VectorDatabase"),
+        patch(
+            f"{_MOD}.LectureUnitPipeline.fetch_existing_properties",
+            return_value=baseline,
+        ) as snapshot,
+        patch.object(pipeline, "_run_full_transcription") as phase_one,
+        patch.object(pipeline, "_run_ingestion") as ingestion,
+    ):
+        order.attach_mock(snapshot, "snapshot")
+        order.attach_mock(phase_one, "phase_one")
+        order.attach_mock(ingestion, "ingestion")
+        pipeline._run()  # pylint: disable=protected-access
+
+    callback = callback_type.return_value
+    assert order.mock_calls[0] == call.snapshot(
+        ANY,
+        ANY,
+    )
+    assert order.mock_calls[1] == call.phase_one(callback)
+    assert order.mock_calls[2] == call.ingestion(callback, baseline)

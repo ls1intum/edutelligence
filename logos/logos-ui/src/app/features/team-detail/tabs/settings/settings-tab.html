@@ -1,5 +1,22 @@
 <div class="settings-tab">
 
+  <p class="section-label">OVERALL TEAM LIMITS</p>
+
+  <div class="settings-card">
+    <div class="settings-field">
+      <label class="field-label" for="s-team-budget">Team Monthly Budget (USD)</label>
+      <input
+        id="s-team-budget"
+        class="field-input"
+        type="text"
+        placeholder="e.g. 150.00, leave blank for unlimited"
+        [value]="teamBudget()"
+        (input)="teamBudget.set($any($event.target).value)"
+        [disabled]="!canEdit || saveLoading()"
+      />
+    </div>
+  </div>
+
   <p class="section-label">DEFAULT LIMITS</p>
   <p class="settings-hint">Fallback limits applied when no specific limits are set for a key or member.</p>
 
@@ -20,7 +37,7 @@
     <div class="settings-group-label">Cloud Rate Limits</div>
     <div class="settings-row-2">
       <div class="settings-field">
-        <label class="field-label" for="s-cloud-rpm">RPM</label>
+        <label class="field-label" for="s-cloud-rpm">RPM (requests per minute)</label>
         <input id="s-cloud-rpm" class="field-input" type="number" min="0"
           placeholder="Requests per minute"
           [value]="cloudRpm()"
@@ -28,7 +45,7 @@
           [disabled]="!canEdit || saveLoading()" />
       </div>
       <div class="settings-field">
-        <label class="field-label" for="s-cloud-tpm">TPM</label>
+        <label class="field-label" for="s-cloud-tpm">TPM (tokens per minute)</label>
         <input id="s-cloud-tpm" class="field-input" type="number" min="0"
           placeholder="Tokens per minute"
           [value]="cloudTpm()"
@@ -40,7 +57,7 @@
     <div class="settings-group-label">Local Rate Limits</div>
     <div class="settings-row-2">
       <div class="settings-field">
-        <label class="field-label" for="s-local-rpm">RPM</label>
+        <label class="field-label" for="s-local-rpm">RPM (requests per minute)</label>
         <input id="s-local-rpm" class="field-input" type="number" min="0"
           placeholder="Requests per minute"
           [value]="localRpm()"
@@ -48,7 +65,7 @@
           [disabled]="!canEdit || saveLoading()" />
       </div>
       <div class="settings-field">
-        <label class="field-label" for="s-local-tpm">TPM</label>
+        <label class="field-label" for="s-local-tpm">TPM (tokens per minute)</label>
         <input id="s-local-tpm" class="field-input" type="number" min="0"
           placeholder="Tokens per minute"
           [value]="localTpm()"

@@ -5,13 +5,12 @@ import { keycloakIssuer, getPasskeyConfig } from '../../keycloak';
 import { isPasskeySupported, loginWithPasskey, passkeyErrorMessage } from '../../passkey';
 import { Logo } from '../../../../shared/components/logo/logo';
 import { ThemeToggle } from '../../../../shared/components/theme-toggle/theme-toggle';
-import { Orbs } from '../../../../shared/components/orbs/orbs';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
 
 @Component({
   selector: 'app-login',
   standalone: true,
-  imports: [Logo, ThemeToggle, Orbs, ErrorMessageComponent],
+  imports: [Logo, ThemeToggle, ErrorMessageComponent],
   templateUrl: './login.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './login.scss',

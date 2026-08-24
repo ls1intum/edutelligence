@@ -71,12 +71,12 @@
   font-weight: var(--font-weight-medium);
   padding: 2px 8px;
   border-radius: 8px;
-  background: rgb(var(--color-primary-400) / var(--opacity-soft));
-  color: rgb(var(--color-accent-purple));
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  color: rgb(var(--color-typography-300));
 
   &--owner {
-    background: rgb(var(--color-accent-green) / var(--opacity-soft));
-    color: rgb(var(--color-accent-green));
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+    color: rgb(var(--color-text-accent));
   }
 }
 
@@ -123,8 +123,8 @@
   border-radius: 8px;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  background: rgb(var(--color-accent-green) / var(--opacity-soft));
-  color: rgb(var(--color-accent-green));
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  color: rgb(var(--color-typography-300));
 }
 
 .budget-row {
@@ -146,7 +146,7 @@
 .team-budget-bar-fill {
   height: 100%;
   border-radius: 8px;
-  background: rgb(var(--color-accent-green));
+  background: rgb(var(--color-primary-500));
   transition: width 0.3s ease;
 }
 
@@ -165,7 +165,7 @@
   padding: 0 8px;
   border-radius: 8px;
   background: rgb(var(--color-primary-400) / var(--opacity-soft));
-  color: rgb(var(--color-accent-purple));
+  color: rgb(var(--color-text-accent));
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
 }
@@ -210,13 +210,13 @@
 }
 
 .badge--type {
-  background: rgb(var(--color-accent-cyan) / var(--opacity-soft));
-  color: rgb(var(--color-accent-cyan));
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  color: rgb(var(--color-typography-300));
 }
 
 .badge--unlimited {
-  background: rgb(var(--color-accent-green) / var(--opacity-soft));
-  color: rgb(var(--color-accent-green));
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  color: rgb(var(--color-typography-300));
   padding: 4px 10px;
   border-radius: 8px;
   font-size: var(--font-size-sm);
@@ -248,7 +248,8 @@
   white-space: nowrap;
 }
 
-.btn-copy {
+.btn-copy,
+.btn-rotate {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   padding: 6px 14px;
@@ -318,7 +319,7 @@
 
 .budget-bar__fill {
   height: 100%;
-  background: rgb(var(--color-accent-green));
+  background: rgb(var(--color-primary-500));
   border-radius: 8px;
   transition: width 0.3s;
 

@@ -1,4 +1,5 @@
 from typing import List, Optional, TypedDict
+from urllib.parse import urlparse
 
 
 class Deployment(TypedDict):
@@ -33,8 +34,13 @@ def infer_cloud_provider_type(
     base_url: Optional[str] = None,
 ) -> Optional[str]:
     normalized = (provider_type or "").strip().lower()
+    if normalized == "azure":
+        return "azure"
+
     base_url_norm = (base_url or "").strip().lower()
-    if normalized == "azure" or "openai.azure.com" in base_url_norm:
+    parsed_url = urlparse(base_url_norm if "://" in base_url_norm else f"//{base_url_norm}")
+    hostname = parsed_url.hostname or ""
+    if hostname == "openai.azure.com" or hostname.endswith(".openai.azure.com"):
         return "azure"
     return None
 

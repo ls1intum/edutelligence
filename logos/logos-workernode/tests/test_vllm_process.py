@@ -131,9 +131,17 @@ def test_infer_tool_call_parser() -> None:
     # AI21 Jamba
     assert _infer_tool_call_parser("ai21labs/AI21-Jamba-1.5-Mini") == "jamba"
     # Alibaba Qwen (coder→qwen3_xml, general→hermes)
-    assert _infer_tool_call_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3_xml"
+    assert _infer_tool_call_parser("Qwen/Qwen3-Coder-480B-A35B-Instruct") == "qwen3_coder"
     assert _infer_tool_call_parser("Qwen/Qwen2.5-Coder-14B-Instruct-AWQ") == "hermes"
     assert _infer_tool_call_parser("Qwen/QwQ-32B") == "hermes"
+    # Qwen3 point releases emit the Qwen3-Coder XML dialect, not hermes JSON.
+    assert _infer_tool_call_parser("Qwen/Qwen3.8-27B") == "qwen3_coder"
+    assert _infer_tool_call_parser("Qwen/Qwen3.6-35B-A3B") == "qwen3_coder"
+    assert _infer_tool_call_parser("Qwen/Qwen3.5-122B-A10B") == "qwen3_coder"
+    assert _infer_tool_call_parser("RedHatAI/Qwen3.5-122B-A10B-NVFP4") == "qwen3_coder"
+    # Dot-free Qwen3 stays on hermes, and Qwen2.5 must not match the dotted rule.
+    assert _infer_tool_call_parser("Qwen/Qwen3-32B") == "hermes"
+    assert _infer_tool_call_parser("Qwen/Qwen2.5-72B-Instruct") == "hermes"
     # Salesforce xLAM (contains "llama"/"qwen" — must match xlam first)
     assert _infer_tool_call_parser("Salesforce/Llama-xLAM-2-8B-fc-r") == "xlam"
     assert _infer_tool_call_parser("Salesforce/Qwen-xLAM-32B-fc-r") == "xlam"
@@ -251,6 +259,138 @@ def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:
     assert "--chat-template-kwargs" not in cmd
 
 
+# ---------------------------------------------------------------------------
+# Custom chat templates — resolved from the persistent template directory
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def chat_template_dir(monkeypatch, tmp_path: Path) -> Path:
+    """Relocate the persistent chat-template directory into a tmp_path."""
+    templates = tmp_path / "chat-templates"
+    templates.mkdir()
+    monkeypatch.setenv("LOGOS_CHAT_TEMPLATE_DIR", str(templates))
+    return templates
+
+
+def _handle_with_stub_binary(monkeypatch) -> VllmProcessHandle:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+    return handle
+
+
+def test_chat_template_dir_defaults_to_persistent_path(monkeypatch) -> None:
+    from logos_worker_node.vllm_process import _chat_template_dir
+
+    monkeypatch.delenv("LOGOS_CHAT_TEMPLATE_DIR", raising=False)
+    assert _chat_template_dir() == "/opt/logos-workernode/chat-templates"
+
+
+def test_build_cmd_resolves_chat_template_name(monkeypatch, chat_template_dir: Path) -> None:
+    template = chat_template_dir / "qwen3-tools.jinja"
+    template.write_text("{{ messages }}")
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template="qwen3-tools.jinja"),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--chat-template")
+    assert cmd[idx + 1] == str(template.resolve())
+
+
+def test_build_cmd_resolves_chat_template_in_subdirectory(monkeypatch, chat_template_dir: Path) -> None:
+    nested = chat_template_dir / "qwen"
+    nested.mkdir()
+    template = nested / "tools.jinja"
+    template.write_text("{{ messages }}")
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template="qwen/tools.jinja"),
+    )
+    cmd = handle._build_cmd(lane)
+    assert cmd[cmd.index("--chat-template") + 1] == str(template.resolve())
+
+
+def test_build_cmd_accepts_absolute_path_inside_template_dir(monkeypatch, chat_template_dir: Path) -> None:
+    template = chat_template_dir / "abs.jinja"
+    template.write_text("{{ messages }}")
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template=str(template)),
+    )
+    cmd = handle._build_cmd(lane)
+    assert cmd[cmd.index("--chat-template") + 1] == str(template.resolve())
+
+
+def test_build_cmd_omits_chat_template_when_unset(monkeypatch, chat_template_dir: Path) -> None:
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(model="Qwen/Qwen3-8B", vllm=True, vllm_config=VllmConfig())
+    assert "--chat-template" not in handle._build_cmd(lane)
+
+
+def test_build_cmd_rejects_missing_chat_template(monkeypatch, chat_template_dir: Path) -> None:
+    """A typo must fail the spawn, never silently fall back to the model default."""
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template="does-not-exist.jinja"),
+    )
+    with pytest.raises(RuntimeError, match="not found"):
+        handle._build_cmd(lane)
+
+
+def test_build_cmd_rejects_absolute_path_outside_template_dir(monkeypatch, chat_template_dir: Path, tmp_path) -> None:
+    outside = tmp_path / "elsewhere.jinja"
+    outside.write_text("{{ messages }}")
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template=str(outside)),
+    )
+    with pytest.raises(RuntimeError, match="outside the persistent chat-template directory"):
+        handle._build_cmd(lane)
+
+
+def test_build_cmd_rejects_symlink_escaping_template_dir(monkeypatch, chat_template_dir: Path, tmp_path) -> None:
+    """Symlinks are followed — a template must not live on ephemeral storage."""
+    outside = tmp_path / "ephemeral.jinja"
+    outside.write_text("{{ messages }}")
+    (chat_template_dir / "linked.jinja").symlink_to(outside)
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(chat_template="linked.jinja"),
+    )
+    with pytest.raises(RuntimeError, match="outside the persistent chat-template directory"):
+        handle._build_cmd(lane)
+
+
+def test_vllm_config_rejects_path_traversal() -> None:
+    with pytest.raises(ValueError, match="Path traversal"):
+        VllmConfig(chat_template="../../etc/passwd")
+
+
+def test_vllm_config_strips_chat_template_whitespace() -> None:
+    assert VllmConfig(chat_template="  tools.jinja  ").chat_template == "tools.jinja"
+    assert VllmConfig(chat_template="   ").chat_template == ""
+
+
 def test_build_cmd_sets_compilation_cache_dir(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig(models_path="/data/models"))
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
@@ -335,7 +475,10 @@ def test_build_cmd_omits_default_lane_context_cap_for_vllm(monkeypatch) -> None:
         vllm_config=VllmConfig(max_model_len=0),
     )
     cmd = handle._build_cmd(lane)
-    assert "--max-model-len" not in cmd
+    # The 4096 sentinel must not be passed through as a real cap; with nothing
+    # explicit the lane asks vLLM to size the window itself.
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "auto"
 
 
 def test_build_cmd_keeps_explicit_lane_context_cap_for_vllm(monkeypatch) -> None:
@@ -353,13 +496,12 @@ def test_build_cmd_keeps_explicit_lane_context_cap_for_vllm(monkeypatch) -> None
     assert cmd[idx + 1] == "8192"
 
 
-def test_build_cmd_uses_calibrated_max_model_len_when_nothing_explicit(monkeypatch) -> None:
-    """Lane spawn picks up calibration's auto-shrunk --max-model-len.
+def test_build_cmd_prefers_auto_over_calibrated_max_model_len(monkeypatch) -> None:
+    """A recorded calibration_max_model_len does not become the start flag.
 
-    Regression: without this, vLLM falls back to the model's default
-    max_seq_len (e.g. Gemma-3-12B's 131072) which the operator-pinned KV
-    budget may not be able to hold — vLLM refuses to start even though
-    calibration proved a shrunk value works.
+    That value is only valid for the KV budget it was measured at, so reusing
+    it on a lane with a different budget serves the wrong window in either
+    direction. "auto" is resolved against the budget the lane actually gets.
     """
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
@@ -380,7 +522,10 @@ def test_build_cmd_uses_calibrated_max_model_len_when_nothing_explicit(monkeypat
     )
     cmd = handle._build_cmd(lane)
     idx = cmd.index("--max-model-len")
-    assert cmd[idx + 1] == "115632"
+    # "auto" wins over the calibrated value: that value is only valid for the
+    # KV budget it was measured at, while "auto" is resolved against the budget
+    # this lane actually gets.
+    assert cmd[idx + 1] == "auto"
 
 
 def test_build_cmd_prefers_explicit_max_model_len_over_calibrated(monkeypatch) -> None:
@@ -415,14 +560,15 @@ def test_build_cmd_prefers_explicit_lane_context_over_calibrated(monkeypatch) ->
     assert cmd[idx + 1] == "8192"
 
 
-def test_build_cmd_omits_max_model_len_when_no_profile(monkeypatch) -> None:
-    """Without a profile or explicit override, vLLM picks its own default."""
+def test_build_cmd_uses_auto_max_model_len_when_no_profile(monkeypatch) -> None:
+    """Without a profile or explicit override, vLLM sizes the window itself."""
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
 
     lane = LaneConfig(model="unknown/model", vllm=True, vllm_config=VllmConfig(max_model_len=0))
     cmd = handle._build_cmd(lane)
-    assert "--max-model-len" not in cmd
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "auto"
 
 
 def test_build_cmd_uses_calibrated_max_num_seqs_when_nothing_explicit(monkeypatch) -> None:
@@ -919,6 +1065,88 @@ vllm:gpu_prefix_cache_hits{model_name="m"} 10
     metrics = await handle.get_backend_metrics()
     # Legacy gauge (0.75) must win over counter-derived rate (0.1).
     assert metrics["prefix_cache_hit_rate"] == pytest.approx(0.75)
+
+
+@pytest.mark.asyncio
+async def test_get_backend_metrics_parses_spec_decode_counters() -> None:
+    """MTP/speculative decoding: acceptance rate from draft/accepted counters."""
+
+    class DummyResponse:
+        status_code = 200
+        text = """
+vllm:num_requests_running{model_name="m"} 1
+vllm:kv_cache_usage_perc{model_name="m"} 0.5
+vllm:spec_decode_num_drafts_total{model_name="m"} 300
+vllm:spec_decode_num_draft_tokens_total{model_name="m"} 1000
+vllm:spec_decode_num_accepted_tokens_total{model_name="m"} 620
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    assert metrics["mtp_acceptance_rate"] == pytest.approx(0.62)
+    # Cumulative counters are exposed for token-weighted aggregation upstream.
+    assert metrics["mtp_draft_tokens_total"] == pytest.approx(1000)
+    assert metrics["mtp_accepted_tokens_total"] == pytest.approx(620)
+    # No prefix-cache counters in this scrape.
+    assert metrics["prefix_cache_hit_rate"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_backend_metrics_spec_decode_counter_unsuffixed_names() -> None:
+    """Accept the counter names without the _total suffix variant."""
+
+    class DummyResponse:
+        status_code = 200
+        text = """
+vllm:num_requests_running{model_name="m"} 1
+vllm:spec_decode_num_draft_tokens{model_name="m"} 200
+vllm:spec_decode_num_accepted_tokens{model_name="m"} 90
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    assert metrics["mtp_acceptance_rate"] == pytest.approx(0.45)
+    assert metrics["mtp_draft_tokens_total"] == pytest.approx(200)
+    assert metrics["mtp_accepted_tokens_total"] == pytest.approx(90)
+
+
+@pytest.mark.asyncio
+async def test_get_backend_metrics_without_spec_decode_counters_reports_none() -> None:
+    """Lanes without --speculative-config expose no spec_decode_* counters."""
+
+    class DummyResponse:
+        status_code = 200
+        text = """
+vllm:num_requests_running{model_name="m"} 1
+vllm:kv_cache_usage_perc{model_name="m"} 0.5
+vllm:gpu_prefix_cache_queries{model_name="m"} 100
+vllm:gpu_prefix_cache_hits{model_name="m"} 10
+"""
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return DummyResponse()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    metrics = await handle.get_backend_metrics()
+    assert metrics["mtp_acceptance_rate"] is None
+    assert metrics["mtp_draft_tokens_total"] is None
+    assert metrics["mtp_accepted_tokens_total"] is None
+    assert metrics["prefix_cache_hit_rate"] == pytest.approx(0.1)
 
 
 def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> None:
@@ -1455,8 +1683,8 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
 def test_infer_reasoning_parser() -> None:
     from logos_worker_node.vllm_process import _infer_reasoning_parser
 
-    # The production rule table currently registers only the parsers shipping
-    # in vllm/reasoning/__init__.py: gemma4 and openai_gptoss. Other model
+    # The production rule table registers only parsers shipping in
+    # vllm/reasoning/__init__.py: gemma4, openai_gptoss and qwen3. Other model
     # families return None — no flag emitted — until vLLM exposes a parser
     # for them.
     # Google Gemma 4
@@ -1465,6 +1693,10 @@ def test_infer_reasoning_parser() -> None:
     # OpenAI GPT-OSS
     assert _infer_reasoning_parser("openai/gpt-oss-120b") == "openai_gptoss"
     assert _infer_reasoning_parser("openai/gpt-oss-20b") == "openai_gptoss"
+    # Qwen3 point releases think by default and have a parser since vLLM 0.27
+    assert _infer_reasoning_parser("Qwen/Qwen3.8-27B") == "qwen3"
+    assert _infer_reasoning_parser("Qwen/Qwen3.6-35B-A3B") == "qwen3"
+    assert _infer_reasoning_parser("Qwen/Qwen3.5-4B") == "qwen3"
     # Unknown / unsupported model families → None (no flag emitted)
     assert _infer_reasoning_parser("meta-llama/Llama-3.1-8B-Instruct") is None
     assert _infer_reasoning_parser("some/unknown-model") is None
@@ -1841,3 +2073,81 @@ async def test_spawn_does_not_retry_on_unrelated_startup_failure(tmp_path: Path,
     # Unrelated failure must not wipe the compile cache.
     assert paths["vllm"].exists()
     assert paths["inductor"].exists()
+
+
+def test_build_cmd_emits_speculative_config(monkeypatch) -> None:
+    """The MTP draft head is configured per model, not through extra_args."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    spec = '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    lane = LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, vllm_config=VllmConfig(speculative_config=spec))
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--speculative-config")
+    assert cmd[idx + 1] == spec
+
+
+def test_build_cmd_omits_speculative_config_when_unset(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
+
+    lane = LaneConfig(model="m", vllm=True, vllm_config=VllmConfig())
+    assert "--speculative-config" not in handle._build_cmd(lane)
+
+
+def test_speculative_decoding_requested_detects_both_spellings() -> None:
+    """A raw --speculative-config in extra_args counts too.
+
+    Either spelling produces a lane with a draft model, and the draft model is
+    what makes the sharded checkpoint cache unusable — so the detection cannot
+    key on the typed field alone.
+    """
+    from logos_worker_node.vllm_process import _speculative_decoding_requested
+
+    assert not _speculative_decoding_requested(VllmConfig())
+    assert _speculative_decoding_requested(VllmConfig(speculative_config='{"method":"qwen3_5_mtp"}'))
+    assert _speculative_decoding_requested(VllmConfig(extra_args=["--speculative-config", '{"method":"mtp"}']))
+    assert _speculative_decoding_requested(VllmConfig(extra_args=['--speculative-config={"method":"mtp"}']))
+    assert not _speculative_decoding_requested(VllmConfig(extra_args=["--enable-prefix-caching"]))
+    assert not _speculative_decoding_requested(VllmConfig(speculative_config="   "))
+
+
+@pytest.mark.asyncio
+async def test_sharded_checkpoint_skipped_for_speculative_lane(monkeypatch, tmp_path) -> None:
+    """A speculative lane must serve the full checkpoint.
+
+    vLLM loads the draft model with the main model's --load-format, and the
+    sharded cache carries shards only for the main model, so the lane dies with
+    "only pre-sharded checkpoints are currently supported". Skipping is per
+    lane, so one model using MTP does not cost the whole node its cache.
+    """
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(),
+        vllm_engine_config=VllmEngineConfig(sharded_checkpoint_enabled=True),
+    )
+    monkeypatch.setattr(handle, "_resolve_persistent_cache_root", lambda _cfg: str(tmp_path))
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.8-27B",
+        vllm=True,
+        vllm_config=VllmConfig(
+            tensor_parallel_size=2,
+            speculative_config='{"method":"qwen3_5_mtp","num_speculative_tokens":3}',
+        ),
+    )
+    # A ready cache is present, so the only reason not to use it is the draft
+    # model. Without this the assertion below would hold for the wrong reason.
+    from logos_worker_node import sharded_checkpoint as sc
+
+    monkeypatch.setattr(sc, "is_sharded_checkpoint_ready", lambda _target: True)
+
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None
+
+    # Same lane, same ready cache, no draft model — now it is used. This is what
+    # makes the assertion above meaningful.
+    plain = LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+    await handle._maybe_prepare_sharded_checkpoint(plain)
+    assert handle._sharded_model_dir is not None

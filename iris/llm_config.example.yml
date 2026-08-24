@@ -8,6 +8,26 @@
 #     `true` (most chat models accept temperature).
 #   * `supports_reasoning_effort: true` — set on models that accept the
 #     `reasoning_effort` request parameter. Default is `false`.
+#   * `supports_logprobs: true` — OPT-IN on models verified to accept the
+#     `logprobs` parameter on chat completions (e.g. gpt-4o / gpt-4.1
+#     families). Used by the autonomous tutor to derive confidence from
+#     logprobs instead of a verbalized self-assessment. Defaults to `false`
+#     everywhere: reasoning models may reject the parameter with a 400, and
+#     `use_responses_api: true` models never produce logprobs on that path
+#     (that combination is rejected at config load). Models without the flag
+#     use the verbalized confidence strategy.
+#   * `supports_top_logprobs: true` — additionally opt in the `top_logprobs`
+#     parameter (top-k alternative candidates per token), which enables the
+#     uncertainty scoring method (Xu et al., FSE '25); requires
+#     `supports_logprobs: true`. Leave it off for strict OpenAI-compatible
+#     gateways that reject unknown parameters with a 4xx; requests then keep
+#     plain logprobs and confidence falls back to the mean-logprob strategy.
+#     Example (verified):
+#       - id: oai-gpt-4o-mini
+#         type: openai_chat
+#         model: gpt-4o-mini
+#         supports_logprobs: true
+#         supports_top_logprobs: true
 - id: oai-gpt-52
   type: openai_chat
   model: gpt-5.2

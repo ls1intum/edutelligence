@@ -80,9 +80,10 @@
 }
 
 // ── Total request line ────────────────────────────────────────────────────────
+// Stroke color is bound inline via [attr.stroke]="totalLineColor" (CHART_ROLE.total)
+// so it always matches its own legend swatch instead of coincidentally matching Cloud's.
 .rv-total-line {
   fill: none;
-  stroke: rgb(var(--color-primary-500));
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
