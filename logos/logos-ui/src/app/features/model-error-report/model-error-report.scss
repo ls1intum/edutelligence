@@ -621,6 +621,44 @@
   }
 }
 
+.btn-copy-log {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+    color: rgb(var(--color-text-accent));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-muted);
+    cursor: not-allowed;
+  }
+
+  &--ok {
+    border-color: rgb(var(--color-success) / var(--opacity-strong));
+    color: rgb(var(--color-success));
+  }
+
+  &--error {
+    border-color: rgb(var(--color-error) / var(--opacity-strong));
+    color: rgb(var(--color-error));
+  }
+}
+
 .log-viewer {
   margin: 0;
   padding: 0;
