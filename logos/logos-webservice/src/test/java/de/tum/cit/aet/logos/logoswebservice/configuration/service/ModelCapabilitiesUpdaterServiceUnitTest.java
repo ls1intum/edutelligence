@@ -225,4 +225,41 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         verify(capabilitiesRepository, never()).save(any());
         verify(capabilitiesRepository).delete(existing);
     }
+
+    @Test
+    void extractAndStore_manualOverrideIsNotOverwrittenOnCatalogMatch() {
+        // Even though the catalog matches, an active manual override must keep the row untouched
+        Map<String, Object> catalog = Map.of(
+            "openai/gpt-4", Map.of(
+                "supports_function_calling", false,
+                "supports_vision", true,
+                "supports_reasoning", true
+            )
+        );
+        ModelCapabilities manual = new ModelCapabilities(5001, true, false, true);
+        manual.setManualOverride(true);
+        when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(manual));
+
+        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
+
+        verify(capabilitiesRepository, never()).save(any());
+        verify(capabilitiesRepository, never()).delete(any());
+    }
+
+    @Test
+    void extractAndStore_manualOverrideSurvivesCatalogNoMatch() {
+        // The guard sits before the no-match delete: a manual row outlives a catalog
+        // that no longer knows the (renamed) model name
+        Map<String, Object> catalog = Map.of(
+            "gpt-4o", Map.of("supports_function_calling", true)
+        );
+        ModelCapabilities manual = new ModelCapabilities(5001, true, false, false);
+        manual.setManualOverride(true);
+        when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(manual));
+
+        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
+
+        verify(capabilitiesRepository, never()).save(any());
+        verify(capabilitiesRepository, never()).delete(any());
+    }
 }

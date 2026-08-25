@@ -66,6 +66,10 @@ public class ModelCapabilitiesUpdaterService {
 
     @Async
     public void updateCapabilitiesForModelAsync(int modelId, String modelName) {
+        updateCapabilitiesForModel(modelId, modelName);
+    }
+
+    public void updateCapabilitiesForModel(int modelId, String modelName) {
         Map<String, Object> fullCatalog = loadLocalCatalog();
         if (fullCatalog == null) return;
         try {
@@ -99,6 +103,10 @@ public class ModelCapabilitiesUpdaterService {
             Map<String, Object> catalog,
             int modelId,
             String modelName) {
+        if (modelCapabilitiesPersistenceService.isManualOverride(modelId)) {
+            log.debug("capabilities_updater: skipping model '{}' (id={}): manual override is active", modelName, modelId);
+            return false;
+        }
         String normalizedModelName = normalizeModelName(modelName);
         boolean found = false;
         boolean supportsFunctionCalling = false;
