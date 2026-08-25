@@ -5318,9 +5318,10 @@ class CapacityPlanner:
     def manual_load_rejection_reason(self, provider_id: int) -> Optional[str]:
         """Why a manual load must not be attempted now, or None if it may run.
 
-        Split out from :meth:`load_lane_manually` so the API layer can answer the
-        operator immediately instead of reporting the rejection from a
-        background task nobody is waiting on.
+        The message is meant for the operator who clicked "Load lane", so the
+        API layer calls this before it accepts the request: the load itself runs
+        as a background task, and a refusal raised in there has nobody left to
+        report to.
         """
         if not self._is_plannable(provider_id):
             if self._registry is not None and self._registry.is_calibrating(provider_id):
@@ -5354,10 +5355,10 @@ class CapacityPlanner:
         Returns False without acting when the provider is not in a state where a
         lane may be placed — while it is calibrating, since the worker has freed
         its VRAM for the probes and a lane would take the memory they need, or
-        with no capacity snapshot to check the lane against. Callers that can
-        still answer their client should consult
-        :meth:`manual_load_rejection_reason` first; this re-checks because the
-        snapshot can go away between that call and this one.
+        with no capacity snapshot to check the lane against. A caller that can
+        still answer its client should ask `manual_load_rejection_reason` first
+        and report what it says; this re-checks anyway, because the snapshot can
+        go away between that call and this one.
 
         Serialized on the per-lane lock, like every other path that loads or
         unloads a lane. The API answers 202 and leaves this running in the
