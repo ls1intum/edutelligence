@@ -28,6 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -46,6 +47,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 class ModelControllerTest {
 
     @Autowired MockMvc mvc;
+    @Autowired ModelCapabilitiesRepository modelCapabilitiesRepository;
     @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
@@ -466,5 +468,85 @@ class ModelControllerTest {
                 .contentType("application/json")
                 .content("{\"model_id\":5001,\"name\":\"GPT-4\"}"))
            .andExpect(status().isOk());
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        // Values the local catalog derives for gpt-4 (function calling via the plain
+        // "gpt-4" entry, no vision/reasoning entries)
+        "INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, supports_reasoning) "
+            + "VALUES (5001, true, false, false)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void getModelCapabilities_existingModelReturnsCapabilities() throws Exception {
+        mvc.perform(post("/logosdb/get_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"ids\":[5001]}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.5001.model_id").value(5001))
+           .andExpect(jsonPath("$.5001.supports_function_calling").value(true))
+           .andExpect(jsonPath("$.5001.supports_vision").value(false))
+           .andExpect(jsonPath("$.5001.supports_reasoning").value(false));
+    }
+
+    @Test
+    void getModelCapabilities_unknownModelReturns404() throws Exception {
+        mvc.perform(post("/logosdb/get_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"ids\":[9999]}"))
+           .andExpect(status().isNotFound())
+           .andExpect(jsonPath("$.error").value("Model not found: 9999"));
+    }
+
+    @Test
+    void getModelCapabilities_mixedKnownAndUnknownIdsReturns404() throws Exception {
+        mvc.perform(post("/logosdb/get_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"ids\":[5001,9999]}"))
+           .andExpect(status().isNotFound())
+           .andExpect(jsonPath("$.error").value("Model not found: 9999"));
+    }
+
+    @Test
+    void getModelCapabilities_existingModelWithoutCapabilitiesRowReturnsEmptyMap() throws Exception {
+        // gpt-3.5 (5002) exists but has no model_capabilities row
+        mvc.perform(post("/logosdb/get_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"ids\":[5002]}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$").isEmpty());
+    }
+
+    @Test
+    void getModelCapabilities_missingIdsReturns400() throws Exception {
+        mvc.perform(post("/logosdb/get_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("ids are required"));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, supports_reasoning) "
+            + "VALUES (5001, true, false, false)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void deleteModel_cascadesToModelCapabilities() throws Exception {
+        assertThat(modelCapabilitiesRepository.findByModelId(5001)).isPresent();
+
+        mvc.perform(post("/logosdb/delete_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"id\":5001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Deleted Model"));
+
+        assertThat(modelCapabilitiesRepository.findByModelId(5001)).isEmpty();
     }
 }

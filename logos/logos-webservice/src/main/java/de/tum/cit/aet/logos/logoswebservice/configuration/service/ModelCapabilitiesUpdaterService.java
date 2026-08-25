@@ -75,6 +75,25 @@ public class ModelCapabilitiesUpdaterService {
         }
     }
 
+    boolean testExtractAndStoreCapabilities(
+            Map<String, Object> catalog,
+            int modelId,
+            String modelName) {
+        return extractAndStoreCapabilities(catalog, modelId, modelName);
+    }
+
+    String testExtractModelName(String catalogKey) {
+        return extractModelName(catalogKey);
+    }
+
+    String testNormalizeModelName(String modelName) {
+        return normalizeModelName(modelName);
+    }
+
+    boolean testModelNamesMatch(String requestedModelName, String catalogModelName) {
+        return modelNamesMatch(requestedModelName, catalogModelName);
+    }
+
     @SuppressWarnings("unchecked")
     private boolean extractAndStoreCapabilities(
             Map<String, Object> catalog,
