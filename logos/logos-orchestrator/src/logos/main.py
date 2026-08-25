@@ -426,6 +426,10 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
     capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
     transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
+    # Needed to resolve a lane's served window: a vLLM lane that was started
+    # without an explicit --max-model-len takes it from the calibrated profile,
+    # so the number is not on the lane itself.
+    model_profiles = runtime.get("model_profiles") if isinstance(runtime.get("model_profiles"), dict) else {}
 
     provider_signals: Dict[str, Any] = {
         "timestamp": runtime.get("timestamp"),
@@ -540,6 +544,11 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
             "ttft_histogram": ttft_histogram,
             "ttft_p95_seconds": lane_ttft_p95,
+            # The window this lane is actually serving at. Two lanes of the same
+            # model can differ — the planner sizes each against the KV cache it
+            # could get — so it belongs on the lane and not on the model. 0 when
+            # the worker reports nothing to derive it from.
+            "max_model_len": _lane_served_context_window(lane, model_profiles) or None,
         }
         if lane_id:
             lane_signals[lane_id] = lane_signal

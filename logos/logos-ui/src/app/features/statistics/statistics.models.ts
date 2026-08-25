@@ -119,6 +119,15 @@ export type LaneSignalData = {
   requests_running: number | null;
   prefix_cache_hit_rate: number | null;
   mtp_acceptance_rate: number | null;
+  /**
+   * Context window this lane is serving at, in tokens.
+   *
+   * Per lane rather than per model on purpose: the planner sizes each lane
+   * against the KV cache it could get, so the same model runs at 262,144 on one
+   * worker and a fraction of that on another. Null when the worker reports
+   * nothing to derive it from.
+   */
+  max_model_len: number | null;
 };
 
 // VramV2Sample from logos-ui-old/hooks/use-stats-websocket-v2.ts

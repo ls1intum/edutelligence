@@ -1,4 +1,4 @@
-import { messageIn } from './lane-health-panel';
+import { formatContextWindow, messageIn } from './lane-health-panel';
 
 /**
  * Pulling the reason out of a failed lane action.
@@ -65,5 +65,37 @@ describe('messageIn', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic['error'] = cyclic;
     expect(messageIn(cyclic)).toBeNull();
+  });
+});
+
+/**
+ * The context window a lane row shows.
+ *
+ * Rounded thousands, because the row is a dense line of stats read to spot the
+ * roomy lane — the exact token count is never what is being asked.
+ */
+describe('formatContextWindow', () => {
+  it('abbreviates thousands', () => {
+    expect(formatContextWindow(262144)).toBe('262k');
+    expect(formatContextWindow(111200)).toBe('111k');
+    expect(formatContextWindow(40960)).toBe('41k');
+    expect(formatContextWindow(1000)).toBe('1k');
+  });
+
+  it('leaves small windows alone', () => {
+    // Nothing to abbreviate, and "0k" would be worse than the number.
+    expect(formatContextWindow(999)).toBe('999');
+    expect(formatContextWindow(512)).toBe('512');
+  });
+
+  it('shows nothing when the worker reported nothing', () => {
+    // The orchestrator sends null for a lane it cannot derive a window for —
+    // a vLLM lane started without --max-model-len and never calibrated. The
+    // row then omits the badge rather than claiming a size.
+    expect(formatContextWindow(null)).toBeNull();
+    expect(formatContextWindow(undefined)).toBeNull();
+    expect(formatContextWindow(0)).toBeNull();
+    expect(formatContextWindow(-1)).toBeNull();
+    expect(formatContextWindow(Number.NaN)).toBeNull();
   });
 });

@@ -42,6 +42,21 @@ export interface LaneRow {
   kvColor: string | null;
   ttftColor: string | null;
   ttftLabel: string | null;
+  /** Served context window, abbreviated — "111k". Null when unreported. */
+  contextLabel: string | null;
+}
+
+/**
+ * Context window as a lane row shows it: thousands, rounded, no decimals.
+ *
+ * These sit in a dense row of stats where the exact token count is never the
+ * point — an operator reads them to see which lane is the roomy one, and
+ * "262,144" costs three times the width to say the same thing as "262k". Below
+ * 1,000 there is nothing to abbreviate.
+ */
+export function formatContextWindow(tokens: number | null | undefined): string | null {
+  if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens <= 0) return null;
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens);
 }
 
 @Component({
@@ -107,6 +122,7 @@ export class LaneHealthPanel implements OnChanges {
                 ? `${Math.round(ttft * 1000)}ms`
                 : `${ttft.toFixed(2)}s`
               : null,
+          contextLabel: formatContextWindow(lane.max_model_len),
         };
       });
   }

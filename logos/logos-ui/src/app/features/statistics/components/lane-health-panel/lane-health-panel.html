@@ -33,7 +33,16 @@
                 }
               </div>
             </div>
-            <div class="lane-model">{{ row.lane.model }}</div>
+            <div class="lane-model">
+              {{ row.lane.model }}
+              @if (row.contextLabel) {
+                <!-- The window this lane is serving at, next to the model whose
+                     window it is not: two lanes of the same model can differ. -->
+                <span class="lane-context" title="Context window this lane is serving at">
+                  {{ row.contextLabel }} ctx
+                </span>
+              }
+            </div>
             @if (gpuLabel(row.lane)) {
               <div class="lane-gpu">
                 <i class="pi pi-microchip" aria-hidden="true"></i>
