@@ -34,6 +34,19 @@ export interface RequestFilter {
   teamId: number | null;
 }
 
+/** One entry of a filter dropdown, with how much picking it would select. */
+export interface ScopeOption {
+  id: number;
+  label: string;
+  requestCount: number;
+}
+
+/** What the filter dropdowns should offer for the current range and team. */
+export interface ScopeOptions {
+  teams: ScopeOption[];
+  requesters: ScopeOption[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class StatisticsService {
   private http = inject(HttpClient);
@@ -41,6 +54,22 @@ export class StatisticsService {
   getVramStats(day: string): Promise<VramV2Payload> {
     return firstValueFrom(this.http.post<VramV2Payload>('/api/logosdb/get_ollama_vram_stats', {
       day,
+    }));
+  }
+
+  /**
+   * Teams and requesters worth offering in the filter for this range.
+   *
+   * Only what actually sent something, busiest first, and requesters narrowed to
+   * `teamId` when one is selected — the platform's full user list is long,
+   * unsearchable in a native select, and mostly made up of people who have never
+   * sent a request.
+   */
+  getScopeOptions(startIso: string, endIso: string, teamId: number | null): Promise<ScopeOptions> {
+    return firstValueFrom(this.http.post<ScopeOptions>('/api/logosdb/request_log_scope_options', {
+      start_date: startIso,
+      end_date: endIso,
+      team_id: teamId,
     }));
   }
 

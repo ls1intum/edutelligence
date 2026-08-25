@@ -28,9 +28,37 @@ public class RequestLogStatsController {
         String endDate      = (String) body.get("end_date");
         int targetBuckets   = body.containsKey("target_buckets")
                 ? ((Number) body.get("target_buckets")).intValue() : 120;
+        // Absent means the whole platform, which is what this endpoint has
+        // always returned — the scope is opt-in, so existing callers are
+        // unaffected.
+        Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
+        Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
         try {
             return ResponseEntity.ok(
-                    requestLogStatsService.getRequestLogStats(startDate, endDate, targetBuckets));
+                    requestLogStatsService.getRequestLogStats(startDate, endDate, targetBuckets, userId, teamId));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * The teams and requesters worth offering in the statistics filter for a
+     * range — those that actually sent something.
+     *
+     * Separate from the aggregates because it changes on a different clock:
+     * those are pushed every few seconds, these two lists only when the range
+     * or the selected team moves.
+     */
+    @PostMapping("/logosdb/request_log_scope_options")
+    public ResponseEntity<?> requestLogScopeOptions(@RequestAttribute("authContext") AuthContext auth,
+                                                    @RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) body = Map.of();
+        String startDate = (String) body.get("start_date");
+        String endDate   = (String) body.get("end_date");
+        // Narrows the requester list only. Absent means every requester in range.
+        Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
+        try {
+            return ResponseEntity.ok(requestLogStatsService.getScopeOptions(startDate, endDate, teamId));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }

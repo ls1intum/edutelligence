@@ -119,6 +119,15 @@ export type LaneSignalData = {
   requests_running: number | null;
   prefix_cache_hit_rate: number | null;
   mtp_acceptance_rate: number | null;
+  /**
+   * Context window this lane is serving at, in tokens.
+   *
+   * Per lane rather than per model on purpose: the planner sizes each lane
+   * against the KV cache it could get, so the same model runs at 262,144 on one
+   * worker and a fraction of that on another. Null when the worker reports
+   * nothing to derive it from.
+   */
+  max_model_len: number | null;
 };
 
 // VramV2Sample from logos-ui-old/hooks/use-stats-websocket-v2.ts
@@ -280,4 +289,34 @@ export interface RequestItem {
   completion_tokens: number | null;
   total_tokens: number | null;
   cost_microcents: number | null;
+  /**
+   * Generation rate of a request that is still streaming, from the
+   * orchestrator's in-flight view. Measured from the first token rather than
+   * from arrival, so queueing does not drag it down. Null once the request has
+   * finished, and while it is still waiting for its first token.
+   */
+  tokens_per_second?: number | null;
+  /**
+   * The token counts above are this request's live figures, not its settled
+   * ones. Prompt tokens are exact either way; the completion count is the
+   * orchestrator's running tally and moves until the request completes.
+   */
+  streaming?: boolean;
+}
+
+/**
+ * One entry of the team / requester dropdowns that scope the page, as
+ * `request_log_scope_options` returns it.
+ *
+ * Lives here rather than with the request feed: the filter used to be part of
+ * that toolbar, and now narrows every request-derived panel on the page.
+ *
+ * `requestCount` is what picking this entry would select in the current range.
+ * It is shown in the option label, because the list is only useful if it says
+ * which of its entries hold anything.
+ */
+export interface FeedFilterOption {
+  id: number;
+  label: string;
+  requestCount: number;
 }

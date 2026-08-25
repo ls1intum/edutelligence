@@ -481,6 +481,13 @@ chosen = {
     "available": available,
     "max": maximum,
 }.get(source, available) or guaranteed
+# Nothing is serving the model right now: the current_* pair only exists while a
+# lane is up, so both are empty and the cascade above has nothing to hand back.
+# max_model_len_overall comes from the model profile instead and survives that,
+# so it is still known — and it beats the blind fallback constant, which is a
+# guess for every model at once and is wrong in both directions (way under a
+# 262144-token model, way over a 32768-token one).
+chosen = chosen or maximum
 print(f"window\t{chosen}\t{guaranteed}\t{available}\t{maximum}")
 ' "$LOGOS_MODEL" "$LOGOS_CONTEXT_SOURCE" || true
 }
@@ -558,6 +565,12 @@ case "$probe_result" in
     IFS=$'\t' read -r _ LOGOS_CONTEXT_TOKENS LOGOS_CONTEXT_GUARANTEED LOGOS_CONTEXT_AVAILABLE \
       LOGOS_CONTEXT_MAX <<<"$probe_result"
     CONTEXT_ORIGIN="$LOGOS_CONTEXT_SOURCE"
+    # No lane is up, so neither current_* figure exists and the probe fell back
+    # to the model's own maximum. Worth saying: the session is sized against a
+    # window Logos has not committed to yet, not against one it is serving.
+    if (( LOGOS_CONTEXT_GUARANTEED <= 0 && LOGOS_CONTEXT_AVAILABLE <= 0 && LOGOS_CONTEXT_MAX > 0 )); then
+      CONTEXT_ORIGIN="cold"
+    fi
     ;;
   ids*)
     KNOWN_MODEL_IDS="${probe_result#ids}"
@@ -597,7 +610,20 @@ CONTEXT_FOR_CLI=$(( LOGOS_CONTEXT_TOKENS - LOGOS_CONTEXT_HEADROOM ))
 COMPACT_AT=$(( CONTEXT_FOR_CLI - LOGOS_MAX_OUTPUT_TOKENS - 13000 ))
 HARD_STOP_AT=$(( CONTEXT_FOR_CLI - LOGOS_MAX_OUTPUT_TOKENS - 3000 ))
 
-thousands() { printf "%'d" "$1" 2>/dev/null || printf '%d' "$1"; }
+# Group digits in threes. printf "%'d" would do this, but only under a locale
+# that defines a thousands separator — under LANG=C, which is what a login shell
+# often ends up with, it silently prints 111200 and the number becomes unreadable.
+# So the grouping is done here rather than left to the environment.
+thousands() {
+  local n="$1" out="" sign=""
+  [[ "$n" == -* ]] && { sign="-"; n="${n#-}"; }
+  [[ "$n" =~ ^[0-9]+$ ]] || { printf '%s' "$1"; return; }
+  while (( ${#n} > 3 )); do
+    out=",${n: -3}$out"
+    n="${n:0:${#n}-3}"
+  done
+  printf '%s%s%s' "$sign" "$n" "$out"
+}
 
 context_report() {
   printf 'model    : %s\n' "$LOGOS_MODEL"
@@ -605,6 +631,11 @@ context_report() {
   if [[ "$CONTEXT_ORIGIN" == "estimate" ]]; then
     printf 'context  : %s tokens (an estimate — Logos reports no size for this model)\n' \
       "$(thousands "$LOGOS_CONTEXT_TOKENS")"
+  elif [[ "$CONTEXT_ORIGIN" == "cold" ]]; then
+    printf 'context  : %s tokens, the maximum this model is served with\n' \
+      "$(thousands "$LOGOS_CONTEXT_TOKENS")"
+    printf '           (no lane is up yet, so Logos reports no current size — the first\n'
+    printf '            request brings one up and it is sized against this number)\n'
   else
     printf 'context  : %s tokens, using "%s" of what Logos offers\n' \
       "$(thousands "$LOGOS_CONTEXT_TOKENS")" "$CONTEXT_ORIGIN"

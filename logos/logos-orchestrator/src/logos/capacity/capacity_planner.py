@@ -88,6 +88,12 @@ class CapacityPlanner:
     DEMAND_WAKE_FLOOR = 0.5  # one partial-demand signal is enough to wake
     DEMAND_LOAD_FLOOR = 1.0  # one real request is enough to load on empty VRAM
 
+    # How long an announced upcoming use (POST /v1/models/{id}/warmup) keeps
+    # counting as a reason to cold-load on free VRAM. Long enough for a load to
+    # actually get planned across a few cycles, short enough that a session the
+    # developer abandoned before sending anything stops holding a lane open.
+    ANNOUNCED_USE_TTL_SECONDS = 300.0
+
     # Competitive ratios: applied when eviction IS required.
     # target_effective_demand > max(eviction_set_demand) * RATIO to proceed.
     WAKE_COMPETITIVE_RATIO = 1.5  # target must beat eviction set by 50%
@@ -275,6 +281,10 @@ class CapacityPlanner:
         # Optional hint payload — does not gate cycle behaviour, but is
         # surfaced in logs so we can see which request woke the cycle.
         self._tick_hints: list[tuple[int, str]] = []
+        # model -> time.time() of the last announced upcoming use (the /warmup
+        # endpoint). Read only by the cold-load path, and only when nothing has
+        # to be evicted for it; see _has_announced_use.
+        self._announced_use: dict[str, float] = {}
         self._use_additive_loads = os.environ.get("LOGOS_USE_ADDITIVE_LOADS", "true").strip().lower() not in (
             "0",
             "false",
@@ -479,6 +489,44 @@ class CapacityPlanner:
         if len(self._tick_hints) > 64:
             del self._tick_hints[: len(self._tick_hints) - 64]
         self._tick_event.set()
+
+    def announce_upcoming_use(self, model_name: str) -> None:
+        """Record that a caller is about to use ``model_name``, and wake the cycle.
+
+        Backs the ``/warmup`` endpoint. The demand score alone cannot carry this
+        signal: it is decayed once per cycle *before* the demand evaluation runs,
+        so any single increment is already multiplied by DECAY_FACTOR (0.7) by
+        the time it is compared against DEMAND_LOAD_FLOOR (1.0) — a lone hint can
+        never clear the floor, whatever weight it is given. Real traffic does not
+        hit this because a queued request bypasses the floor outright; an
+        announcement has no queue entry to be found by. So it is recorded as its
+        own fact and read next to ``has_queued``.
+
+        What it deliberately does not do is compete: the bypass applies only on
+        free VRAM, so an announcement can never displace a lane that is serving
+        someone. Against contention it stays exactly what it was — a hint.
+        """
+        self._announced_use[model_name] = time.time()
+        # Trim expired entries here rather than on a timer: the dict only ever
+        # holds models someone asked for, and this runs per announcement.
+        cutoff = time.time() - self.ANNOUNCED_USE_TTL_SECONDS
+        for model in [m for m, at in self._announced_use.items() if at < cutoff]:
+            del self._announced_use[model]
+        self.hint_capacity_needed(model_name)
+
+    def _has_announced_use(self, model_name: str) -> bool:
+        """Whether an unexpired announcement is on file for ``model_name``."""
+        announced_at = self._announced_use.get(model_name)
+        return announced_at is not None and (time.time() - announced_at) < self.ANNOUNCED_USE_TTL_SECONDS
+
+    def _consume_announced_use(self, model_name: str) -> None:
+        """Drop the announcement once it has produced a planned load.
+
+        One announcement is one load. Without this the same hint would satisfy
+        the floor again on the next cycle and, if the first load is still coming
+        up, argue for a second lane nobody asked for.
+        """
+        self._announced_use.pop(model_name, None)
 
     async def stop(self) -> None:
         """Stop the planner."""
@@ -3434,12 +3482,30 @@ class CapacityPlanner:
             has_queued = self._get_queue_depth_for_model(provider_id, model_name, lanes) > 0
 
             if not eviction_set:
-                # Resources freely available — act on floor score.
-                if eff < self.DEMAND_LOAD_FLOOR and not has_queued:
+                # Resources freely available — act on floor score. An announced
+                # upcoming use counts alongside a queued request: nothing has to
+                # be given up for this load, and the caller has said the traffic
+                # is coming. Restricted to this branch on purpose — see
+                # announce_upcoming_use.
+                announced = self._has_announced_use(model_name)
+                if eff < self.DEMAND_LOAD_FLOOR and not has_queued and not announced:
                     continue
                 if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
                     continue
                 lane_id = self._planner_lane_id(model_name)
+                if eff >= self.DEMAND_LOAD_FLOOR or has_queued:
+                    reason = f"Demand eff={eff:.2f} ≥ floor={self.DEMAND_LOAD_FLOOR}; VRAM free"
+                else:
+                    reason = f"Announced upcoming use (eff={eff:.2f} below floor); VRAM free"
+                    logger.info(
+                        "Cold-loading %s on worker=%s for an announced upcoming use "
+                        "(eff=%.2f below floor=%.2f, no eviction needed)",
+                        model_name,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        eff,
+                        self.DEMAND_LOAD_FLOOR,
+                    )
+                self._consume_announced_use(model_name)
                 actions.append(
                     CapacityPlanAction(
                         action="load",
@@ -3447,7 +3513,7 @@ class CapacityPlanner:
                         lane_id=lane_id,
                         model_name=model_name,
                         params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-                        reason=f"Demand eff={eff:.2f} ≥ floor={self.DEMAND_LOAD_FLOOR}; VRAM free",
+                        reason=reason,
                     )
                 )
                 planned_models.add(model_name)

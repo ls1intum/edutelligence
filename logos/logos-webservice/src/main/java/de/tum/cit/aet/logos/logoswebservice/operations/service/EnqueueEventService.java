@@ -22,26 +22,36 @@ public class EnqueueEventService {
         this.logEntryRepository = logEntryRepository;
     }
 
-    public Map<String, Object> getInRange(String startIso, String endIso, int limit) {
+    /**
+     * Enqueue events in a range, optionally narrowed to a team or requester.
+     *
+     * The scope belongs here and not only on the aggregates: the statistics page
+     * builds its request-volume chart client-side from these events, so leaving
+     * them unfiltered would draw platform-wide bars above filtered totals.
+     * Null for either id means "everyone".
+     */
+    public Map<String, Object> getInRange(String startIso, String endIso, int limit,
+                                          Integer userId, Integer teamId) {
         Instant start = parseIso(startIso);
         Instant end = parseIso(endIso);
         List<EnqueueEventProjection> rows = logEntryRepository.findInRange(
-            Timestamp.from(start), Timestamp.from(end), limit);
+            Timestamp.from(start), Timestamp.from(end), userId, teamId, limit);
         return buildResult(rows, null, "");
     }
 
     public Map<String, Object> getDeltas(String afterEnqueueTs, String afterRequestId,
-                                         String untilTs, int limit) {
+                                         String untilTs, int limit,
+                                         Integer userId, Integer teamId) {
         Instant until = untilTs != null ? parseIso(untilTs) : Instant.now();
         String cursorId = afterRequestId != null ? afterRequestId : "";
 
         List<EnqueueEventProjection> rows;
         if (afterEnqueueTs == null || afterEnqueueTs.isBlank()) {
-            rows = logEntryRepository.findDeltasNoCursor(Timestamp.from(until), limit);
+            rows = logEntryRepository.findDeltasNoCursor(Timestamp.from(until), userId, teamId, limit);
         } else {
             Instant cursor = parseIso(afterEnqueueTs);
             rows = logEntryRepository.findDeltasWithCursor(
-                Timestamp.from(cursor), cursorId, Timestamp.from(until), limit);
+                Timestamp.from(cursor), cursorId, Timestamp.from(until), userId, teamId, limit);
         }
         return buildResult(rows, afterEnqueueTs, cursorId);
     }

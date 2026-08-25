@@ -7,6 +7,40 @@
       Real-time request volume, VRAM, and lane health across all providers.
     </p>
     <div class="stats-header__controls">
+      <!-- Scope. Sits with the time range because it does the same kind of job:
+           both narrow every request-derived panel on the page at once. -->
+      <div class="stats-scope">
+        <app-select
+          class="stats-scope__select"
+          [options]="teamFilterOptions()"
+          [value]="selectedTeamValue()"
+          [compact]="true"
+          ariaLabel="Filter by team"
+          (valueChange)="setTeamFilter($event)"
+        />
+        <app-select
+          class="stats-scope__select"
+          [options]="userFilterOptions()"
+          [value]="selectedUserValue()"
+          [compact]="true"
+          [disabled]="noRequestersInScope()"
+          ariaLabel="Filter by requester"
+          (valueChange)="setUserFilter($event)"
+        />
+        @if (noRequestersInScope()) {
+          <span class="stats-scope__note">no named requesters in this range</span>
+        }
+        @if (filterActive()) {
+          <button
+            class="stats-scope__clear"
+            type="button"
+            (click)="clearFilter()"
+            aria-label="Clear filter"
+          >
+            <i class="pi pi-times" aria-hidden="true"></i> Clear
+          </button>
+        }
+      </div>
       <app-time-range-bar
         class="stats-time-range"
         [preset]="preset()"
@@ -30,6 +64,12 @@
          line and every card in the row loses its alignment. -->
     <div class="stats-kpi-period">
       Totals for <strong>{{ customRange() ? rangeLabel() : periodLabel() }}</strong>
+      @if (filterActive()) {
+        <!-- Named here rather than left to the dropdowns: these totals are the
+             thing most likely to be read at a glance and misremembered as
+             platform-wide once the filter scrolls out of view. -->
+        · <strong>{{ filterLabel() }}</strong> only
+      }
     </div>
 
     <div class="stats-kpi-strip">
@@ -336,8 +376,8 @@
         [totalInRange]="totalRequests()"
         [range]="requestFeedRange()"
         [pending]="requestsPending()"
-        [users]="feedUsers()"
-        [teams]="feedTeams()"
+        [filterUserId]="filterUserId()"
+        [filterTeamId]="filterTeamId()"
       />
     </app-stats-chart-panel>
 
