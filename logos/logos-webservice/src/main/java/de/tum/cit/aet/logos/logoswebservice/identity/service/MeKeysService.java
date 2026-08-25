@@ -77,13 +77,19 @@ public class MeKeysService {
         List<ModelAccessProjection> rows = Boolean.TRUE.equals(key.getUseCustomPermissions())
             ? apiKeyRepository.findAccessibleModelsByKey(keyId)
             : apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId());
-        Map<String, Integer> windows = modelWindowClient.getContextWindows();
+        Map<String, OrchestratorModelWindowClient.ModelContextWindows> windows =
+            modelWindowClient.getContextWindows();
         return Optional.of(rows.stream()
-            .map(r -> new ModelAccessDTO(
-                r.getModelName(),
-                includeProviderNames ? r.getProviderName() : null,
-                r.getProviderType(),
-                windows.get(r.getModelName())))
+            .map(r -> {
+                var w = windows.get(r.getModelName());
+                return new ModelAccessDTO(
+                    r.getModelName(),
+                    includeProviderNames ? r.getProviderName() : null,
+                    r.getProviderType(),
+                    w != null ? w.min() : null,
+                    w != null ? w.best() : null,
+                    w != null ? w.nativeMax() : null);
+            })
             .toList());
     }
 

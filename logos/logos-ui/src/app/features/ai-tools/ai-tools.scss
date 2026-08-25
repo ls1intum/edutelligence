@@ -10,46 +10,346 @@
   margin-bottom: 16px;
 }
 
-// ── Tool tabs ─────────────────────────────────────────────────────────────
-.tool-tabs {
+// ── Stepper ───────────────────────────────────────────────────────────────
+.stepper {
   display: flex;
-  gap: 8px;
-  margin-bottom: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
 }
 
-.tool-tab {
+.stepper-item {
+  display: flex;
+  align-items: center;
+
+  // Connector between steps, so the row reads as a sequence rather than tabs.
+  &:not(.stepper-item--last)::after {
+    content: '';
+    width: 18px;
+    height: 1px;
+    background: rgb(var(--color-outline-200) / var(--opacity-strong));
+  }
+}
+
+.stepper-btn {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 20px;
-  border-radius: 10px;
-  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  gap: 8px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
   background: transparent;
   color: rgb(var(--color-typography-500));
-  font-size: var(--font-size-base);
   font-family: inherit;
-  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-md);
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 
-  &:hover {
+  &:hover:not(:disabled) {
     background: rgb(var(--color-primary-400) / var(--opacity-faint));
     color: rgb(var(--color-text-accent));
   }
 
-  &--active {
+  &:disabled {
+    cursor: not-allowed;
+    opacity: var(--opacity-muted);
+  }
+
+  &--current {
     background: rgb(var(--nav-active-fill) / var(--nav-active-fill-opacity));
     border-color: rgb(var(--nav-active-stroke) / var(--nav-active-stroke-opacity));
     color: rgb(var(--color-text-accent));
     font-weight: var(--font-weight-semibold);
   }
+
+  &--done {
+    color: rgb(var(--color-typography-300));
+
+    .stepper-num {
+      background: rgb(var(--color-accent-green) / var(--opacity-soft));
+      color: rgb(var(--color-accent-green));
+    }
+  }
 }
+
+.stepper-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+
+  i { font-size: var(--font-size-sm); }
+}
+
+.stepper-title { white-space: nowrap; }
 
 // ── Section cards ─────────────────────────────────────────────────────────
 .config-section {
   @include glass-surface;
   margin-top: 16px;
   padding: 20px 24px 24px;
+
+  // A collapsed step is one summary row; drop the card padding so the sequence
+  // of completed steps stays compact above the one being worked on.
+  &--collapsed {
+    padding: 0;
+  }
+
+  // A step that cannot be opened yet has nothing to show, so the card should
+  // not be there at all.
+  &--collapsed:empty {
+    display: none;
+  }
+}
+
+.step-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / var(--opacity-faint));
+  }
+
+  > i {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: var(--font-size-sm);
+    color: rgb(var(--color-typography-700));
+  }
+}
+
+.step-summary-label {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-widest);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700));
+}
+
+.step-summary-value {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+  overflow-wrap: anywhere;
+}
+
+// ── Step navigation ───────────────────────────────────────────────────────
+.step-nav {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+}
+
+// ── Step 1: tool comparison ───────────────────────────────────────────────
+// A single grid holding every cell as a direct child, so the dimension label
+// and both values share one grid row. That is what makes the two tools
+// comparable: the rows cannot drift apart when one side's text wraps to two
+// lines and the other's does not, which is exactly what happens on a narrow
+// window or with a longer translation.
+.compare {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.55fr) repeat(2, minmax(0, 1fr));
+  // 1px gaps with the container's own background showing through: grid lines
+  // without a border on every cell, so the eye can follow a row across.
+  gap: 1px;
+  margin: 16px 0 10px;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgb(var(--color-outline-200) / var(--opacity-border));
+}
+
+// Column header and footer: buttons that span the full cell so the whole
+// column reads as one clickable choice.
+.compare-col,
+.compare-cta {
+  border: none;
+  background: rgb(var(--color-background-50));
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.compare-col {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 16px 16px 14px;
+  text-align: left;
+
+  &:hover { background: rgb(var(--color-primary-400) / var(--opacity-faint)); }
+
+  &--active { background: rgb(var(--color-primary-500) / var(--opacity-soft)); }
+}
+
+.compare-col-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+
+  i {
+    font-size: var(--font-size-lg);
+    color: rgb(var(--color-text-accent));
+  }
+}
+
+.compare-col-name {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+.compare-col-headline {
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-300));
+  line-height: var(--line-height-normal);
+}
+
+.compare-col-caveat {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  line-height: var(--line-height-normal);
+
+  i {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: rgb(var(--color-warning));
+  }
+}
+
+.compare-corner {
+  background: rgb(var(--color-background-50));
+}
+
+.compare-dim {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px;
+  background: rgb(var(--color-surface-0));
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700));
+}
+
+.compare-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  background: rgb(var(--color-surface-0));
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  line-height: var(--line-height-normal);
+
+  &--active { background: rgb(var(--color-primary-500) / var(--opacity-faint)); }
+
+  &--plus { color: rgb(var(--color-typography-100)); }
+}
+
+.compare-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  font-size: var(--font-size-sm);
+
+  &--plus { color: rgb(var(--color-accent-green)); }
+  &--even,
+  &--minus { color: rgb(var(--color-typography-700)); }
+}
+
+.compare-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 14px;
+  color: rgb(var(--color-text-accent));
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+
+  &:hover { background: rgb(var(--color-primary-400) / var(--opacity-faint)); }
+
+  &--active {
+    background: rgb(var(--color-primary-500));
+    color: rgb(var(--color-white));
+
+    &:hover { background: rgb(var(--color-primary-500)); }
+  }
+}
+
+.tool-legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+// ── Context window grid ───────────────────────────────────────────────────
+.context-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0 12px;
+}
+
+.context-cell {
+  @include glass-card;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  background: rgb(var(--color-background-50));
+
+  &--accent {
+    border-color: rgb(var(--color-primary-400) / var(--opacity-strong));
+  }
+}
+
+.context-cell-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700));
+}
+
+.context-cell-value {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--color-typography-100));
+}
+
+.context-cell-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  line-height: var(--line-height-normal);
 }
 
 .step-label {
@@ -249,22 +549,23 @@
   &:hover { text-decoration: underline; }
 }
 
-// ── Privacy callout ───────────────────────────────────────────────────────
-.privacy-callout {
+// ── Callouts ──────────────────────────────────────────────────────────────
+// Two flavours of one shape: .privacy-callout warns about something to know
+// before continuing, .callout--good confirms something the reader might
+// otherwise worry about (here: that their own setup is left alone).
+.privacy-callout,
+.callout {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   padding: 12px 16px;
   margin-bottom: 16px;
   border-radius: 8px;
-  background: rgb(var(--color-warning) / var(--opacity-faint));
-  border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
 
   i {
     flex-shrink: 0;
     margin-top: 2px;
     font-size: var(--font-size-base);
-    color: rgb(var(--color-warning));
   }
 
   p {
@@ -275,6 +576,20 @@
 
     strong { color: rgb(var(--color-typography-100)); }
   }
+}
+
+.privacy-callout {
+  background: rgb(var(--color-warning) / var(--opacity-faint));
+  border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
+
+  i { color: rgb(var(--color-warning)); }
+}
+
+.callout--good {
+  background: rgb(var(--color-accent-green) / var(--opacity-faint));
+  border: 1px solid rgb(var(--color-accent-green) / var(--opacity-border));
+
+  i { color: rgb(var(--color-accent-green)); }
 }
 
 // ── Connect sub-steps ─────────────────────────────────────────────────────
@@ -318,6 +633,18 @@
 }
 
 // ── Mobile ────────────────────────────────────────────────────────────────
+@media (max-width: 900px) {
+  // Side-by-side comparison needs two columns to be a comparison at all; below
+  // this width the cards stack and the shared row labels carry the pairing.
+  .tool-choice {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .context-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 768px) {
   .ai-tools {
     padding: 24px 16px 32px;
@@ -325,6 +652,14 @@
 
   .config-section {
     padding: 16px 16px 20px;
+
+    &--collapsed { padding: 0; }
+  }
+
+  .step-summary {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    padding: 12px 16px;
   }
 
   .code-header {
@@ -332,9 +667,32 @@
     row-gap: 6px;
   }
 
-  .os-tabs,
-  .tool-tabs {
+  .os-tabs {
     flex-wrap: wrap;
+  }
+
+  .stepper-item:not(.stepper-item--last)::after {
+    width: 8px;
+  }
+
+  .stepper-title {
+    // Numbers alone stay legible on a narrow screen; the open step's own
+    // heading says which step it is.
+    display: none;
+  }
+
+  .stepper-btn--current .stepper-title {
+    display: inline;
+  }
+
+  .step-nav {
+    flex-direction: column-reverse;
+
+    .btn-primary,
+    .btn-secondary {
+      width: 100%;
+      justify-content: center;
+    }
   }
 
   .terminal-block {

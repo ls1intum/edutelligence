@@ -378,3 +378,56 @@ async def test_retrieve_model_includes_served_context_window(monkeypatch):
         response = await main.retrieve_model("qwen-14b", _make_request())
 
     assert json.loads(response.body)["max_model_len"] == 40960
+
+
+@pytest.mark.asyncio
+async def test_list_models_reports_best_and_native_next_to_the_minimum(monkeypatch):
+    """Three figures, because one number cannot serve every client.
+
+    ``max_model_len`` stays the smallest window (safe whichever worker answers).
+    A client that would rather advertise the ceiling — and accept the occasional
+    overflow — gets ``max_model_len_best`` (widest served right now) and
+    ``max_context_length`` (the model's own limit).
+    """
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry(
+        {
+            7: _snapshot(
+                [_vllm_lane("qwen-27b", max_model_len=262144)],
+                model_profiles={"qwen-27b": {"max_context_length": 262144}},
+            ),
+            8: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)]),
+        }
+    )
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert entries["qwen-27b"]["max_model_len"] == 33000
+    assert entries["qwen-27b"]["max_model_len_best"] == 262144
+    assert entries["qwen-27b"]["max_context_length"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_native_length_without_a_live_lane(monkeypatch):
+    """A model with a profile but nothing loaded still reports its own limit.
+
+    That is the number a config file has to be written from, and it does not
+    depend on what happens to be running at the time the page is opened.
+    """
+    models = [{"id": 1, "name": "cold-model", "description": None}]
+    registry = DummyRegistry({7: _snapshot([], model_profiles={"cold-model": {"max_context_length": 131072}})})
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert entries["cold-model"]["max_context_length"] == 131072
+    assert "max_model_len" not in entries["cold-model"]
+    assert "max_model_len_best" not in entries["cold-model"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_omits_every_context_field_when_unknown(monkeypatch):
+    """Cloud models keep the exact object they had before these fields existed."""
+    models = [{"id": 1, "name": "gpt-4o", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}))
+
+    assert set(entries["gpt-4o"]) == {"id", "object", "created", "owned_by"}

@@ -150,7 +150,7 @@ async def test_audio_translation_job_does_not_add_stream_field(monkeypatch):
 
     monkeypatch.setattr(main, "DBManager", FakeDB)
 
-    async def filter_deployments(deployments):
+    async def filter_deployments(deployments, payload=None):
         return deployments
 
     async def route_and_capture(**kwargs):

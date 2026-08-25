@@ -333,6 +333,22 @@ class CapacityPlanner:
             "true",
             "yes",
         )
+        # Minimum share of a model's own context length a lane has to serve to
+        # be worth placing at all. Without a floor the planner takes whatever
+        # window fits the free KV cache, so the same model ends up serving
+        # 262144 tokens on a roomy node and a small fraction of that on a busy
+        # one — and since the API can only advertise the smallest window across
+        # the cluster (a request may land anywhere), the narrow lane defines
+        # what every client is told the model can do. Refusing to place a lane
+        # below this share trades some availability for a window that stays
+        # worth advertising.
+        #
+        # 0 disables the floor (place at any window, pre-existing behaviour).
+        # 1.0 is "full context or nothing". Per-model overrides go in
+        # LOGOS_MIN_CONTEXT_FRACTION_OVERRIDES as JSON, e.g.
+        #   {"Qwen/Qwen3.8-27B": 1.0, "openai/gpt-oss-120b": 0.75}
+        self._min_context_fraction = max(0.0, min(1.0, _initial_min_context_fraction()))
+        self._min_context_fraction_overrides = _initial_min_context_overrides()
 
         # ── Tunable switching/anti-starvation knobs (env-overridable) ──────────
         # Under sustained load every model has a queue, so the demand-preemptive
@@ -5130,20 +5146,41 @@ class CapacityPlanner:
             # fits the estimated per-GPU KV headroom — spawning it would only
             # yield a doomed vLLM start (the budget can't serve one request at
             # any calibrated context). Better to defer until VRAM frees up.
+            #
+            # The same check also enforces the context floor: pairs below
+            # _min_context_tokens are not counted as viable, so a node with
+            # room for a narrow lane but not a useful one defers instead of
+            # placing the lane that would drag the model's advertised window
+            # down cluster-wide.
             if profile is not None and profile.residency_source == "calibrated":
                 pairs = self._parse_kv_max_model_len_pairs(profile)
-                viable = [pkv for pkv, pmml in pairs if pmml and pmml > 0]
+                min_context = self._min_context_tokens(profile)
+                viable = [pkv for pkv, pmml in pairs if pmml and pmml >= max(1, min_context)]
                 if viable:
                     avail_kv = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
                     if avail_kv is not None and avail_kv < min(viable):
                         logger.info(
-                            "Feasibility FAILED for %s: smallest calibrated KV pair %.0fMB > "
-                            "available-for-KV %.0fMB/GPU — not spawning",
+                            "Feasibility FAILED for %s: smallest calibrated KV pair serving >=%d "
+                            "context tokens needs %.0fMB > available-for-KV %.0fMB/GPU — not spawning",
                             model_name,
+                            max(1, min_context),
                             min(viable),
                             avail_kv,
                         )
                         return False
+                elif min_context > 0 and pairs:
+                    # No calibrated point on this node reaches the floor at any
+                    # KV size. Nothing will free up that changes it, so say so
+                    # once per cycle and leave the model alone here.
+                    logger.info(
+                        "Feasibility FAILED for %s: no calibrated KV point serves the required "
+                        "minimum of %d context tokens (widest is %d) — not spawning. Lower "
+                        "LOGOS_MIN_CONTEXT_FRACTION (or override it for this model) to allow it",
+                        model_name,
+                        min_context,
+                        max((pmml for _pkv, pmml in pairs), default=0),
+                    )
+                    return False
         else:
             if kv_cache_bytes_str:
                 kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
@@ -5692,6 +5729,45 @@ class CapacityPlanner:
         if kv_mb <= 0:
             return None
         return self._format_bytes_human(int(kv_mb * 1024 * 1024))
+
+    @staticmethod
+    def _native_context_length(profile: Optional[ModelProfile]) -> int:
+        """The model's own context length, 0 when the profile does not say.
+
+        ``max_context_length`` when calibration recorded it, otherwise the
+        widest window any calibrated KV point reached — which is the best
+        available proxy for "all the context this model has".
+        """
+        if profile is None:
+            return 0
+        native = 0
+        try:
+            if profile.max_context_length:
+                native = int(profile.max_context_length)
+        except (TypeError, ValueError):
+            native = 0
+        for _kv_mb, max_model_len in CapacityPlanner._parse_kv_max_model_len_pairs(profile):
+            native = max(native, max_model_len)
+        return native if native > 0 else 0
+
+    def _min_context_tokens(self, profile: Optional[ModelProfile]) -> int:
+        """Narrowest window a lane for this model may be placed with.
+
+        0 means "no floor": either the operator disabled it, or the profile
+        does not report a context length to take a share of. A model whose
+        context length is unknown is never blocked by this gate — the floor
+        exists to stop the planner from *choosing* a narrow window, not to
+        stop uncalibrated models from loading.
+        """
+        if profile is None:
+            return 0
+        fraction = self._min_context_fraction_overrides.get(profile.model_name, self._min_context_fraction)
+        if fraction <= 0:
+            return 0
+        native = self._native_context_length(profile)
+        if native <= 0:
+            return 0
+        return int(native * fraction)
 
     @staticmethod
     def _parse_kv_max_model_len_pairs(profile: ModelProfile) -> List[tuple[float, int]]:

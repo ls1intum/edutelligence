@@ -31,6 +31,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
+from logos.context_budget import required_context_tokens
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
@@ -1732,7 +1733,12 @@ async def internal_model_context_windows(request: Request):
 
     The effective window lives only in the worker runtime snapshots held by
     the orchestrator's registry; the webservice enriches its model listings
-    (e.g. the OpenCode setup page) from this map.
+    (e.g. the AI-tools setup page) from this map.
+
+    ``windows`` keeps its original shape — model name -> smallest currently
+    served window — so an older webservice keeps working. ``stats`` adds the
+    ``best`` and ``native`` numbers next to it; see
+    :func:`_served_context_window_stats`.
     """
     if not _INTERNAL_SECRET:
         raise HTTPException(status_code=403, detail="Internal endpoint disabled")
@@ -1745,7 +1751,11 @@ async def internal_model_context_windows(request: Request):
     if not hmac.compare_digest(token, _INTERNAL_SECRET):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
-    return {"windows": _served_context_windows()}
+    stats = _served_context_window_stats()
+    return {
+        "windows": {model: entry["min"] for model, entry in stats.items() if "min" in entry},
+        "stats": stats,
+    }
 
 
 @app.get("/internal/calibration_probe_logs", tags=["admin"])
@@ -1999,10 +2009,14 @@ def _build_logosnode_ws_url(request: Request, token: str) -> str:
 
 async def _filter_logosnode_deployments(
     deployments: list[Deployment],
+    payload: Optional[dict] = None,
 ) -> list[Deployment]:
     """
     Enforce provider model scope intersection:
     DB deployment assignment AND node capabilities.
+
+    When ``payload`` is given, also prefers the workers whose served context
+    window fits the request; see :func:`_prefer_deployments_with_context_room`.
     """
     if not deployments:
         return []
@@ -2036,7 +2050,117 @@ async def _filter_logosnode_deployments(
             if allowed:
                 filtered.append({**deployment, "type": "logosnode"})
 
+    # Audio uploads carry a file, not a conversation: their "prompt" field is a
+    # transcription hint of a few words and says nothing about how much context
+    # the request needs. Leave their routing alone.
+    if payload is not None and not is_multipart_payload(payload):
+        filtered = _prefer_deployments_with_context_room(filtered, payload, _local_name_lookup)
+
     return filtered
+
+
+def _provider_served_context_windows() -> dict[tuple[int, str], int]:
+    """(provider_id, model name) -> smallest window that worker serves for it.
+
+    Per worker rather than per model, which is what routing needs: the
+    model-level minimum in :func:`_served_context_window_stats` is the floor
+    across the whole cluster and says nothing about which node is the roomy
+    one. A worker running several lanes for the same model is reduced to its
+    narrowest, since any of them may take the request.
+    """
+    windows: dict[tuple[int, str], int] = {}
+    try:
+        provider_ids = _logosnode_registry.active_provider_ids()
+    except Exception:
+        return windows
+    for provider_id in provider_ids:
+        snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        runtime = (snap or {}).get("runtime")
+        if not isinstance(runtime, dict):
+            continue
+        lanes = runtime.get("lanes")
+        if not isinstance(lanes, list):
+            continue
+        model_profiles = runtime.get("model_profiles")
+        if not isinstance(model_profiles, dict):
+            model_profiles = {}
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            window = _lane_served_context_window(lane, model_profiles)
+            if window <= 0:
+                continue
+            key = (int(provider_id), lane["model"])
+            windows[key] = min(windows[key], window) if key in windows else window
+    return windows
+
+
+def _prefer_deployments_with_context_room(
+    deployments: list[Deployment],
+    payload: dict,
+    model_names: dict[int, str],
+) -> list[Deployment]:
+    """Drop workers whose context window is too narrow for this request.
+
+    A model can be placed with very different windows on different nodes: the
+    planner gives a lane as much context as the node's free KV cache allows,
+    so the same model may serve 262144 tokens on one worker and a fraction of
+    that on another. Routing a long conversation to the narrow one earns a 400
+    from vLLM even though a worker that could have answered was idle next to
+    it.
+
+    So: estimate what the request needs (prompt + its own output reservation +
+    the same 3000-token margin Claude Code keeps) and keep only the workers
+    that offer it.
+
+    Two deliberate escape hatches, because this filter runs on an estimate:
+
+    * A worker whose window is unknown is always kept. ``max_model_len`` is
+      absent for cloud providers, for Ollama lanes and for a vLLM lane the
+      worker has not reported a window for — none of those are evidence of a
+      *narrow* window.
+    * When no worker is left, the widest ones are returned instead of nothing.
+      The request then fails upstream exactly as it did before this filter
+      existed, rather than turning into a 404 that hides which model was
+      asked for.
+    """
+    required = required_context_tokens(payload)
+    if required is None:
+        return deployments
+
+    windows = _provider_served_context_windows()
+    if not windows:
+        return deployments
+
+    def _window_of(deployment: Deployment) -> Optional[int]:
+        if _normalize_provider_type(deployment.get("type")) != "logosnode":
+            return None
+        model_name = model_names.get(int(deployment["model_id"]))
+        if not model_name:
+            return None
+        return windows.get((int(deployment["provider_id"]), model_name))
+
+    fitting = [d for d in deployments if (_window_of(d) or required) >= required]
+    if fitting:
+        if len(fitting) != len(deployments):
+            logger.info(
+                "Context routing: request needs ~%d tokens; %d of %d deployment(s) serve a wide " "enough window",
+                required,
+                len(fitting),
+                len(deployments),
+            )
+        return fitting
+
+    # Every known window is too narrow. Hand back the widest so the request
+    # gets the best available shot instead of a synthetic 404.
+    widest = max((w for w in (_window_of(d) for d in deployments) if w), default=0)
+    logger.warning(
+        "Context routing: request needs ~%d tokens but the widest served window is %d — "
+        "falling back to the widest deployment(s)",
+        required,
+        widest,
+    )
+    return [d for d in deployments if (_window_of(d) or 0) >= widest] or deployments
 
 
 async def start_pipeline():
@@ -3788,7 +3912,7 @@ async def handle_sync_request(path: str, request: Request):
                     timeout_s=body.get("timeout_s"),
                 )
             deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(deployments)
+        deployments = await _filter_logosnode_deployments(deployments, payload=body)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         raise HTTPException(status_code=401, detail=str(e))
@@ -4061,7 +4185,7 @@ async def execute_proxy_job(
                     timeout_s=json_data.get("timeout_s"),
                 )
             deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(deployments)
+        deployments = await _filter_logosnode_deployments(deployments, payload=json_data)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         _, err_body = coerce_upstream_error(401, {"error": str(e)})
@@ -4651,28 +4775,82 @@ def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
     return 0
 
 
-def _served_context_windows() -> dict[str, int]:
-    """Best-effort map of model name -> served context window (tokens),
-    derived from the logosnode runtime snapshots. When several workers serve
-    the same model with different windows, the smallest wins: a request may
-    be routed to any of them, so only the minimum is safe to advertise.
+def _profile_native_context_length(profile: dict) -> int:
+    """Largest context window a model could ever be served with here.
+
+    The model's own architectural limit (``max_context_length``) when the
+    worker reported it, otherwise the widest window any calibrated KV point
+    reached. This is the "all-time maximum" — what the model offers when a
+    lane gets all the KV cache it wants — as opposed to the window a lane
+    happens to run with right now.
     """
-    windows: dict[str, int] = {}
+    if not isinstance(profile, dict):
+        return 0
+
+    def _as_len(value) -> int:
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return value if value > 0 else 0
+
+    native = _as_len(profile.get("max_context_length"))
+    pairs = profile.get("kv_cache_to_max_model_len_pairs")
+    if isinstance(pairs, list):
+        for item in pairs:
+            if isinstance(item, dict):
+                native = max(native, _as_len(item.get("max_model_len")))
+    return native
+
+
+def _served_context_window_stats() -> dict[str, dict[str, int]]:
+    """Per-model context windows derived from the logosnode runtime snapshots.
+
+    Three numbers per model, all in tokens and all omitted when unknown:
+
+    ``min``    the smallest window any worker currently serves. A request may
+               be routed to any of them, so this is the only value that is
+               safe unconditionally — it is what ``max_model_len`` reports.
+    ``best``   the largest window currently served anywhere. Reachable only
+               when the request lands on that worker, which is what the
+               context-aware routing in ``_filter_logosnode_deployments``
+               tries to arrange.
+    ``native`` the model's own limit, i.e. what a lane serves when it gets all
+               the KV cache it asks for. Independent of what is loaded right
+               now, so it is also known for models with no live lane, and it
+               is the ceiling ``best`` can ever grow to.
+    """
+    stats: dict[str, dict[str, int]] = {}
     try:
         provider_ids = _logosnode_registry.active_provider_ids()
     except Exception:
-        return windows
+        return stats
+
+    def _record(model: str, field: str, value: int, *, keep_smallest: bool = False) -> None:
+        entry = stats.setdefault(model, {})
+        current = entry.get(field)
+        if current is None:
+            entry[field] = value
+        elif keep_smallest:
+            entry[field] = min(current, value)
+        else:
+            entry[field] = max(current, value)
+
     for provider_id in provider_ids:
         snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
         runtime = (snap or {}).get("runtime")
         if not isinstance(runtime, dict):
             continue
-        lanes = runtime.get("lanes")
-        if not isinstance(lanes, list):
-            continue
         model_profiles = runtime.get("model_profiles")
         if not isinstance(model_profiles, dict):
             model_profiles = {}
+        for model, profile in model_profiles.items():
+            native = _profile_native_context_length(profile)
+            if native > 0:
+                _record(model, "native", native)
+        lanes = runtime.get("lanes")
+        if not isinstance(lanes, list):
+            continue
         for lane in lanes:
             if not isinstance(lane, dict):
                 continue
@@ -4680,8 +4858,45 @@ def _served_context_windows() -> dict[str, int]:
             if window <= 0:
                 continue
             model = lane["model"]
-            windows[model] = min(windows[model], window) if model in windows else window
-    return windows
+            _record(model, "min", window, keep_smallest=True)
+            _record(model, "best", window)
+    return stats
+
+
+def _served_context_windows() -> dict[str, int]:
+    """Model name -> smallest currently served context window (tokens).
+
+    The conservative view of :func:`_served_context_window_stats`, kept as its
+    own helper because most callers only ever want the safe number.
+    """
+    return {model: entry["min"] for model, entry in _served_context_window_stats().items() if "min" in entry}
+
+
+def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
+    """Context-window fields for one model in an OpenAI-style model object.
+
+    ``max_model_len`` is the field vLLM uses and the one clients should trust
+    unconditionally: the smallest window currently served, safe whichever
+    worker a request lands on. The two Logos extensions next to it describe
+    the room above that floor — ``max_model_len_best`` what some worker serves
+    right now, ``max_context_length`` what the model offers when a lane gets
+    the KV cache it wants. A client that never wants a rejected request stays
+    on ``max_model_len``; one that would rather advertise the ceiling (and
+    accept the occasional overflow) has the other two.
+
+    Every field is omitted when unknown, so cloud models and never-calibrated
+    models keep the object they had before these fields existed.
+    """
+    if not entry:
+        return {}
+    fields: dict[str, int] = {}
+    if entry.get("min"):
+        fields["max_model_len"] = entry["min"]
+    if entry.get("best"):
+        fields["max_model_len_best"] = entry["best"]
+    if entry.get("native"):
+        fields["max_context_length"] = entry["native"]
+    return fields
 
 
 @app.get("/v1/models", tags=["user-facing"])
@@ -4704,16 +4919,14 @@ async def list_models(request: Request):
     with DBManager() as db:
         models = db.get_models_for_api_key(auth.api_key_id)
 
-    windows = _served_context_windows()
+    stats = _served_context_window_stats()
     data = [
         {
             "id": model["name"],
             "object": "model",
             "created": _SERVER_START_TIME,
             "owned_by": "logos",
-            # Same extension field vLLM uses; omitted when no worker reports
-            # a served window for the model (cloud models, cold lanes).
-            **({"max_model_len": windows[model["name"]]} if model["name"] in windows else {}),
+            **_model_context_fields(stats.get(model["name"])),
         }
         for model in models
     ]
@@ -4759,14 +4972,14 @@ async def retrieve_model(model_id: str, request: Request):
     if not model:
         raise HTTPException(status_code=404, detail="Model not found or access denied")
 
-    windows = _served_context_windows()
+    stats = _served_context_window_stats()
     return JSONResponse(
         content={
             "id": model["name"],
             "object": "model",
             "created": _SERVER_START_TIME,
             "owned_by": "logos",
-            **({"max_model_len": windows[model["name"]]} if model["name"] in windows else {}),
+            **_model_context_fields(stats.get(model["name"])),
         }
     )
 
