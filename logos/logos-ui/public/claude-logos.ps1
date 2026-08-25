@@ -15,6 +15,7 @@
                                      context this session would get, then exit
     claude-logos -Install            install to %LOCALAPPDATA%\Programs\claude-logos
                                      (takes KEY=value lines via -LogosConfig)
+    claude-logos -Update             replace this wrapper with the current one
     claude-logos -Uninstall          remove the wrapper, its config and its key
 
   NOTHING OUTSIDE THIS WRAPPER IS TOUCHED. The Logos credential, base URL and model are
@@ -24,6 +25,9 @@
   %USERPROFILE%\.claude\settings.json and your claude.ai login are left exactly as they
   are, so plain `claude` keeps using your Anthropic subscription.
 
+  It never updates itself either. It notices when Logos serves a newer revision
+  and says so; replacing it is always something you type.
+
   This file is served by the Logos UI at <logos-url>/claude-logos.ps1 and is what the
   "AI Tools" page installs.
 #>
@@ -31,6 +35,7 @@
 param(
     [switch]$Install,
     [switch]$Uninstall,
+    [switch]$Update,
     [switch]$Check,
     [switch]$Yes,
     # KEY=value lines for -Install, passed as a here-string. Keeping it a
@@ -43,11 +48,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Bump on every change installed copies should pick up. Keep in step with the same
+# constant in claude-logos.sh — the two wrappers are one tool with two front ends.
+# A monotonic integer, not a version string: the comparison cannot misread anything.
+$ClaudeLogosVersion = 1          # 2026-08-25
+
 $ConfigDir = if ($env:LOGOS_CONFIG_DIR) { $env:LOGOS_CONFIG_DIR }
              else { Join-Path $env:USERPROFILE '.config\claude-logos' }
 $ConfigFile = Join-Path $ConfigDir 'config'
 $KeyFile = Join-Path $ConfigDir 'key'
 $SettingsFile = Join-Path $ConfigDir 'settings.json'
+$KnownModelsFile = Join-Path $ConfigDir 'known-models'
+$VersionStateFile = Join-Path $ConfigDir 'latest-revision'
 $InstallDir = if ($env:LOGOS_INSTALL_DIR) { $env:LOGOS_INSTALL_DIR }
               else { Join-Path $env:LOCALAPPDATA 'Programs\claude-logos' }
 $InstallPath = Join-Path $InstallDir 'claude-logos.ps1'
@@ -95,6 +107,95 @@ $MaxOutputTokens = [int](Get-Setting 'LOGOS_MAX_OUTPUT_TOKENS' 20000)
 # so a session left on high fails on every turn. xhigh is its default and the closest
 # match. Set LOGOS_EFFORT to an empty string to opt out.
 $Effort = Get-Setting 'LOGOS_EFFORT' 'xhigh'
+
+# ── Revision check ──────────────────────────────────────────────────────────────
+# Logos serves the current wrapper at the same URL this copy came from, so the
+# revision in that file is the only source of truth. Nothing here ever replaces
+# this script.
+#
+# Unlike the bash wrapper this check is synchronous: PowerShell's background jobs
+# each cost a whole extra process, which is more than the check itself. It runs at
+# most once a day and the request is a few tens of kilobytes, so the cost is a
+# round trip on one start out of however many happen in 24 hours.
+function Get-RemoteRevision([string]$Text) {
+    if ($Text -match '(?m)^\$ClaudeLogosVersion\s*=\s*(\d+)') { return [int]$Matches[1] }
+    return 0
+}
+
+function Get-CachedRevision {
+    if (-not (Test-Path -LiteralPath $VersionStateFile)) { return 0 }
+    $raw = (Get-Content -Raw -LiteralPath $VersionStateFile).Trim() -split "`t"
+    if ($raw.Count -ge 1 -and $raw[0] -match '^\d+$') { return [int]$raw[0] }
+    return 0
+}
+
+function Report-NewRevision {
+    $latest = Get-CachedRevision
+    if ($latest -le $ClaudeLogosVersion) { return }
+    Write-Host ("update   : claude-logos revision {0} is available (this is {1})" -f $latest, $ClaudeLogosVersion)
+    Write-Host '           run: claude-logos -Update    (nothing changes until you do)'
+}
+
+function Update-CachedRevision {
+    $intervalSeconds = [int](Get-Setting 'LOGOS_VERSION_CHECK_INTERVAL' 86400)
+    $now = [int][double]::Parse((Get-Date -UFormat %s))
+    if (Test-Path -LiteralPath $VersionStateFile) {
+        $raw = (Get-Content -Raw -LiteralPath $VersionStateFile).Trim() -split "`t"
+        if ($raw.Count -ge 2 -and $raw[1] -match '^\d+$' -and ($now - [int]$raw[1]) -le $intervalSeconds) {
+            return
+        }
+    }
+    try {
+        $text = Invoke-RestMethod -Uri "$LogosUrl/claude-logos.ps1" -TimeoutSec 10
+        $remote = Get-RemoteRevision "$text"
+        if ($remote -gt 0) {
+            Set-Content -LiteralPath $VersionStateFile -Value "$remote`t$now" -Encoding UTF8
+        }
+    } catch {
+        # Offline, or Logos is not reachable: say nothing and try again tomorrow.
+    }
+}
+
+# ── -Update ─────────────────────────────────────────────────────────────────────
+# Replaces this file and nothing else: the key, the config and the settings layer
+# stay as they are, so an update is not a re-setup.
+function Invoke-LogosUpdate {
+    $target = if (Test-Path -LiteralPath $InstallPath) { $InstallPath } else { $PSCommandPath }
+    $staged = Join-Path (Split-Path $target) ("claude-logos.{0}.tmp" -f [System.IO.Path]::GetRandomFileName())
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "$LogosUrl/claude-logos.ps1" -OutFile $staged -TimeoutSec 60
+    } catch {
+        if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged -Force }
+        Stop-WithError "could not download $LogosUrl/claude-logos.ps1 ($($_.Exception.Message))"
+    }
+
+    # Validate before replacing anything. A captive portal or a proxy error page
+    # would otherwise leave a working wrapper overwritten with HTML — and this file
+    # is the next thing the user runs.
+    $remote = Get-RemoteRevision (Get-Content -Raw -LiteralPath $staged)
+    if ($remote -le 0) {
+        Remove-Item -LiteralPath $staged -Force
+        Stop-WithError "what $LogosUrl served is not a claude-logos script"
+    }
+    $errors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($staged, [ref]$null, [ref]$errors) | Out-Null
+    if ($errors -and $errors.Count -gt 0) {
+        Remove-Item -LiteralPath $staged -Force
+        Stop-WithError 'the downloaded script does not parse — not installing it'
+    }
+
+    if ($remote -eq $ClaudeLogosVersion) {
+        Remove-Item -LiteralPath $staged -Force
+        if (Test-Path -LiteralPath $VersionStateFile) { Remove-Item -LiteralPath $VersionStateFile -Force }
+        Write-Host ("Already current (revision {0})." -f $ClaudeLogosVersion)
+        return
+    }
+
+    Move-Item -LiteralPath $staged -Destination $target -Force
+    if (Test-Path -LiteralPath $VersionStateFile) { Remove-Item -LiteralPath $VersionStateFile -Force }
+    Write-Host ("Updated {0}: revision {1} -> {2}" -f $target, $ClaudeLogosVersion, $remote)
+    Write-Host 'Your key, model and settings were not touched.'
+}
 
 # ── -Install ────────────────────────────────────────────────────────────────────
 # Takes KEY=value lines from -LogosConfig, or from stdin when that is empty.
@@ -234,7 +335,8 @@ function Invoke-LogosUninstall {
         }
     }
 
-    foreach ($path in @($KeyFile, $SettingsFile, $ConfigFile, $ShimPath, $InstallPath)) {
+    foreach ($path in @($KeyFile, $SettingsFile, $ConfigFile, $KnownModelsFile,
+                        $VersionStateFile, $ShimPath, $InstallPath)) {
         if (Test-Path -LiteralPath $path) {
             Remove-Item -LiteralPath $path -Force
             Write-Host "  removed $path"
@@ -261,6 +363,7 @@ function Invoke-LogosUninstall {
 }
 
 if ($Install) { Invoke-LogosInstall $LogosConfig; exit 0 }
+if ($Update) { Invoke-LogosUpdate; exit 0 }
 if ($Uninstall) { Invoke-LogosUninstall; exit 0 }
 
 # ── Credential ──────────────────────────────────────────────────────────────────
@@ -336,8 +439,6 @@ if ($Headroom + $MaxOutputTokens -ge $ContextTokens) {
 $ContextForCli = $ContextTokens - $Headroom
 $CompactAt = $ContextForCli - $MaxOutputTokens - 13000
 $HardStopAt = $ContextForCli - $MaxOutputTokens - 3000
-
-$KnownModelsFile = Join-Path $ConfigDir 'known-models'
 
 # ── New models since the last run ───────────────────────────────────────────────
 # Models get added to a team without anyone telling the people on it, and the
@@ -428,6 +529,8 @@ if ($Check) {
     Write-Host ("key      : {0} ({1} chars)" -f $KeyFile, $LogosKey.Length)
     Write-Host ("effort   : {0}" -f $(if ($Effort) { $Effort } else { '<not set by this wrapper>' }))
     Report-NewModels $AllModelIds
+    Report-NewRevision
+    Update-CachedRevision
     exit 0
 }
 
@@ -447,6 +550,8 @@ Invoke-Warmup
 # compacted early again" and "there was less room today".
 Write-ContextReport
 Report-NewModels $AllModelIds
+Report-NewRevision
+Update-CachedRevision
 Write-Host ''
 
 $passThrough = @()

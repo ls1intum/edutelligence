@@ -12,6 +12,7 @@
 #   claude-logos --check              show the connection, the model and how much
 #                                     context this session would get, then exit
 #   claude-logos --install            install to ~/.local/bin (reads config from stdin)
+#   claude-logos --update             replace this wrapper with the current one
 #   claude-logos --uninstall          remove the wrapper, its config and its key
 #   claude-logos --help               this text, then claude's own
 #
@@ -21,16 +22,30 @@
 # ~/.claude/settings.json and your claude.ai login are left exactly as they are, so plain
 # `claude` keeps using your Anthropic subscription with no reconfiguration.
 #
+# It never updates itself either. It notices when Logos serves a newer revision and
+# says so; replacing it is always something you type.
+#
 # This file is served by the Logos UI at <logos-url>/claude-logos.sh and is what the
 # "AI Tools" page installs.
 #
 set -euo pipefail
+
+# Bump on every change installed copies should pick up. A monotonic integer, not a
+# version string: the comparison is a single `-gt` that cannot misread anything,
+# where sorting "1.10" against "1.9" needs care to get right. The date is here for
+# people; only the number is compared.
+CLAUDE_LOGOS_VERSION=1          # 2026-08-25
 
 CONFIG_DIR="${LOGOS_CONFIG_DIR:-$HOME/.config/claude-logos}"
 CONFIG_FILE="$CONFIG_DIR/config"
 KEY_FILE_DEFAULT="$CONFIG_DIR/key"
 SETTINGS_FILE_DEFAULT="$CONFIG_DIR/settings.json"
 INSTALL_PATH="${LOGOS_INSTALL_PATH:-$HOME/.local/bin/claude-logos}"
+# Two files this wrapper keeps between runs. Declared here with the rest of the
+# paths rather than next to the code that uses them: --uninstall runs before that
+# code is reached, and under `set -u` an undeclared name is a hard error.
+KNOWN_MODELS_FILE="$CONFIG_DIR/known-models"
+VERSION_STATE_FILE="$CONFIG_DIR/latest-revision"
 
 # ── Settings, lowest precedence first ───────────────────────────────────────────
 # The config file is written by --install (i.e. by the AI Tools page) and holds
@@ -101,7 +116,104 @@ die() { printf 'claude-logos: %s\n' "$1" >&2; exit "${2:-1}"; }
 note() { printf 'claude-logos: %s\n' "$1" >&2; }
 
 usage() {
-  sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
+  # Every comment line of the header block, so adding a line up there cannot
+  # silently fall out of --help the way a fixed line range would.
+  awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
+  printf 'revision: %s\n' "$CLAUDE_LOGOS_VERSION"
+}
+
+# ── Revision check ──────────────────────────────────────────────────────────────
+# Logos serves the current wrapper at the same URL this copy came from, so the
+# revision in that file is the only source of truth — there is no second place to
+# keep in sync and therefore no way for the two to disagree.
+#
+# Nothing here ever replaces this script. The check runs in the background and
+# writes what it found to a file; the *next* start reads that file and says so.
+# Two consequences, both deliberate:
+#
+#   * startup is never slower for it, even on a slow or captive network
+#   * a new revision is announced one start after it appears, which is soon
+#     enough for something the user then has to act on by hand anyway
+VERSION_CHECK_INTERVAL_SECONDS="${LOGOS_VERSION_CHECK_INTERVAL:-86400}"
+
+remote_revision_from() {
+  # Only a bare `CLAUDE_LOGOS_VERSION=<digits>` assignment counts, so the line in
+  # this very comment block cannot be mistaken for the declaration.
+  sed -n 's/^CLAUDE_LOGOS_VERSION=\([0-9][0-9]*\).*/\1/p' "$1" | head -1
+}
+
+report_new_revision() {
+  [[ -r "$VERSION_STATE_FILE" ]] || return 0
+  local latest checked
+  IFS=$'\t' read -r latest checked < "$VERSION_STATE_FILE" || return 0
+  [[ "$latest" =~ ^[0-9]+$ ]] || return 0
+  (( latest > CLAUDE_LOGOS_VERSION )) || return 0
+  printf 'update   : claude-logos revision %s is available (this is %s)\n' \
+    "$latest" "$CLAUDE_LOGOS_VERSION"
+  printf '           run: claude-logos --update    (nothing changes until you do)\n'
+}
+
+refresh_latest_revision() {
+  local now age=$(( VERSION_CHECK_INTERVAL_SECONDS + 1 ))
+  now="$(date +%s)"
+  if [[ -r "$VERSION_STATE_FILE" ]]; then
+    local _latest checked
+    IFS=$'\t' read -r _latest checked < "$VERSION_STATE_FILE" || checked=""
+    [[ "$checked" =~ ^[0-9]+$ ]] && age=$(( now - checked ))
+  fi
+  (( age <= VERSION_CHECK_INTERVAL_SECONDS )) && return 0
+  {
+    local body remote
+    body="$(mktemp)" || exit 0
+    if curl -fsS -m 20 "$LOGOS_URL/claude-logos.sh" -o "$body" 2>/dev/null; then
+      remote="$(remote_revision_from "$body")"
+      [[ -n "$remote" ]] && printf '%s\t%s\n' "$remote" "$now" > "$VERSION_STATE_FILE"
+    fi
+    rm -f "$body"
+  } >/dev/null 2>&1 &
+}
+
+# ── --update ────────────────────────────────────────────────────────────────────
+# Replaces this file and nothing else: the key, the config and the settings layer
+# stay as they are, so an update is not a re-setup and the Logos web UI does not
+# have to be visited again.
+logos_update() {
+  local target="$INSTALL_PATH"
+  [[ -e "$target" ]] || target="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  # Same directory as the target, so the final move is a rename within one
+  # filesystem — atomic, and it cannot half-write the wrapper.
+  local staged
+  staged="$(mktemp "$(dirname "$target")/claude-logos.XXXXXX")" ||
+    die "could not write next to $target"
+  # shellcheck disable=SC2064  # $staged is fixed at this point; expand it now.
+  trap "rm -f '$staged'" EXIT
+
+  curl -fsS -m 60 "$LOGOS_URL/claude-logos.sh" -o "$staged" ||
+    die "could not download $LOGOS_URL/claude-logos.sh"
+
+  # Validate before replacing anything. A captive portal, a proxy error page or a
+  # truncated transfer would otherwise leave a working wrapper overwritten with
+  # HTML — and the next thing the user runs is this file.
+  local remote
+  remote="$(remote_revision_from "$staged")"
+  [[ -n "$remote" ]] || die "what $LOGOS_URL served is not a claude-logos script"
+  bash -n "$staged" 2>/dev/null || die "the downloaded script does not parse — not installing it"
+
+  if (( remote == CLAUDE_LOGOS_VERSION )); then
+    printf 'Already current (revision %s).\n' "$CLAUDE_LOGOS_VERSION"
+    rm -f "$VERSION_STATE_FILE"
+    return 0
+  fi
+
+  chmod 755 "$staged"
+  mv -f "$staged" "$target" || die "could not replace $target"
+  trap - EXIT
+  # mv swapped the inode, so this still-running copy keeps reading the old file
+  # and finishes normally; the next invocation is the new one.
+  rm -f "$VERSION_STATE_FILE"
+  printf 'Updated %s: revision %s → %s\n' "$target" "$CLAUDE_LOGOS_VERSION" "$remote"
+  printf 'Your key, model and settings were not touched.\n'
 }
 
 # ── --install ───────────────────────────────────────────────────────────────────
@@ -258,7 +370,8 @@ PY
     fi
   fi
 
-  for path in "$LOGOS_KEY_FILE" "$SETTINGS_FILE_DEFAULT" "$CONFIG_FILE"; do
+  for path in "$LOGOS_KEY_FILE" "$SETTINGS_FILE_DEFAULT" "$CONFIG_FILE" \
+    "$KNOWN_MODELS_FILE" "$VERSION_STATE_FILE"; do
     if [[ -e "$path" ]]; then
       rm -f "$path"
       printf '  removed %s\n' "$path"
@@ -302,6 +415,7 @@ case "${1:-}" in
     exec claude --help
     ;;
   --install) shift; logos_install; exit 0 ;;
+  --update) shift; logos_update; exit 0 ;;
   --uninstall)
     shift
     assume_yes="no"
@@ -393,8 +507,6 @@ for entry in data.get("data", []):
 # already in hand from the call above, so noticing an addition costs one file
 # comparison — and the terminal someone is about to work in is the one place they
 # will actually read it.
-KNOWN_MODELS_FILE="$CONFIG_DIR/known-models"
-
 report_new_models() {
   local current="$1" previous=""
   [[ -n "$current" ]] || return 0
@@ -560,6 +672,8 @@ if [[ "${1:-}" == "--check" ]]; then
   printf 'key      : %s (%s chars)\n' "$LOGOS_KEY_FILE" "${#LOGOS_KEY}"
   printf 'effort   : %s\n' "${LOGOS_EFFORT:-<not set by this wrapper>}"
   report_new_models "$(model_ids_probe)"
+  report_new_revision
+  refresh_latest_revision
   exit 0
 fi
 
@@ -576,6 +690,8 @@ trigger_warmup &
 # compacted early again" and "there was less room today".
 context_report >&2
 report_new_models "$(model_ids_probe)" >&2
+report_new_revision >&2
+refresh_latest_revision
 printf '\n' >&2
 
 settings_args=()

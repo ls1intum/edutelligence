@@ -205,9 +205,34 @@ Useful commands:
 
 ```bash
 claude-logos --check       connection, model and how much room a session would get
+claude-logos --update      replace the wrapper with the current one
 claude-logos --uninstall   remove the wrapper, its config and its key
 claude-logos --help        this, then claude's own help
 ```
+
+#### Revisions
+
+`CLAUDE_LOGOS_VERSION` near the top of the script is a monotonic integer — bump it
+in the same commit as any change installed copies should pick up, and keep the
+`$ClaudeLogosVersion` in `claude-logos.ps1` in step. It is the only place the
+revision lives: Logos serves the current wrapper at the same URL an installed copy
+came from, so there is no second file to keep in sync and no way for the two to
+disagree.
+
+Installed copies **never update themselves.** At most once a day the wrapper
+fetches that URL in the background and records the revision it found; the next
+start compares it and, if a newer one exists, prints the one command that replaces
+it. So the notice costs no startup time and appears one start after a release —
+soon enough for something the user then has to type anyway.
+
+`--update` replaces the script and nothing else. The key, config and settings
+layer stay as they are, so an update is not a re-setup and the AI Tools page does
+not have to be visited again. It validates before replacing: the download has to
+contain a revision line and has to parse, because otherwise a captive portal or a
+proxy error page would leave a working wrapper overwritten with HTML — and that
+file is the next thing the user runs. The replacement is a rename within one
+directory, so a still-running copy keeps reading the old inode and finishes
+normally.
 
 ### OpenCode
 

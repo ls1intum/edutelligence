@@ -611,6 +611,15 @@
           the session got — this command just shows it without starting one.
         </p>
 
+        <p class="substep-label">Staying up to date</p>
+        <p class="apply-hint">
+          The wrapper never updates itself. It checks once a day whether Logos serves a newer
+          revision and, if so, says so on the next start along with the one command that
+          replaces it — <code class="inline-code">{{ claudeCodeUpdateCommand() }}</code>. That
+          leaves your key, model and settings untouched, so an update is not a re-setup and you
+          do not need to come back to this page for one.
+        </p>
+
         <p class="substep-label">Remove it again</p>
         <p class="apply-hint">
           Deletes the wrapper, the config and the key, and offers to clean up an older Logos

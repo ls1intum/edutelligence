@@ -405,6 +405,12 @@ export class AiTools implements OnInit {
       : 'claude-logos --uninstall',
   );
 
+  readonly claudeCodeUpdateCommand = computed(() =>
+    this.installTab() === 'windows'
+      ? '& "$env:LOCALAPPDATA\\Programs\\claude-logos\\claude-logos.ps1" -Update'
+      : 'claude-logos --update',
+  );
+
   readonly claudeCodeVerifyCommand = computed(() =>
     this.installTab() === 'windows'
       ? '& "$env:LOCALAPPDATA\\Programs\\claude-logos\\claude-logos.ps1" -Check'
