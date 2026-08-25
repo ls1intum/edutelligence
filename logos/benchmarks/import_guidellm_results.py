@@ -12,6 +12,29 @@ from pathlib import Path
 from typing import Any
 
 
+_SECRET_KEYS = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def redact_secrets(value: Any) -> Any:
+    """Remove credential-like fields before benchmark configuration is stored."""
+    if isinstance(value, dict):
+        return {
+            key: redact_secrets(item)
+            for key, item in value.items()
+            if key.lower() not in _SECRET_KEYS
+        }
+    if isinstance(value, list):
+        return [redact_secrets(item) for item in value]
+    return value
+
+
 def build_payloads(report: dict[str, Any], model_provider_id: int, dataset: str) -> list[dict[str, Any]]:
     """Convert successful GuideLLM report entries into Logos import payloads."""
     payloads: list[dict[str, Any]] = []
@@ -33,9 +56,9 @@ def build_payloads(report: dict[str, Any], model_provider_id: int, dataset: str)
             "model_provider_id": model_provider_id,
             "configuration": {
                 "tool": "guidellm",
-                "metadata": report.get("metadata", {}),
-                "scenario": report.get("config", {}),
-                "benchmark": benchmark.get("config", {}),
+                "metadata": redact_secrets(report.get("metadata", {})),
+                "scenario": redact_secrets(report.get("config", {})),
+                "benchmark": redact_secrets(benchmark.get("config", {})),
             },
             "dataset": dataset,
             "sample_size": total,
@@ -80,6 +103,8 @@ def main() -> None:
 
     report = json.loads(args.report.read_text(encoding="utf-8"))
     payloads = build_payloads(report, args.model_provider_id, args.dataset)
+    if not payloads:
+        parser.error("The GuideLLM report contains no fully successful benchmark summary")
     for payload in payloads:
         post_payload(args.api_url, token, payload)
     print(f"Imported {len(payloads)} successful GuideLLM benchmark summaries")

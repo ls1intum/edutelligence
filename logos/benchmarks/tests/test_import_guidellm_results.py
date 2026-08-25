@@ -44,3 +44,36 @@ def test_build_payloads_keeps_only_successful_benchmarks():
     assert payloads[0]["configuration"]["benchmark"] == {"rate": 2}
     assert payloads[0]["metrics"]["time_to_first_token_ms"]["successful"]["p50"] == 120.0
     assert payloads[0]["recorded_at"] == "2023-11-14T22:13:20+00:00"
+
+
+def test_build_payloads_removes_secrets_from_configuration():
+    report = {
+        "config": {
+            "spec": {
+                "backend": {
+                    "api_key": "provider-secret",
+                    "extras": {"headers": {"authorization": "Bearer secret"}},
+                }
+            }
+        },
+        "benchmarks": [
+            {
+                "config": {"backend": {"token": "secret", "model": "Qwen/Qwen3-8B"}},
+                "metrics": {
+                    "request_totals": {
+                        "successful": 1,
+                        "incomplete": 0,
+                        "errored": 0,
+                        "total": 1,
+                    }
+                },
+            }
+        ],
+    }
+
+    payload = importer.build_payloads(report, 7, "openai/gsm8k")[0]
+
+    assert "api_key" not in payload["configuration"]["scenario"]["spec"]["backend"]
+    assert "authorization" not in payload["configuration"]["scenario"]["spec"]["backend"]["extras"]["headers"]
+    assert "token" not in payload["configuration"]["benchmark"]["backend"]
+    assert payload["configuration"]["benchmark"]["backend"]["model"] == "Qwen/Qwen3-8B"
