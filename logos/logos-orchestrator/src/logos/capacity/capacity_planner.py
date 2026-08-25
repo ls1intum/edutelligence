@@ -5406,6 +5406,110 @@ class CapacityPlanner:
         sanitized = model_name.replace("/", "_").replace(":", "_").replace(" ", "_")
         return f"planner-{sanitized}"
 
+    def manual_load_rejection_reason(self, provider_id: int) -> Optional[str]:
+        """Why a manual load must not be attempted now, or None if it may run.
+
+        The message is meant for the operator who clicked "Load lane", so the
+        API layer calls this before it accepts the request: the load itself runs
+        as a background task, and a refusal raised in there has nobody left to
+        report to.
+        """
+        if not self._is_plannable(provider_id):
+            if self._registry is not None and self._registry.is_calibrating(provider_id):
+                return "Provider is calibrating; its VRAM is reserved for the calibration probes."
+            return "Provider has not reported its lanes yet; try again once it has connected."
+        if self._safe_get_capacity(provider_id) is None:
+            # Without a snapshot the executor falls back to an unconditional VRAM
+            # reservation, i.e. it would place the lane without checking whether
+            # it fits. Request-time cold loads bail out here for the same reason.
+            return "No capacity information for this provider yet; its free VRAM is unknown."
+        return None
+
+    async def load_lane_manually(self, provider_id: int, model_name: str) -> bool:
+        """Operator-initiated load ("Load lane" in the statistics UI).
+
+        Runs on the planner's own execution path rather than dispatching
+        ``add_lane`` directly, because everything that path does around the
+        command matters just as much for a manual load:
+
+        * the profile lookup — a bare ``{"model": ...}`` makes the worker build
+          a LaneConfig with ``vllm=False`` and default context/KV, starting a
+          vLLM-calibrated model on the wrong backend;
+        * the VRAM reservation, so a concurrent planner load does not hand out
+          the same memory twice;
+        * the configured additive-load mode (``add_lane`` vs a full
+          ``apply_lanes`` reconcile);
+        * ``update_desired_lane_add``, without which the registry's desired set
+          never learns about the lane and the next ``apply_lanes`` removes it
+          again.
+
+        Returns False without acting when the provider is not in a state where a
+        lane may be placed — while it is calibrating, since the worker has freed
+        its VRAM for the probes and a lane would take the memory they need, or
+        with no capacity snapshot to check the lane against. A caller that can
+        still answer its client should ask `manual_load_rejection_reason` first
+        and report what it says; this re-checks anyway, because the snapshot can
+        go away between that call and this one.
+
+        Serialized on the per-lane lock, like every other path that loads or
+        unloads a lane. The API answers 202 and leaves this running in the
+        background, so a second click — or a planner cycle deciding on the same
+        model — arrives while the first load is still in flight. Both derive the
+        same deterministic lane id, so without the lock both would dispatch
+        ``add_lane`` for it, and the check inside the lock is what turns the
+        second into a no-op instead of a duplicate.
+        """
+        rejection = self.manual_load_rejection_reason(provider_id)
+        if rejection is not None:
+            logger.warning("Refusing manual load of %s on worker=%s: %s", model_name, provider_id, rejection)
+            return False
+
+        lane_id = self._planner_lane_id(model_name)
+        async with self._lane_lock(provider_id, lane_id):
+            # Everything below is re-read under the lock: a load takes minutes,
+            # so the provider state this was admitted on is long stale by the
+            # time the lock is free.
+            if self._lane_exists_in_runtime(provider_id, lane_id):
+                logger.info(
+                    "Manual load of %s on worker=%s is a no-op: lane %s already exists",
+                    model_name,
+                    provider_id,
+                    lane_id,
+                )
+                return False
+
+            rejection = self.manual_load_rejection_reason(provider_id)
+            if rejection is not None:
+                logger.warning(
+                    "Refusing manual load of %s on worker=%s after waiting for the lane lock: %s",
+                    model_name,
+                    provider_id,
+                    rejection,
+                )
+                return False
+
+            capacity = self._safe_get_capacity(provider_id)
+            if capacity is None:
+                logger.warning(
+                    "Refusing manual load of %s on worker=%s: capacity snapshot went away before dispatch",
+                    model_name,
+                    provider_id,
+                )
+                return False
+
+            profile = self._safe_get_profiles(provider_id).get(model_name)
+            action = CapacityPlanAction(
+                action="load",
+                provider_id=provider_id,
+                lane_id=lane_id,
+                model_name=model_name,
+                params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
+                reason="Manual load requested by an operator",
+            )
+            return await self._execute_action_with_confirmation(
+                action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S
+            )
+
     def _build_load_params(
         self,
         model_name: str,

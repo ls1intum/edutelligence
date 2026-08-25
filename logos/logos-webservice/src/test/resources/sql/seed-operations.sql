@@ -1,15 +1,15 @@
 INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
                        timestamp_request, timestamp_forwarding, timestamp_response,
-                       was_cold_start, queue_depth_at_enqueue, user_id, environment)
+                       was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment)
 VALUES
-  -- developer-key request: carries the requesting user, no environment
+  -- developer-key request: carries the requesting user and their team, no environment
   (9001, 'req-aaa-111', 3001, 5001, 6001, 'success',
    NOW() - INTERVAL '10 minutes', NOW() - INTERVAL '9 minutes', NOW() - INTERVAL '8 minutes',
-   false, 1, 1001, NULL),
-  -- application-key-style request: carries the environment, no user
+   false, 1, 1001, 2001, NULL),
+  -- application-key-style request: carries the environment, no user and no team
   (9002, 'req-bbb-222', 3001, 5001, 6001, 'success',
    NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes', NOW() - INTERVAL '3 minutes',
-   true, 0, NULL, 'production');
+   true, 0, NULL, NULL, 'production');
 
 INSERT INTO ollama_provider_snapshots
   (id, provider_id, snapshot_ts, poll_success,

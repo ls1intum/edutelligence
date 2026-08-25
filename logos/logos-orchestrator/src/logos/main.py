@@ -521,6 +521,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "vllm": is_vllm,
             "runtime_state": runtime_state,
             "sleep_state": lane.get("sleep_state"),
+            "gpu_devices": str(lane.get("gpu_devices") or ""),
+            "effective_gpu_devices": str(lane.get("effective_gpu_devices") or ""),
+            "num_parallel": _safe_int(lane.get("num_parallel")) or 0,
             "active_requests": active_requests,
             "effective_vram_mb": _safe_float(lane.get("effective_vram_mb")) or 0.0,
             "reported_vram_mb": _safe_float(lane.get("reported_vram_mb")) or 0.0,
@@ -1201,7 +1204,12 @@ def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
     return {}
 
 
-_MICRO_CENTS_PER_EUR = 100_000_000
+# One currency unit = 100 cents = 1e8 micro-cents. The unit is USD, not EUR:
+# token_prices is filled from litellm's model catalog, whose input_cost_per_token
+# is USD per token (gpt-4o reads 2.5e-6, i.e. its $2.50 per 1M list price),
+# scaled by 1e11 = 1e8 micro-cents x 1e3 per-1k. No exchange rate is applied
+# anywhere in the stack, so reporting these amounts as EUR mislabelled them.
+_MICRO_CENTS_PER_USD = 100_000_000
 
 
 def _response_with_cost(
@@ -1245,8 +1253,8 @@ def _response_with_cost(
         return response_payload, False
 
     enriched_usage = dict(usage)
-    enriched_usage["cost"] = round(cost_micro_cents / _MICRO_CENTS_PER_EUR, 8)
-    enriched_usage["cost_currency"] = "EUR"
+    enriched_usage["cost"] = round(cost_micro_cents / _MICRO_CENTS_PER_USD, 8)
+    enriched_usage["cost_currency"] = "USD"
     enriched_payload = dict(response_payload)
     enriched_payload["usage"] = enriched_usage
     return enriched_payload, True
@@ -1712,6 +1720,7 @@ async def internal_provider_status(request: Request):
                 "connected": connected,
                 "connection_state": "online" if connected else "offline",
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+                "calibrating": _logosnode_registry.is_calibrating(provider_id),
             }
         )
     return {"providers": providers}
@@ -1770,6 +1779,11 @@ class _InternalCalibrateRequest(BaseModel):
 class _InternalDeleteLaneRequest(BaseModel):
     provider_id: int
     lane_id: str
+
+
+class _InternalAddLaneRequest(BaseModel):
+    provider_id: int
+    lane: dict[str, Any]
 
 
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
@@ -1840,6 +1854,47 @@ async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, reque
         provider_id=data.provider_id,
         action="delete_lane",
         params={"lane_id": data.lane_id},
+    )
+
+
+@app.post("/internal/logosnode/lanes/add", tags=["admin"])
+async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Request):
+    """Manually load a single lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    model = str(data.lane.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="lane.model is required")
+
+    if _capacity_planner is None:
+        raise HTTPException(status_code=503, detail="Capacity planner not ready")
+
+    # Answer a refusal synchronously — a background task has nobody to report to.
+    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id)
+    if rejection is not None:
+        raise HTTPException(status_code=409, detail=rejection)
+
+    # Loading a model takes minutes (the planner budgets 1800 s for the command),
+    # far beyond any caller's HTTP read timeout, and holding a servlet thread
+    # open that long per load is its own problem. So kick it off and return: the
+    # lane appears in the lane-status stream the statistics page already
+    # subscribes to, which is where the operator watches it come up.
+    task = asyncio.create_task(_capacity_planner.load_lane_manually(data.provider_id, model))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    # 202, not 200: the lane is not loaded when this returns, only scheduled.
+    return JSONResponse(
+        status_code=202,
+        content={"status": "accepted", "model": model, "provider_id": data.provider_id},
     )
 
 

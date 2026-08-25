@@ -93,6 +93,8 @@ public class RequestLogStatsService {
         m.put("warmStarts", p.getWarmStarts());
         m.put("avgQueueSeconds", p.getAvgQueueSeconds());
         m.put("avgRunSeconds", p.getAvgRunSeconds());
+        m.put("totalTokens", p.getTotalTokens() != null ? p.getTotalTokens() : 0L);
+        m.put("cloudCostMicroCents", p.getCloudCostMicroCents() != null ? p.getCloudCostMicroCents() : 0L);
         return m;
     }
 
