@@ -1,14 +1,35 @@
 <div class="ai-tools">
+  <!-- Confetti for finishing the setup. Purely decorative, hidden from assistive
+       technology, and never rendered at all when the visitor asked their system
+       for reduced motion (see celebrate()). -->
+  @if (confetti().length > 0) {
+    <div class="confetti" aria-hidden="true">
+      @for (piece of confetti(); track piece.id) {
+        <span
+          class="confetti-piece"
+          [style.left.%]="piece.left"
+          [style.width.px]="piece.size"
+          [style.height.px]="piece.size * 2"
+          [style.background]="piece.color"
+          [style.animation-delay.s]="piece.delay"
+          [style.animation-duration.s]="piece.duration"
+          [style.--confetti-drift.px]="piece.drift"
+          [style.--confetti-spin.deg]="piece.spin"
+        ></span>
+      }
+    </div>
+  }
+
   <h1 class="page-title">AI Coding Tools</h1>
   <p class="page-subtitle">
-    Six steps to a coding assistant that runs on Logos. Pick a tool first — the rest of the
-    setup is generated from what you choose.
+    {{ visibleSteps().length }} guided steps to a coding assistant that runs on Logos. Pick a
+    tool first — the rest of the setup is generated from what you choose.
   </p>
 
   <!-- ── Stepper ───────────────────────────────────────────────────────────── -->
   <ol class="stepper" aria-label="Setup progress">
-    @for (s of steps; track s.id) {
-      <li class="stepper-item" [class.stepper-item--last]="s.id === steps.length">
+    @for (s of visibleSteps(); track s.id; let isLast = $last) {
+      <li class="stepper-item" [class.stepper-item--last]="isLast">
         <button
           type="button"
           class="stepper-btn"
@@ -23,7 +44,7 @@
             } @else if (stepState(s.id) === 'locked') {
               <i class="pi pi-lock"></i>
             } @else {
-              {{ s.id }}
+              {{ s.number }}
             }
           </span>
           <span class="stepper-title">{{ s.title }}</span>
@@ -35,7 +56,7 @@
   <!-- ══════════════ 1 · TOOL ══════════════════════════════════════════════ -->
   <section class="config-section" [class.config-section--collapsed]="step() !== 1">
     @if (step() === 1) {
-      <p class="step-label">1. Choose your tool</p>
+      <p class="step-label">{{ stepNumber(1) }}. Choose your tool</p>
       <p class="section-note">
         Both talk to the same Logos models with the same key. They differ in where they run,
         how they handle the context window, and what they do to a setup you already have.
@@ -126,7 +147,7 @@
       </p>
     } @else if (showSummary(1)) {
       <button type="button" class="step-summary" (click)="goTo(1)">
-        <span class="step-summary-label">1 · Tool</span>
+        <span class="step-summary-label">{{ stepNumber(1) }} · Tool</span>
         <span class="step-summary-value">{{ toolLabel(activeTool()) }}</span>
         <i class="pi pi-pencil" aria-hidden="true"></i>
       </button>
@@ -136,7 +157,7 @@
   <!-- ══════════════ 2 · TEAM ══════════════════════════════════════════════ -->
   <section class="config-section" [class.config-section--collapsed]="step() !== 2">
     @if (step() === 2) {
-      <p class="step-label">2. Choose your team</p>
+      <p class="step-label">{{ stepNumber(2) }}. Choose your team</p>
       <p class="section-note">
         Requests are billed to the team whose key you use, and the team decides which models
         you can reach in the next step.
@@ -174,7 +195,7 @@
       </div>
     } @else if (showSummary(2)) {
       <button type="button" class="step-summary" (click)="goTo(2)">
-        <span class="step-summary-label">2 · Team</span>
+        <span class="step-summary-label">{{ stepNumber(2) }} · Team</span>
         <span class="step-summary-value">{{ selectedKey()?.team?.name ?? '—' }}</span>
         <i class="pi pi-pencil" aria-hidden="true"></i>
       </button>
@@ -184,7 +205,7 @@
   <!-- ══════════════ 3 · MODEL ═════════════════════════════════════════════ -->
   <section class="config-section" [class.config-section--collapsed]="step() !== 3">
     @if (step() === 3) {
-      <p class="step-label">3. Choose your model</p>
+      <p class="step-label">{{ stepNumber(3) }}. Choose your model</p>
 
       @if (activeTool() === 'opencode') {
         <p class="section-note">
@@ -218,76 +239,7 @@
         />
 
         @if (selected()) {
-          <!-- Context windows. Same three numbers whichever tool is selected; the
-               note below them differs because only one of the two can re-read them. -->
-          <div class="context-grid" role="group" aria-label="Context window in tokens">
-            <div class="context-cell">
-              <span class="context-cell-label">Always available</span>
-              <span class="context-cell-value">
-                @if (hasReportedWindow()) {
-                  {{ contextCurrentMin() | number }}
-                } @else {
-                  unknown
-                }
-              </span>
-              <span class="context-cell-note">tokens you get whatever the load</span>
-            </div>
-            <div class="context-cell">
-              <span class="context-cell-label">Available now</span>
-              <span class="context-cell-value">
-                @if (hasReportedWindow()) {
-                  {{ contextCurrentMax() | number }}
-                } @else {
-                  unknown
-                }
-              </span>
-              <span class="context-cell-note">tokens Logos can give you at the moment</span>
-            </div>
-            <div class="context-cell context-cell--accent">
-              <span class="context-cell-label">Model maximum</span>
-              <span class="context-cell-value">
-                @if (hasReportedWindow()) {
-                  {{ contextOverall() | number }}
-                } @else {
-                  {{ contextFallback() | number }}
-                }
-              </span>
-              <span class="context-cell-note">the most this model can ever offer</span>
-            </div>
-          </div>
-
-          <p class="context-note">
-            How much context Logos can give a model depends on how much capacity is free, so it
-            is not one fixed number — it moves between the first two figures above. Long
-            requests are sent wherever there is room for them.
-            @if (activeTool() === 'claudecode') {
-              <strong>The wrapper asks Logos at every start and prints what it got,</strong>
-              so you always see the size of the session you are in, and nothing needs changing
-              on your side when it moves.
-            } @else {
-              <strong>OpenCode reads its config once at startup</strong>, so the config below
-              states the model maximum. Very long conversations may be turned down when
-              capacity is tight; start a new one, or use Claude Code, which adjusts by itself.
-            }
-            @if (!hasReportedWindow()) {
-              Logos reports no size for this model right now, so the figure above is a
-              conservative estimate.
-            }
-          </p>
-
-          @if (activeTool() === 'claudecode' && windowUnenforced()) {
-            <div class="privacy-callout" role="note">
-              <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-              <p>
-                <strong>Claude Code will ignore the context window for this model.</strong>
-                It resolves ids starting with <code class="inline-code">claude-</code> or
-                containing <code class="inline-code">[1m]</code> to one of its own models and
-                keeps that window instead. The wrapper says so on startup; pick another model,
-                or set <code class="inline-code">DISABLE_COMPACT=1</code> to force the window
-                through (which turns auto-compaction off).
-              </p>
-            </div>
-          }
+          <ng-container *ngTemplateOutlet="modelContext"></ng-container>
         }
       }
 
@@ -299,7 +251,7 @@
       </div>
     } @else if (showSummary(3)) {
       <button type="button" class="step-summary" (click)="goTo(3)">
-        <span class="step-summary-label">3 · Model</span>
+        <span class="step-summary-label">{{ stepNumber(3) }} · Model</span>
         <span class="step-summary-value">{{ selected()?.model_name ?? '—' }}</span>
         <i class="pi pi-pencil" aria-hidden="true"></i>
       </button>
@@ -309,7 +261,7 @@
   <!-- ══════════════ 4 · INSTALL ═══════════════════════════════════════════ -->
   <section class="config-section" [class.config-section--collapsed]="step() !== 4">
     @if (step() === 4) {
-      <p class="step-label">4. Install {{ toolLabel(activeTool()) }}</p>
+      <p class="step-label">{{ stepNumber(4) }}. Install {{ toolLabel(activeTool()) }}</p>
       <p class="section-note">Skip this if you already have it.</p>
 
       <div class="os-tabs" role="tablist">
@@ -413,7 +365,7 @@
       </div>
     } @else if (showSummary(4)) {
       <button type="button" class="step-summary" (click)="goTo(4)">
-        <span class="step-summary-label">4 · Install</span>
+        <span class="step-summary-label">{{ stepNumber(4) }} · Install</span>
         <span class="step-summary-value">{{ toolLabel(activeTool()) }} on {{ osLabel() }}</span>
         <i class="pi pi-pencil" aria-hidden="true"></i>
       </button>
@@ -423,13 +375,35 @@
   <!-- ══════════════ 5 · CONNECT ═══════════════════════════════════════════ -->
   <section class="config-section" [class.config-section--collapsed]="step() !== 5">
     @if (step() === 5) {
-      <p class="step-label">5. Connect to Logos</p>
+      <p class="step-label">{{ stepNumber(5) }}. Connect to Logos</p>
 
       @if (!ready()) {
         <p class="model-empty">
           Pick a team and a model first — the commands here are generated from them.
         </p>
-      } @else if (activeTool() === 'claudecode') {
+      } @else {
+        <!-- With one team and/or one model those steps hold no decision and are
+             skipped, so say here what was used instead of leaving it implicit. -->
+        @if (isSkipped(2) && isSkipped(3)) {
+          <p class="section-note used-choices">
+            Using your only team, <strong>{{ selectedKey()?.team?.name }}</strong>, and the only
+            model it can reach, <strong>{{ selected()?.model_name }}</strong>.
+          </p>
+        } @else if (isSkipped(2)) {
+          <p class="section-note used-choices">
+            Using your only team, <strong>{{ selectedKey()?.team?.name }}</strong>.
+          </p>
+        } @else if (isSkipped(3)) {
+          <p class="section-note used-choices">
+            Using <strong>{{ selected()?.model_name }}</strong>, the only model this key can reach.
+          </p>
+        }
+        @if (isSkipped(3) && selected()) {
+          <ng-container *ngTemplateOutlet="modelContext"></ng-container>
+        }
+      }
+
+      @if (ready() && activeTool() === 'claudecode') {
         <!-- ── Claude Code: install the wrapper ─────────────────────────────── -->
         <p class="section-note">
           This installs <code class="inline-code">claude-logos</code>: a small wrapper on your
@@ -493,7 +467,7 @@
           once, prefix it:
           <code class="inline-code">{{ modelOverrideExample() }}</code>.
         </p>
-      } @else {
+      } @else if (ready()) {
         <!-- ── OpenCode: add the provider ───────────────────────────────────── -->
         <div class="privacy-callout" role="note">
           <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
@@ -578,7 +552,7 @@
       </div>
     } @else if (showSummary(5)) {
       <button type="button" class="step-summary" (click)="goTo(5)">
-        <span class="step-summary-label">5 · Connect</span>
+        <span class="step-summary-label">{{ stepNumber(5) }} · Connect</span>
         <span class="step-summary-value">
           {{ activeTool() === 'claudecode' ? 'claude-logos wrapper' : 'Logos provider in opencode.json' }}
         </span>
@@ -590,7 +564,7 @@
   <!-- ══════════════ 6 · VERIFY ════════════════════════════════════════════ -->
   <section class="config-section" [class.config-section--collapsed]="step() !== 6">
     @if (step() === 6) {
-      <p class="step-label">6. Verify, and how to undo it</p>
+      <p class="step-label">{{ stepNumber(6) }}. Verify, and how to undo it</p>
 
       @if (activeTool() === 'claudecode') {
         <p class="substep-label">Check the connection</p>
@@ -657,10 +631,87 @@
       </div>
     } @else if (showSummary(6)) {
       <button type="button" class="step-summary" (click)="goTo(6)">
-        <span class="step-summary-label">6 · Verify</span>
+        <span class="step-summary-label">{{ stepNumber(6) }} · Verify</span>
         <span class="step-summary-value">Check the connection, or undo the setup</span>
         <i class="pi pi-pencil" aria-hidden="true"></i>
       </button>
     }
   </section>
+
+  <!-- The model and its context windows. Rendered in step 3 normally, and at the
+       top of Connect when step 3 was skipped because there is only one model —
+       the numbers are the point of that step, so skipping the click must not
+       also drop the information. -->
+  <ng-template #modelContext>
+        <!-- Context windows. Same three numbers whichever tool is selected; the
+             note below them differs because only one of the two can re-read them. -->
+        <div class="context-grid" role="group" aria-label="Context window in tokens">
+          <div class="context-cell">
+            <span class="context-cell-label">Always available</span>
+            <span class="context-cell-value">
+              @if (hasReportedWindow()) {
+                {{ contextCurrentMin() | number }}
+              } @else {
+                unknown
+              }
+            </span>
+            <span class="context-cell-note">tokens you get whatever the load</span>
+          </div>
+          <div class="context-cell">
+            <span class="context-cell-label">Available now</span>
+            <span class="context-cell-value">
+              @if (hasReportedWindow()) {
+                {{ contextCurrentMax() | number }}
+              } @else {
+                unknown
+              }
+            </span>
+            <span class="context-cell-note">tokens Logos can give you at the moment</span>
+          </div>
+          <div class="context-cell context-cell--accent">
+            <span class="context-cell-label">Model maximum</span>
+            <span class="context-cell-value">
+              @if (hasReportedWindow()) {
+                {{ contextOverall() | number }}
+              } @else {
+                {{ contextFallback() | number }}
+              }
+            </span>
+            <span class="context-cell-note">the most this model can ever offer</span>
+          </div>
+        </div>
+
+        <p class="context-note">
+          How much context Logos can give a model depends on how much capacity is free, so it
+          is not one fixed number — it moves between the first two figures above. Long
+          requests are sent wherever there is room for them.
+          @if (activeTool() === 'claudecode') {
+            <strong>The wrapper asks Logos at every start and prints what it got,</strong>
+            so you always see the size of the session you are in, and nothing needs changing
+            on your side when it moves.
+          } @else {
+            <strong>OpenCode reads its config once at startup</strong>, so the config below
+            states the model maximum. Very long conversations may be turned down when
+            capacity is tight; start a new one, or use Claude Code, which adjusts by itself.
+          }
+          @if (!hasReportedWindow()) {
+            Logos reports no size for this model right now, so the figure above is a
+            conservative estimate.
+          }
+        </p>
+
+        @if (activeTool() === 'claudecode' && windowUnenforced()) {
+          <div class="privacy-callout" role="note">
+            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+            <p>
+              <strong>Claude Code will ignore the context window for this model.</strong>
+              It resolves ids starting with <code class="inline-code">claude-</code> or
+              containing <code class="inline-code">[1m]</code> to one of its own models and
+              keeps that window instead. The wrapper says so on startup; pick another model,
+              or set <code class="inline-code">DISABLE_COMPACT=1</code> to force the window
+              through (which turns auto-compaction off).
+            </p>
+          </div>
+        }
+  </ng-template>
 </div>

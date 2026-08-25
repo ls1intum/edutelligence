@@ -4,6 +4,7 @@ import {
   inject,
   signal,
   OnInit,
+  OnDestroy,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
@@ -13,6 +14,21 @@ import { SelectComponent, AppSelectOption } from '../../shared/components/select
 
 export type AiTool = 'claudecode' | 'opencode';
 export type OsTab = 'mac' | 'linux' | 'windows';
+
+/** One piece of the finishing confetti. Values are randomised per piece. */
+interface ConfettiPiece {
+  id: number;
+  /** Horizontal start, in % of the viewport width. */
+  left: number;
+  delay: number;
+  duration: number;
+  /** Sideways travel while falling, in px. */
+  drift: number;
+  /** Total rotation, in degrees. */
+  spin: number;
+  size: number;
+  color: string;
+}
 
 /** One row of the step-1 comparison, stated for both tools so they line up. */
 interface ComparisonRow {
@@ -31,7 +47,7 @@ interface ComparisonRow {
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './ai-tools.scss',
 })
-export class AiTools implements OnInit {
+export class AiTools implements OnInit, OnDestroy {
   private myKeysService = inject(MyKeysService);
 
   readonly String = String;
@@ -40,7 +56,11 @@ export class AiTools implements OnInit {
   // The page walks one decision at a time: tool, then team, then model, then the
   // mechanics. Earlier steps stay reachable (their summary line is a button) but
   // a later one cannot be opened before the choices it is generated from exist.
-  readonly steps = [
+  //
+  // Ids are fixed and never renumbered — they are how the template and the
+  // gating below refer to a step. What the user sees is numbered in
+  // `visibleSteps`, which leaves out the steps that hold no decision.
+  readonly allSteps = [
     { id: 1, title: 'Tool' },
     { id: 2, title: 'Team' },
     { id: 3, title: 'Model' },
@@ -48,6 +68,8 @@ export class AiTools implements OnInit {
     { id: 5, title: 'Connect' },
     { id: 6, title: 'Verify' },
   ] as const;
+
+  readonly LAST_STEP = 6;
 
   step = signal<number>(1);
 
@@ -76,7 +98,36 @@ export class AiTools implements OnInit {
   readonly modelChosen = computed(() => this.selected() !== null);
   readonly ready = computed(() => this.teamChosen() && this.modelChosen());
 
+  /**
+   * A step that holds no decision is not a step. With one team there is nothing
+   * to pick in step 2; with one model, nothing in step 3. Asking anyway is a
+   * click that can only be answered one way.
+   *
+   * Only while the list is loaded and holds exactly one entry. An empty list is
+   * *not* skipped — that step is where "no keys for your account" is said, and
+   * silently jumping over it would leave the user in a later step wondering why
+   * nothing is generated.
+   */
+  isSkipped(step: number): boolean {
+    if (step === 2) return !this.keysLoading() && this.keys().length === 1;
+    if (step === 3) return !this.modelsLoading() && this.models().length === 1;
+    return false;
+  }
+
+  /** The steps as the user sees them: skipped ones gone, the rest renumbered. */
+  readonly visibleSteps = computed(() =>
+    this.allSteps
+      .filter((s) => !this.isSkipped(s.id))
+      .map((s, index) => ({ ...s, number: index + 1 })),
+  );
+
+  /** Displayed position of a step, for headings and summary lines. */
+  stepNumber(step: number): number {
+    return this.visibleSteps().find((s) => s.id === step)?.number ?? step;
+  }
+
   canOpen(step: number): boolean {
+    if (this.isSkipped(step)) return false;
     if (step <= 1) return true;
     if (!this.toolChosen()) return false;
     if (step === 2) return true;
@@ -101,20 +152,36 @@ export class AiTools implements OnInit {
   }
 
   goTo(step: number): void {
-    if (this.canOpen(step)) this.step.set(step);
+    if (this.canOpen(step)) this.setStep(step);
   }
 
   next(): void {
-    for (let candidate = this.step() + 1; candidate <= this.steps.length; candidate++) {
+    const target = this.firstOpenFrom(this.step() + 1);
+    if (target !== null) this.setStep(target);
+  }
+
+  back(): void {
+    for (let candidate = this.step() - 1; candidate >= 1; candidate--) {
       if (this.canOpen(candidate)) {
-        this.step.set(candidate);
+        this.setStep(candidate);
         return;
       }
     }
   }
 
-  back(): void {
-    if (this.step() > 1) this.step.set(this.step() - 1);
+  /** First step at or after `from` the user can actually open. */
+  private firstOpenFrom(from: number): number | null {
+    for (let candidate = from; candidate <= this.LAST_STEP; candidate++) {
+      if (this.canOpen(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  private setStep(step: number): void {
+    this.step.set(step);
+    // Reaching the last step means the setup is done — everything after it is
+    // reading, not doing.
+    if (step === this.LAST_STEP) this.celebrate();
   }
 
   // ── Step 1: tool comparison ───────────────────────────────────────────────
@@ -175,9 +242,11 @@ export class AiTools implements OnInit {
 
   chooseTool(tool: AiTool): void {
     this.activeTool.set(tool);
-    // A tool switch changes what steps 4-6 say but nothing about the team or the
-    // model, so those choices are kept.
-    this.step.set(2);
+    // A tool switch changes what the later steps say but nothing about the team
+    // or the model, so those choices are kept. Land on the next step that
+    // actually asks something — with one team and one model that is the install.
+    const target = this.firstOpenFrom(2);
+    if (target !== null) this.setStep(target);
   }
 
   toolLabel(tool: AiTool | null): string {
@@ -449,6 +518,50 @@ export class AiTools implements OnInit {
   );
 
   readonly shellPrompt = computed(() => (this.installTab() === 'windows' ? '>' : '$'));
+
+  // ── Finishing ─────────────────────────────────────────────────────────────
+  // A small burst of confetti when the last step opens. Rendered inside the
+  // component so the component's own stylesheet applies — appending to
+  // document.body would put the nodes outside Angular's style encapsulation.
+  confetti = signal<ConfettiPiece[]>([]);
+  private celebrated = false;
+  private confettiTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private celebrate(): void {
+    // Once per visit. Stepping back and forth should not set it off again.
+    if (this.celebrated) return;
+    this.celebrated = true;
+    // Someone who asked their system for less motion means it.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+
+    // The palette tokens are bare RGB triples ("124 58 237"), so they need the
+    // rgb() wrapper here the same way every stylesheet in the app does.
+    const colors = [
+      'rgb(var(--color-primary-500))',
+      'rgb(var(--color-primary-400))',
+      'rgb(var(--color-accent-green))',
+      'rgb(var(--color-warning))',
+    ];
+    this.confetti.set(
+      Array.from({ length: 36 }, (_, index) => ({
+        id: index,
+        left: Math.random() * 100,
+        delay: Math.random() * 0.5,
+        duration: 2 + Math.random() * 1.2,
+        drift: Math.random() * 120 - 60,
+        spin: Math.random() * 720 - 360,
+        size: 5 + Math.random() * 4,
+        color: colors[index % colors.length],
+      })),
+    );
+    // Drop the nodes once the longest piece has fallen, so nothing lingers in
+    // the DOM for the rest of the session.
+    this.confettiTimer = setTimeout(() => this.confetti.set([]), 4000);
+  }
+
+  ngOnDestroy(): void {
+    if (this.confettiTimer !== null) clearTimeout(this.confettiTimer);
+  }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   async ngOnInit(): Promise<void> {

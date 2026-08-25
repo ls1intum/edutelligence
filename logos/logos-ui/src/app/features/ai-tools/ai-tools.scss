@@ -721,3 +721,59 @@
     align-items: flex-start;
   }
 }
+
+// ── Finishing confetti ────────────────────────────────────────────────────
+// A short burst when the last step opens. Fixed to the viewport and
+// pointer-events: none, so it cannot intercept a click on the step below it.
+// The per-piece values (position, drift, spin, timing) come from the template
+// as inline styles and custom properties.
+.confetti {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 60;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -24px;
+  border-radius: 1px;
+  opacity: 0;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(0.25, 0.55, 0.45, 1);
+  animation-fill-mode: forwards;
+}
+
+@keyframes confetti-fall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  // Fade in over the first slice rather than appearing at full opacity, so the
+  // burst reads as a flourish and not as a flash.
+  12% {
+    opacity: 0.85;
+  }
+  75% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform:
+      translate3d(var(--confetti-drift, 0), 100vh, 0)
+      rotate(var(--confetti-spin, 180deg));
+  }
+}
+
+// Belt and braces: celebrate() already returns early for a reduced-motion
+// preference, so nothing renders. If that ever regresses, the pieces stay put
+// instead of flying across the screen.
+@media (prefers-reduced-motion: reduce) {
+  .confetti { display: none; }
+}
+
+// The line naming the team/model whose step was skipped.
+.used-choices {
+  margin-bottom: 12px;
+}
