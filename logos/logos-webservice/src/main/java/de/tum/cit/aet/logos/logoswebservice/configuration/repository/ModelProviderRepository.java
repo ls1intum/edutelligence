@@ -1,11 +1,14 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.repository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelProvider;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelProviderBenchmarkProjection;
@@ -36,6 +39,22 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
         ORDER BY b.recorded_at DESC, b.id DESC
         """, nativeQuery = true)
     List<ModelProviderBenchmarkProjection> findBenchmarksForModel(@Param("modelId") int modelId);
+
+    @Modifying
+    @Transactional
+    @Query(value = """
+        INSERT INTO model_provider_benchmarks
+            (model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
+        VALUES
+            (:modelProviderId, CAST(:configurationJson AS jsonb), :dataset, :sampleSize,
+             CAST(:metricsJson AS jsonb), COALESCE(:recordedAt, CURRENT_TIMESTAMP))
+        """, nativeQuery = true)
+    int insertBenchmark(@Param("modelProviderId") int modelProviderId,
+                        @Param("configurationJson") String configurationJson,
+                        @Param("dataset") String dataset,
+                        @Param("sampleSize") int sampleSize,
+                        @Param("metricsJson") String metricsJson,
+                        @Param("recordedAt") Instant recordedAt);
 
     @Query(value = """
         SELECT m.id AS model_id, m.name AS model_name, mp.endpoint, mp.api_key

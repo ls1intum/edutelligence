@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.dto.ProviderPerformanceRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.operations.dto.StoreModelBenchmarkRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelProviderBenchmarkProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderPerformanceProjection;
@@ -73,6 +74,35 @@ public class ProviderPerformanceService {
         return Map.of("benchmarks", benchmarks);
     }
 
+    public Map<String, Object> storeModelBenchmark(StoreModelBenchmarkRequestDTO request) {
+        if (request.modelProviderId() == null || request.modelProviderId() <= 0) {
+            throw new IllegalArgumentException("model_provider_id must be a positive integer");
+        }
+        if (!modelProviderRepository.existsById(request.modelProviderId())) {
+            throw new IllegalArgumentException("model_provider_id does not exist");
+        }
+        if (request.configuration() == null) {
+            throw new IllegalArgumentException("configuration is required");
+        }
+        if (request.dataset() == null || request.dataset().isBlank()) {
+            throw new IllegalArgumentException("dataset is required");
+        }
+        if (request.sampleSize() == null || request.sampleSize() <= 0) {
+            throw new IllegalArgumentException("sample_size must be a positive integer");
+        }
+        validateSuccessfulGuideLlmMetrics(request.metrics());
+
+        int inserted = modelProviderRepository.insertBenchmark(
+            request.modelProviderId(),
+            toJson(request.configuration()),
+            request.dataset().trim(),
+            request.sampleSize(),
+            toJson(request.metrics()),
+            request.recordedAt()
+        );
+        return Map.of("stored", inserted == 1);
+    }
+
     private static Map<String, Object> toMap(ProviderPerformanceProjection p) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("provider_id", p.getProviderId());
@@ -120,5 +150,30 @@ public class ProviderPerformanceService {
         } catch (IOException e) {
             throw new IllegalStateException("Stored benchmark JSON is invalid", e);
         }
+    }
+
+    private String toJson(Map<String, Object> value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Benchmark JSON is invalid", e);
+        }
+    }
+
+    private static void validateSuccessfulGuideLlmMetrics(Map<String, Object> metrics) {
+        if (metrics == null || !(metrics.get("request_totals") instanceof Map<?, ?> totals)) {
+            throw new IllegalArgumentException("GuideLLM metrics.request_totals is required");
+        }
+
+        int successful = intValue(totals.get("successful"));
+        int incomplete = intValue(totals.get("incomplete"));
+        int errored = intValue(totals.get("errored"));
+        if (successful <= 0 || incomplete > 0 || errored > 0) {
+            throw new IllegalArgumentException("Only successful GuideLLM benchmark summaries are stored");
+        }
+    }
+
+    private static int intValue(Object value) {
+        return value instanceof Number number ? number.intValue() : 0;
     }
 }

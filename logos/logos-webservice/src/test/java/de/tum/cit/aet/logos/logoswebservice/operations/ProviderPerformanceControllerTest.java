@@ -126,4 +126,56 @@ class ProviderPerformanceControllerTest {
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error").value("model_id must be a positive integer"));
     }
+
+    @Test
+    void importModelBenchmark_storesSuccessfulGuideLlmSummary() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/import")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "model_provider_id": 7001,
+                      "configuration": {"tool":"guidellm","profile":{"kind":"sweep"}},
+                      "dataset": "openai/gsm8k",
+                      "sample_size": 50,
+                      "metrics": {
+                        "request_totals": {"successful":50,"incomplete":0,"errored":0,"total":50},
+                        "time_to_first_token_ms": {"successful":{"p50":120.0,"p95":250.0}}
+                      },
+                      "recorded_at": "2026-08-25T10:00:00Z"
+                    }
+                    """))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.stored").value(true));
+
+        mvc.perform(post("/logosdb/model_benchmarks")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.benchmarks.length()").value(2))
+           .andExpect(jsonPath("$.benchmarks[0].sample_size").value(50))
+           .andExpect(jsonPath("$.benchmarks[0].configuration.tool").value("guidellm"));
+    }
+
+    @Test
+    void importModelBenchmark_rejectsFailedGuideLlmSummary() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/import")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "model_provider_id": 7001,
+                      "configuration": {"tool":"guidellm"},
+                      "dataset": "openai/gsm8k",
+                      "sample_size": 50,
+                      "metrics": {
+                        "request_totals": {"successful":49,"incomplete":0,"errored":1,"total":50}
+                      }
+                    }
+                    """))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error")
+               .value("Only successful GuideLLM benchmark summaries are stored"));
+    }
 }
