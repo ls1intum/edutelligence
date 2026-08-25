@@ -40,4 +40,11 @@ public class ModelCapabilitiesPersistenceService {
 
         modelCapabilitiesRepository.save(capabilities);
     }
+
+    @Transactional
+    public void deleteModelCapabilities(int modelId) {
+
+        modelCapabilitiesRepository.findByModelId(modelId)
+            .ifPresent(modelCapabilitiesRepository::delete);
+    }
 }
