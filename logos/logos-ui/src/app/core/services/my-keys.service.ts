@@ -11,7 +11,7 @@ export class MyKeysService {
 
   /**
    * hasKeysGuard fetches keys to decide route access, then the page component
-   * (my-workspace/open-code) fetches the same list again in ngOnInit right
+   * (my-workspace/ai-tools) fetches the same list again in ngOnInit right
    * after — two sequential round trips per navigation for data that can't
    * have changed between them. Short TTL avoids the duplicate without
    * meaningfully staling the access check.
@@ -114,7 +114,7 @@ export class MyKeysService {
 
   // ── Shared "does this user have an active key" state ──────────────────────
   // Single source of truth for both the sidebar nav (Shell) and hasKeysGuard,
-  // so navigating between my-workspace/open-code reads an already-resolved
+  // so navigating between my-workspace/ai-tools reads an already-resolved
   // signal instead of paying a fresh network round trip on every click. Only
   // re-fetches when team membership changes (join/leave flips key state
   // server-side), same trigger as before this was shared.
