@@ -1524,24 +1524,36 @@ class LaneManager:
         tp_size: int,
         per_gpu_threshold_mb: float,
         multi_gpu_indices: set[int] | None = None,
+        awake_lanes_by_gpu: dict[int, int] | None = None,
+        awake_used_mb_by_gpu: dict[int, float] | None = None,
     ) -> list[int] | None:
         feasible = [row for row in device_rows if float(row["free_mb"]) >= per_gpu_threshold_mb]
         if len(feasible) < tp_size:
             return None
 
         occupied = multi_gpu_indices or set()
+        awake_lanes = awake_lanes_by_gpu or {}
+        awake_used = awake_used_mb_by_gpu or {}
         best_indices: list[int] | None = None
-        best_score: tuple[int, float, float, float, tuple[int, ...]] | None = None
+        best_score: tuple[int, int, float, float, tuple[int, ...]] | None = None
         for combo in combinations(feasible, tp_size):
             indices = tuple(sorted(int(row["index"]) for row in combo))
             # Penalise combos that share GPUs with active TP>1 lane shards.
             # A non-collocated placement always beats a collocated one regardless
             # of free-memory leftover.
             collocated = int(bool(set(indices) & occupied))
-            leftover = sum(float(row["free_mb"]) - per_gpu_threshold_mb for row in combo)
-            utilization = sum(float(row["utilization"]) for row in combo)
-            widest_free = max(float(row["free_mb"]) for row in combo)
-            score = (collocated, leftover, utilization, widest_free, indices)
+            # Prefer GPUs that hold no awake lane. Lanes in sleep_l1 do not
+            # count: their weights sit in host RAM and their ~GB-sized VRAM
+            # residue must not anchor new lanes onto a GPU that is otherwise
+            # empty (deioma incident: an embedding lane was stacked next to a
+            # sleeping 27B while a fully free GPU sat unused).
+            awake_lane_count = sum(awake_lanes.get(i, 0) for i in indices)
+            awake_used_mb = sum(awake_used.get(i, 0.0) for i in indices)
+            # Among equally unoccupied combos take the most free VRAM
+            # (spread): it maximises headroom for the new lane and keeps the
+            # emptiest GPUs intact for larger models.
+            free_mb = sum(float(row["free_mb"]) for row in combo)
+            score = (collocated, awake_lane_count, awake_used_mb, -free_mb, indices)
             if best_score is None or score < best_score:
                 best_score = score
                 best_indices = list(indices)
@@ -1553,8 +1565,10 @@ class LaneManager:
         Strategy:
         - Respect explicit lane gpu_devices.
         - Preserve the current placement when it still fits.
-        - Otherwise choose the smallest feasible GPU subset by free-memory
-          leftover (best fit) within the worker's allowed GPU pool.
+        - Otherwise choose the feasible GPU subset in the worker's allowed
+          GPU pool that shares the least with awake lanes, breaking ties
+          toward the most free VRAM (spread, not best-fit packing: a GPU
+          whose only occupants are sleeping lanes is treated as empty).
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
             return lane_config
@@ -1657,7 +1671,14 @@ class LaneManager:
         # Collect GPU indices occupied by active TP>1 lanes so placement can
         # prefer GPUs that aren't already shared with multi-GPU model shards.
         multi_gpu_indices: set[int] = set()
-        for h in self._handles.values():
+        # Per-GPU occupancy of awake vLLM lanes, so the subset picker can keep
+        # one active model per GPU and ignore sleep_l1 residues (weights in
+        # host RAM are not VRAM occupancy).
+        awake_lanes_by_gpu: dict[int, int] = {}
+        awake_used_mb_by_gpu: dict[int, float] = {}
+        for other_id, h in self._handles.items():
+            if other_id == lane_id:
+                continue  # this lane's own (old) footprint is being replaced
             lc = h.lane_config
             if (
                 lc
@@ -1670,6 +1691,26 @@ class LaneManager:
                     s = s.strip()
                     if s.isdigit():
                         multi_gpu_indices.add(int(s))
+            if lc is None or not lc.vllm or not lc.gpu_devices:
+                continue
+            try:
+                if h.status().state != ProcessState.RUNNING:
+                    continue
+            except Exception:
+                continue
+            try:
+                if (await h.is_sleeping()) is True:
+                    continue
+            except Exception:
+                pass  # unknown sleep state — count the lane as awake
+            indices = [int(s) for s in lc.gpu_devices.split(",") if s.strip().isdigit()]
+            if not indices:
+                continue
+            est_mb = self._estimate_lane_vram_mb(lc)
+            share_mb = est_mb / len(indices)
+            for i in indices:
+                awake_lanes_by_gpu[i] = awake_lanes_by_gpu.get(i, 0) + 1
+                awake_used_mb_by_gpu[i] = awake_used_mb_by_gpu.get(i, 0.0) + share_mb
 
         current_handle = self._handles.get(lane_id)
         current_selector = ""
@@ -1690,6 +1731,8 @@ class LaneManager:
                 tp_size,
                 per_gpu_threshold_mb,
                 multi_gpu_indices,
+                awake_lanes_by_gpu,
+                awake_used_mb_by_gpu,
             )
         if selected_indices is None:
             # Fail fast: an unset gpu_devices makes vLLM default to cuda:0,
