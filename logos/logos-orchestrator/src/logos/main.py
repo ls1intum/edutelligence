@@ -1066,9 +1066,7 @@ def _record_log_failure(
 
 # Anthropic Messages SSE event types the accumulator acts on. The stream also
 # emits content_block_start/stop and ping, which carry neither text nor usage.
-_MESSAGES_EVENT_TYPES = frozenset(
-    {"message_start", "message_delta", "message_stop", "content_block_delta"}
-)
+_MESSAGES_EVENT_TYPES = frozenset({"message_start", "message_delta", "message_stop", "content_block_delta"})
 
 
 class _LiveStreamRegistry:
