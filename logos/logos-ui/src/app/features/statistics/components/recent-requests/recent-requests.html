@@ -95,7 +95,12 @@
               </div>
             }
             @if (tokensLabelOf(item)) {
-              <div class="rr-card__meta rr-card__tokens">{{ tokensLabelOf(item) }} tokens</div>
+              <div class="rr-card__meta rr-card__tokens" [class.rr-card__tokens--live]="item.streaming">
+                {{ tokensLabelOf(item) }} tokens
+                @if (rateLabelOf(item)) {
+                  <span class="rr-card__rate">{{ rateLabelOf(item) }}</span>
+                }
+              </div>
             }
             @if (stageOf(item) === 'complete' && item.status === 'error' && item.error_message) {
               <div class="rr-card__error-snippet">{{ errorSnippet(item.error_message) }}</div>

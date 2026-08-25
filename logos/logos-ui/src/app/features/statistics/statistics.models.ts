@@ -289,6 +289,19 @@ export interface RequestItem {
   completion_tokens: number | null;
   total_tokens: number | null;
   cost_microcents: number | null;
+  /**
+   * Generation rate of a request that is still streaming, from the
+   * orchestrator's in-flight view. Measured from the first token rather than
+   * from arrival, so queueing does not drag it down. Null once the request has
+   * finished, and while it is still waiting for its first token.
+   */
+  tokens_per_second?: number | null;
+  /**
+   * The token counts above are this request's live figures, not its settled
+   * ones. Prompt tokens are exact either way; the completion count is the
+   * orchestrator's running tally and moves until the request completes.
+   */
+  streaming?: boolean;
 }
 
 /**

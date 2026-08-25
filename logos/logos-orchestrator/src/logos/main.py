@@ -10,6 +10,7 @@ import math
 import os
 import re
 import secrets
+import threading
 import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
@@ -1070,6 +1071,89 @@ _MESSAGES_EVENT_TYPES = frozenset(
 )
 
 
+class _LiveStreamRegistry:
+    """Token counts of the streams running right now, keyed by request id.
+
+    A finished request's usage is in the database; one still running is
+    nowhere, and "nowhere" is what the statistics page showed for the whole
+    minute a long generation takes. This holds the in-flight view, in memory
+    and on the orchestrator, because that is the only process that sees the
+    chunks go past.
+
+    Bounded by construction: an entry exists only while its request is
+    streaming and is dropped in the same ``finally`` that logs the completion.
+    """
+
+    def __init__(self, now: Any = time.time) -> None:
+        self._streams: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        # Injected rather than read off the module so a test can drive the clock
+        # without patching time.time for everything else running in-process.
+        self._now = now
+
+    def start(self, request_id: Optional[str], model_name: Optional[str]) -> None:
+        if not request_id:
+            return
+        with self._lock:
+            self._streams[request_id] = {
+                "model_name": model_name,
+                "started_at": self._now(),
+                # Set on the first delta, not here: the wait for a lane to warm
+                # up is not generation, and averaging over it would report a
+                # rate no one is seeing.
+                "first_token_at": None,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            }
+
+    def update(self, request_id: Optional[str], tokens: Dict[str, int]) -> None:
+        if not request_id:
+            return
+        with self._lock:
+            entry = self._streams.get(request_id)
+            if entry is None:
+                return
+            completion = tokens.get("completion_tokens", 0)
+            if completion > 0 and entry["first_token_at"] is None:
+                entry["first_token_at"] = self._now()
+            entry["prompt_tokens"] = tokens.get("prompt_tokens", 0)
+            entry["completion_tokens"] = completion
+
+    def finish(self, request_id: Optional[str]) -> None:
+        if not request_id:
+            return
+        with self._lock:
+            self._streams.pop(request_id, None)
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Every running stream, with the rate it is generating at."""
+        now = self._now()
+        out: list[dict[str, Any]] = []
+        with self._lock:
+            entries = [(rid, dict(entry)) for rid, entry in self._streams.items()]
+        for request_id, entry in entries:
+            first_token_at = entry["first_token_at"]
+            completion = entry["completion_tokens"]
+            elapsed = (now - first_token_at) if first_token_at else 0.0
+            out.append(
+                {
+                    "request_id": request_id,
+                    "model_name": entry["model_name"],
+                    "prompt_tokens": entry["prompt_tokens"],
+                    "completion_tokens": completion,
+                    # Measured from the first token, so it is the generation
+                    # rate rather than an average dragged down by queueing.
+                    # None until there is a span to divide by.
+                    "tokens_per_second": (completion / elapsed) if elapsed > 0.5 and completion > 0 else None,
+                    "elapsed_seconds": now - entry["started_at"],
+                }
+            )
+        return out
+
+
+_live_streams = _LiveStreamRegistry()
+
+
 @dataclass
 class _StreamingLogAccumulator:
     """
@@ -1095,6 +1179,10 @@ class _StreamingLogAccumulator:
     # earlier — see _consume_messages_event.
     messages_usage: Optional[Dict[str, Any]] = None
     _saw_messages_events: bool = False
+    # Text deltas seen so far. The exact completion count only arrives with the
+    # terminal usage event, which is no help to anyone watching the request run
+    # — so the delta count stands in for it until then. See streamed_tokens.
+    delta_count: int = 0
     _decoder: Any = field(
         default_factory=lambda: codecs.getincrementaldecoder("utf-8")(errors="replace"),
         repr=False,
@@ -1118,6 +1206,30 @@ class _StreamingLogAccumulator:
         self.buffer = ""
         for line in remainder.splitlines():
             self._consume_line(line.rstrip("\r"))
+
+    def streamed_tokens(self) -> Dict[str, int]:
+        """Best current view of this request's tokens, mid-stream.
+
+        Prompt tokens are exact as soon as the stream opens — every surface
+        states them up front. Completion tokens are not: the count settles only
+        in the terminal usage event, which is precisely the moment a live view
+        stops being interesting. Until it arrives the text deltas are counted
+        instead, one apiece.
+
+        That is an approximation, and it is the right one to make: vLLM emits a
+        delta per token, so it tracks the real figure closely, and speculative
+        decoding is the case where it can undercount. It is only ever shown
+        while the request is running — the settled usage replaces it on
+        completion, so nothing is stored or billed from this.
+        """
+        usage = self.usage()
+        prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        if not isinstance(prompt, int):
+            prompt = 0
+        if not isinstance(completion, int) or completion <= 0:
+            completion = self.delta_count
+        return {"prompt_tokens": prompt, "completion_tokens": completion}
 
     def usage(self) -> Dict[str, Any]:
         if isinstance(self.responses_final, dict):
@@ -1205,6 +1317,7 @@ class _StreamingLogAccumulator:
                 content = delta.get("content", "")
                 if content:
                     self.full_text += content
+                    self.delta_count += 1
 
     def _consume_responses_event(self, event_type: str, blob: Dict[str, Any]) -> None:
         """Consume one Responses-API SSE event (``{"type": "response.*", ...}``)."""
@@ -1213,6 +1326,7 @@ class _StreamingLogAccumulator:
             delta = blob.get("delta")
             if isinstance(delta, str):
                 self.full_text += delta
+                self.delta_count += 1
         elif event_type in {"response.completed", "response.incomplete", "response.failed"}:
             response = blob.get("response")
             if isinstance(response, dict):
@@ -1242,6 +1356,7 @@ class _StreamingLogAccumulator:
                 text = delta.get("text")
                 if isinstance(text, str):
                     self.full_text += text
+                    self.delta_count += 1
             return
 
         usage: Any = None
@@ -1837,6 +1952,31 @@ async def internal_model_context_windows(request: Request):
         "windows": {model: entry["current_min"] for model, entry in stats.items() if "current_min" in entry},
         "stats": stats,
     }
+
+
+@app.get("/internal/live_streams", tags=["admin"])
+async def internal_live_streams(request: Request):
+    """Token counts of the requests streaming right now, for the statistics page.
+
+    A finished request's usage is in the database; one still running is only
+    here, in the process the chunks pass through. Without this the request feed
+    shows a row with no numbers for the whole minute a long generation takes,
+    and then the totals appear at once when it ends.
+
+    Cheap by construction: a dict of the in-flight requests, no database work,
+    and the webservice already polls on the cadence it pushes the feed at.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    return {"streams": _live_streams.snapshot()}
 
 
 @app.get("/internal/calibration_probe_logs", tags=["admin"])
@@ -2773,6 +2913,10 @@ async def _streaming_response(
             stream_log = _StreamingLogAccumulator()
             error_message = None
             ttft_recorded = False
+            # Publish this request to the live view for as long as it runs. The
+            # registry is dropped in the finally below, so a client that walks
+            # away cannot leave an entry behind.
+            _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
@@ -2787,6 +2931,7 @@ async def _streaming_response(
                                         db.set_time_at_first_token(log_id)
                                 ttft_recorded = True
                             stream_log.feed(chunk)
+                            _live_streams.update(request_id, stream_log.streamed_tokens())
                     except Exception as e:
                         # Retry ONLY if nothing has been streamed to the client yet:
                         # a pre-token failure (e.g. a just-woken level-1 lane whose
@@ -2807,6 +2952,7 @@ async def _streaming_response(
                         raise e
                     break  # stream completed without raising
             finally:
+                _live_streams.finish(request_id)
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
                 usage_tokens = _usage_tokens_from_payload(response_payload)
@@ -2911,6 +3057,9 @@ async def _streaming_response(
         def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
             return cost_enricher.feed(chunk) if cost_enricher else [chunk]
 
+        # Same live view the logosnode path publishes to — a cloud request is
+        # just as opaque while it runs, and the page shows both together.
+        _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
         try:
             # Yield the already-peeked first chunk
             if first_chunk:
@@ -2927,6 +3076,7 @@ async def _streaming_response(
                 for outgoing_chunk in enriched_chunks(chunk):
                     yield outgoing_chunk
                     stream_log.feed(outgoing_chunk)
+                _live_streams.update(request_id, stream_log.streamed_tokens())
                 if chunk and not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
@@ -2955,6 +3105,7 @@ async def _streaming_response(
                 yield f"data: {_json.dumps(error_body)}\n\n".encode()
                 yield b"data: [DONE]\n\n"
         finally:
+            _live_streams.finish(request_id)
             if error_message is None:
                 error_message = stream_status.error
             failed = error_message is not None

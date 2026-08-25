@@ -319,6 +319,21 @@ export class RecentRequests implements OnChanges, OnDestroy {
     return `↑${p ?? 0} ↓${c ?? 0}`;
   }
 
+  /**
+   * Generation rate of a request that is still streaming.
+   *
+   * Only while it runs: once it finishes, an average over its whole span says
+   * less than the duration already on the row, and a figure that stops moving
+   * next to counts that stopped moving reads as part of the record rather than
+   * as a live measurement.
+   */
+  rateLabelOf(item: RequestItem): string | null {
+    if (!item.streaming) return null;
+    const rate = item.tokens_per_second;
+    if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return null;
+    return `${rate < 10 ? rate.toFixed(1) : Math.round(rate)} tok/s`;
+  }
+
   totalTimeLabelOf(item: RequestItem): string {
     const stage = deriveStage(item);
     if (stage === 'complete' && item.total_seconds != null) {

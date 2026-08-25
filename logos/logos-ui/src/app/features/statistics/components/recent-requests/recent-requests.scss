@@ -234,6 +234,19 @@
   }
 }
 
+// A running request's counts come from the orchestrator's in-flight view and
+// move between pushes. Marked so a number that is still climbing does not read
+// as the request's final tally.
+.rr-card__tokens--live {
+  color: rgb(var(--color-accent-cyan));
+}
+
+.rr-card__rate {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--color-typography-300));
+}
+
 // ── Badges ───────────────────────────────────────────────────────────────────
 
 .rr-badge {
