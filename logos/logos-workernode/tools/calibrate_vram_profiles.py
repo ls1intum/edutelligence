@@ -45,9 +45,11 @@ from logos_worker_node.calibration import (
     _PROFILES_FILE,
     _READY_TIMEOUT_S,
     CalibrationResult,
+    ProfileStoreUnreadableError,
     _reset_calibration_log,
     calibrate_model,
     load_existing_profiles,
+    merge_profile,
     plans_from_config,
     result_to_profile_dict,
     save_profiles,
@@ -101,10 +103,13 @@ def main() -> int:
         "--sleep-level",
         type=int,
         default=1,
-        choices=[1, 2],
+        choices=[0, 1, 2],
         help=(
             "vLLM sleep level (default: 1, matches the worker). "
-            "Level 1 frees KV cache blocks; level 2 also offloads weights to CPU."
+            "Level 1 frees KV cache blocks; level 2 also offloads weights to CPU. "
+            "Level 0 probes without sleep support and skips the sleep phases — "
+            "use it for models the worker runs with enable_sleep_mode: false, "
+            "which is also what an automatic session picks for them."
         ),
     )
     parser.add_argument(
@@ -184,7 +189,15 @@ def main() -> int:
         print("       Hint: pass --vllm-binary /opt/venv/bin/vllm or ensure it is on PATH")
         return 1
 
-    existing_profiles = load_existing_profiles(profiles_path)
+    # Refuse to run against a store we cannot read: every result below is
+    # written back over the whole file, so continuing from an empty dict would
+    # replace the node's profiles with just this run's models.
+    try:
+        existing_profiles = load_existing_profiles(profiles_path)
+    except ProfileStoreUnreadableError as exc:
+        print(f"ERROR: {exc}")
+        print("       Fix or move the file; calibrating now would overwrite it.")
+        return 1
     results: list[CalibrationResult] = []
 
     for plan in plans:
@@ -205,7 +218,14 @@ def main() -> int:
         results.append(result)
 
         if result.success:
-            existing_profiles[result.model] = result_to_profile_dict(result)
+            # Merged, not assigned: the probe leaves every field it does not
+            # measure at None, and those include flags set elsewhere
+            # (sleep_mode_disabled, calibration_unsupported) that assigning
+            # would silently drop.
+            existing_profiles[result.model] = merge_profile(
+                existing_profiles.get(result.model),
+                result_to_profile_dict(result),
+            )
             # Persist after every success so a later failure doesn't lose prior results
             save_profiles(profiles_path, existing_profiles)
             print(f"  Saved → {profiles_path}")
@@ -227,7 +247,9 @@ def main() -> int:
                 f"{r.loaded_vram_mb:>6.0f}  "
                 f"{r.kv_cache_sent_mb:>6.0f}    "
                 f"{r.base_residency_mb:>6.0f}  "
-                f"{r.sleeping_residual_mb:>6.0f}  MB"
+                # None when the run skipped the sleep phases (--sleep-level 0,
+                # or a model this worker never sleeps).
+                f"{f'{r.sleeping_residual_mb:.0f}' if r.sleeping_residual_mb is not None else 'n/a':>6}  MB"
             )
         print()
         print("  base_residency = loaded - kv_sent  (exact)")

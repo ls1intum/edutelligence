@@ -24,6 +24,7 @@ marked xfail with a TODO.
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import dataclass, field
 from types import ModuleType, SimpleNamespace
 from typing import Any, Dict, List
@@ -183,6 +184,9 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
     facade = _MockFacade(providers)
     registry = MagicMock()
     registry.has_received_first_status.return_value = True
+    # Explicit: a bare MagicMock returns a truthy mock, which would make the
+    # planner treat every provider as mid-calibration and skip it.
+    registry.is_calibrating.return_value = False
     registry.peek_runtime_snapshot.return_value = {"runtime": {"lanes": [], "devices": {}}}
     demand = MagicMock()
     demand.get_ranked_models.return_value = []
@@ -193,6 +197,7 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
     planner._registry = registry
     planner._demand = demand
     planner._lane_wake_failure_until = {}
+    planner._lane_load_failure_until = {}
     planner._cross_provider_best_first = True
     planner._replica_first_eviction = True
     planner._replicate_on_free_vram = False  # opt-in; tests turn it on
@@ -424,6 +429,73 @@ class TestEstimateDemandActionCost:
         )
         assert result is None
 
+    def test_a_cold_load_in_failure_cooldown_is_infeasible(self):
+        """A load this worker just failed cannot serve the model, so it cannot
+        be a ranking candidate either — see the deadlock test below."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            profiles={"X": _profile(loaded_vram_mb=20_000.0)},
+            available_vram_mb=80_000.0,
+        )
+        planner = _planner([provider])
+        planner._lane_load_failure_until[(1, planner._planner_lane_id("X"))] = time.time() + 120.0
+
+        result = planner._estimate_demand_action_cost(
+            1,
+            "X",
+            provider.lanes,
+            provider.profiles,
+            planner._facade.get_capacity_info(1),
+        )
+        assert result is None
+
+    def test_an_expired_cooldown_makes_the_worker_a_candidate_again(self):
+        """The cooldown is a pause, not a ban."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            profiles={"X": _profile(loaded_vram_mb=20_000.0)},
+            available_vram_mb=80_000.0,
+        )
+        planner = _planner([provider])
+        planner._lane_load_failure_until[(1, planner._planner_lane_id("X"))] = time.time() - 1.0
+
+        result = planner._estimate_demand_action_cost(
+            1,
+            "X",
+            provider.lanes,
+            provider.profiles,
+            planner._facade.get_capacity_info(1),
+        )
+        assert result is not None
+
+    def test_a_sleeping_lane_is_unaffected_by_the_load_cooldown(self):
+        """Waking a lane that is already resident is not the load that failed,
+        and has its own cooldown."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane(lane_id="planner-X", model_name="X", runtime_state="loaded", sleep_state="sleeping")],
+            profiles={"X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=1_000.0)},
+            available_vram_mb=80_000.0,
+        )
+        planner = _planner([provider])
+        planner._lane_load_failure_until[(1, "planner-X")] = time.time() + 120.0
+
+        result = planner._estimate_demand_action_cost(
+            1,
+            "X",
+            provider.lanes,
+            provider.profiles,
+            planner._facade.get_capacity_info(1),
+        )
+        assert result is not None
+        cost, _ = result
+        assert cost == pytest.approx(CapacityPlanner.TARGET_ACTION_COST_S["wake"])
+
 
 # ---------------------------------------------------------------------------
 # Cross-provider ranker tests
@@ -457,6 +529,72 @@ class TestRankProvidersForDemandedModels:
             [("X", 1.5)],
         )
         assert winners == {"X": a.provider_id}
+
+    def test_a_worker_whose_load_just_failed_does_not_win(self):
+        """Production, 2026-08-21: A's vLLM died during startup, so its lane
+        went into the load-failure cooldown. The ranker did not look at that
+        and kept naming A the winner, which made B skip the model with
+        "best-first ranker picked worker=A" — and A's own action was then
+        dropped by the cooldown check in _validate_vram_budget. Neither worker
+        loaded anything for the next two minutes, while a request sat queued.
+        """
+        a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=90_000,  # would otherwise win the free-VRAM tiebreak
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        planner._lane_load_failure_until[(a.provider_id, planner._planner_lane_id("X"))] = time.time() + 120.0
+
+        winners = planner._rank_providers_for_demanded_models(
+            [a.provider_id, b.provider_id],
+            [("X", 1.5)],
+        )
+        assert winners == {"X": b.provider_id}
+
+    def test_all_workers_in_cooldown_leaves_the_model_unranked(self):
+        """With no viable worker the ranker must name none, so nothing is
+        skipped for "another worker was picked" — the per-worker paths then
+        make their own decision instead of deferring to a winner that cannot
+        act. _compute_demand_actions defaults a missing entry to the worker
+        being evaluated for exactly this reason."""
+        a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=90_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        lane_id = planner._planner_lane_id("X")
+        planner._lane_load_failure_until[(a.provider_id, lane_id)] = time.time() + 120.0
+        planner._lane_load_failure_until[(b.provider_id, lane_id)] = time.time() + 120.0
+
+        winners = planner._rank_providers_for_demanded_models(
+            [a.provider_id, b.provider_id],
+            [("X", 1.5)],
+        )
+        assert "X" not in winners
 
     def test_sleeping_provider_beats_cold_provider(self):
         """Scenario 4: A has X sleeping (with eviction), B is cold (no eviction).

@@ -8,9 +8,10 @@ import json
 import logging
 import math
 import os
+import re
 import secrets
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
@@ -30,6 +31,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
+from logos.context_budget import required_context_tokens
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
@@ -490,10 +492,13 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
                 "gpu_cache_usage_percent_avg": None,
                 "gpu_cache_usage_percent_max": None,
                 "prefix_cache_hit_rate_avg": None,
+                "mtp_acceptance_rate_avg": None,
                 "_gpu_cache_usage_percent_sum": 0.0,
                 "_gpu_cache_usage_percent_count": 0,
                 "_prefix_cache_hit_rate_sum": 0.0,
                 "_prefix_cache_hit_rate_count": 0,
+                "_mtp_draft_tokens_total": 0.0,
+                "_mtp_accepted_tokens_total": 0.0,
             },
         )
 
@@ -517,6 +522,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "vllm": is_vllm,
             "runtime_state": runtime_state,
             "sleep_state": lane.get("sleep_state"),
+            "gpu_devices": str(lane.get("gpu_devices") or ""),
+            "effective_gpu_devices": str(lane.get("effective_gpu_devices") or ""),
+            "num_parallel": _safe_int(lane.get("num_parallel")) or 0,
             "active_requests": active_requests,
             "effective_vram_mb": _safe_float(lane.get("effective_vram_mb")) or 0.0,
             "reported_vram_mb": _safe_float(lane.get("reported_vram_mb")) or 0.0,
@@ -527,6 +535,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
             "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
             "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
+            "mtp_acceptance_rate": _safe_float(backend_metrics.get("mtp_acceptance_rate")),
             "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
             "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
             "ttft_histogram": ttft_histogram,
@@ -596,6 +605,17 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
             entry["_prefix_cache_hit_rate_count"] += 1
 
+        # Token-weighted MTP aggregation: sum the cumulative draft/accepted
+        # token counters per model (an unweighted mean of per-lane rates would
+        # misstate the model rate when lanes have different draft volumes).
+        mtp_draft_tokens_total = _safe_float(backend_metrics.get("mtp_draft_tokens_total"))
+        if mtp_draft_tokens_total is not None:
+            entry["_mtp_draft_tokens_total"] += mtp_draft_tokens_total
+
+        mtp_accepted_tokens_total = _safe_float(backend_metrics.get("mtp_accepted_tokens_total"))
+        if mtp_accepted_tokens_total is not None:
+            entry["_mtp_accepted_tokens_total"] += mtp_accepted_tokens_total
+
         _merge_histogram_buckets(entry["ttft_histogram"], ttft_histogram)
 
     for entry in model_signals.values():
@@ -608,6 +628,11 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         prefix_sum = float(entry.pop("_prefix_cache_hit_rate_sum", 0.0) or 0.0)
         if prefix_count > 0:
             entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
+
+        mtp_draft = float(entry.pop("_mtp_draft_tokens_total", 0.0) or 0.0)
+        mtp_accepted = float(entry.pop("_mtp_accepted_tokens_total", 0.0) or 0.0)
+        if mtp_draft > 0:
+            entry["mtp_acceptance_rate_avg"] = mtp_accepted / mtp_draft
 
         entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
 
@@ -1180,6 +1205,126 @@ def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
     return {}
 
 
+# One currency unit = 100 cents = 1e8 micro-cents. The unit is USD, not EUR:
+# token_prices is filled from litellm's model catalog, whose input_cost_per_token
+# is USD per token (gpt-4o reads 2.5e-6, i.e. its $2.50 per 1M list price),
+# scaled by 1e11 = 1e8 micro-cents x 1e3 per-1k. No exchange rate is applied
+# anywhere in the stack, so reporting these amounts as EUR mislabelled them.
+_MICRO_CENTS_PER_USD = 100_000_000
+
+
+def _response_with_cost(
+    response_payload: Any,
+    provider_id: Optional[int],
+    model_id: Optional[int],
+    response_at: datetime.datetime,
+) -> tuple[Any, bool]:
+    """Add the configured EUR cost to a cloud response's usage object.
+
+    Cost enrichment is deliberately best-effort: a billing lookup must never
+    turn a successful inference into an error. The DB method returns ``None``
+    for local providers, so proxy mode can safely use the same helper without
+    separately resolving the provider type.
+    """
+    if not isinstance(response_payload, dict) or provider_id is None or model_id is None:
+        return response_payload, False
+    usage = response_payload.get("usage")
+    if not isinstance(usage, dict):
+        return response_payload, False
+    usage_tokens = extract_token_usage(usage)
+    if not usage_tokens:
+        return response_payload, False
+
+    try:
+        with DBManager() as db:
+            cost_micro_cents = db.get_usage_cost_micro_cents(
+                model_id,
+                provider_id,
+                usage_tokens,
+                response_at,
+            )
+    except Exception:
+        logger.exception(
+            "Failed to calculate response cost (model_id=%s, provider_id=%s)",
+            model_id,
+            provider_id,
+        )
+        return response_payload, False
+    if cost_micro_cents is None:
+        return response_payload, False
+
+    enriched_usage = dict(usage)
+    enriched_usage["cost"] = round(cost_micro_cents / _MICRO_CENTS_PER_USD, 8)
+    enriched_usage["cost_currency"] = "USD"
+    enriched_payload = dict(response_payload)
+    enriched_payload["usage"] = enriched_usage
+    return enriched_payload, True
+
+
+@dataclass
+class _StreamingCostEnricher:
+    """Enrich terminal SSE usage events while preserving all other frames."""
+
+    provider_id: Optional[int]
+    model_id: Optional[int]
+    buffer: bytes = b""
+
+    def feed(self, chunk: bytes | str) -> list[bytes]:
+        self.buffer += chunk.encode("utf-8") if isinstance(chunk, str) else chunk
+        frames: list[bytes] = []
+        while True:
+            delimiter = re.search(rb"\r?\n\r?\n", self.buffer)
+            if delimiter is None:
+                break
+            end = delimiter.end()
+            frame = self.buffer[:end]
+            self.buffer = self.buffer[end:]
+            frames.append(self._enrich_frame(frame, delimiter.start(), delimiter.group()))
+        return frames
+
+    def finish(self) -> list[bytes]:
+        if not self.buffer:
+            return []
+        remainder = self.buffer
+        self.buffer = b""
+        return [remainder]
+
+    def _enrich_frame(self, frame: bytes, payload_end: int, delimiter: bytes) -> bytes:
+        event = frame[:payload_end]
+        newline = b"\r\n" if b"\r\n" in event else b"\n"
+        lines = event.split(newline)
+        for index, line in enumerate(lines):
+            if not line.startswith(b"data:"):
+                continue
+            raw_data = line[5:].lstrip()
+            if raw_data == b"[DONE]":
+                return frame
+            try:
+                blob = json.loads(raw_data)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(blob, dict):
+                continue
+
+            target = blob.get("response") if isinstance(blob.get("response"), dict) else blob
+            enriched_target, changed = _response_with_cost(
+                target,
+                self.provider_id,
+                self.model_id,
+                datetime.datetime.now(datetime.timezone.utc),
+            )
+            if not changed:
+                continue
+            if target is blob:
+                blob = enriched_target
+            else:
+                blob = dict(blob)
+                blob["response"] = enriched_target
+            lines[index] = b"data: " + json.dumps(blob, separators=(",", ":")).encode("utf-8")
+            return newline.join(lines) + delimiter
+        return frame
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -1576,6 +1721,7 @@ async def internal_provider_status(request: Request):
                 "connected": connected,
                 "connection_state": "online" if connected else "offline",
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+                "calibrating": _logosnode_registry.is_calibrating(provider_id),
             }
         )
     return {"providers": providers}
@@ -1587,7 +1733,12 @@ async def internal_model_context_windows(request: Request):
 
     The effective window lives only in the worker runtime snapshots held by
     the orchestrator's registry; the webservice enriches its model listings
-    (e.g. the OpenCode setup page) from this map.
+    (e.g. the AI-tools setup page) from this map.
+
+    ``windows`` keeps its original shape — model name -> smallest currently
+    served window — so an older webservice keeps working. ``stats`` adds the
+    ``best`` and ``native`` numbers next to it; see
+    :func:`_served_context_window_stats`.
     """
     if not _INTERNAL_SECRET:
         raise HTTPException(status_code=403, detail="Internal endpoint disabled")
@@ -1600,7 +1751,11 @@ async def internal_model_context_windows(request: Request):
     if not hmac.compare_digest(token, _INTERNAL_SECRET):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
-    return {"windows": _served_context_windows()}
+    stats = _served_context_window_stats()
+    return {
+        "windows": {model: entry["current_min"] for model, entry in stats.items() if "current_min" in entry},
+        "stats": stats,
+    }
 
 
 @app.get("/internal/calibration_probe_logs", tags=["admin"])
@@ -1634,6 +1789,11 @@ class _InternalCalibrateRequest(BaseModel):
 class _InternalDeleteLaneRequest(BaseModel):
     provider_id: int
     lane_id: str
+
+
+class _InternalAddLaneRequest(BaseModel):
+    provider_id: int
+    lane: dict[str, Any]
 
 
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
@@ -1704,6 +1864,47 @@ async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, reque
         provider_id=data.provider_id,
         action="delete_lane",
         params={"lane_id": data.lane_id},
+    )
+
+
+@app.post("/internal/logosnode/lanes/add", tags=["admin"])
+async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Request):
+    """Manually load a single lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    model = str(data.lane.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="lane.model is required")
+
+    if _capacity_planner is None:
+        raise HTTPException(status_code=503, detail="Capacity planner not ready")
+
+    # Answer a refusal synchronously — a background task has nobody to report to.
+    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id)
+    if rejection is not None:
+        raise HTTPException(status_code=409, detail=rejection)
+
+    # Loading a model takes minutes (the planner budgets 1800 s for the command),
+    # far beyond any caller's HTTP read timeout, and holding a servlet thread
+    # open that long per load is its own problem. So kick it off and return: the
+    # lane appears in the lane-status stream the statistics page already
+    # subscribes to, which is where the operator watches it come up.
+    task = asyncio.create_task(_capacity_planner.load_lane_manually(data.provider_id, model))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    # 202, not 200: the lane is not loaded when this returns, only scheduled.
+    return JSONResponse(
+        status_code=202,
+        content={"status": "accepted", "model": model, "provider_id": data.provider_id},
     )
 
 
@@ -1808,10 +2009,14 @@ def _build_logosnode_ws_url(request: Request, token: str) -> str:
 
 async def _filter_logosnode_deployments(
     deployments: list[Deployment],
+    payload: Optional[dict] = None,
 ) -> list[Deployment]:
     """
     Enforce provider model scope intersection:
     DB deployment assignment AND node capabilities.
+
+    When ``payload`` is given, also prefers the workers whose served context
+    window fits the request; see :func:`_prefer_deployments_with_context_room`.
     """
     if not deployments:
         return []
@@ -1845,7 +2050,117 @@ async def _filter_logosnode_deployments(
             if allowed:
                 filtered.append({**deployment, "type": "logosnode"})
 
+    # Audio uploads carry a file, not a conversation: their "prompt" field is a
+    # transcription hint of a few words and says nothing about how much context
+    # the request needs. Leave their routing alone.
+    if payload is not None and not is_multipart_payload(payload):
+        filtered = _prefer_deployments_with_context_room(filtered, payload, _local_name_lookup)
+
     return filtered
+
+
+def _provider_served_context_windows() -> dict[tuple[int, str], int]:
+    """(provider_id, model name) -> smallest window that worker serves for it.
+
+    Per worker rather than per model, which is what routing needs: the
+    model-level minimum in :func:`_served_context_window_stats` is the floor
+    across the whole cluster and says nothing about which node is the roomy
+    one. A worker running several lanes for the same model is reduced to its
+    narrowest, since any of them may take the request.
+    """
+    windows: dict[tuple[int, str], int] = {}
+    try:
+        provider_ids = _logosnode_registry.active_provider_ids()
+    except Exception:
+        return windows
+    for provider_id in provider_ids:
+        snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        runtime = (snap or {}).get("runtime")
+        if not isinstance(runtime, dict):
+            continue
+        lanes = runtime.get("lanes")
+        if not isinstance(lanes, list):
+            continue
+        model_profiles = runtime.get("model_profiles")
+        if not isinstance(model_profiles, dict):
+            model_profiles = {}
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            window = _lane_served_context_window(lane, model_profiles)
+            if window <= 0:
+                continue
+            key = (int(provider_id), lane["model"])
+            windows[key] = min(windows[key], window) if key in windows else window
+    return windows
+
+
+def _prefer_deployments_with_context_room(
+    deployments: list[Deployment],
+    payload: dict,
+    model_names: dict[int, str],
+) -> list[Deployment]:
+    """Drop workers whose context window is too narrow for this request.
+
+    A model can be placed with very different windows on different nodes: the
+    planner gives a lane as much context as the node's free KV cache allows,
+    so the same model may serve 262144 tokens on one worker and a fraction of
+    that on another. Routing a long conversation to the narrow one earns a 400
+    from vLLM even though a worker that could have answered was idle next to
+    it.
+
+    So: estimate what the request needs (prompt + its own output reservation +
+    the same 3000-token margin Claude Code keeps) and keep only the workers
+    that offer it.
+
+    Two deliberate escape hatches, because this filter runs on an estimate:
+
+    * A worker whose window is unknown is always kept. ``max_model_len`` is
+      absent for cloud providers, for Ollama lanes and for a vLLM lane the
+      worker has not reported a window for — none of those are evidence of a
+      *narrow* window.
+    * When no worker is left, the widest ones are returned instead of nothing.
+      The request then fails upstream exactly as it did before this filter
+      existed, rather than turning into a 404 that hides which model was
+      asked for.
+    """
+    required = required_context_tokens(payload)
+    if required is None:
+        return deployments
+
+    windows = _provider_served_context_windows()
+    if not windows:
+        return deployments
+
+    def _window_of(deployment: Deployment) -> Optional[int]:
+        if _normalize_provider_type(deployment.get("type")) != "logosnode":
+            return None
+        model_name = model_names.get(int(deployment["model_id"]))
+        if not model_name:
+            return None
+        return windows.get((int(deployment["provider_id"]), model_name))
+
+    fitting = [d for d in deployments if (_window_of(d) or required) >= required]
+    if fitting:
+        if len(fitting) != len(deployments):
+            logger.info(
+                "Context routing: request needs ~%d tokens; %d of %d deployment(s) serve a wide " "enough window",
+                required,
+                len(fitting),
+                len(deployments),
+            )
+        return fitting
+
+    # Every known window is too narrow. Hand back the widest so the request
+    # gets the best available shot instead of a synthetic 404.
+    widest = max((w for w in (_window_of(d) for d in deployments) if w), default=0)
+    logger.warning(
+        "Context routing: request needs ~%d tokens but the widest served window is %d — "
+        "falling back to the widest deployment(s)",
+        required,
+        widest,
+    )
+    return [d for d in deployments if (_window_of(d) or 0) >= widest] or deployments
 
 
 async def start_pipeline():
@@ -2146,6 +2461,24 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     )
 
 
+def _cached_prompt_tokens(usage: Dict[str, Any]) -> Optional[int]:
+    """Cached-prompt tokens as reported by the provider, or None when absent.
+
+    Handles both shapes that reach the completion log: the flattened dict
+    from ``extract_token_usage`` (``prompt_cached_tokens``) and the raw
+    streaming usage (``prompt_tokens_details.cached_tokens``).
+    """
+    cached = usage.get("prompt_cached_tokens")
+    if isinstance(cached, int) and not isinstance(cached, bool):
+        return cached
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if isinstance(cached, int) and not isinstance(cached, bool):
+            return cached
+    return None
+
+
 def _log_request_completion(
     model_id: int,
     request_id: Optional[str],
@@ -2158,6 +2491,7 @@ def _log_request_completion(
     duration_ms = (time.perf_counter() - start_time) * 1000.0
     prompt_tokens = usage.get("prompt_tokens", 0) or 0
     completion_tokens = usage.get("completion_tokens", 0) or 0
+    cached_tokens = _cached_prompt_tokens(usage)
     generation_s = duration_ms / 1000.0
     tps = (completion_tokens / generation_s) if generation_s > 0 and completion_tokens > 0 else 0.0
 
@@ -2186,6 +2520,10 @@ def _log_request_completion(
         )
         if tps > 0:
             parts.append(f"tps={tps:.1f}")
+    # Prefix-cache hit share of this request's prompt; only shown when the
+    # provider reports cached tokens (vLLM, Azure, OpenAI prompt caching).
+    if prompt_tokens > 0 and cached_tokens is not None:
+        parts.append(f"prefix_hit={cached_tokens / prompt_tokens:.0%}")
     logger.info(" ".join(parts))
 
 
@@ -2481,14 +2819,23 @@ async def _streaming_response(
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
+        cost_enricher = (
+            _StreamingCostEnricher(provider_id, model_id)
+            if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
+            else None
+        )
         error_message = None
         ttft_recorded = False
+
+        def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
+            return cost_enricher.feed(chunk) if cost_enricher else [chunk]
 
         try:
             # Yield the already-peeked first chunk
             if first_chunk:
-                yield first_chunk
-                stream_log.feed(first_chunk)
+                for outgoing_chunk in enriched_chunks(first_chunk):
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
                 if not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
@@ -2496,15 +2843,24 @@ async def _streaming_response(
                     ttft_recorded = True
 
             async for chunk in chunk_iter:
-                yield chunk
+                for outgoing_chunk in enriched_chunks(chunk):
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
                 if chunk and not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
                     ttft_recorded = True
-                stream_log.feed(chunk)
+            if cost_enricher:
+                for outgoing_chunk in cost_enricher.finish():
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
         except Exception as exc:
             error_message = str(exc)
+            if cost_enricher:
+                for outgoing_chunk in cost_enricher.finish():
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
             # Once bytes have reached the client, only SSE can carry the
             # synthetic OpenAI error frame without corrupting its protocol.
             if upstream_media_type == "text/event-stream":
@@ -2700,6 +3056,7 @@ async def _sync_response(
                 )
         else:
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+        response_at = datetime.datetime.now(datetime.timezone.utc)
 
         # Update rate limits from response headers
         if exec_result.headers:
@@ -2731,6 +3088,9 @@ async def _sync_response(
                 f"Request failed (model_id={model_id}, provider_id={provider_id}): "
                 f"{exec_result.error}, response={response_payload}"
             )
+
+        if exec_result.success and context.provider_type == "cloud":
+            response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
 
         usage_tokens = _usage_tokens_from_payload(response_payload)
 
@@ -2893,6 +3253,7 @@ def _proxy_streaming_response(
 
     async def streamer():
         stream_log = _StreamingLogAccumulator()
+        cost_enricher = _StreamingCostEnricher(provider_id, model_id)
         stream_status = StreamingExecutionStatus()
         ttft = None
         error_message = None
@@ -2911,11 +3272,17 @@ def _proxy_streaming_response(
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
 
-                yield chunk
-
-                stream_log.feed(chunk)
+                for outgoing_chunk in cost_enricher.feed(chunk):
+                    yield outgoing_chunk
+                    stream_log.feed(outgoing_chunk)
+            for outgoing_chunk in cost_enricher.finish():
+                yield outgoing_chunk
+                stream_log.feed(outgoing_chunk)
         except Exception as exc:  # noqa: BLE001
             error_message = str(exc)
+            for outgoing_chunk in cost_enricher.finish():
+                yield outgoing_chunk
+                stream_log.feed(outgoing_chunk)
             raise
         finally:
             if error_message is None:
@@ -2969,10 +3336,13 @@ async def _proxy_sync_response(
     from fastapi.responses import JSONResponse
 
     exec_result = await _pipeline.executor.execute_sync(forward_url, proxy_headers, payload)
+    response_at = datetime.datetime.now(datetime.timezone.utc)
 
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
         response_payload = {"error": exec_result.error}
+    if exec_result.success:
+        response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
 
     if log_id:
         usage_tokens = _usage_tokens_from_payload(response_payload)
@@ -3181,11 +3551,12 @@ async def _execute_resource_mode(
         else:
             raise HTTPException(status_code=503, detail=error_msg)
 
+    provider_type = result.scheduling_stats.get("provider_type", "")
+
     rl_tpm_key = None
     if auth.cloud_rl is not None or auth.local_rl is not None:
         from logos.rate_limiter import RateLimitConfig, get_rate_limiter
 
-        provider_type = result.scheduling_stats.get("provider_type", "")
         is_local = provider_type == "logosnode"
         rl_info = auth.local_rl if is_local else auth.cloud_rl
         rl_key = f"api_key:{auth.api_key_id}:{'local' if is_local else 'cloud'}"
@@ -3218,6 +3589,35 @@ async def _execute_resource_mode(
 
             if rl_info.get("tpm") is not None:
                 rl_tpm_key = rl_key
+
+    with DBManager() as db:
+        try:
+            _check_budget_if_cloud(
+                db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
+            )
+        except Exception as e:
+            try:
+                _pipeline.scheduler.release(
+                    result.model_id,
+                    result.provider_id,
+                    provider_type,
+                    result.scheduling_stats.get("request_id") or request_id,
+                )
+            except Exception:
+                logger.warning("Failed to release scheduler slot after budget reject")
+            if isinstance(e, HTTPException) and is_async_job:
+                _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
+                _record_log_failure(
+                    log_id,
+                    result.scheduling_stats.get("request_id") or request_id,
+                    str(e.detail),
+                    model_id=result.model_id,
+                    provider_id=result.provider_id,
+                    classification_stats=result.classification_stats,
+                    scheduling_stats=result.scheduling_stats,
+                )
+                return {"status_code": e.status_code, "data": err_body}
+            raise
 
     # Execute and Respond
     try:
@@ -3409,6 +3809,90 @@ async def route_and_execute(
         raise
 
 
+_CLIENT_DISCONNECT_POLL_SECONDS = 1.0
+
+
+async def _wait_for_client_disconnect(request: Request) -> None:
+    """Return once the client has gone away."""
+    while not await request.is_disconnected():
+        await asyncio.sleep(_CLIENT_DISCONNECT_POLL_SECONDS)
+
+
+async def _settle(task: asyncio.Task) -> Any:
+    """Cancel ``task`` and wait for its cleanup to finish.
+
+    The pipeline releases the scheduler slot in a ``finally`` block, so the
+    caller must not unwind before that has run — otherwise the lane stays
+    booked for a request that is already gone.
+    """
+    task.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        return await task
+    return None
+
+
+async def _discard_response(response: Any) -> None:
+    """Close a response nobody is left to read.
+
+    ``_streaming_response`` pulls the first chunk before handing the response
+    over, so by then the upstream connection is already open. Closing the body
+    iterator unwinds the executor's stream contexts instead of leaving them to
+    the garbage collector.
+    """
+    iterator = getattr(response, "body_iterator", None)
+    if iterator is None:
+        return
+    with suppress(Exception):
+        await iterator.aclose()
+
+
+async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
+    """Run ``route_and_execute``, dropping the work if the client leaves.
+
+    Uvicorn does not tear the handler down when a client vanishes mid-request,
+    so the call kept a worker generating a response nobody would read — a ghost
+    request holding a GPU lane for as long as the generation took. Cancelling
+    the task unwinds the executor's ``httpx.AsyncClient`` context, which closes
+    the upstream connection so vLLM aborts the sequence.
+
+    Whether the response ends up streaming is decided deep inside the pipeline:
+    resource mode can resolve to Whisper and answer synchronously even for
+    ``stream: true``. So this reacts to what came back rather than predicting
+    it. Once a streaming response is handed on, Starlette's own watcher takes
+    over — it listens for the disconnect while the body is consumed and cancels
+    the generator, which unwinds the same stream context.
+    """
+    work = asyncio.create_task(route_and_execute(**kwargs))
+    watcher = asyncio.create_task(_wait_for_client_disconnect(request))
+    try:
+        done, _ = await asyncio.wait({work, watcher}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        await _settle(work)
+        raise
+    finally:
+        watcher.cancel()
+
+    # The watcher may land in the same batch as a finished task. Its probe
+    # consumes the http.disconnect message, so a response produced in that
+    # same tick can no longer be handed to Starlette's watcher — drop it here
+    # instead of streaming it into a closed socket.
+    if work in done and watcher not in done:
+        return work.result()
+
+    await _discard_response(await _settle(work))
+
+    request_id = kwargs.get("request_id")
+    logger.info("Cancelled request %s: client disconnected before the response was ready", request_id)
+    _record_log_failure(
+        kwargs.get("log_id"),
+        request_id,
+        "Client disconnected before the response was ready; upstream request cancelled.",
+    )
+    # 499, as nginx uses it: the client closed the request. Nobody is left to
+    # read this, but the status keeps the access log honest.
+    return JSONResponse(status_code=499, content={"detail": "Client closed request"})
+
+
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
@@ -3418,17 +3902,17 @@ async def handle_sync_request(path: str, request: Request):
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
-    if log_id:
-        with DBManager() as db:
-            db.update_log_entry_metrics(
-                log_id=log_id,
-                request_id=request_id,
-                timeout_s=body.get("timeout_s"),
-            )
 
     try:
-        deployments, allowed_models = request_setup(headers, auth.api_key_id)
-        deployments = await _filter_logosnode_deployments(deployments)
+        with DBManager() as db:
+            if log_id:
+                db.update_log_entry_metrics(
+                    log_id=log_id,
+                    request_id=request_id,
+                    timeout_s=body.get("timeout_s"),
+                )
+            deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+        deployments = await _filter_logosnode_deployments(deployments, payload=body)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         raise HTTPException(status_code=401, detail=str(e))
@@ -3442,7 +3926,7 @@ async def handle_sync_request(path: str, request: Request):
         _record_log_failure(log_id, request_id, msg, result_status="error")
         raise HTTPException(status_code=404, detail=msg)
 
-    return await route_and_execute(
+    execute_kwargs = dict(
         deployments=deployments,
         body=body,
         headers=headers,
@@ -3451,6 +3935,7 @@ async def handle_sync_request(path: str, request: Request):
         log_id=log_id,
         request_id=request_id,
     )
+    return await _execute_cancelling_on_disconnect(request, **execute_kwargs)
 
 
 async def auth_parse_log(request: Request, use_profile_auth: bool = False):
@@ -3496,14 +3981,12 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
         raise HTTPException(status_code=400, detail="JSON payload must be an object")
 
     if use_profile_auth:
-        import datetime
-
-        month_start = datetime.date.today().replace(day=1).isoformat()
         with DBManager() as db:
 
-            # Rate limits and budgets apply to every key, including those owned
-            # by logos_admins. Admin keys derive their limits from their team /
-            # key settings exactly like any other key.
+            # Rate limits apply to every key, including those owned by
+            # logos_admins. Admin keys derive their limits from their team /
+            # key settings exactly like any other key. Budget is checked later,
+            # once permitted deployments are known (see _check_budget_if_cloud).
             s = auth.settings or {}
             team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
 
@@ -3528,38 +4011,6 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
             if local_rpm is not None or local_tpm is not None:
                 auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
 
-            key_type = getattr(auth, "key_type", "user")
-
-            if key_type == "application":
-                app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
-                if app_budget_limit is not None:
-                    app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-                    if app_used >= app_budget_limit:
-                        raise HTTPException(
-                            status_code=402,
-                            detail="Application monthly budget exceeded.",
-                        )
-            else:
-                if auth.team_id is not None:
-                    team_info = db.get_team(auth.team_id)
-                    if team_info and team_info.get("team_monthly_budget_micro_cents"):
-                        team_limit = team_info["team_monthly_budget_micro_cents"]
-                        team_used = db.get_team_budget_usage(auth.team_id, month_start)
-                        if team_used >= team_limit:
-                            raise HTTPException(
-                                status_code=402,
-                                detail="Team monthly budget exceeded. Contact your admin.",
-                            )
-
-                personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
-                if personal_limit is not None:
-                    personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-                    if personal_used >= personal_limit:
-                        raise HTTPException(
-                            status_code=402,
-                            detail="Personal monthly budget exceeded.",
-                        )
-
             r_log, c_log = db.log_usage(
                 api_key_id=auth.api_key_id,
                 team_id=auth.team_id,
@@ -3576,6 +4027,45 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
         return headers, auth, body, client_ip, log_id
 
     return headers, None, body, client_ip, None
+
+
+def _check_budget_if_cloud(db: DBManager, auth: "AuthContext", is_cloud: bool, month_start: str) -> None:
+    """
+    Raise HTTPException(402) if this key/team is over its monthly budget.
+
+    Only cloud usage is metered (logosnode/local providers have no configured
+    token pricing in token_prices, so they always cost $0), so this is a
+    no-op when the request that actually got scheduled isn't routing to a
+    cloud provider at all. Called post-scheduling (see _execute_resource_mode)
+    with the real resolved provider type, not a guess from the permission list --
+    that's what lets this be exact for mixed cloud+local keys instead of only
+    for pure-type ones.
+    """
+    if not is_cloud:
+        return
+
+    key_type = getattr(auth, "key_type", "user")
+
+    if key_type == "application":
+        app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
+        if app_budget_limit is not None:
+            app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+            if app_used >= app_budget_limit:
+                raise HTTPException(status_code=402, detail="Application monthly budget exceeded.")
+    else:
+        if auth.team_id is not None:
+            team_info = db.get_team(auth.team_id)
+            if team_info and team_info.get("team_monthly_budget_micro_cents"):
+                team_limit = team_info["team_monthly_budget_micro_cents"]
+                team_used = db.get_team_budget_usage(auth.team_id, month_start)
+                if team_used >= team_limit:
+                    raise HTTPException(status_code=402, detail="Team monthly budget exceeded. Contact your admin.")
+
+        personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
+        if personal_limit is not None:
+            personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
+            if personal_used >= personal_limit:
+                raise HTTPException(status_code=402, detail="Personal monthly budget exceeded.")
 
 
 async def submit_job_request(path: str, request: Request) -> JSONResponse:
@@ -3684,18 +4174,18 @@ async def execute_proxy_job(
     json_data = json_data or dict()
 
     request_id = secrets.token_urlsafe(16)
-    if log_id:
-        with DBManager() as db:
-            db.update_log_entry_metrics(
-                log_id=log_id,
-                request_id=request_id,
-                timeout_s=json_data.get("timeout_s"),
-            )
 
     # Get available models for this API key
     try:
-        deployments, allowed_models = request_setup(headers, auth.api_key_id)
-        deployments = await _filter_logosnode_deployments(deployments)
+        with DBManager() as db:
+            if log_id:
+                db.update_log_entry_metrics(
+                    log_id=log_id,
+                    request_id=request_id,
+                    timeout_s=json_data.get("timeout_s"),
+                )
+            deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+        deployments = await _filter_logosnode_deployments(deployments, payload=json_data)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         _, err_body = coerce_upstream_error(401, {"error": str(e)})
@@ -3866,6 +4356,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     max_lanes=(
                         int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
                     ),
+                    calibrating=(
+                        bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
+                    ),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -3880,6 +4373,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     configured_models=(
                         payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
                     ),
+                    calibrating=(
+                        bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
+                    ),
                 )
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
@@ -3887,6 +4383,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 await _logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
                     event=event,
+                    replay=bool(payload.get("replay", False)),
                 )
                 if event.get("event") == "calibration_probe_log":
                     try:
@@ -4278,28 +4775,83 @@ def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
     return 0
 
 
-def _served_context_windows() -> dict[str, int]:
-    """Best-effort map of model name -> served context window (tokens),
-    derived from the logosnode runtime snapshots. When several workers serve
-    the same model with different windows, the smallest wins: a request may
-    be routed to any of them, so only the minimum is safe to advertise.
+def _profile_native_context_length(profile: dict) -> int:
+    """Largest context window a model could ever be served with here.
+
+    The model's own architectural limit (``max_context_length``) when the
+    worker reported it, otherwise the widest window any calibrated KV point
+    reached. This is the "all-time maximum" — what the model offers when a
+    lane gets all the KV cache it wants — as opposed to the window a lane
+    happens to run with right now.
     """
-    windows: dict[str, int] = {}
+    if not isinstance(profile, dict):
+        return 0
+
+    def _as_len(value) -> int:
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return value if value > 0 else 0
+
+    native = _as_len(profile.get("max_context_length"))
+    pairs = profile.get("kv_cache_to_max_model_len_pairs")
+    if isinstance(pairs, list):
+        for item in pairs:
+            if isinstance(item, dict):
+                native = max(native, _as_len(item.get("max_model_len")))
+    return native
+
+
+def _served_context_window_stats() -> dict[str, dict[str, int]]:
+    """Per-model context windows derived from the logosnode runtime snapshots.
+
+    Three numbers per model, all in tokens and all omitted when unknown:
+
+    ``current_min``  the smallest window being served right now. A request may
+                     be routed to any deployment, so this is the only value
+                     that holds unconditionally.
+    ``current_max``  the largest window being served right now. Reachable only
+                     when the request lands there, which is what the
+                     context-aware routing in ``_filter_logosnode_deployments``
+                     arranges.
+    ``overall``      the widest this model is ever served with — what a lane
+                     runs at once it gets all the KV cache it asks for.
+                     Independent of what is loaded at the moment, so it is
+                     known even for a model with no live lane, and it is the
+                     ceiling ``current_max`` can grow to.
+    """
+    stats: dict[str, dict[str, int]] = {}
     try:
         provider_ids = _logosnode_registry.active_provider_ids()
     except Exception:
-        return windows
+        return stats
+
+    def _record(model: str, field: str, value: int, *, keep_smallest: bool = False) -> None:
+        entry = stats.setdefault(model, {})
+        current = entry.get(field)
+        if current is None:
+            entry[field] = value
+        elif keep_smallest:
+            entry[field] = min(current, value)
+        else:
+            entry[field] = max(current, value)
+
     for provider_id in provider_ids:
         snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
         runtime = (snap or {}).get("runtime")
         if not isinstance(runtime, dict):
             continue
-        lanes = runtime.get("lanes")
-        if not isinstance(lanes, list):
-            continue
         model_profiles = runtime.get("model_profiles")
         if not isinstance(model_profiles, dict):
             model_profiles = {}
+        for model, profile in model_profiles.items():
+            native = _profile_native_context_length(profile)
+            if native > 0:
+                _record(model, "overall", native)
+        lanes = runtime.get("lanes")
+        if not isinstance(lanes, list):
+            continue
         for lane in lanes:
             if not isinstance(lane, dict):
                 continue
@@ -4307,8 +4859,55 @@ def _served_context_windows() -> dict[str, int]:
             if window <= 0:
                 continue
             model = lane["model"]
-            windows[model] = min(windows[model], window) if model in windows else window
-    return windows
+            _record(model, "current_min", window, keep_smallest=True)
+            _record(model, "current_max", window)
+    return stats
+
+
+def _served_context_windows() -> dict[str, int]:
+    """Model name -> smallest currently served context window (tokens).
+
+    The conservative view of :func:`_served_context_window_stats`, kept as its
+    own helper because most callers only ever want the safe number.
+    """
+    return {
+        model: entry["current_min"] for model, entry in _served_context_window_stats().items() if "current_min" in entry
+    }
+
+
+def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
+    """Context-window fields for one model in an OpenAI-style model object.
+
+    Three numbers, named for what they are:
+
+    ``max_model_len_current_min``  the smallest window being served right now.
+                                   The one figure that holds whichever worker
+                                   answers, so a client that never wants a
+                                   rejected request sizes itself from this.
+    ``max_model_len_current_max``  the largest window being served right now.
+                                   Reachable because long requests are routed
+                                   to a deployment that fits them.
+    ``max_model_len_overall``      the widest this model is ever served with,
+                                   independent of what is loaded at the moment.
+                                   The number to write into a config file that
+                                   is only read at startup.
+
+    ``max_model_len`` repeats the first of those under the name vLLM itself
+    uses, so an OpenAI-compatible client that already reads that field keeps
+    working. Every field is omitted when unknown, so cloud models and
+    never-calibrated models keep the object they had before any of this existed.
+    """
+    if not entry:
+        return {}
+    fields: dict[str, int] = {}
+    if entry.get("current_min"):
+        fields["max_model_len"] = entry["current_min"]
+        fields["max_model_len_current_min"] = entry["current_min"]
+    if entry.get("current_max"):
+        fields["max_model_len_current_max"] = entry["current_max"]
+    if entry.get("overall"):
+        fields["max_model_len_overall"] = entry["overall"]
+    return fields
 
 
 @app.get("/v1/models", tags=["user-facing"])
@@ -4331,16 +4930,14 @@ async def list_models(request: Request):
     with DBManager() as db:
         models = db.get_models_for_api_key(auth.api_key_id)
 
-    windows = _served_context_windows()
+    stats = _served_context_window_stats()
     data = [
         {
             "id": model["name"],
             "object": "model",
             "created": _SERVER_START_TIME,
             "owned_by": "logos",
-            # Same extension field vLLM uses; omitted when no worker reports
-            # a served window for the model (cloud models, cold lanes).
-            **({"max_model_len": windows[model["name"]]} if model["name"] in windows else {}),
+            **_model_context_fields(stats.get(model["name"])),
         }
         for model in models
     ]
@@ -4386,15 +4983,92 @@ async def retrieve_model(model_id: str, request: Request):
     if not model:
         raise HTTPException(status_code=404, detail="Model not found or access denied")
 
-    windows = _served_context_windows()
+    stats = _served_context_window_stats()
     return JSONResponse(
         content={
             "id": model["name"],
             "object": "model",
             "created": _SERVER_START_TIME,
             "owned_by": "logos",
-            **({"max_model_len": windows[model["name"]]} if model["name"] in windows else {}),
+            **_model_context_fields(stats.get(model["name"])),
         }
+    )
+
+
+def _resolve_accessible_model_name(api_key_id: int, model_id: str) -> Optional[str]:
+    """Canonical name of ``model_id`` if this key may use it, else None.
+
+    Shared by the model endpoints below: they all have to accept the same
+    aliases (planner-sanitized underscores, case differences) and all have to
+    refuse a model the key has no permission for.
+    """
+    with DBManager() as db:
+        model = db.get_model_for_api_key(api_key_id, model_id)
+        if model:
+            return model["name"]
+        models = db.get_models_for_api_key(api_key_id)
+        return _resolve_requested_model_name(
+            model_id,
+            [str(entry.get("name") or "").strip() for entry in models],
+        )
+
+
+@app.post("/v1/models/{model_id:path}/warmup", tags=["user-facing"])
+@app.post("/openai/models/{model_id:path}/warmup", tags=["user-facing"], include_in_schema=False)
+async def warmup_model(model_id: str, request: Request):
+    """Tell the planner a model is about to be used, and return immediately.
+
+    A coding assistant asks for the model list when it starts and then sits
+    idle while the developer reads the terminal — the first real request lands
+    seconds later, and pays for a cold load it could have overlapped with that
+    pause. This turns the startup into a hint.
+
+    It is a *hint*, not a reservation: it records the same latent demand the
+    scheduler records when classification prefers a model it did not get, and
+    wakes the planner cycle early. The planner still decides what to load using
+    its own fairness rules, so a warmup can never evict a lane that real
+    traffic is using, and a burst of them coalesces into one extra cycle. That
+    is also what keeps it from being a way to make the cluster thrash: the most
+    an authenticated caller can do is raise a model it already has access to
+    slightly in the queue of things worth loading.
+
+    Deliberately not "send a tiny request": that bills the caller, occupies a
+    slot, and returns a completion nobody wanted.
+    """
+    auth = authenticate_api_key(dict(request.headers))
+    model_name = _resolve_accessible_model_name(auth.api_key_id, model_id)
+    if model_name is None:
+        raise HTTPException(status_code=404, detail="Model not found or access denied")
+
+    stats = _served_context_window_stats().get(model_name) or {}
+    # A reported window means some lane is serving the model right now, which is
+    # the closest thing to "ready" this endpoint can answer without asking every
+    # worker. Already-warm models still record the hint: it keeps the model from
+    # decaying out of the planner's demand view while a session is open.
+    already_serving = bool(stats.get("current_min"))
+
+    accepted = False
+    if _demand_tracker is not None:
+        _demand_tracker.record_latent_demand(model_name)
+        accepted = True
+    if _capacity_planner is not None:
+        _capacity_planner.hint_capacity_needed(model_name)
+        accepted = True
+
+    logger.info(
+        "Warmup requested for model=%s (already serving: %s, hint accepted: %s)",
+        model_name,
+        already_serving,
+        accepted,
+    )
+    return JSONResponse(
+        status_code=202,
+        content={
+            "model": model_name,
+            "status": "serving" if already_serving else "preparing",
+            "hint_accepted": accepted,
+            **_model_context_fields(stats),
+        },
     )
 
 

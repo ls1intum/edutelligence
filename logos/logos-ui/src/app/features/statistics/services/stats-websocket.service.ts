@@ -39,6 +39,12 @@ export interface StatsWsHandlers {
   onVramDelta: (payload: VramV2Payload) => void;
   onTimelineInit: (payload: TimelineInitPayload) => void;
   onTimelineDelta: (payload: TimelineDeltaPayload) => void;
+  /**
+   * Recomputed aggregates for the same range — the same shape as
+   * `timeline_init` minus its (far larger) event list. Pushed while the page is
+   * open, which is what keeps the KPI counters moving.
+   */
+  onStats: (payload: TimelineInitPayload) => void;
   onRequestsData: (payload: { requests?: Array<any> }) => void;
 }
 
@@ -54,6 +60,7 @@ type ServerMessage =
   | { type: 'vram_delta'; payload: VramV2Payload }
   | { type: 'timeline_init'; payload: TimelineInitPayload }
   | { type: 'timeline_delta'; payload: TimelineDeltaPayload }
+  | { type: 'stats'; payload: TimelineInitPayload }
   | { type: 'requests'; payload: { requests?: Array<any> } }
   | { type: 'pong' };
 
@@ -238,6 +245,8 @@ export class StatsWebsocketService {
           opts.handlers.onTimelineInit(msg.payload);
         } else if (msg.type === 'timeline_delta') {
           opts.handlers.onTimelineDelta(msg.payload);
+        } else if (msg.type === 'stats') {
+          opts.handlers.onStats(msg.payload);
         } else if (msg.type === 'requests') {
           opts.handlers.onRequestsData((msg as any).payload ?? {});
         }

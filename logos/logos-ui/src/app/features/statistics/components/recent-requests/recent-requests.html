@@ -1,25 +1,92 @@
 <div class="rr-host">
 
-  <!-- Error banner -->
-  @if (fetchError()) {
-    <div class="rr-error">
-      <span class="rr-error__msg">{{ fetchError() }}</span>
-      <button class="rr-error__retry" (click)="load(page())">Retry</button>
+  <!-- ── Toolbar ──────────────────────────────────────────────────────────────
+       Above the list on purpose: request cards differ in height, so a control
+       under them shifts between clicks and the cursor loses it. Up here Next
+       stays put however tall the page turns out. -->
+  <div class="rr-toolbar">
+
+    <div class="rr-filters">
+      <app-select
+        class="rr-filter"
+        [options]="teamOptions()"
+        [value]="selectedTeamValue()"
+        [compact]="true"
+        ariaLabel="Filter by team"
+        (valueChange)="setTeamFilter($event)"
+      />
+      <app-select
+        class="rr-filter"
+        [options]="userOptions()"
+        [value]="selectedUserValue()"
+        [compact]="true"
+        ariaLabel="Filter by requester"
+        (valueChange)="setUserFilter($event)"
+      />
+      @if (filterActive()) {
+        <button
+          class="rr-filter-clear"
+          type="button"
+          (click)="clearFilter()"
+          aria-label="Clear filter"
+        >
+          <i class="pi pi-times" aria-hidden="true"></i> Clear
+        </button>
+      }
     </div>
+
+    <div class="rr-pager">
+      @if (displayItems().length > 0) {
+        <span class="rr-pager__count">
+          <strong>{{ formatCount(firstRowNumber()) }}-{{ formatCount(lastRowNumber()) }}</strong>
+          of <strong>{{ formatCount(totalCount()) }}</strong>
+        </span>
+      }
+      <button
+        class="rr-pager__btn"
+        type="button"
+        [disabled]="!hasPrev() || loading()"
+        (click)="prevPage()"
+        aria-label="Newer requests"
+      >
+        <i class="pi pi-angle-left" aria-hidden="true"></i>
+      </button>
+      <button
+        class="rr-pager__btn"
+        type="button"
+        [disabled]="!hasNext() || loading()"
+        (click)="nextPage()"
+        aria-label="Older requests"
+      >
+        <i class="pi pi-angle-right" aria-hidden="true"></i>
+      </button>
+      @if (loading()) {
+        <i class="pi pi-spin pi-spinner rr-pager__spinner" aria-hidden="true"></i>
+      } @else if (onLivePage()) {
+        <span class="rr-pager__live" title="Page 1 updates as requests arrive">live</span>
+      }
+    </div>
+
+  </div>
+
+  @if (error()) {
+    <div class="rr-error">{{ error() }}</div>
   }
 
-  <!-- Skeleton while first load is in flight -->
-  @if (loading() && !pageData()) {
+  <!-- ── List ─────────────────────────────────────────────────────────────────
+       `pending` is about the websocket feed, so it only speaks for page 1: a
+       fetched page is already the range the operator asked for. -->
+  @if (pending && onLivePage()) {
     <app-stats-skeleton variant="rows" />
-  }
-
-  <!-- Empty state -->
-  @if (!loading() && displayItems().length === 0 && pageData()) {
-    <div class="rr-empty">No requests yet.</div>
-  }
-
-  <!-- Request rows -->
-  @if (displayItems().length > 0) {
+  } @else if (displayItems().length === 0) {
+    <div class="rr-empty">
+      @if (filterActive()) {
+        No requests from this requester or team in the selected range.
+      } @else {
+        No requests in this time range.
+      }
+    </div>
+  } @else {
     <div class="rr-list">
       @for (item of displayItems(); track trackById($index, item)) {
         <div
@@ -45,16 +112,20 @@
                   <i class="pi pi-users" aria-hidden="true"></i>{{ item.team_name }}
                 </span>
               }
-              @if (item.username) {
+              @if (requesterOf(item)) {
                 <span class="rr-card__requester" title="Requesting user">
-                  <i class="pi pi-user" aria-hidden="true"></i>{{ item.username }}
-                </span>
-              } @else if (item.environment) {
-                <span class="rr-card__requester" title="Application environment">
-                  <i class="pi pi-tag" aria-hidden="true"></i>{{ item.environment }}
+                  <i class="pi pi-user" aria-hidden="true"></i>{{ requesterOf(item) }}
                 </span>
               }
             </div>
+            @if (item.is_cloud && costLabelOf(item)) {
+              <div class="rr-card__meta rr-card__cost">
+                <i class="pi pi-dollar" aria-hidden="true"></i> {{ costLabelOf(item) }}
+              </div>
+            }
+            @if (tokensLabelOf(item)) {
+              <div class="rr-card__meta rr-card__tokens">{{ tokensLabelOf(item) }} tokens</div>
+            }
             @if (stageOf(item) === 'complete' && item.status === 'error' && item.error_message) {
               <div class="rr-card__error-snippet">{{ errorSnippet(item.error_message) }}</div>
             }
@@ -91,30 +162,6 @@
           </div>
         </div>
       }
-    </div>
-  }
-
-  <!-- Pagination footer -->
-  @if (totalPages() > 1) {
-    <div class="rr-pagination">
-      <button
-        class="rr-page-btn"
-        [disabled]="page() <= 1 || loading()"
-        (click)="load(page() - 1)"
-      ><i class="pi pi-chevron-left" aria-hidden="true"></i> Prev</button>
-
-      <span class="rr-page-label">
-        Page {{ page() }} of {{ totalPages() }}
-        @if (loading()) {
-          <i class="pi pi-spin pi-spinner"></i>
-        }
-      </span>
-
-      <button
-        class="rr-page-btn"
-        [disabled]="page() >= totalPages() || loading()"
-        (click)="load(page() + 1)"
-      >Next <i class="pi pi-chevron-right" aria-hidden="true"></i></button>
     </div>
   }
 

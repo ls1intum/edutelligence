@@ -24,6 +24,7 @@ public class MeKeysService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<Object> OBJ_TYPE = new TypeReference<>() {};
+    private static final int API_KEY_TOKEN_LENGTH = 128;
 
     private final ApiKeyRepository apiKeyRepository;
     private final OrchestratorModelWindowClient modelWindowClient;
@@ -50,6 +51,9 @@ public class MeKeysService {
         }
         ApiKey key = keyOpt.get();
         if (!key.getUserId().equals(userId)) {
+            // Deliberately collapse "exists but not owned" into the same outcome as
+            // "not found" so callers can return a uniform 404 and avoid key
+            // enumeration.
             return Optional.empty();
         }
         key.setLog(LogLevel.valueOf(level));
@@ -57,7 +61,8 @@ public class MeKeysService {
         return Optional.of(Map.of("result", "Log level updated to " + level));
     }
 
-    public Optional<List<ModelAccessDTO>> getAccessibleModels(int keyId, int userId) {
+    public Optional<List<ModelAccessDTO>> getAccessibleModels(
+            int keyId, int userId, boolean includeProviderNames) {
         Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
         if (keyOpt.isEmpty()) {
             return Optional.empty();
@@ -72,11 +77,37 @@ public class MeKeysService {
         List<ModelAccessProjection> rows = Boolean.TRUE.equals(key.getUseCustomPermissions())
             ? apiKeyRepository.findAccessibleModelsByKey(keyId)
             : apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId());
-        Map<String, Integer> windows = modelWindowClient.getContextWindows();
+        Map<String, OrchestratorModelWindowClient.ModelContextWindows> windows =
+            modelWindowClient.getContextWindows();
         return Optional.of(rows.stream()
-            .map(r -> new ModelAccessDTO(
-                r.getModelName(), r.getProviderName(), r.getProviderType(), windows.get(r.getModelName())))
+            .map(r -> {
+                var w = windows.get(r.getModelName());
+                return new ModelAccessDTO(
+                    r.getModelName(),
+                    includeProviderNames ? r.getProviderName() : null,
+                    r.getProviderType(),
+                    w != null ? w.currentMin() : null,
+                    w != null ? w.currentMax() : null,
+                    w != null ? w.overall() : null);
+            })
             .toList());
+    }
+
+    @Transactional
+    public Optional<Map<String, Object>> rotateKeyForUser(int keyId, int userId) {
+        Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
+        if (keyOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        ApiKey key = keyOpt.get();
+        if (!key.getUserId().equals(userId)) {
+            return Optional.empty();
+        }
+        key.setKeyValue(rotateKeyValue(key.getKeyValue()));
+        apiKeyRepository.save(key);
+        return Optional.of(Map.of(
+            "result", "API key rotated successfully",
+            "api_key", key.getKeyValue()));
     }
 
     private Map<String, Object> toMap(MyKeyProjection p) {
@@ -122,5 +153,20 @@ public class MeKeysService {
         if (json == null || json.isBlank()) return Map.of();
         try { return OBJECT_MAPPER.readValue(json, OBJ_TYPE); }
         catch (Exception e) { return Map.of(); }
+    }
+
+    private String rotateKeyValue(String currentKeyValue) {
+        if (currentKeyValue == null || currentKeyValue.isBlank()) {
+            return "lg-" + ApiKeyFactory.generateToken();
+        }
+        String prefix = null;
+        int separatorIndex = currentKeyValue.length() - API_KEY_TOKEN_LENGTH - 1;
+        if (separatorIndex >= 0 && currentKeyValue.charAt(separatorIndex) == '-') {
+            prefix = currentKeyValue.substring(0, separatorIndex);
+        }
+        if (prefix == null || prefix.isBlank()) {
+            prefix = "lg";
+        }
+        return prefix + "-" + ApiKeyFactory.generateToken();
     }
 }

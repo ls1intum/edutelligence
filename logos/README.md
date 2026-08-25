@@ -132,6 +132,7 @@ To deploy Logos locally:
    ng serve
    ```
 
+   > 💡 **Note for Linux users:** Should you encounter `EACCES` permissions errors during the setup, consult the [Official npm Documentation](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally).
 3. Log In
 
    Once running, open the UI at:
@@ -396,3 +397,6 @@ ssh -L 5433:127.0.0.1:5432 <yourtumkuerzel>@logos-test.aet.cit.tum.de
 ```
 
 Then connect your database client to `localhost:5433` with the credentials above.
+
+# License and Attribution
+For license attribution and upstream provenance of the LiteLLM model catalog data, see [litellm-model-catalog.NOTICE](logos-webservice/src/main/resources/litellm-model-catalog.NOTICE).

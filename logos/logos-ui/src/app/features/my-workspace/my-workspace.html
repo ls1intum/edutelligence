@@ -37,7 +37,7 @@
           <!-- Team budget + members -->
           <div class="team-meta">
             <div class="budget-group">
-              <span class="section-label">TEAM BUDGET</span>
+              <span class="section-label">MEMBER BUDGET</span>
               @if (ws.team.team_monthly_budget_micro_cents === null) {
                 <span class="unlimited-chip">&#8734; Unlimited</span>
               } @else {
@@ -77,16 +77,19 @@
                 <button class="btn-copy" type="button" (click)="copyKey(key)">
                   {{ isCopied(key.id) ? 'Copied!' : 'Copy Key' }}
                 </button>
+                <button class="btn-rotate" type="button" (click)="requestRotate(key)">
+                  <i class="pi pi-refresh" aria-hidden="true"></i> Rotate
+                </button>
               </div>
 
               <div class="limits-row">
                 <div class="limit-group">
                   <span class="limit-label">CLOUD</span>
-                  <span class="limit-value">{{ formatRpm(key.settings?.cloud_rpm_limit ?? null) }} RPM · {{ formatTpm(key.settings?.cloud_tpm_limit ?? null) }} TPM</span>
+                  <span class="limit-value" title="RPM = requests per minute, TPM = tokens per minute">{{ formatRpm(key.settings?.cloud_rpm_limit ?? null) }} RPM · {{ formatTpm(key.settings?.cloud_tpm_limit ?? null) }} TPM</span>
                 </div>
                 <div class="limit-group">
                   <span class="limit-label">LOCAL</span>
-                  <span class="limit-value">{{ formatRpm(key.settings?.local_rpm_limit ?? null) }} RPM · {{ formatTpm(key.settings?.local_tpm_limit ?? null) }} TPM</span>
+                  <span class="limit-value" title="RPM = requests per minute, TPM = tokens per minute">{{ formatRpm(key.settings?.local_rpm_limit ?? null) }} RPM · {{ formatTpm(key.settings?.local_tpm_limit ?? null) }} TPM</span>
                 </div>
                 <div class="limit-group limit-group--budget">
                   <span class="limit-label">KEY BUDGET</span>
@@ -162,7 +165,9 @@
                               @if (group.hasLocal) { <span>Local</span> }
                             </span>
                           </div>
-                          <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                          @if (showProviderNames() && group.providers.length > 0) {
+                            <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                          }
                         </div>
                       }
                     </div>
@@ -179,6 +184,21 @@
   }
 
 </div>
+
+<app-modal-confirm
+  [visible]="rotateTarget() !== null"
+  (visibleChange)="$event || closeRotateModal()"
+  [title]="'Rotate API key \'' + (rotateTarget()?.name ?? '') + '\'?'"
+  message="This immediately invalidates the current key. All clients using it must be updated to the new key."
+  icon="pi-refresh"
+  confirmLabel="Rotate"
+  [loading]="rotateLoading()"
+  (confirmed)="confirmRotate()"
+>
+  @if (rotateError()) {
+    <app-error-message modal-error message="Failed to rotate key, please try again." />
+  }
+</app-modal-confirm>
 
 <!-- ── Log change confirmation modal ──────────────────────────────────────── -->
 <app-modal-form

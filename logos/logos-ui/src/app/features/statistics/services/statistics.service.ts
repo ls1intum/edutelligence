@@ -1,7 +1,38 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import { VramV2Payload, PaginatedRequestResponse } from '../statistics.models';
+import { RequestItem, VramV2Payload } from '../statistics.models';
+
+/**
+ * Lane-picker view of POST /api/logosdb/get_provider_models. The endpoint also
+ * returns `endpoint`/`api_key`; both are deliberately left out here so the
+ * credential never enters this feature's data flow.
+ */
+export interface ProviderModel {
+  model_id: number;
+  model_name: string;
+}
+
+/** Position to continue a request-feed page from, as the server hands it back. */
+export interface RequestCursor {
+  ts: string;
+  request_id: string;
+}
+
+/** One page of the request feed, as `POST /api/logosdb/latest_requests` returns it. */
+export interface LatestRequestsPage {
+  requests: RequestItem[];
+  total: number;
+  limit: number;
+  has_more: boolean;
+  next_cursor: RequestCursor | null;
+}
+
+/** Narrowing of the request feed. `null` on a field means "do not narrow by it". */
+export interface RequestFilter {
+  userId: number | null;
+  teamId: number | null;
+}
 
 @Injectable({ providedIn: 'root' })
 export class StatisticsService {
@@ -13,10 +44,53 @@ export class StatisticsService {
     }));
   }
 
-  getPaginatedRequests(page: number, perPage: number): Promise<PaginatedRequestResponse> {
-    return firstValueFrom(this.http.post<PaginatedRequestResponse>('/api/logosdb/paginated_requests', {
-      page,
-      per_page: perPage,
+  /**
+   * One page of the request feed inside `[startIso, endIso]`, newest first.
+   *
+   * The newest unfiltered rows arrive over the stats websocket; this serves
+   * everything else — paging back through the range and any view narrowed to a
+   * requester or team — so it is only ever called on an explicit interaction,
+   * never on a timer.
+   *
+   * @param cursor `next_cursor` of the previous page, or null to start at the
+   *               newest
+   */
+  getLatestRequests(
+    startIso: string,
+    endIso: string,
+    limit: number,
+    filter: RequestFilter,
+    cursor: RequestCursor | null,
+  ): Promise<LatestRequestsPage> {
+    return firstValueFrom(
+      this.http.post<LatestRequestsPage>('/api/logosdb/latest_requests', {
+        start: startIso,
+        end: endIso,
+        limit,
+        user_id: filter.userId,
+        team_id: filter.teamId,
+        cursor_ts: cursor?.ts ?? null,
+        cursor_id: cursor?.request_id ?? null,
+      }),
+    );
+  }
+
+  /** Models registered on a provider (for the "Load lane" picker). */
+  getProviderModels(providerId: number): Promise<ProviderModel[]> {
+    return firstValueFrom(this.http.post<ProviderModel[]>('/api/logosdb/get_provider_models', {
+      provider_id: providerId,
+    }));
+  }
+
+  /**
+   * Manually load a single lane (model) on a worker. The worker loads the
+   * model, which can take minutes — the call simply waits for the server
+   * (Spring gives the orchestrator call a ~185 s budget).
+   */
+  addLane(providerId: number, model: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/add', {
+      provider_id: providerId,
+      lane: { model },
     }));
   }
 

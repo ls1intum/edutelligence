@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { authGuard } from './core/auth/guards/auth.guard';
 import { roleGuard } from './core/auth/guards/role.guard';
 import { hasKeysGuard } from './core/auth/guards/has-keys.guard';
+import { ALL_ROLES } from './shared/constants/roles';
 
 export const routes: Routes = [
   {
@@ -17,7 +18,7 @@ export const routes: Routes = [
     children: [
       { path: 'dashboard',       title: 'Dashboard · Logos',       data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/dashboard/dashboard').then(m => m.Dashboard) },
       { path: 'statistics',      title: 'Statistics · Logos',      data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/statistics/statistics').then(m => m.Statistics) },
-      { path: 'models',         title: 'Models · Logos',           data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/models/models').then(m => m.Models) },
+      { path: 'models',         title: 'Models · Logos',           data: { roles: ALL_ROLES },                canActivate: [roleGuard], loadComponent: () => import('./features/models/models').then(m => m.Models) },
       { path: 'models/:id/errors', title: 'Model Error Report · Logos', data: { roles: ['logos_admin'] },           canActivate: [roleGuard], loadComponent: () => import('./features/model-error-report/model-error-report').then(m => m.ModelErrorReport) },
       { path: 'providers',      title: 'Providers · Logos',        data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/providers/providers').then(m => m.Providers) },
       { path: 'policies',       title: 'Policies · Logos',         data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/policies/policies').then(m => m.Policies) },
@@ -26,7 +27,9 @@ export const routes: Routes = [
       { path: 'team-management', title: 'Teams · Logos',           data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/team-management/team-management').then(m => m.TeamManagement) },
       { path: 'teams/:id',       title: 'Team · Logos',            data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/team-detail/team-detail').then(m => m.TeamDetail) },
       { path: 'my-workspace',    title: 'My Workspace · Logos',    canActivate: [hasKeysGuard], loadComponent: () => import('./features/my-workspace/my-workspace').then(m => m.MyWorkspace) },
-      { path: 'open-code',       title: 'OpenCode · Logos',        canActivate: [hasKeysGuard], loadComponent: () => import('./features/open-code/open-code').then(m => m.OpenCode) },
+      { path: 'ai-tools',        title: 'AI Tools · Logos',         canActivate: [hasKeysGuard], loadComponent: () => import('./features/ai-tools/ai-tools').then(m => m.AiTools) },
+      { path: 'open-code',       redirectTo: 'ai-tools', pathMatch: 'full' },
+      { path: 'claude-code',     redirectTo: 'ai-tools', pathMatch: 'full' },
       { path: 'no-access',       title: 'No Access · Logos',       loadComponent: () => import('./features/no-access/no-access').then(m => m.NoAccess) },
       { path: '**', redirectTo: 'my-workspace' },
     ],

@@ -1,10 +1,19 @@
-import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  inject,
+  signal,
+  computed,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 import { MyKeysService } from '../../core/services/my-keys.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
+import { AuthService } from '../../core/auth/services/auth.service';
 import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
 import { MyTeam } from '../../shared/models/team.model';
 import { isInteractiveClick } from '../../shared/utils/interactive-click';
@@ -24,7 +33,13 @@ interface ModelGroup {
 @Component({
   selector: 'app-my-workspace',
   standalone: true,
-  imports: [CommonModule, ModalFormComponent, ErrorMessageComponent, IconTileComponent],
+  imports: [
+    CommonModule,
+    ModalFormComponent,
+    ModalConfirmComponent,
+    ErrorMessageComponent,
+    IconTileComponent,
+  ],
   templateUrl: './my-workspace.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './my-workspace.scss',
@@ -32,6 +47,11 @@ interface ModelGroup {
 export class MyWorkspace implements OnInit {
   private keysService = inject(MyKeysService);
   private teamService = inject(TeamManagementService);
+  private authService = inject(AuthService);
+
+  readonly showProviderNames = computed(
+    () => this.authService.role() === 'logos_admin' || this.authService.role() === 'app_admin',
+  );
 
   workspaces = signal<TeamWorkspace[]>([]);
   loading = signal(true);
@@ -45,6 +65,10 @@ export class MyWorkspace implements OnInit {
   logChangeTarget = signal<{ key: MyKey; newLog: 'BILLING' | 'FULL' } | null>(null);
   logChangeLoading = signal(false);
   logChangeError = signal(false);
+
+  rotateTarget = signal<MyKey | null>(null);
+  rotateLoading = signal(false);
+  rotateError = signal(false);
 
   copiedKeyId = signal<number | null>(null);
 
@@ -163,7 +187,9 @@ export class MyWorkspace implements OnInit {
         hasCloud: false,
         hasLocal: false,
       };
-      if (!group.providers.includes(m.provider_name)) group.providers.push(m.provider_name);
+      if (m.provider_name && !group.providers.includes(m.provider_name)) {
+        group.providers.push(m.provider_name);
+      }
       if (m.provider_type === 'cloud') group.hasCloud = true;
       else group.hasLocal = true;
       groups.set(m.model_name, group);
@@ -222,6 +248,38 @@ export class MyWorkspace implements OnInit {
       : `Switch "${target.key.name}" to Billing logging? Only metadata (no content) will be stored.`;
   }
 
+  requestRotate(key: MyKey): void {
+    this.rotateError.set(false);
+    this.rotateTarget.set(key);
+  }
+
+  closeRotateModal(): void {
+    if (this.rotateLoading()) return;
+    this.rotateTarget.set(null);
+  }
+
+  async confirmRotate(): Promise<void> {
+    const key = this.rotateTarget();
+    if (!key || this.rotateLoading()) return;
+    this.rotateLoading.set(true);
+    this.rotateError.set(false);
+    try {
+      const res = await this.keysService.rotateKey(key.id);
+      this.workspaces.update((list) =>
+        list.map((ws) => ({
+          ...ws,
+          keys: ws.keys.map((k) => (k.id === key.id ? { ...k, key_value: res.api_key } : k)),
+        })),
+      );
+      this.copiedKeyId.set(null);
+      this.rotateTarget.set(null);
+    } catch {
+      this.rotateError.set(true);
+    } finally {
+      this.rotateLoading.set(false);
+    }
+  }
+
   // ── Key budget ─────────────────────────────────────────────────────────────
   isKeyBudgetExhausted(key: MyKey): boolean {
     return (
@@ -239,7 +297,7 @@ export class MyWorkspace implements OnInit {
 
   budgetExhaustedMessage(team: MyTeam, key: MyKey): string | null {
     if (this.isTeamBudgetExhausted(team)) {
-      return `Team budget exhausted: all ${team.name} keys are currently inactive.`;
+      return `Monthly member budget exhausted: your ${team.name} keys are currently inactive.`;
     }
     if (this.isKeyBudgetExhausted(key)) {
       return 'Key budget exhausted: this key is currently inactive.';

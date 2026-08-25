@@ -5,8 +5,9 @@ The operator rule the planner enforces:
     Load as many models into the tmpfs cache as possible WITHOUT lowering
     the number of models that can be sleeping simultaneously.
 
-Concretely: reserve ``sum(host_ram of every sleepable capability model)``
-from the host's available RAM, then pack the leftover with cache candidates
+Concretely: reserve ``sum(sleeping host_ram of every sleepable capability
+model)`` from the host's available RAM plus whatever the cache already holds
+(that part is reclaimable), then pack the leftover with cache candidates
 (unsleepable first because they cannot be brought back via sleep_l1; smallest
 first within each group to maximise count).
 """
@@ -22,7 +23,7 @@ def _c(name: str, *, can_sleep: bool, host_ram_mb: float, size_bytes: int) -> Ca
     return CacheCandidate(
         name=name,
         can_sleep=can_sleep,
-        host_ram_mb=host_ram_mb,
+        sleeping_host_ram_mb=host_ram_mb,
         size_bytes=size_bytes,
     )
 
@@ -188,3 +189,66 @@ def test_smallest_first_within_each_group():
         "s-small",
         "s-big",
     ]
+
+
+# ---------------------------------------------------------------------------
+# The cache's own footprint is part of the pool it is budgeted against
+#
+# Measuring the budget from MemAvailable alone measures it after the cache has
+# already spent it. A full cache then reports no room, declines to cache
+# anything else, and — because nothing ever reclaimed — keeps every byte it
+# took on first boot, whatever the lanes needed later.
+# ---------------------------------------------------------------------------
+
+
+def test_a_full_cache_does_not_report_itself_out_of_budget():
+    """The production shape: 339 GB cached, MemAvailable down to 63 GB. Read
+    naively that is no budget at all, and the plan caches nothing — while the
+    339 GB stays exactly where it is."""
+    cands = [
+        _c("s-a", can_sleep=True, host_ram_mb=20_000.0, size_bytes=30_000 * _MB),
+        _c("s-b", can_sleep=True, host_ram_mb=20_000.0, size_bytes=30_000 * _MB),
+    ]
+
+    blind = plan_cache_order(cands, available_host_ram_mb=63_000.0, safety_margin_mb=8192.0)
+    assert blind.cached_sleepable == [], "sanity: without the held bytes there is no room"
+
+    aware = plan_cache_order(
+        cands,
+        available_host_ram_mb=63_000.0,
+        safety_margin_mb=8192.0,
+        cache_held_mb=339_000.0,
+    )
+    assert aware.cached_sleepable == ["s-a", "s-b"]
+
+
+def test_the_budget_can_come_out_below_what_is_already_cached():
+    """Which is the point: a plan that can only ever grow the cache cannot
+    hand RAM back to the sleep reserve. Models absent from `order` are what
+    the caller reclaims."""
+    cands = [
+        _c("s-huge", can_sleep=True, host_ram_mb=200_000.0, size_bytes=300_000 * _MB),
+        _c("s-small", can_sleep=True, host_ram_mb=1_000.0, size_bytes=1_000 * _MB),
+    ]
+
+    plan = plan_cache_order(
+        cands,
+        available_host_ram_mb=10_000.0,
+        safety_margin_mb=8192.0,
+        cache_held_mb=301_000.0,
+    )
+
+    assert "s-huge" in plan.skipped_sleepable
+    assert set(plan.order) != {"s-huge", "s-small"}
+
+
+def test_the_reserve_is_the_sleeping_footprint_not_the_awake_one():
+    """The reserve exists so every sleepable model can be in sleep_l1 at once,
+    so it has to be sized on what a sleeping lane holds. An awake lane's RAM
+    is spoken for whether or not the cache holds anything; counting it here
+    reserved the same memory twice and starved the cache for no gain."""
+    cands = [_c("s-a", can_sleep=True, host_ram_mb=30_000.0, size_bytes=10_000 * _MB)]
+
+    plan = plan_cache_order(cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0)
+
+    assert plan.reserved_for_sleep_mb == 30_000.0

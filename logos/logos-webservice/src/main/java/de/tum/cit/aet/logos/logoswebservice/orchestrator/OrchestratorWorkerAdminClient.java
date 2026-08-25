@@ -38,6 +38,15 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/logosnode/lanes/delete", Map.of("provider_id", providerId, "lane_id", laneId));
     }
 
+    /**
+     * Requests a lane load. The orchestrator only accepts the request and loads
+     * in the background — a model can take minutes — so this returns as quickly
+     * as any other admin call and the shared read timeout is enough.
+     */
+    public ResponseEntity<Map> addLane(int providerId, Map<String, Object> lane) {
+        return post("/internal/logosnode/lanes/add", Map.of("provider_id", providerId, "lane", lane));
+    }
+
     private ResponseEntity<Map> post(String path, Map<String, Object> body) {
         if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
             throw new IllegalStateException("Orchestrator URL or internal secret not configured");

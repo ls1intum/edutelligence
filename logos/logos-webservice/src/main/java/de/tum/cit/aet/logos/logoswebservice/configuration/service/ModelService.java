@@ -4,14 +4,19 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ModelCapabilitiesDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelWithPriceProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
@@ -23,16 +28,18 @@ public class ModelService {
     private final ModelRepository modelRepository;
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
+    private final ModelCapabilitiesRepository modelCapabilitiesRepository;
 
     public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
-                        OrchestratorNotificationService orchestratorNotificationService) {
+                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository) {
         this.modelRepository = modelRepository;
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
+        this.modelCapabilitiesRepository = modelCapabilitiesRepository;
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
-        List<ModelWithPriceProjection> projections = isAdmin(auth)
+        List<ModelWithPriceProjection> projections = isLogosAdmin(auth)
             ? modelRepository.findAllWithPricing()
             : modelRepository.findAllWithPricingForUser(auth.userId());
         return projections.stream().map(ModelService::toModelMap).toList();
@@ -115,8 +122,8 @@ public class ModelService {
         return Map.of("totalModels", modelRepository.count());
     }
 
-    private static boolean isAdmin(AuthContext auth) {
-        return Role.LOGOS_ADMIN.matches(auth.role()) || Role.APP_ADMIN.matches(auth.role());
+    private static boolean isLogosAdmin(AuthContext auth) {
+        return Role.LOGOS_ADMIN.matches(auth.role());
     }
 
     private static Map<String, Object> toModelMap(ModelWithPriceProjection p) {
@@ -135,5 +142,29 @@ public class ModelService {
         m.put("input_usd_per_million", p.getInputUsdPerMillion());
         m.put("output_usd_per_million", p.getOutputUsdPerMillion());
         return m;
+    }
+
+    public Optional<ModelCapabilitiesDTO> getModelCapabilities(Integer modelId) {
+        return modelCapabilitiesRepository.findByModelId(modelId)
+            .map(ModelService::toModelCapabilitiesDTO);
+    }
+
+    public Map<Integer, ModelCapabilitiesDTO> getModelCapabilities(List<Integer> modelIds) {
+        return modelCapabilitiesRepository.findByModelIdIn(modelIds)
+            .stream()
+            .map(ModelService::toModelCapabilitiesDTO)
+            .collect(Collectors.toMap(
+                ModelCapabilitiesDTO::modelId,
+                Function.identity()
+            ));
+    }
+
+    private static ModelCapabilitiesDTO toModelCapabilitiesDTO(ModelCapabilities capabilities) {
+        return new ModelCapabilitiesDTO(
+            capabilities.getModelId(),
+            capabilities.getSupportsFunctionCalling(),
+            capabilities.getSupportsVision(),
+            capabilities.getSupportsReasoning()
+        );
     }
 }

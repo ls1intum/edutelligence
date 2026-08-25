@@ -43,6 +43,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile String vramDay = null;
         volatile int vramCursor = 0;
 
+        // The user-selected window. The live delta slide advances only the end
+        // to "now"; the start stays anchored where the preset put it.
         volatile String timelineStart;
         volatile String timelineEnd;
         volatile int targetBuckets = DEFAULT_TARGET_BUCKETS;
@@ -54,6 +56,12 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
         volatile String prevReqSig = "";
         volatile String prevVramMetaSig = "";
+
+        // Traffic moved since the last aggregate push, so the totals the
+        // statistics page shows are out of date. Recomputing them is a scan of
+        // the whole range, so it is driven by this flag rather than by the clock:
+        // an idle session costs nothing.
+        volatile boolean statsDirty = false;
 
         void initDefaultTimeline() {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
@@ -193,6 +201,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                                  "payload", Map.of("error", "Invalid timeline range")));
         } else {
             pushTimelineInit(session, state);
+            pushRequests(session, state, true);
         }
     }
 
@@ -214,6 +223,16 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 }
                 if (t % 5 == 0) {
                     pushVramDelta(session, state);
+                }
+                // Aggregates are the expensive push (findTotals alone scans the
+                // range twice more for tokens and cost), so they go out at a
+                // tenth of the request cadence and only when the request feed
+                // actually reported a change. Without this the page's counters
+                // never moved after load: stats only ever came with
+                // timeline_init, i.e. on connect and on a range change.
+                if (t % 10 == 0 && state.statsDirty) {
+                    state.statsDirty = false;
+                    pushStats(session, state);
                 }
             } catch (Exception e) {
                 log.warn("[ws/stats/v2] tick error for session {}: {}", entry.getKey(), e.getMessage());
@@ -276,7 +295,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         for (Object p : providers) {
             if (!(p instanceof Map<?, ?> provider)) continue;
             sb.append(provider.get("provider_id")).append(':')
-              .append(provider.get("connection_state")).append(',');
+              .append(provider.get("connection_state")).append(':')
+              .append(provider.get("calibrating")).append(',');
         }
         return sb.toString();
     }
@@ -300,6 +320,31 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    /**
+     * Re-send the aggregates for the session's range.
+     *
+     * Deliberately not {@link #pushTimelineInit}: that one also ships every
+     * enqueue event in the range (up to 200k rows), which is fine once on
+     * connect and far too much to repeat while the page is open. The client
+     * keeps its event list current from the deltas instead.
+     */
+    private void pushStats(WebSocketSession session, SessionState state) {
+        try {
+            // A live selection keeps growing, so it has to be queried up to now,
+            // the same way pushRequests and pushTimelineDelta do it. Only the end
+            // moves; the start stays where the preset put it.
+            if (state.timelineLive) state.timelineEnd = Instant.now().toString();
+
+            Map<String, Object> stats = statsService.getRequestLogStats(
+                state.timelineStart, state.timelineEnd, state.targetBuckets);
+            state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n
+                ? n.intValue() : state.bucketSeconds;
+            send(session, Map.of("type", "stats", "payload", stats));
+        } catch (Exception e) {
+            log.warn("[ws/stats/v2] stats push error: {}", e.getMessage());
+        }
+    }
+
     private void pushTimelineDelta(WebSocketSession session, SessionState state) {
         try {
             String untilIso = Instant.now().toString();
@@ -316,9 +361,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             String newId = (String) cursor.get("request_id");
             if (newTs != null && !newTs.isBlank()) { state.cursorTs = newTs; state.cursorId = newId; }
 
-            ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
-            state.timelineEnd   = untilIso;
-            state.timelineStart = now.minusSeconds((long)(DEFAULT_WINDOW_DAYS * 86400L)).toInstant().toString();
+            // Only the end moves. Re-anchoring the start to now-windowSeconds
+            // would turn every calendar-anchored preset into a rolling window:
+            // picking "Today" at 00:20 gives a 20-minute span, so an hour later
+            // the view would cover 01:00–01:20 instead of the whole day.
+            state.timelineEnd = untilIso;
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("events", events);
@@ -334,8 +381,20 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
     private void pushRequests(WebSocketSession session, SessionState state, boolean force) {
         try {
-            Map<String, Object> payload = requestLogService.getLatestRequests();
+            // A live selection ("last 30 days", "today", …) keeps growing while
+            // the page is open, so the request list has to query up to *now*.
+            // state.timelineEnd is only advanced by pushTimelineDelta, which the
+            // statistics page disables (timelineDeltas: false) — reading it here
+            // would pin the list to the instant the range was set and no request
+            // enqueued after page load would ever show up.
+            String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
+            Map<String, Object> payload = requestLogService.getLatestRequests(state.timelineStart, end);
             String sig = requestsSig(payload);
+            if (!sig.equals(state.prevReqSig)) {
+                // A request arrived, finished, or grew its usage — whatever the
+                // aggregates summarise has moved with it.
+                state.statsDirty = true;
+            }
             if (force || !sig.equals(state.prevReqSig)) {
                 state.prevReqSig = sig;
                 send(session, Map.of("type", "requests", "payload", payload));
@@ -345,6 +404,9 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    // Content-only signature: the live window slide advances the range on
+    // every delta, which must not force a push — user-driven range changes
+    // are already pushed explicitly (force=true) in handleSetTimelineRange.
     @SuppressWarnings("unchecked")
     private String requestsSig(Map<String, Object> payload) {
         var reqs = (java.util.List<Map<String, Object>>) payload.getOrDefault("requests", java.util.List.of());
@@ -353,7 +415,14 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             sb.append(r.getOrDefault("request_id", "")).append(':')
               .append(r.getOrDefault("status", "")).append(':')
               .append(r.getOrDefault("scheduled_ts", "")).append(':')
-              .append(r.getOrDefault("request_complete_ts", "")).append(',');
+              .append(r.getOrDefault("request_complete_ts", "")).append(':')
+              // Usage and cost grow while a request streams, without any of the
+              // fields above changing — leaving them out of the signature pins
+              // the token and cost line of a running request to its first push.
+              .append(r.getOrDefault("prompt_tokens", "")).append(':')
+              .append(r.getOrDefault("completion_tokens", "")).append(':')
+              .append(r.getOrDefault("total_tokens", "")).append(':')
+              .append(r.getOrDefault("cost_microcents", "")).append(',');
         }
         return sb.toString();
     }

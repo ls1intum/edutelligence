@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from logos_worker_node.logos_bridge import LogosBridgeClient
+from logos_worker_node.logos_bridge import LogosBridgeClient, _CalibrationSession
 from logos_worker_node.models import LaneStatus, LogosConfig, ProcessState, ProcessStatus
 
 
@@ -932,11 +932,11 @@ def test_list_uncalibrated_flags_calibrated_profile_missing_pairs(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkeypatch):
-    """Inside the session loop, a model that can't be slept on this worker
-    is recorded as skipped (with sleep_mode_disabled persisted on the
-    profile) and the loop moves on to the next model. The session must
-    not refuse the whole batch over one bad model."""
+async def test_session_calibrates_sleep_disabled_model_without_sleep(tmp_path, monkeypatch):
+    """A model that can't be slept on this worker is calibrated at
+    sleep_level 0 rather than skipped: base_residency is measurable without
+    sleep, and skipping left such a model permanently uncalibrated — and so
+    never announced as a capability — with no way back."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
 
@@ -954,7 +954,11 @@ async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkey
     client = LogosBridgeClient(app, cfg)
 
     # Mock the actual calibration so we don't spawn vLLM.
+    seen_sleep_levels: dict[str, int] = {}
+
     def _fake_calibrate(plan, **kwargs):
+        sleep_level = int(kwargs["sleep_level"])
+        seen_sleep_levels[plan["model"]] = sleep_level
         return CalibrationResult(
             model=plan["model"],
             tensor_parallel_size=1,
@@ -962,8 +966,8 @@ async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkey
             kv_cache_sent_mb=2048.0,
             success=True,
             base_residency_mb=12345.0,
-            sleeping_residual_mb=512.0,
-            sleep_l1_transient_host_ram_mb=4096.0,
+            sleeping_residual_mb=(512.0 if sleep_level > 0 else None),
+            sleep_l1_transient_host_ram_mb=(4096.0 if sleep_level > 0 else None),
         )
 
     monkeypatch.setattr(
@@ -980,14 +984,52 @@ async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkey
     await _drain_session(client)
 
     events = [(e.event, e.model) for e in app.state.lane_manager._event_log]
-    # gpt-oss skipped, phi-4 attempted and completed.
-    assert ("calibration_model_skipped", "openai/gpt-oss-120b") in events
+    assert ("calibration_model_skipped", "openai/gpt-oss-120b") not in events
+    assert ("calibration_model_completed", "openai/gpt-oss-120b") in events
     assert ("calibration_model_completed", "microsoft/Phi-4-reasoning") in events
     assert ("calibration_session_finished", "") in events
-    # sleep_mode_disabled persisted for the skipped model.
-    skipped_profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
-    assert skipped_profile is not None
-    assert skipped_profile.sleep_mode_disabled is True
+    # The nosleep model probed without sleep; the other one kept the session level.
+    assert seen_sleep_levels == {"openai/gpt-oss-120b": 0, "microsoft/Phi-4-reasoning": 1}
+    # sleep_mode_disabled persisted, and the measurement landed.
+    nosleep_profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
+    assert nosleep_profile is not None
+    assert nosleep_profile.sleep_mode_disabled is True
+    assert nosleep_profile.base_residency_mb == 12345.0
+    assert nosleep_profile.sleeping_residual_mb is None
+    # The model is announced to Logos now that it has a profile.
+    assert "openai/gpt-oss-120b" in client._cfg.capabilities_models  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_nosleep_model_with_profile_is_not_recalibrated(tmp_path, monkeypatch):
+    """A nosleep model calibrated at level 0 has null sleep fields by
+    design. Those nulls must not read as "incomplete", or every session
+    re-picks the model forever."""
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(
+        tmp_path,
+        per_model_overrides={"openai/gpt-oss-120b": {"enable_sleep_mode": False}},
+    )
+    app.state.model_profiles.seed_capabilities(["openai/gpt-oss-120b"])
+    profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
+    profile.base_residency_mb = 98945.0
+    profile.residency_source = "calibrated"
+    profile.sleeping_residual_mb = None
+    profile.sleep_l1_transient_host_ram_mb = None
+    profile.sleep_mode_disabled = True
+    profile.kv_cache_to_max_model_len_pairs = [{"kv_mb": 8192.0, "max_model_len": 32768}]
+
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["openai/gpt-oss-120b"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    assert client._list_uncalibrated_models() == []  # noqa: SLF001
 
 
 @pytest.mark.asyncio
@@ -1113,3 +1155,441 @@ async def test_stream_200_with_no_output_fails_clean_without_start(monkeypatch):
     assert [f["type"] for f in frames] == ["stream_end"]
     assert frames[-1]["success"] is False
     assert "stream_start" not in [f["type"] for f in frames]
+
+
+# ---------------------------------------------------------------------------
+# VRAM-growing commands are refused while a calibration session holds the GPU
+# ---------------------------------------------------------------------------
+
+
+def _client_with_calibration_session(session_done: bool = False) -> LogosBridgeClient:
+    app = _DummyApp()
+    app.state.lane_manager = object()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    session = _CalibrationSession(sleep_level=1)
+    session.task = SimpleNamespace(done=lambda: session_done)
+    client._active_calibration_session = session  # noqa: SLF001
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["add_lane", "apply_lanes", "wake_lane", "reconfigure_lane"])
+async def test_vram_growing_commands_are_refused_during_calibration(action):
+    """The session freed this node's VRAM for its probes. A lane placed now
+    takes the memory they need and the kv-cache search fails at sizes that
+    would otherwise fit — so the node refuses locally, whatever the server
+    currently believes."""
+    client = _client_with_calibration_session()
+
+    result = await client._execute_command(action, {"lane_id": "lane-a"})  # noqa: SLF001
+
+    assert result["ok"] is False
+    assert result["calibrating"] is True
+    assert action in result["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["delete_lane", "sleep_lane"])
+async def test_vram_freeing_commands_are_still_accepted_during_calibration(action):
+    """Only growth is refused — the guard must not block the server from
+    freeing memory the session could use."""
+    client = _client_with_calibration_session()
+    calls: list[str] = []
+
+    async def _remove_lane(lane_id):
+        calls.append(f"remove:{lane_id}")
+
+    async def _sleep_lane(lane_id, level=1, mode="wait"):  # noqa: ARG001
+        calls.append(f"sleep:{lane_id}")
+        return _make_lane_status()
+
+    client._app.state.lane_manager = SimpleNamespace(  # noqa: SLF001
+        remove_lane=_remove_lane,
+        sleep_lane=_sleep_lane,
+    )
+
+    await client._execute_command(action, {"lane_id": "lane-a"})  # noqa: SLF001
+
+    assert calls, f"{action} must reach the lane manager"
+
+
+@pytest.mark.asyncio
+async def test_a_finished_session_does_not_keep_refusing():
+    """_active_calibration_session lingers until the next start clears it, so
+    the task state is what decides — otherwise the node would refuse lanes
+    forever after its first session."""
+    client = _client_with_calibration_session(session_done=True)
+    added: list[str] = []
+
+    async def _add_lane(lane_config):
+        added.append(lane_config.lane_id)
+        return _make_lane_status()
+
+    client._app.state.lane_manager = SimpleNamespace(add_lane=_add_lane)  # noqa: SLF001
+
+    await client._execute_command(  # noqa: SLF001
+        "add_lane",
+        {"lane_id": "lane-a", "model": "qwen2.5-coder:32b"},
+    )
+
+    assert added == ["lane-a"]
+
+
+def _event_stub(event_id: str, name: str):
+    return SimpleNamespace(
+        event_id=event_id,
+        model_dump=lambda mode="json", _n=name: {"event": _n},
+    )
+
+
+def _bridge_client(app) -> LogosBridgeClient:
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    return LogosBridgeClient(app, cfg)
+
+
+@pytest.mark.asyncio
+async def test_event_loop_flags_only_the_backlog_that_existed_at_connect():
+    """The first drain runs a second after the connect, so it carries both the
+    backlog and anything created in that second. Only the backlog is history:
+    a session ending inside that second produces a live terminal event, and
+    dismissing it as backlog would leave the provider excluded from lane
+    placement with no further event coming to release it."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    log = [_event_stub("evt-1", "calibration_session_finished")]
+    replay_ids = frozenset({"evt-1"})
+    # The session ends between the connect and the drain.
+    log.append(_event_stub("calib-9", "calibration_session_cancelled"))
+    app.state.lane_manager = SimpleNamespace(event_log=log)
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if len(sent) == 2:
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object(), replay_event_ids=replay_ids)  # noqa: SLF001
+
+    assert [p["event"]["event"] for p in sent] == [
+        "calibration_session_finished",
+        "calibration_session_cancelled",
+    ]
+    assert [p["replay"] for p in sent] == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_a_live_event_in_a_full_log_is_not_mistaken_for_backlog():
+    """The log is capped and trims from the front, so on a full log a live event
+    lands at a position the backlog used to occupy. Keyed on position it would
+    be sent as replay, the server would ignore it, and a terminal event lost
+    that way leaves the provider excluded with nothing left to release it."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    cap = 500
+    backlog = [_event_stub(f"evt-{n}", "lane_started") for n in range(1, cap + 1)]
+    replay_ids = frozenset(event.event_id for event in backlog)
+
+    # A live terminal event arrives; the append trims the oldest entry, so the
+    # log length is unchanged and the new event sits at the last position.
+    full_log = backlog[1:] + [_event_stub("calib-1", "calibration_session_finished")]
+    assert len(full_log) == cap
+    app.state.lane_manager = SimpleNamespace(event_log=full_log)
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if payload["event"]["event"] == "calibration_session_finished":
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object(), replay_event_ids=replay_ids)  # noqa: SLF001
+
+    terminal = [p for p in sent if p["event"]["event"] == "calibration_session_finished"]
+    assert terminal, "the live terminal event must be forwarded"
+    assert terminal[0]["replay"] is False
+
+
+@pytest.mark.asyncio
+async def test_event_loop_keeps_forwarding_once_the_log_is_full():
+    """A positional cursor equals the log length once the log is full and never
+    advances again, so no further event would reach the server at all."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    cap = 500
+    log = [_event_stub(f"evt-{n}", "lane_started") for n in range(1, cap + 1)]
+    drains = {"count": 0}
+
+    class _LaneManager:
+        @property
+        def event_log(self):
+            drains["count"] += 1
+            if drains["count"] == 1:
+                return list(log)
+            # Second drain: one new event, oldest trimmed — same length.
+            return log[1:] + [_event_stub("evt-501", "lane_stopped")]
+
+    app.state.lane_manager = _LaneManager()
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if payload["event"]["event"] == "lane_stopped":
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object())  # noqa: SLF001
+
+    assert len(sent) == cap + 1, "the event added to a full log must still be forwarded"
+    assert sent[-1]["event"]["event"] == "lane_stopped"
+
+
+@pytest.mark.asyncio
+async def test_event_loop_does_not_resend_events_it_already_forwarded():
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    log = [_event_stub("evt-1", "lane_started")]
+    drains = {"count": 0}
+
+    class _LaneManager:
+        @property
+        def event_log(self):
+            drains["count"] += 1
+            if drains["count"] >= 2:
+                client._stopping.set()  # noqa: SLF001
+            return list(log)
+
+    app.state.lane_manager = _LaneManager()
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object())  # noqa: SLF001
+
+    assert len(sent) == 1
+
+
+def test_current_event_ids_snapshots_the_log():
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        event_log=[_event_stub("evt-1", "lane_started"), _event_stub("calib-1", "calibration_session_started")]
+    )
+    client = _bridge_client(app)
+
+    assert client._current_event_ids() == frozenset({"evt-1", "calib-1"})  # noqa: SLF001
+
+    app.state.lane_manager = None
+    assert client._current_event_ids() == frozenset()  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# The status carries the live calibration state
+#
+# The server excludes a calibrating worker from lane placement, and used to
+# learn when that ended from a single lifecycle event. An event that never
+# lands as a live one — dropped by the post-connect replay filter, belonging
+# to a connection that is gone — left the worker excluded with nothing to
+# release it. Observed in production as three workers holding no lanes for
+# over seven hours, recovered only by restarting the container.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_reports_the_live_calibration_state(tmp_path, monkeypatch):
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.build_runtime_status",
+        AsyncMock(return_value=SimpleNamespace(model_dump=lambda mode="json": {"lanes": []})),
+    )
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_runtime_status(object(), force=True)  # noqa: SLF001
+    assert sends[-1]["calibrating"] is False
+
+    client._active_calibration_session = _CalibrationSession(sleep_level=1)  # noqa: SLF001
+    await client._send_runtime_status(object(), force=True)  # noqa: SLF001
+    assert sends[-1]["calibrating"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_session_ending_is_pushed_even_when_nothing_else_changed(tmp_path, monkeypatch):
+    """A session that starts and ends without touching a lane changes nothing
+    else in the payload. Left out of the dedupe signature, the status carrying
+    calibrating=False would never be sent and the server would stay stuck."""
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.build_runtime_status",
+        AsyncMock(return_value=SimpleNamespace(model_dump=lambda mode="json": {"lanes": []})),
+    )
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    session = _CalibrationSession(sleep_level=1)
+    client._active_calibration_session = session  # noqa: SLF001
+    assert await client._send_runtime_status(object(), force=False) is True  # noqa: SLF001
+    assert await client._send_runtime_status(object(), force=False) is False  # noqa: SLF001
+
+    client._active_calibration_session = None  # noqa: SLF001
+    assert await client._send_runtime_status(object(), force=False) is True  # noqa: SLF001
+    assert [p["calibrating"] for p in sends] == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_hello_reports_a_finished_session_as_not_calibrating(tmp_path, monkeypatch):
+    """_active_calibration_session lingers until the next start clears it.
+    Reporting that as live at connect would exclude the worker from placement
+    for as long as no new session begins."""
+    app = _make_app_for_calibration(tmp_path)
+    app.state.lane_manager._static_lane_ids = set()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    async def _already_done():
+        return None
+
+    done = _CalibrationSession(sleep_level=1)
+    done.task = asyncio.create_task(_already_done())
+    await done.task
+    client._active_calibration_session = done  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+    await client._send_hello(object())  # noqa: SLF001
+
+    assert sends[-1]["calibrating"] is False
+
+
+# ---------------------------------------------------------------------------
+# A calibration result is merged into the store, never written over it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_profile_store_is_left_alone(tmp_path, monkeypatch):
+    """load_existing_profiles used to answer an unreadable store with an empty
+    dict, and saving that back replaced every profile on the node with this one
+    result. One lost measurement is recoverable; the file is not."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/model-a"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    profiles_path = tmp_path / "model_profiles.yml"
+    profiles_path.write_text("model_profiles:\n  org/other: {unterminated\n")
+    corrupt = profiles_path.read_text()
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=12345.0,
+            sleeping_residual_mb=512.0,
+        ),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    assert (await client._handle_start_calibration_session({"sleep_level": 1}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    assert profiles_path.read_text() == corrupt
+    events = [(e.event, e.details) for e in app.state.lane_manager._event_log]
+    assert any(e == "calibration_model_failed" and "unreadable" in d for e, d in events)
+    # The session still ends cleanly — the server must not be left waiting.
+    assert ("calibration_session_finished", "sleep_level=1") in events
+
+
+@pytest.mark.asyncio
+async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
+    """Fields the probe does not measure — here the sleep gate's flag and a
+    disk size recorded elsewhere — survive the write."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult, load_existing_profiles, save_profiles
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/model-a"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    profiles_path = tmp_path / "model_profiles.yml"
+    save_profiles(
+        profiles_path,
+        {
+            "org/model-a": {"base_residency_mb": 1.0, "disk_size_bytes": 42, "sleep_mode_disabled": True},
+            "org/untouched": {"base_residency_mb": 22545.0},
+        },
+    )
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=12345.0,
+            sleeping_residual_mb=512.0,
+        ),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    assert (await client._handle_start_calibration_session({"sleep_level": 1}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    stored = load_existing_profiles(profiles_path)
+    assert stored["org/model-a"]["base_residency_mb"] == 12345.0
+    assert stored["org/model-a"]["disk_size_bytes"] == 42
+    assert stored["org/model-a"]["sleep_mode_disabled"] is True
+    assert stored["org/untouched"]["base_residency_mb"] == 22545.0, "other models must be untouched"

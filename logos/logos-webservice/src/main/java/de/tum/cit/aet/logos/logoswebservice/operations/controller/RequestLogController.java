@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -24,9 +25,33 @@ public class RequestLogController {
         this.requestLogService = requestLogService;
     }
 
+    /**
+     * System-wide request feed. Unlike {@code /request_logs} this has no
+     * per-user scoping to fall back on — every row carries the requester's full
+     * name, team and cloud cost — so it is restricted to Logos admins.
+     *
+     * <p>The statistics page gets its newest unfiltered rows pushed over
+     * {@code /ws/stats/v2} and calls this for everything else: paging back
+     * through the range, and any view narrowed to one requester or team. Pages
+     * are keyset-based — pass the {@code next_cursor} of the previous response
+     * as {@code cursor_ts}/{@code cursor_id}. Without a body the service returns
+     * the newest page of the last 30 days.
+     */
     @PostMapping("/latest_requests")
-    public ResponseEntity<?> latestRequests(@RequestAttribute("authContext") AuthContext auth) {
-        return ResponseEntity.ok(requestLogService.getLatestRequests());
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> latestRequests(@RequestAttribute("authContext") AuthContext auth,
+                                            @RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) body = Map.of();
+        String start = body.get("start") instanceof String s ? s : null;
+        String end = body.get("end") instanceof String s ? s : null;
+        Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
+        Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
+        String cursorTs = body.get("cursor_ts") instanceof String s ? s : null;
+        String cursorId = body.get("cursor_id") instanceof String s ? s : null;
+        int limit = body.get("limit") instanceof Number n
+            ? n.intValue() : RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
+        return ResponseEntity.ok(requestLogService.getLatestRequests(
+            start, end, userId, teamId, cursorTs, cursorId, limit, true));
     }
 
     @PostMapping("/request_logs")
@@ -52,18 +77,5 @@ public class RequestLogController {
         // see only requests they themselves made (across all their api keys).
         Integer userId = Role.LOGOS_ADMIN.matches(auth.role()) ? null : auth.userId();
         return ResponseEntity.ok(requestLogService.getRequestLogs(userId, requestIds));
-    }
-
-    @PostMapping("/paginated_requests")
-    public ResponseEntity<?> paginatedRequests(@RequestAttribute("authContext") AuthContext auth,
-                                               @RequestBody(required = false) Map<String, Object> body) {
-        if (body == null) body = Map.of();
-        int page = body.containsKey("page") ? ((Number) body.get("page")).intValue() : 1;
-        int perPage = body.containsKey("per_page") ? ((Number) body.get("per_page")).intValue() : 20;
-        // Admins see the request history across all users — the statistics page
-        // already streams every request live, so the paginated history must not
-        // be limited to requests made by the admin themselves.
-        Integer userId = Role.LOGOS_ADMIN.matches(auth.role()) ? null : auth.userId();
-        return ResponseEntity.ok(requestLogService.getPaginatedRequests(userId, page, perPage));
     }
 }

@@ -157,9 +157,20 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
     ("internlm", "internlm"),
     # AI21 Labs Jamba
     ("jamba", "jamba"),
-    # Alibaba Qwen (coder→qwen3_xml per docs, then general qwen3→hermes)
-    ("qwen3-coder", "qwen3_xml"),
-    ("qwen3_coder", "qwen3_xml"),
+    # Alibaba Qwen.  vLLM registers "qwen3_coder" and "qwen3_xml" as two names
+    # for the same Qwen3EngineToolParser; "qwen3_coder" is the one vLLM's own
+    # deployment recipes name, so it is the one used here.
+    ("qwen3-coder", "qwen3_coder"),
+    ("qwen3_coder", "qwen3_coder"),
+    # Qwen3 point releases (3.5, 3.6, 3.8, …) emit the same XML dialect as
+    # Qwen3-Coder, not the JSON-in-<tool_call> that hermes expects: their
+    # bundled chat templates render '<tool_call>\n<function=NAME>\n<parameter=…>'
+    # verbatim.  This rule has to sit above the "qwen3-"/"qwen3_" entries,
+    # which never matched a dotted name and so let every point release fall
+    # through to the generic ("qwen", "hermes") catch-all — hermes then failed
+    # to parse the XML and vLLM returned the raw markup as assistant text.
+    ("qwen3.", "qwen3_coder"),
+    # Qwen3 (dot-free, e.g. Qwen3-32B) still emits hermes-style JSON.
     ("qwen3-", "hermes"),
     ("qwen3_", "hermes"),
     ("qwen", "hermes"),
@@ -210,6 +221,11 @@ _TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
 _REASONING_PARSER_RULES: tuple[tuple[str, str], ...] = (
     ("gemma-4", "gemma4"),
     ("gpt-oss", "openai_gptoss"),
+    # Qwen3 point releases think by default.  Without a reasoning parser the
+    # <think> block is returned inline in the assistant message instead of in
+    # reasoning_content, so clients render it as the answer.  Only the dotted
+    # releases are mapped: dot-free Qwen3 predates the parser.
+    ("qwen3.", "qwen3"),
 )
 
 # Model-name → default --default-chat-template-kwargs mapping.  Applied as a
@@ -308,6 +324,20 @@ def _infer_tool_call_parser(model: str) -> str:
     return "hermes"
 
 
+def _speculative_decoding_requested(vc: Any) -> bool:
+    """True when this lane runs vLLM with a draft model.
+
+    Covers both the ``speculative_config`` field and a raw
+    ``--speculative-config`` in ``extra_args``, because either one produces a
+    lane whose draft model vLLM loads with the main model's ``--load-format``.
+    """
+    if vc is None:
+        return False
+    if str(getattr(vc, "speculative_config", "") or "").strip():
+        return True
+    return any(str(a).startswith("--speculative-config") for a in (getattr(vc, "extra_args", None) or []))
+
+
 class VllmProcessHandle:
     """Manages a single vLLM server process on a specific port."""
 
@@ -340,6 +370,10 @@ class VllmProcessHandle:
         # is used for a TP>1 lane; _build_cmd then serves this directory with
         # --load-format sharded_state instead of the full checkpoint.
         self._sharded_model_dir: str | None = None
+        # Set for the retry after a sharded checkpoint was rejected by the
+        # loader, so the retry serves the full checkpoint instead of rebuilding
+        # the same unusable shards. Reset at the top of every spawn().
+        self._skip_sharded_checkpoint: bool = False
         # Consecutive liveness-probe failures observed by is_sleeping().
         # The lane manager reads this to escalate to a restart when the API
         # server is alive (/v1/models, /health) but the EngineCore RPC is
@@ -368,6 +402,11 @@ class VllmProcessHandle:
         pointing inside the compile cache directory (e.g. an AOT-compiled
         graph that was specialized on a stale shape profile), the caches are
         purged again and the spawn is retried once.
+
+        The same shape of recovery covers a sharded checkpoint the loader
+        rejects: the cached conversion is discarded and the lane retried once
+        against the full checkpoint. Both are one-shot — a second failure of
+        the same kind is a real fault and propagates.
         """
         if self._process is not None and self._process.returncode is None:
             logger.info(
@@ -380,12 +419,30 @@ class VllmProcessHandle:
         self._purge_compile_caches_if_versions_changed()
 
         purged_once = False
+        unsharded_once = False
+        self._skip_sharded_checkpoint = False
         while True:
             try:
                 status = await self._spawn_once(lane_config)
                 self._write_compile_cache_stamp()
                 return status
             except RuntimeError:
+                # Checked before the compile cache: a sharded-loader failure
+                # can name a file under the compile cache too, and purging
+                # that leaves the actual cause in place for the retry.
+                if not unsharded_once and self.has_broken_sharded_checkpoint:
+                    unsharded_once = True
+                    self._invalidate_sharded_checkpoint(lane_config)
+                    # Hold off the conversion for this lane's retry as well:
+                    # rebuilding it would only reproduce the same bad output.
+                    self._skip_sharded_checkpoint = True
+                    logger.warning(
+                        "[%s] vLLM rejected the pre-sharded checkpoint for %s; "
+                        "retrying once from the full checkpoint",
+                        self.lane_id,
+                        lane_config.model,
+                    )
+                    continue
                 if purged_once or not self.has_poisoned_compile_cache:
                     raise
                 purged = self._purge_compile_caches()
@@ -520,6 +577,56 @@ class VllmProcessHandle:
     )
 
     _COMPILE_CACHE_STAMP_FILENAME: ClassVar[str] = ".logos_compile_cache_stamp.json"
+
+    # Log fragments that mean the pre-sharded checkpoint is the thing vLLM
+    # could not load. Matched only while this lane is actually serving one, so
+    # the loader-module frame is enough on its own; the payload messages cover
+    # the ways the shards can be wrong without the frame appearing in the tail
+    # we captured (a shape that doesn't match the parameter, e.g. a
+    # quantization whose packed layout doesn't survive the conversion, or
+    # shards missing for a rank).
+    _BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = (
+        "sharded_state_loader.py",
+        "only pre-sharded checkpoints are currently supported",
+        "could not find checkpoint files",
+    )
+
+    @property
+    def has_broken_sharded_checkpoint(self) -> bool:
+        """True if this lane's pre-sharded checkpoint is what failed to load.
+
+        A conversion can finish successfully and still emit shards vLLM
+        rejects, and nothing about the produced files says so — the marker is
+        written, the shard files are there, and every subsequent spawn picks
+        the same directory up as ready. For a model the worker keeps warm that
+        is a permanent outage of that model, reported only as a failed
+        add_lane.
+        """
+        if not self._sharded_model_dir or not self._recent_logs:
+            return False
+        log_blob = "\n".join(self._recent_logs).lower()
+        return any(frag in log_blob for frag in self._BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS)
+
+    def _invalidate_sharded_checkpoint(self, lane_config: LaneConfig) -> bool:
+        """Remove the sharded checkpoint this lane just failed to load."""
+        directory = self._sharded_model_dir
+        if not directory:
+            return False
+        try:
+            from logos_worker_node import sharded_checkpoint as sc  # noqa: PLC0415
+
+            removed = sc.invalidate_sharded_checkpoint(Path(directory))
+        except Exception:  # noqa: BLE001
+            logger.exception("[%s] Failed to discard sharded checkpoint %s", self.lane_id, directory)
+            return False
+        if removed:
+            logger.warning(
+                "[%s] Discarded sharded checkpoint for %s: %s",
+                self.lane_id,
+                lane_config.model,
+                directory,
+            )
+        return removed
 
     @property
     def has_poisoned_compile_cache(self) -> bool:
@@ -817,6 +924,9 @@ class VllmProcessHandle:
             "requests_running": None,
             "gpu_cache_usage_percent": None,
             "prefix_cache_hit_rate": None,
+            "mtp_acceptance_rate": None,
+            "mtp_draft_tokens_total": None,
+            "mtp_accepted_tokens_total": None,
             "prompt_tokens_total": None,
             "generation_tokens_total": None,
             "ttft_histogram": {},
@@ -830,6 +940,8 @@ class VllmProcessHandle:
                 return metrics
             _prefix_queries: float = 0.0
             _prefix_hits: float = 0.0
+            _spec_draft_tokens_total: float = 0.0
+            _spec_accepted_tokens_total: float = 0.0
             for raw_line in resp.text.splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -870,6 +982,18 @@ class VllmProcessHandle:
                     or metric_name.endswith(":prefix_cache_hits")
                 ):
                     _prefix_hits += value
+                elif metric_name.endswith("spec_decode_num_draft_tokens") or metric_name.endswith(
+                    "spec_decode_num_draft_tokens_total"
+                ):
+                    # vLLM speculative decoding (e.g. MTP draft heads):
+                    # cumulative tokens proposed by the draft model.
+                    _spec_draft_tokens_total += value
+                elif metric_name.endswith("spec_decode_num_accepted_tokens") or metric_name.endswith(
+                    "spec_decode_num_accepted_tokens_total"
+                ):
+                    # Cumulative draft tokens accepted by the target model.
+                    # Only present when --speculative-config is active.
+                    _spec_accepted_tokens_total += value
                 elif metric_name.endswith("prompt_tokens_total"):
                     metrics["prompt_tokens_total"] = value
                 elif metric_name.endswith("generation_tokens_total"):
@@ -888,6 +1012,16 @@ class VllmProcessHandle:
             # gauge was not present.
             if metrics["prefix_cache_hit_rate"] is None and _prefix_queries > 0:
                 metrics["prefix_cache_hit_rate"] = _prefix_hits / _prefix_queries
+            # Speculative decoding (MTP) — only reported when spec decode is
+            # enabled (vLLM exposes no spec_decode_* counters otherwise).
+            if _spec_draft_tokens_total > 0 or _spec_accepted_tokens_total > 0:
+                # Acceptance rate: accepted / draft tokens since process start.
+                if _spec_draft_tokens_total > 0:
+                    metrics["mtp_acceptance_rate"] = _spec_accepted_tokens_total / _spec_draft_tokens_total
+                # Expose the underlying cumulative counters (for per-model
+                # token-weighted aggregation in the orchestrator).
+                metrics["mtp_draft_tokens_total"] = _spec_draft_tokens_total
+                metrics["mtp_accepted_tokens_total"] = _spec_accepted_tokens_total
         except httpx.HTTPError:
             return metrics
         return metrics
@@ -1088,27 +1222,6 @@ class VllmProcessHandle:
         )
         return clamped
 
-    def _calibrated_max_model_len(self, lane_config: LaneConfig) -> int | None:
-        """Return the auto-shrunk --max-model-len recorded by calibration.
-
-        Calibration parses vLLM's "estimated maximum model length is N"
-        suggestion and re-probes with --max-model-len=N when the operator's
-        pinned KV budget can't fit one request at the model's default
-        max_seq_len. The value is persisted on the profile so the lane
-        spawner reuses the same flag — without this, vLLM would refuse to
-        start at the default max_seq_len even though the budget was proven
-        viable at the shrunk value.
-        """
-        if self._model_profiles is None:
-            return None
-        profile = self._model_profiles.get_profile(lane_config.model)
-        if profile is None:
-            return None
-        value = getattr(profile, "calibration_max_model_len", None)
-        if not value or int(value) <= 0:
-            return None
-        return int(value)
-
     def _calibrated_max_num_seqs(self, lane_config: LaneConfig) -> int | None:
         """Return the --max-num-seqs cap recorded by calibration.
 
@@ -1145,8 +1258,32 @@ class VllmProcessHandle:
         vc = lane_config.vllm_config
         if vc is None:
             return
+        if self._skip_sharded_checkpoint:
+            # Set by spawn() after the loader rejected the cached conversion.
+            # Rebuilding it here would reproduce the same unusable shards.
+            logger.info(
+                "[%s] serving %s from the full checkpoint — its sharded conversion was rejected",
+                self.lane_id,
+                lane_config.model,
+            )
+            return
         ec = self._vllm_engine_config
         if not getattr(ec, "sharded_checkpoint_enabled", True):
+            return
+        if _speculative_decoding_requested(vc):
+            # vLLM loads the draft model with the same --load-format as the main
+            # model, and the sharded cache holds shards only for the main one, so
+            # the lane dies at startup with "Could not find checkpoint files
+            # model-rank-N-part-*.safetensors, only pre-sharded checkpoints are
+            # currently supported". Serve this lane from the full checkpoint
+            # instead — that is a per-lane decision, so speculative decoding on
+            # one model does not cost every other model on the node its cache.
+            logger.info(
+                "[%s] skipping sharded checkpoint for %s: speculative decoding needs the "
+                "full checkpoint for the draft model",
+                self.lane_id,
+                lane_config.model,
+            )
             return
         tp = int(vc.tensor_parallel_size)
         min_tp = max(2, int(getattr(ec, "sharded_checkpoint_min_tensor_parallel_size", 2)))
@@ -1268,15 +1405,18 @@ class VllmProcessHandle:
         elif lane_config.context_length > 0 and lane_config.context_length != _DEFAULT_LANE_CONTEXT_LENGTH:
             cmd.extend(["--max-model-len", str(lane_config.context_length)])
         else:
-            # Reuse calibration's auto-shrunk --max-model-len so production
-            # matches the configuration that actually passed the binary search.
-            # Without this, vLLM falls back to the model's default max_seq_len
-            # (e.g. Gemma-3-12B's 131072), which the operator-pinned KV budget
-            # may not be able to hold for a single request — vLLM then refuses
-            # to start even though calibration proved a shrunk value works.
-            calibrated_max_len = self._calibrated_max_model_len(lane_config)
-            if calibrated_max_len:
-                cmd.extend(["--max-model-len", str(calibrated_max_len)])
+            # Let vLLM size the context itself: "auto" serves the model's
+            # full window when the KV budget holds it, and otherwise the
+            # largest window that does.
+            #
+            # This replaces reusing calibration's recorded max_model_len. That
+            # value was derived by parsing vLLM's rejection during a sweep and
+            # re-probing, and it is only valid for the KV budget it was found
+            # at — a lane started with a different budget then serves a context
+            # that no longer matches, in either direction. "auto" is resolved
+            # against the budget the lane actually gets, so it cannot go stale,
+            # and it removes the second start the retry needed.
+            cmd.extend(["--max-model-len", "auto"])
         # max_num_seqs: explicit per-model override wins; otherwise reuse the
         # cap calibration discovered for hybrid Mamba/SSM models so the lane
         # matches the configuration that passed the binary search. Without
@@ -1292,6 +1432,8 @@ class VllmProcessHandle:
             cmd.extend(["--kv-cache-memory-bytes", vc.kv_cache_memory_bytes])
         if vc.kv_cache_dtype:
             cmd.extend(["--kv-cache-dtype", vc.kv_cache_dtype])
+        if vc.speculative_config.strip():
+            cmd.extend(["--speculative-config", vc.speculative_config.strip()])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
         # enforce_eager defaults to False (CUDA graph capture enabled).

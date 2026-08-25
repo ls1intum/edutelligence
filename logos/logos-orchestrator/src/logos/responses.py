@@ -116,25 +116,29 @@ def parse_provider_config(name: str) -> dict:
     }
 
 
-def request_setup(headers: dict, api_key_id: int):
+def request_setup(headers: dict, api_key_id: int, db: "DBManager | None" = None):
     """
     Get available models for the user and normalize provider types.
-    """
-    with DBManager() as db:
-        raw_deployments = db.get_deployments_for_api_key(api_key_id)
 
-        deployments = []
-        for deployment in raw_deployments:
-            d = dict(deployment)
-            p_id = d.get("provider_id")
-            if p_id:
-                p_info = db.get_provider(p_id) or {}
-                provider_type = normalize_provider_type(d.get("type"))
-                cloud_provider_type = p_info.get("cloud_provider_type") or infer_cloud_provider_type(
-                    d.get("type"), base_url=p_info.get("base_url")
-                )
-                d["type"] = "azure" if provider_type == "cloud" and cloud_provider_type == "azure" else provider_type
-            deployments.append(d)
+    Pass an already-open `db` to reuse the caller's session/connection
+    instead of checking out a new one from the pool.
+    """
+    if db is not None:
+        raw_deployments = db.get_deployments_for_api_key(api_key_id)
+    else:
+        with DBManager() as owned_db:
+            raw_deployments = owned_db.get_deployments_for_api_key(api_key_id)
+
+    deployments = []
+    for deployment in raw_deployments:
+        d = dict(deployment)
+        if d.get("provider_id"):
+            provider_type = normalize_provider_type(d.get("type"))
+            cloud_provider_type = d.get("cloud_provider_type") or infer_cloud_provider_type(
+                d.get("type"), base_url=d.get("base_url")
+            )
+            d["type"] = "azure" if provider_type == "cloud" and cloud_provider_type == "azure" else provider_type
+        deployments.append(d)
 
     allowed_models = get_unique_models_from_deployments(deployments)
     return deployments, allowed_models

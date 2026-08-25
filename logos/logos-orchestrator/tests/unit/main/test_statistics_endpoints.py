@@ -137,6 +137,9 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
                                     "requests_running": 2,
                                     "gpu_cache_usage_percent": 66.0,
                                     "prefix_cache_hit_rate": 0.42,
+                                    "mtp_acceptance_rate": 0.61,
+                                    "mtp_draft_tokens_total": 1000,
+                                    "mtp_accepted_tokens_total": 610,
                                     "prompt_tokens_total": 1200,
                                     "generation_tokens_total": 3400,
                                     "ttft_histogram": {"0.5": 8, "1.0": 10},
@@ -189,7 +192,11 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["queue_waiting_current"] == 3.0
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["requests_running_current"] == 2.0
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["ttft_p95_seconds"] == pytest.approx(0.875)
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["prefix_cache_hit_rate_avg"] == pytest.approx(0.42)
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["mtp_acceptance_rate_avg"] == pytest.approx(0.61)
     assert scheduler_signals["lanes"]["qwen-a"]["gpu_cache_usage_percent"] == 66.0
+    assert scheduler_signals["lanes"]["qwen-a"]["prefix_cache_hit_rate"] == 0.42
+    assert scheduler_signals["lanes"]["qwen-a"]["mtp_acceptance_rate"] == 0.61
 
     offline_provider = payload["providers"][1]
     assert offline_provider["connected"] is False
@@ -469,3 +476,73 @@ async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(
     provider = payload["providers"][0]
     assert [sample["snapshot_id"] for sample in provider["data"]] == [101, 102]
     assert payload["last_snapshot_id"] == 102
+
+
+def test_scheduler_signals_mtp_acceptance_is_token_weighted_across_lanes() -> None:
+    """Per-model MTP rate sums the draft/accepted counters, it is NOT the
+    unweighted mean of per-lane rates (regression for the CodeRabbit review)."""
+
+    def _lane(lane_id: str, draft: float, accepted: float) -> dict:
+        return {
+            "lane_id": lane_id,
+            "model": "mtp-model",
+            "vllm": True,
+            "runtime_state": "running",
+            "active_requests": 0,
+            "effective_vram_mb": 8000.0,
+            "backend_metrics": {
+                "engine": "vllm",
+                "mtp_acceptance_rate": (accepted / draft) if draft > 0 else None,
+                "mtp_draft_tokens_total": draft,
+                "mtp_accepted_tokens_total": accepted,
+            },
+        }
+
+    # Lane A: perfect acceptance but a single draft token.
+    # Lane B: zero acceptance over 10,000 draft tokens.
+    runtime = {
+        "timestamp": "2026-03-16T18:00:00Z",
+        "transport": {"connected": True},
+        "devices": {},
+        "capacity": {},
+        "lanes": [
+            _lane("lane-a", draft=1, accepted=1),
+            _lane("lane-b", draft=10_000, accepted=0),
+        ],
+    }
+
+    signals = main._build_logosnode_scheduler_signals(runtime)
+    model = signals["models"]["mtp-model"]
+
+    # Token-weighted: 1 accepted / 10,001 draft. The unweighted lane-rate
+    # mean would be 0.5 — exactly the misstatement this regression guards.
+    assert model["mtp_acceptance_rate_avg"] == pytest.approx(1 / 10_001)
+
+    # The per-lane signal still carries each lane's own rate.
+    assert signals["lanes"]["lane-a"]["mtp_acceptance_rate"] == pytest.approx(1.0)
+    assert signals["lanes"]["lane-b"]["mtp_acceptance_rate"] == pytest.approx(0.0)
+
+
+def test_scheduler_signals_mtp_acceptance_none_without_spec_decode() -> None:
+    """Lanes without speculative decoding leave the per-model rate unset."""
+    runtime = {
+        "timestamp": "2026-03-16T18:00:00Z",
+        "transport": {"connected": True},
+        "devices": {},
+        "capacity": {},
+        "lanes": [
+            {
+                "lane_id": "lane-a",
+                "model": "plain-model",
+                "vllm": True,
+                "runtime_state": "loaded",
+                "active_requests": 0,
+                "effective_vram_mb": 8000.0,
+                "backend_metrics": {"engine": "vllm", "prefix_cache_hit_rate": 0.3},
+            }
+        ],
+    }
+
+    signals = main._build_logosnode_scheduler_signals(runtime)
+    assert signals["models"]["plain-model"]["mtp_acceptance_rate_avg"] is None
+    assert signals["models"]["plain-model"]["prefix_cache_hit_rate_avg"] == pytest.approx(0.3)

@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlencode
 
 from logos.dbutils.dbmanager import DBManager
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
+from logos.pipeline.effort_normalization import normalize_reasoning_effort
 from logos.request_content import is_multipart_payload, set_payload_field
 from logos.sdi.azure_deployment_sync import AZURE_OPERATION_API_VERSIONS
 
@@ -106,6 +107,20 @@ class ContextResolver:
             auth_name = (auth_info.get("auth_name") or "").strip()
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
+
+            # The provider form advertises "Authorization" and "Bearer {}" as
+            # placeholders, so operators routinely save an OpenAI-shaped cloud
+            # provider with both fields empty. Without a default the header was
+            # dropped silently below and the upstream rejected the request as
+            # unauthenticated — apply the advertised convention instead. An
+            # explicit header name (e.g. Azure's "api-key") keeps its own name
+            # and defaults to the bare key rather than a Bearer prefix.
+            if provider_type != "logosnode" and api_key:
+                if not auth_name:
+                    auth_name = "Authorization"
+                    auth_format = auth_format or "Bearer {}"
+                elif not auth_format:
+                    auth_format = "{}"
 
             if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
                 logger.error(
@@ -235,6 +250,13 @@ class ContextResolver:
         # OpenWebUI requires model name injection
         if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
             payload = set_payload_field(payload, "model", context.model_name)
+
+        # The Qwen3.8 chat template only accepts xhigh/medium/low as reasoning
+        # effort, but clients such as Claude Code send the Anthropic value
+        # "high" in every request. vLLM forwards the value to the template,
+        # which rejects it with an error surfaced as HTTP 500 — map the wider
+        # client scale onto the accepted one before forwarding (#749).
+        payload = normalize_reasoning_effort(payload, context.model_name)
 
         # Azure Responses API resolves the deployment from the body's "model"
         # field (the URL carries no deployment segment). Clients address models

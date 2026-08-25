@@ -175,6 +175,15 @@ class VllmConfig(BaseModel):
         description="Default chat_template_kwargs passed to vLLM via --default-chat-template-kwargs. "
         'e.g. {"enable_thinking": false} to disable Qwen3/3.5 thinking mode.',
     )
+    speculative_config: str = Field(
+        default="",
+        description="vLLM --speculative-config as a JSON string, e.g. "
+        '\'{"method":"qwen3_5_mtp","num_speculative_tokens":3}\' to enable the '
+        "model's built-in MTP draft head. Empty (default) = no speculative decoding. "
+        "Setting this disables the sharded-checkpoint cache for the lane: vLLM loads the "
+        "draft model in the same format as the main model, and a pre-sharded cache has no "
+        'shards for it ("only pre-sharded checkpoints are currently supported").',
+    )
     extra_args: list[str] = Field(default_factory=list)
     env_overrides: dict[str, str] = Field(
         default_factory=dict,

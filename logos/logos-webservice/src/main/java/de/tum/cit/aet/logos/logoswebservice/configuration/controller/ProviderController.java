@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.CalibrateUncalibratedRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteLaneRequestDTO;
@@ -22,6 +23,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteProviderRequ
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
@@ -31,11 +33,13 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdmin
 public class ProviderController {
 
     private final ProviderService providerService;
+    private final PriceUpdaterService priceUpdaterService;
     private final OrchestratorWorkerAdminClient workerAdminClient;
     private final ObjectMapper objectMapper;
 
-    public ProviderController(ProviderService providerService, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
         this.providerService = providerService;
+        this.priceUpdaterService = priceUpdaterService;
         this.workerAdminClient = workerAdminClient;
         this.objectMapper = objectMapper;
     }
@@ -83,7 +87,15 @@ public class ProviderController {
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> connectModelProvider(
             @RequestBody ConnectModelProviderRequestDTO req) {
-        return ResponseEntity.ok(providerService.connectModelProvider(req));
+        ResponseEntity<?> response = ResponseEntity.ok(providerService.connectModelProvider(req));
+        // A model only becomes priceable once it is linked to a cloud provider:
+        // before the link, updatePricesForModelAsync finds no cloud pair and
+        // skips. Without this trigger prices stayed absent until the next daily
+        // refresh, so freshly connected cloud models reported a cost of zero.
+        if (req.modelId() != null) {
+            priceUpdaterService.updatePricesForModelAsync(req.modelId());
+        }
+        return response;
     }
 
     @PostMapping("/disconnect_model_provider")
@@ -115,6 +127,20 @@ public class ProviderController {
         if (req.providerId() == null) return ResponseEntity.badRequest().body(Map.of("error", "provider_id is required"));
         try {
             return workerAdminClient.calibrateUncalibrated(req.providerId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/providers/logosnode/lanes/add")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> addLane(@RequestBody AddLaneRequestDTO req) {
+        if (req.providerId() == null || req.lane() == null || req.lane().isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane are required"));
+        try {
+            return workerAdminClient.addLane(req.providerId(), req.lane());
         } catch (RestClientResponseException e) {
             return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
         } catch (Exception e) {

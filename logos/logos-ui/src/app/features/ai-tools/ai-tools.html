@@ -1,0 +1,717 @@
+<div class="ai-tools">
+  <!-- Confetti for finishing the setup. Purely decorative, hidden from assistive
+       technology, and never rendered at all when the visitor asked their system
+       for reduced motion (see celebrate()). -->
+  @if (confetti().length > 0) {
+    <div class="confetti" aria-hidden="true">
+      @for (piece of confetti(); track piece.id) {
+        <span
+          class="confetti-piece"
+          [style.left.%]="piece.left"
+          [style.width.px]="piece.size"
+          [style.height.px]="piece.size * 2"
+          [style.background]="piece.color"
+          [style.animation-delay.s]="piece.delay"
+          [style.animation-duration.s]="piece.duration"
+          [style.--confetti-drift.px]="piece.drift"
+          [style.--confetti-spin.deg]="piece.spin"
+        ></span>
+      }
+    </div>
+  }
+
+  <h1 class="page-title">AI Coding Tools</h1>
+  <p class="page-subtitle">
+    {{ visibleSteps().length }} guided steps to a coding assistant that runs on Logos. Pick a
+    tool first — the rest of the setup is generated from what you choose.
+  </p>
+
+  <!-- ── Stepper ───────────────────────────────────────────────────────────── -->
+  <ol class="stepper" aria-label="Setup progress">
+    @for (s of visibleSteps(); track s.id; let isLast = $last) {
+      <li class="stepper-item" [class.stepper-item--last]="isLast">
+        <button
+          type="button"
+          class="stepper-btn"
+          [class]="'stepper-btn stepper-btn--' + stepState(s.id)"
+          [disabled]="!canOpen(s.id)"
+          [attr.aria-current]="step() === s.id ? 'step' : null"
+          (click)="goTo(s.id)"
+        >
+          <span class="stepper-num" aria-hidden="true">
+            @if (stepState(s.id) === 'done') {
+              <i class="pi pi-check"></i>
+            } @else if (stepState(s.id) === 'locked') {
+              <i class="pi pi-lock"></i>
+            } @else {
+              {{ s.number }}
+            }
+          </span>
+          <span class="stepper-title">{{ s.title }}</span>
+        </button>
+      </li>
+    }
+  </ol>
+
+  <!-- ══════════════ 1 · TOOL ══════════════════════════════════════════════ -->
+  <section class="config-section" [class.config-section--collapsed]="step() !== 1">
+    @if (step() === 1) {
+      <p class="step-label">{{ stepNumber(1) }}. Choose your tool</p>
+      <p class="section-note">
+        Both talk to the same Logos models with the same key. They differ in where they run,
+        how they handle the context window, and what they do to a setup you already have.
+      </p>
+
+      <!-- A real table: the dimension label and both values share one row, so
+           the two tools stay aligned however the text wraps. The rows carry
+           role="row" and are laid out with display:contents, which keeps every
+           cell a grid item of .compare while the semantics stay valid. -->
+      <div class="compare" role="table" aria-label="Claude Code compared with OpenCode">
+        <div class="compare-row" role="row">
+          <div class="compare-corner" role="presentation"></div>
+          @for (tool of toolChoices; track tool) {
+            <div
+              class="compare-col"
+              role="columnheader"
+              [class.compare-col--active]="activeTool() === tool"
+            >
+              <span class="compare-col-head">
+                <i
+                  [class]="tool === 'claudecode' ? 'pi pi-sparkles' : 'pi pi-code'"
+                  aria-hidden="true"
+                ></i>
+                <span class="compare-col-name">{{ toolLabel(tool) }}</span>
+              </span>
+              <span class="compare-col-headline">{{ toolSummaries[tool].headline }}</span>
+              <span class="compare-col-caveat">
+                <i class="pi pi-exclamation-circle" aria-hidden="true"></i>
+                {{ toolSummaries[tool].caveat }}
+              </span>
+            </div>
+          }
+        </div>
+
+        @for (row of comparison; track row.dimension) {
+          <div class="compare-row" role="row">
+            <div class="compare-dim" role="rowheader">{{ row.dimension }}</div>
+            @for (tool of toolChoices; track tool) {
+              <div
+                class="compare-cell"
+                role="cell"
+                [class.compare-cell--active]="activeTool() === tool"
+                [class.compare-cell--plus]="row.favours === tool"
+              >
+                <i
+                  [class]="
+                    row.favours === tool
+                      ? 'pi pi-check-circle compare-icon compare-icon--plus'
+                      : row.favours === 'even'
+                        ? 'pi pi-minus-circle compare-icon compare-icon--even'
+                        : 'pi pi-circle compare-icon compare-icon--minus'
+                  "
+                  aria-hidden="true"
+                ></i>
+                <span>{{ tool === 'claudecode' ? row.claudecode : row.opencode }}</span>
+              </div>
+            }
+          </div>
+        }
+
+        <div class="compare-row" role="row">
+          <div class="compare-corner" role="presentation"></div>
+          @for (tool of toolChoices; track tool) {
+            <div class="compare-cta-cell" role="cell">
+              <button
+                type="button"
+                class="compare-cta"
+                [class.compare-cta--active]="activeTool() === tool"
+                [attr.aria-pressed]="activeTool() === tool"
+                (click)="chooseTool(tool)"
+              >
+                @if (activeTool() === tool) {
+                  <i class="pi pi-check" aria-hidden="true"></i> Selected — continue below
+                } @else {
+                  Choose {{ toolLabel(tool) }}
+                }
+              </button>
+            </div>
+          }
+        </div>
+      </div>
+
+      <p class="tab-note tool-legend">
+        <i class="pi pi-check-circle compare-icon compare-icon--plus" aria-hidden="true"></i>
+        the stronger side of that row —
+        <i class="pi pi-circle compare-icon compare-icon--minus" aria-hidden="true"></i>
+        the weaker one.
+      </p>
+    } @else if (showSummary(1)) {
+      <button type="button" class="step-summary" (click)="goTo(1)">
+        <span class="step-summary-label">{{ stepNumber(1) }} · Tool</span>
+        <span class="step-summary-value">{{ toolLabel(activeTool()) }}</span>
+        <i class="pi pi-pencil" aria-hidden="true"></i>
+      </button>
+    }
+  </section>
+
+  <!-- ══════════════ 2 · TEAM ══════════════════════════════════════════════ -->
+  <section class="config-section" [class.config-section--collapsed]="step() !== 2">
+    @if (step() === 2) {
+      <p class="step-label">{{ stepNumber(2) }}. Choose your team</p>
+      <p class="section-note">
+        Requests are billed to the team whose key you use, and the team decides which models
+        you can reach in the next step.
+      </p>
+
+      @if (keysLoading()) {
+        <div class="model-loading">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+          <span>Loading your keys…</span>
+        </div>
+      } @else if (keysError()) {
+        <p class="model-error">Failed to load your API keys. Please refresh.</p>
+      } @else if (keys().length === 0) {
+        <p class="model-empty">No API keys found for your account.</p>
+      } @else {
+        <app-select
+          [options]="keyOptions()"
+          [value]="selectedKey() ? String(selectedKey()!.id) : ''"
+          ariaLabel="Select team"
+          (valueChange)="selectKeyById($event ?? '')"
+        />
+        @if (selectedKey()) {
+          <p class="tab-note">
+            Uses the key <code class="inline-code">{{ selectedKey()!.name }}</code> of this team.
+            The commands further down embed it, so treat them as a secret.
+          </p>
+        }
+      }
+
+      <div class="step-nav">
+        <button type="button" class="btn-secondary" (click)="back()">Back</button>
+        <button type="button" class="btn-primary" [disabled]="!teamChosen()" (click)="next()">
+          Continue <i class="pi pi-arrow-right" aria-hidden="true"></i>
+        </button>
+      </div>
+    } @else if (showSummary(2)) {
+      <button type="button" class="step-summary" (click)="goTo(2)">
+        <span class="step-summary-label">{{ stepNumber(2) }} · Team</span>
+        <span class="step-summary-value">{{ selectedKey()?.team?.name ?? '—' }}</span>
+        <i class="pi pi-pencil" aria-hidden="true"></i>
+      </button>
+    }
+  </section>
+
+  <!-- ══════════════ 3 · MODEL ═════════════════════════════════════════════ -->
+  <section class="config-section" [class.config-section--collapsed]="step() !== 3">
+    @if (step() === 3) {
+      <p class="step-label">{{ stepNumber(3) }}. Choose your model</p>
+
+      @if (activeTool() === 'opencode') {
+        <p class="section-note">
+          Sets the default model for the terminal version. The desktop app ignores it — there
+          you pick the model in the model picker after connecting.
+        </p>
+      } @else {
+        <p class="section-note">
+          Claude Code runs one model at a time, so the wrapper points every alias —
+          <code class="inline-code">opus</code>, <code class="inline-code">sonnet</code>,
+          <code class="inline-code">haiku</code> — at the model you pick here. Switching alias
+          with <code class="inline-code">/model</code> then never leaves Logos.
+        </p>
+      }
+
+      @if (keysLoading() || modelsLoading()) {
+        <div class="model-loading">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+          <span>Loading models…</span>
+        </div>
+      } @else if (modelsError()) {
+        <p class="model-error">Failed to load models for this key.</p>
+      } @else if (models().length === 0) {
+        <p class="model-empty">No models are accessible for this key.</p>
+      } @else {
+        <app-select
+          [options]="modelOptions()"
+          [value]="selected()?.model_name ?? ''"
+          ariaLabel="Select model"
+          (valueChange)="selectModel($event ?? '')"
+        />
+
+        @if (selected()) {
+          <ng-container *ngTemplateOutlet="modelContext"></ng-container>
+        }
+      }
+
+      <div class="step-nav">
+        <button type="button" class="btn-secondary" (click)="back()">Back</button>
+        <button type="button" class="btn-primary" [disabled]="!modelChosen()" (click)="next()">
+          Continue <i class="pi pi-arrow-right" aria-hidden="true"></i>
+        </button>
+      </div>
+    } @else if (showSummary(3)) {
+      <button type="button" class="step-summary" (click)="goTo(3)">
+        <span class="step-summary-label">{{ stepNumber(3) }} · Model</span>
+        <span class="step-summary-value">{{ selected()?.model_name ?? '—' }}</span>
+        <i class="pi pi-pencil" aria-hidden="true"></i>
+      </button>
+    }
+  </section>
+
+  <!-- ══════════════ 4 · INSTALL ═══════════════════════════════════════════ -->
+  <section class="config-section" [class.config-section--collapsed]="step() !== 4">
+    @if (step() === 4) {
+      <p class="step-label">{{ stepNumber(4) }}. Install {{ toolLabel(activeTool()) }}</p>
+      <p class="section-note">Skip this if you already have it.</p>
+
+      <div class="os-tabs" role="tablist">
+        <button class="os-tab" role="tab" [attr.aria-selected]="installTab() === 'mac'"
+          [class.os-tab--active]="installTab() === 'mac'"
+          (click)="installTab.set('mac')">macOS</button>
+        <button class="os-tab" role="tab" [attr.aria-selected]="installTab() === 'linux'"
+          [class.os-tab--active]="installTab() === 'linux'"
+          (click)="installTab.set('linux')">Linux</button>
+        <button class="os-tab" role="tab" [attr.aria-selected]="installTab() === 'windows'"
+          [class.os-tab--active]="installTab() === 'windows'"
+          (click)="installTab.set('windows')">Windows</button>
+      </div>
+
+      @if (activeTool() === 'claudecode') {
+        @if (installTab() === 'mac') {
+          <div class="terminal-block">
+            <span class="terminal-prefix" aria-hidden="true">$</span>
+            <code class="terminal-cmd">{{ claudeCodeInstallCommands.mac }}</code>
+            <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeInstallCommands.mac"
+              (click)="copyCmd(claudeCodeInstallCommands.mac)" aria-label="Copy command">
+              <i [class]="copiedCmd() === claudeCodeInstallCommands.mac ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+            </button>
+          </div>
+          <p class="tab-note">
+            Homebrew installs do not auto-update. Prefer the self-updating native installer?
+            Use <code class="inline-code">{{ claudeCodeInstallCommands.nativeUnix }}</code> instead.
+          </p>
+        } @else if (installTab() === 'linux') {
+          <div class="terminal-block">
+            <span class="terminal-prefix" aria-hidden="true">$</span>
+            <code class="terminal-cmd">{{ claudeCodeInstallCommands.nativeUnix }}</code>
+            <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeInstallCommands.nativeUnix"
+              (click)="copyCmd(claudeCodeInstallCommands.nativeUnix)" aria-label="Copy command">
+              <i [class]="copiedCmd() === claudeCodeInstallCommands.nativeUnix ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+            </button>
+          </div>
+          <p class="tab-note">
+            Works on WSL too. Debian, Fedora, RHEL and Alpine can also install via
+            <code class="inline-code">apt</code>, <code class="inline-code">dnf</code> or
+            <code class="inline-code">apk</code>; see
+            <a class="ext-link" href="https://code.claude.com/docs/en/setup" target="_blank" rel="noopener">the setup guide</a>.
+          </p>
+        } @else {
+          <div class="terminal-block">
+            <span class="terminal-prefix" aria-hidden="true">&gt;</span>
+            <code class="terminal-cmd">{{ claudeCodeInstallCommands.windows }}</code>
+            <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeInstallCommands.windows"
+              (click)="copyCmd(claudeCodeInstallCommands.windows)" aria-label="Copy command">
+              <i [class]="copiedCmd() === claudeCodeInstallCommands.windows ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+            </button>
+          </div>
+          <p class="tab-note">
+            Run in PowerShell, not CMD. WinGet works as well
+            (<code class="inline-code">{{ claudeCodeInstallCommands.winget }}</code>), but does not auto-update.
+          </p>
+        }
+      } @else {
+        @if (installTab() === 'mac') {
+          <div class="terminal-block">
+            <span class="terminal-prefix" aria-hidden="true">$</span>
+            <code class="terminal-cmd">{{ openCodeInstallCommands.mac }}</code>
+            <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === openCodeInstallCommands.mac"
+              (click)="copyCmd(openCodeInstallCommands.mac)" aria-label="Copy command">
+              <i [class]="copiedCmd() === openCodeInstallCommands.mac ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+            </button>
+          </div>
+          <p class="tab-note">
+            Installs the OpenCode desktop app. Prefer the terminal-only version? Use
+            <code class="inline-code">{{ openCodeInstallCommands.macCli }}</code> or
+            <code class="inline-code">{{ openCodeInstallCommands.npmCli }}</code> instead.
+          </p>
+        } @else if (installTab() === 'linux') {
+          <p class="install-hint">
+            Download the OpenCode desktop app (<code class="inline-code">.deb</code> /
+            <code class="inline-code">.rpm</code>) from
+            <a class="ext-link" href="https://opencode.ai/download" target="_blank" rel="noopener">opencode.ai/download</a>.
+          </p>
+          <p class="tab-note">
+            Prefer the terminal-only version? Use
+            <code class="inline-code">{{ openCodeInstallCommands.linuxCli }}</code> or
+            <code class="inline-code">{{ openCodeInstallCommands.npmCli }}</code> instead.
+          </p>
+        } @else {
+          <p class="install-hint">
+            Download the OpenCode desktop installer from
+            <a class="ext-link" href="https://opencode.ai/download" target="_blank" rel="noopener">opencode.ai/download</a>.
+          </p>
+          <p class="tab-note">
+            Prefer the terminal-only version? Use
+            <code class="inline-code">{{ openCodeInstallCommands.npmCli }}</code> instead.
+          </p>
+        }
+      }
+
+      <div class="step-nav">
+        <button type="button" class="btn-secondary" (click)="back()">Back</button>
+        <button type="button" class="btn-primary" (click)="next()">
+          Continue <i class="pi pi-arrow-right" aria-hidden="true"></i>
+        </button>
+      </div>
+    } @else if (showSummary(4)) {
+      <button type="button" class="step-summary" (click)="goTo(4)">
+        <span class="step-summary-label">{{ stepNumber(4) }} · Install</span>
+        <span class="step-summary-value">{{ toolLabel(activeTool()) }} on {{ osLabel() }}</span>
+        <i class="pi pi-pencil" aria-hidden="true"></i>
+      </button>
+    }
+  </section>
+
+  <!-- ══════════════ 5 · CONNECT ═══════════════════════════════════════════ -->
+  <section class="config-section" [class.config-section--collapsed]="step() !== 5">
+    @if (step() === 5) {
+      <p class="step-label">{{ stepNumber(5) }}. Connect to Logos</p>
+
+      @if (!ready()) {
+        <p class="model-empty">
+          Pick a team and a model first — the commands here are generated from them.
+        </p>
+      } @else {
+        <!-- With one team and/or one model those steps hold no decision and are
+             skipped, so say here what was used instead of leaving it implicit. -->
+        @if (isSkipped(2) && isSkipped(3)) {
+          <p class="section-note used-choices">
+            Using your only team, <strong>{{ selectedKey()?.team?.name }}</strong>, and the only
+            model it can reach, <strong>{{ selected()?.model_name }}</strong>.
+          </p>
+        } @else if (isSkipped(2)) {
+          <p class="section-note used-choices">
+            Using your only team, <strong>{{ selectedKey()?.team?.name }}</strong>.
+          </p>
+        } @else if (isSkipped(3)) {
+          <p class="section-note used-choices">
+            Using <strong>{{ selected()?.model_name }}</strong>, the only model this key can reach.
+          </p>
+        }
+        @if (isSkipped(3) && selected()) {
+          <ng-container *ngTemplateOutlet="modelContext"></ng-container>
+        }
+      }
+
+      @if (ready() && activeTool() === 'claudecode') {
+        <!-- ── Claude Code: install the wrapper ─────────────────────────────── -->
+        <p class="section-note">
+          This installs <code class="inline-code">claude-logos</code>: a small wrapper on your
+          PATH that points Claude Code at Logos for its own session only. Run it exactly like
+          <code class="inline-code">claude</code> — every argument is passed through unchanged.
+        </p>
+
+        <div class="callout callout--good" role="note">
+          <i class="pi pi-shield" aria-hidden="true"></i>
+          <p>
+            <strong>Your existing setup is left alone.</strong> No shell profile, no global
+            environment variable and no change to
+            <code class="inline-code">~/.claude/settings.json</code>: plain
+            <code class="inline-code">claude</code> keeps using your Anthropic subscription, and
+            <code class="inline-code">claude-logos</code> goes to Logos. Both work side by side,
+            with no switching back and forth.
+          </p>
+        </div>
+
+        <p class="substep-label">a. Install the wrapper</p>
+        <p class="apply-hint">
+          Downloads <a class="ext-link" [href]="wrapperUrl()" target="_blank" rel="noopener">the
+          wrapper</a>, writes it to
+          <code class="inline-code">{{ wrapperInstallDir() }}</code>
+          and stores your key (readable by you only) in
+          <code class="inline-code">{{ wrapperConfigDir() }}</code>.
+          Paste the whole block — it contains your key, so treat it as a secret.
+        </p>
+        <div class="code-header">
+          <span class="file-tab">{{ installTab() === 'windows' ? 'PowerShell' : 'Terminal' }}</span>
+          <button class="btn-copy-config"
+            [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeInstallCommand()"
+            (click)="copyCmd(claudeCodeInstallCommand())">
+            <i [class]="copiedCmd() === claudeCodeInstallCommand() ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+            Copy command
+          </button>
+        </div>
+        <div class="code-block" role="region" aria-label="Install command">
+          <pre class="code-content">{{ claudeCodeInstallCommand() }}</pre>
+        </div>
+
+        <p class="substep-label">b. Add it to your PATH, if it is not already</p>
+        <p class="apply-hint">
+          The installer checks and prints the exact line to add when it is needed. Open a new
+          terminal afterwards so the change takes effect.
+        </p>
+
+        <p class="substep-label">c. Start it</p>
+        <div class="terminal-block">
+          <span class="terminal-prefix" aria-hidden="true">{{ shellPrompt() }}</span>
+          <code class="terminal-cmd">claude-logos</code>
+          <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === 'claude-logos'"
+            (click)="copyCmd('claude-logos')" aria-label="Copy command">
+            <i [class]="copiedCmd() === 'claude-logos' ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+          </button>
+        </div>
+        <p class="tab-note">
+          Anything after it goes to Claude Code:
+          <code class="inline-code">claude-logos -p "explain this repo"</code>,
+          <code class="inline-code">claude-logos --resume</code>. To use another Logos model
+          once, prefix it:
+          <code class="inline-code">{{ modelOverrideExample() }}</code>.
+        </p>
+      } @else if (ready()) {
+        <!-- ── OpenCode: add the provider ───────────────────────────────────── -->
+        <div class="privacy-callout" role="note">
+          <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+          <p>
+            <strong>Prompts only stay on Logos while a Logos model is selected</strong>;
+            otherwise OpenCode sends them to its built-in cloud models.
+          </p>
+        </div>
+
+        <p class="substep-label">a. Add the Logos provider to your config</p>
+
+        <div class="os-tabs" role="tablist">
+          <button type="button" class="os-tab" role="tab"
+            [attr.aria-selected]="connectMethod() === 'terminal'"
+            [class.os-tab--active]="connectMethod() === 'terminal'"
+            (click)="connectMethod.set('terminal')">Terminal</button>
+          <button type="button" class="os-tab" role="tab"
+            [attr.aria-selected]="connectMethod() === 'download'"
+            [class.os-tab--active]="connectMethod() === 'download'"
+            (click)="connectMethod.set('download')">Download config</button>
+        </div>
+
+        @if (connectMethod() === 'terminal') {
+          <p class="apply-hint">
+            Run in your terminal; adds only the Logos provider, an existing config is kept:
+          </p>
+          <div class="terminal-block">
+            <span class="terminal-prefix" aria-hidden="true">{{ shellPrompt() }}</span>
+            <code class="terminal-cmd">{{ openCodeMergeCommand() }}</code>
+            <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === openCodeMergeCommand()"
+              (click)="copyCmd(openCodeMergeCommand())" aria-label="Copy command">
+              <i [class]="copiedCmd() === openCodeMergeCommand() ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+            </button>
+          </div>
+          @if (installTab() === 'windows') {
+            <p class="tab-note">Run in PowerShell; uses only built-in cmdlets.</p>
+          } @else if (installTab() === 'mac') {
+            <p class="tab-note">
+              Uses <code class="inline-code">python3</code>, included in the Xcode Command Line
+              Tools (already present if you installed via Homebrew).
+            </p>
+          } @else {
+            <p class="tab-note">Uses the system <code class="inline-code">python3</code>.</p>
+          }
+        } @else {
+          <p class="apply-hint">
+            Only if you have no <code class="inline-code">opencode.json</code> yet: save it as
+            <code class="inline-code">{{ openCodeConfigPath() }}</code>.
+          </p>
+          <div class="code-header">
+            <span class="file-tab">opencode.json</span>
+            <button class="btn-copy-config" (click)="downloadOpenCodeConfig()">
+              <i class="pi pi-download" aria-hidden="true"></i> Download config
+            </button>
+          </div>
+          <div class="code-block" role="region" aria-label="Generated opencode.json">
+            <div class="line-numbers" aria-hidden="true">
+              @for (line of openCodeConfigLines(); track $index) {
+                <span>{{ $index + 1 }}</span>
+              }
+            </div>
+            <pre class="code-content">{{ openCodeConfigJson() }}</pre>
+          </div>
+        }
+
+        <p class="substep-label">b. Restart OpenCode</p>
+        <p class="apply-hint">The config is only read at startup.</p>
+
+        <p class="substep-label">c. Select a Logos model</p>
+        <p class="apply-hint">
+          Open the model picker (or type <code class="inline-code">/models</code>) and pick a
+          model under <strong>Logos LLM Platform</strong>, both in the desktop app and in the
+          terminal.
+        </p>
+      }
+
+      <div class="step-nav">
+        <button type="button" class="btn-secondary" (click)="back()">Back</button>
+        <button type="button" class="btn-primary" [disabled]="!ready()" (click)="next()">
+          Continue <i class="pi pi-arrow-right" aria-hidden="true"></i>
+        </button>
+      </div>
+    } @else if (showSummary(5)) {
+      <button type="button" class="step-summary" (click)="goTo(5)">
+        <span class="step-summary-label">{{ stepNumber(5) }} · Connect</span>
+        <span class="step-summary-value">
+          {{ activeTool() === 'claudecode' ? 'claude-logos wrapper' : 'Logos provider in opencode.json' }}
+        </span>
+        <i class="pi pi-pencil" aria-hidden="true"></i>
+      </button>
+    }
+  </section>
+
+  <!-- ══════════════ 6 · VERIFY ════════════════════════════════════════════ -->
+  <section class="config-section" [class.config-section--collapsed]="step() !== 6">
+    @if (step() === 6) {
+      <p class="step-label">{{ stepNumber(6) }}. Verify, and how to undo it</p>
+
+      @if (activeTool() === 'claudecode') {
+        <p class="substep-label">Check the connection</p>
+        <p class="apply-hint">
+          Prints the gateway, the key it found, the context window this deployment currently
+          serves and the result of one real request:
+        </p>
+        <div class="terminal-block">
+          <span class="terminal-prefix" aria-hidden="true">{{ shellPrompt() }}</span>
+          <code class="terminal-cmd">{{ claudeCodeVerifyCommand() }}</code>
+          <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeVerifyCommand()"
+            (click)="copyCmd(claudeCodeVerifyCommand())" aria-label="Copy command">
+            <i [class]="copiedCmd() === claudeCodeVerifyCommand() ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+          </button>
+        </div>
+        <p class="tab-note">
+          Every normal start prints the same context line, so you can always see how much room
+          the session got — this command just shows it without starting one.
+        </p>
+
+        <p class="substep-label">Staying up to date</p>
+        <p class="apply-hint">
+          The wrapper never updates itself. It checks once a day whether Logos serves a newer
+          revision and, if so, says so on the next start along with the one command that
+          replaces it — <code class="inline-code">{{ claudeCodeUpdateCommand() }}</code>. That
+          leaves your key, model and settings untouched, so an update is not a re-setup and you
+          do not need to come back to this page for one.
+        </p>
+
+        <p class="substep-label">Remove it again</p>
+        <p class="apply-hint">
+          Deletes the wrapper, the config and the key, and offers to clean up an older Logos
+          block in <code class="inline-code">~/.claude/settings.json</code> if this page put one
+          there before. Nothing of it is left afterwards:
+        </p>
+        <div class="terminal-block">
+          <span class="terminal-prefix" aria-hidden="true">{{ shellPrompt() }}</span>
+          <code class="terminal-cmd">{{ claudeCodeUninstallCommand() }}</code>
+          <button class="btn-copy-cmd" [class.btn-copy-cmd--done]="copiedCmd() === claudeCodeUninstallCommand()"
+            (click)="copyCmd(claudeCodeUninstallCommand())" aria-label="Copy command">
+            <i [class]="copiedCmd() === claudeCodeUninstallCommand() ? 'pi pi-check' : 'pi pi-copy'" aria-hidden="true"></i>
+          </button>
+        </div>
+      } @else {
+        <p class="substep-label">Check the connection</p>
+        <p class="apply-hint">
+          Open the model picker: the models under <strong>Logos LLM Platform</strong> are the
+          ones this key can reach. Send a short prompt and confirm it appears in
+          <a class="ext-link" href="/statistics">your statistics</a>.
+        </p>
+
+        <p class="substep-label">Remove it again</p>
+        <p class="apply-hint">
+          Delete the <code class="inline-code">logos</code> entry under
+          <code class="inline-code">provider</code> in
+          <code class="inline-code">~/.config/opencode/opencode.json</code> (and the
+          <code class="inline-code">model</code> line if it points at
+          <code class="inline-code">logos/…</code>), then restart OpenCode.
+        </p>
+      }
+
+      <div class="step-nav">
+        <button type="button" class="btn-secondary" (click)="back()">Back</button>
+      </div>
+    } @else if (showSummary(6)) {
+      <button type="button" class="step-summary" (click)="goTo(6)">
+        <span class="step-summary-label">{{ stepNumber(6) }} · Verify</span>
+        <span class="step-summary-value">Check the connection, or undo the setup</span>
+        <i class="pi pi-pencil" aria-hidden="true"></i>
+      </button>
+    }
+  </section>
+
+  <!-- The model and its context windows. Rendered in step 3 normally, and at the
+       top of Connect when step 3 was skipped because there is only one model —
+       the numbers are the point of that step, so skipping the click must not
+       also drop the information. -->
+  <ng-template #modelContext>
+        <!-- Context windows. Same three numbers whichever tool is selected; the
+             note below them differs because only one of the two can re-read them. -->
+        <div class="context-grid" role="group" aria-label="Context window in tokens">
+          <div class="context-cell">
+            <span class="context-cell-label">Always available</span>
+            <span class="context-cell-value">
+              @if (hasReportedWindow()) {
+                {{ contextCurrentMin() | number }}
+              } @else {
+                unknown
+              }
+            </span>
+            <span class="context-cell-note">tokens you get whatever the load</span>
+          </div>
+          <div class="context-cell">
+            <span class="context-cell-label">Available now</span>
+            <span class="context-cell-value">
+              @if (hasReportedWindow()) {
+                {{ contextCurrentMax() | number }}
+              } @else {
+                unknown
+              }
+            </span>
+            <span class="context-cell-note">tokens Logos can give you at the moment</span>
+          </div>
+          <div class="context-cell context-cell--accent">
+            <span class="context-cell-label">Model maximum</span>
+            <span class="context-cell-value">
+              @if (hasReportedWindow()) {
+                {{ contextOverall() | number }}
+              } @else {
+                {{ contextFallback() | number }}
+              }
+            </span>
+            <span class="context-cell-note">the most this model can ever offer</span>
+          </div>
+        </div>
+
+        <p class="context-note">
+          How much context Logos can give a model depends on how much capacity is free, so it
+          is not one fixed number — it moves between the first two figures above. Long
+          requests are sent wherever there is room for them.
+          @if (activeTool() === 'claudecode') {
+            <strong>The wrapper asks Logos at every start and prints what it got,</strong>
+            so you always see the size of the session you are in, and nothing needs changing
+            on your side when it moves.
+          } @else {
+            <strong>OpenCode reads its config once at startup</strong>, so the config below
+            states the model maximum. Very long conversations may be turned down when
+            capacity is tight; start a new one, or use Claude Code, which adjusts by itself.
+          }
+          @if (!hasReportedWindow()) {
+            Logos reports no size for this model right now, so the figure above is a
+            conservative estimate.
+          }
+        </p>
+
+        @if (activeTool() === 'claudecode' && windowUnenforced()) {
+          <div class="privacy-callout" role="note">
+            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+            <p>
+              <strong>Claude Code will ignore the context window for this model.</strong>
+              It resolves ids starting with <code class="inline-code">claude-</code> or
+              containing <code class="inline-code">[1m]</code> to one of its own models and
+              keeps that window instead. The wrapper says so on startup; pick another model,
+              or set <code class="inline-code">DISABLE_COMPACT=1</code> to force the window
+              through (which turns auto-compaction off).
+            </p>
+          </div>
+        }
+  </ng-template>
+</div>
