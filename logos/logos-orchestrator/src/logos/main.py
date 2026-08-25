@@ -2560,7 +2560,6 @@ async def _register_models_with_facades(
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
                         "provider_id": provider_id,
-                        "db_parallel": model_info.get("parallel"),
                     }
                 )
             elif cloud_provider_type == "azure":
