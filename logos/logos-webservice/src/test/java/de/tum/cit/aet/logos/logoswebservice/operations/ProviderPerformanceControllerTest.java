@@ -97,4 +97,33 @@ class ProviderPerformanceControllerTest {
                 .content("{}"))
            .andExpect(status().isForbidden());
     }
+
+    @Test
+    void modelBenchmarks_returnsStoredGuideLlmSummaryForModel() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.benchmarks.length()").value(1))
+           .andExpect(jsonPath("$.benchmarks[0].model_provider_id").value(7001))
+           .andExpect(jsonPath("$.benchmarks[0].provider_name").value("openai-provider"))
+           .andExpect(jsonPath("$.benchmarks[0].model_name").value("gpt-4"))
+           .andExpect(jsonPath("$.benchmarks[0].configuration.tool").value("guidellm"))
+           .andExpect(jsonPath("$.benchmarks[0].dataset").value("openai/gsm8k"))
+           .andExpect(jsonPath("$.benchmarks[0].sample_size").value(100))
+           .andExpect(jsonPath("$.benchmarks[0].metrics.request_rate").value(2.5))
+           .andExpect(jsonPath("$.benchmarks[0].metrics.request_latency_ms.p95").value(690.0))
+           .andExpect(jsonPath("$.benchmarks[0].recorded_at").value("2026-08-24T12:00:00Z"));
+    }
+
+    @Test
+    void modelBenchmarks_rejectsMissingModelId() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("model_id must be a positive integer"));
+    }
 }

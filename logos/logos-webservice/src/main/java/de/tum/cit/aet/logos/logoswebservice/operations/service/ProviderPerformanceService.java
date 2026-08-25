@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.operations.service;
 
+import java.io.IOException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
@@ -9,19 +10,31 @@ import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.dto.ProviderPerformanceRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelProviderBenchmarkProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderPerformanceProjection;
 
 @Service
 public class ProviderPerformanceService {
 
     private static final Duration DEFAULT_WINDOW = Duration.ofHours(24);
+    private static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {};
 
     private final LogEntryRepository logEntryRepository;
+    private final ModelProviderRepository modelProviderRepository;
+    private final ObjectMapper objectMapper;
 
-    public ProviderPerformanceService(LogEntryRepository logEntryRepository) {
+    public ProviderPerformanceService(LogEntryRepository logEntryRepository,
+                                      ModelProviderRepository modelProviderRepository,
+                                      ObjectMapper objectMapper) {
         this.logEntryRepository = logEntryRepository;
+        this.modelProviderRepository = modelProviderRepository;
+        this.objectMapper = objectMapper;
     }
 
     public Map<String, Object> getProviderPerformance(ProviderPerformanceRequestDTO request) {
@@ -47,6 +60,19 @@ public class ProviderPerformanceService {
         return response;
     }
 
+    public Map<String, Object> getModelBenchmarks(Integer modelId) {
+        if (modelId == null || modelId <= 0) {
+            throw new IllegalArgumentException("model_id must be a positive integer");
+        }
+
+        List<Map<String, Object>> benchmarks = modelProviderRepository.findBenchmarksForModel(modelId)
+            .stream()
+            .map(this::benchmarkToMap)
+            .toList();
+
+        return Map.of("benchmarks", benchmarks);
+    }
+
     private static Map<String, Object> toMap(ProviderPerformanceProjection p) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("provider_id", p.getProviderId());
@@ -70,5 +96,29 @@ public class ProviderPerformanceService {
         result.put("p95", p95);
         result.put("p100", p100);
         return result;
+    }
+
+    private Map<String, Object> benchmarkToMap(ModelProviderBenchmarkProjection benchmark) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", benchmark.getId());
+        result.put("model_provider_id", benchmark.getModelProviderId());
+        result.put("provider_id", benchmark.getProviderId());
+        result.put("provider_name", benchmark.getProviderName());
+        result.put("model_id", benchmark.getModelId());
+        result.put("model_name", benchmark.getModelName());
+        result.put("configuration", parseJson(benchmark.getConfigurationJson()));
+        result.put("dataset", benchmark.getDataset());
+        result.put("sample_size", benchmark.getSampleSize());
+        result.put("metrics", parseJson(benchmark.getMetricsJson()));
+        result.put("recorded_at", benchmark.getRecordedAt());
+        return result;
+    }
+
+    private Map<String, Object> parseJson(String json) {
+        try {
+            return objectMapper.readValue(json, JSON_MAP);
+        } catch (IOException e) {
+            throw new IllegalStateException("Stored benchmark JSON is invalid", e);
+        }
     }
 }

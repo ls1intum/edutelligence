@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.operations.dto.ModelBenchmarkRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.operations.dto.ProviderPerformanceRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.ProviderPerformanceService;
 
@@ -29,6 +30,16 @@ public class ProviderPerformanceController {
             @RequestBody(required = false) ProviderPerformanceRequestDTO request) {
         try {
             return ResponseEntity.ok(providerPerformanceService.getProviderPerformance(request));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/model_benchmarks")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> modelBenchmarks(@RequestBody ModelBenchmarkRequestDTO request) {
+        try {
+            return ResponseEntity.ok(providerPerformanceService.getModelBenchmarks(request.modelId()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
