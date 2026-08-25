@@ -48,6 +48,50 @@ export interface ProviderPerformanceResponse {
   pairs: ProviderPerformancePair[];
 }
 
+export interface GuideLlmPercentiles {
+  p50: number;
+  p95: number;
+  p99: number;
+}
+
+export interface GuideLlmDistributionSummary {
+  percentiles: GuideLlmPercentiles;
+}
+
+export interface GuideLlmStatusDistributionSummary {
+  successful: GuideLlmDistributionSummary;
+}
+
+export interface GuideLlmMetrics {
+  request_totals: {
+    successful: number;
+    incomplete: number;
+    errored: number;
+    total: number;
+  };
+  request_latency?: GuideLlmStatusDistributionSummary;
+  time_to_first_token_ms?: GuideLlmStatusDistributionSummary;
+  time_per_output_token_ms?: GuideLlmStatusDistributionSummary;
+}
+
+export interface ModelProviderBenchmark {
+  id: number;
+  model_provider_id: number;
+  provider_id: number;
+  provider_name: string;
+  model_id: number;
+  model_name: string;
+  configuration: Record<string, unknown>;
+  dataset: string;
+  sample_size: number;
+  metrics: GuideLlmMetrics;
+  recorded_at: string;
+}
+
+export interface ModelBenchmarkResponse {
+  benchmarks: ModelProviderBenchmark[];
+}
+
 export interface AddProviderPayload {
   name: string;
   base_url?: string;

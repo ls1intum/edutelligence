@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
-import { ProviderPerformanceResponse } from '../../shared/models/provider.model';
+import { ModelBenchmarkResponse } from '../../shared/models/provider.model';
 
 @Injectable({ providedIn: 'root' })
 export class ModelManagementService {
@@ -12,10 +12,10 @@ export class ModelManagementService {
     return firstValueFrom(this.http.post<Model[]>('/api/logosdb/get_models', {}));
   }
 
-  getPerformance(modelId: number): Promise<ProviderPerformanceResponse> {
+  getBenchmarks(modelId: number): Promise<ModelBenchmarkResponse> {
     return firstValueFrom(
-      this.http.post<ProviderPerformanceResponse>(
-        '/api/logosdb/provider_performance',
+      this.http.post<ModelBenchmarkResponse>(
+        '/api/logosdb/model_benchmarks',
         { model_id: modelId },
       ),
     );

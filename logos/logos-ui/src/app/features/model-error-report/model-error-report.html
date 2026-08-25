@@ -439,18 +439,18 @@
 
             <div class="performance-list">
 
-              @for (pair of performance(); track pair.provider_id) {
+              @for (benchmark of performance(); track benchmark.id) {
 
                 <article class="performance-card">
 
                   <header class="performance-card__header">
                     <div>
-                      <h3>{{ pair.provider_name }}</h3>
-                      <p>{{ pair.model_name }} · {{ pair.request_count }} requests</p>
+                      <h3>{{ benchmark.provider_name }}</h3>
+                      <p>{{ benchmark.model_name }} · {{ benchmark.sample_size }} samples</p>
                     </div>
 
-                    <span class="success-rate">
-                      {{ formatRate(pair.success_rate) }} success
+                    <span class="benchmark-tool">
+                      GuideLLM
                     </span>
                   </header>
 
@@ -458,30 +458,30 @@
 
                     <section class="metric">
                       <strong>TTFT</strong>
-                      <span>p50 <b>{{ formatDuration(pair.ttft_ms.p50) }}</b></span>
-                      <span>p95 <b>{{ formatDuration(pair.ttft_ms.p95) }}</b></span>
-                      <span>p100 <b>{{ formatDuration(pair.ttft_ms.p100) }}</b></span>
+                      <span>p50 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p50') }}</b></span>
+                      <span>p95 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p95') }}</b></span>
+                      <span>p99 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p99') }}</b></span>
                     </section>
 
                     <section class="metric">
                       <strong>TPOT</strong>
-                      <span>p50 <b>{{ formatDuration(pair.tpot_ms.p50) }}</b></span>
-                      <span>p95 <b>{{ formatDuration(pair.tpot_ms.p95) }}</b></span>
-                      <span>p100 <b>{{ formatDuration(pair.tpot_ms.p100) }}</b></span>
+                      <span>p50 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p50') }}</b></span>
+                      <span>p95 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p95') }}</b></span>
+                      <span>p99 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p99') }}</b></span>
                     </section>
 
                     <section class="metric">
-                      <strong>TTLT</strong>
-                      <span>p50 <b>{{ formatDuration(pair.ttlt_ms.p50) }}</b></span>
-                      <span>p95 <b>{{ formatDuration(pair.ttlt_ms.p95) }}</b></span>
-                      <span>p100 <b>{{ formatDuration(pair.ttlt_ms.p100) }}</b></span>
+                      <strong>Request latency</strong>
+                      <span>p50 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p50', 'seconds') }}</b></span>
+                      <span>p95 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p95', 'seconds') }}</b></span>
+                      <span>p99 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p99', 'seconds') }}</b></span>
                     </section>
 
                   </div>
 
                   <footer class="performance-card__footer">
-                    {{ pair.cold_start_count }} cold starts
-                    ({{ formatRate(pair.cold_start_rate) }})
+                    {{ benchmark.dataset }} · {{ benchmarkProfile(benchmark) }} ·
+                    {{ formatBenchmarkTimestamp(benchmark.recorded_at) }}
                   </footer>
 
                 </article>

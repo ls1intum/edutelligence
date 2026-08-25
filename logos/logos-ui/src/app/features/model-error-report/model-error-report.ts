@@ -18,7 +18,10 @@ import { firstValueFrom } from 'rxjs';
 
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { Model } from '../../shared/models/model.model';
-import { ProviderPerformancePair } from '../../shared/models/provider.model';
+import {
+  GuideLlmStatusDistributionSummary,
+  ModelProviderBenchmark,
+} from '../../shared/models/provider.model';
 
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
@@ -278,7 +281,7 @@ export class ModelErrorReport implements OnInit {
 
   readonly processesLoading = signal(false);
 
-  readonly performance = signal<readonly ProviderPerformancePair[]>([]);
+  readonly performance = signal<readonly ModelProviderBenchmark[]>([]);
   readonly performanceLoading = signal(false);
   readonly performanceError = signal(false);
 
@@ -529,8 +532,8 @@ export class ModelErrorReport implements OnInit {
     this.performanceError.set(false);
 
     try {
-      const response = await this.modelService.getPerformance(modelId);
-      this.performance.set(response.pairs);
+      const response = await this.modelService.getBenchmarks(modelId);
+      this.performance.set(response.benchmarks);
     } catch {
       this.performance.set([]);
       this.performanceError.set(true);
@@ -556,8 +559,44 @@ export class ModelErrorReport implements OnInit {
     return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} s`;
   }
 
-  formatRate(rate: number): string {
-    return `${Math.round(rate * 100)}%`;
+  formatBenchmarkDuration(
+    metric: GuideLlmStatusDistributionSummary | undefined,
+    percentile: 'p50' | 'p95' | 'p99',
+    unit: 'milliseconds' | 'seconds' = 'milliseconds',
+  ): string {
+    const value = metric?.successful.percentiles[percentile] ?? null;
+    return this.formatDuration(value === null || unit === 'milliseconds' ? value : value * 1000);
+  }
+
+  formatBenchmarkTimestamp(timestamp: string): string {
+    return new Date(timestamp).toLocaleString();
+  }
+
+  benchmarkProfile(benchmark: ModelProviderBenchmark): string {
+    const benchmarkConfig = benchmark.configuration['benchmark'];
+    if (this.isRecord(benchmarkConfig)) {
+      const profile = benchmarkConfig['profile'];
+      if (this.isRecord(profile) && typeof profile['kind'] === 'string') {
+        return profile['kind'];
+      }
+      if (typeof benchmarkConfig['kind'] === 'string') {
+        return benchmarkConfig['kind'];
+      }
+    }
+
+    const scenario = benchmark.configuration['scenario'];
+    if (this.isRecord(scenario)) {
+      const profile = scenario['profile'];
+      if (this.isRecord(profile) && typeof profile['kind'] === 'string') {
+        return profile['kind'];
+      }
+    }
+
+    return 'GuideLLM';
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
   }
 
   toggleProcess(id: number): void {
