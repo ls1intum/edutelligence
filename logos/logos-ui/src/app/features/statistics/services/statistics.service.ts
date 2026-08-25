@@ -13,13 +13,25 @@ export interface ProviderModel {
   model_name: string;
 }
 
+/** Position to continue a request-feed page from, as the server hands it back. */
+export interface RequestCursor {
+  ts: string;
+  request_id: string;
+}
+
 /** One page of the request feed, as `POST /api/logosdb/latest_requests` returns it. */
 export interface LatestRequestsPage {
   requests: RequestItem[];
   total: number;
-  offset: number;
   limit: number;
   has_more: boolean;
+  next_cursor: RequestCursor | null;
+}
+
+/** Narrowing of the request feed. `null` on a field means "do not narrow by it". */
+export interface RequestFilter {
+  userId: number | null;
+  teamId: number | null;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -35,22 +47,30 @@ export class StatisticsService {
   /**
    * One page of the request feed inside `[startIso, endIso]`, newest first.
    *
-   * The live rows arrive over the stats websocket; this exists for the operator
-   * walking backwards through the range, which is why it is only ever called on
-   * an explicit "load older" and never on a timer.
+   * The newest unfiltered rows arrive over the stats websocket; this serves
+   * everything else — paging back through the range and any view narrowed to a
+   * requester or team — so it is only ever called on an explicit interaction,
+   * never on a timer.
+   *
+   * @param cursor `next_cursor` of the previous page, or null to start at the
+   *               newest
    */
   getLatestRequests(
     startIso: string,
     endIso: string,
     limit: number,
-    offset: number,
+    filter: RequestFilter,
+    cursor: RequestCursor | null,
   ): Promise<LatestRequestsPage> {
     return firstValueFrom(
       this.http.post<LatestRequestsPage>('/api/logosdb/latest_requests', {
         start: startIso,
         end: endIso,
         limit,
-        offset,
+        user_id: filter.userId,
+        team_id: filter.teamId,
+        cursor_ts: cursor?.ts ?? null,
+        cursor_id: cursor?.request_id ?? null,
       }),
     );
   }

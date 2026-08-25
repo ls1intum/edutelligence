@@ -57,6 +57,12 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile String prevReqSig = "";
         volatile String prevVramMetaSig = "";
 
+        // Traffic moved since the last aggregate push, so the totals the
+        // statistics page shows are out of date. Recomputing them is a scan of
+        // the whole range, so it is driven by this flag rather than by the clock:
+        // an idle session costs nothing.
+        volatile boolean statsDirty = false;
+
         void initDefaultTimeline() {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
             timelineEnd = now.toInstant().toString();
@@ -218,6 +224,16 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 if (t % 5 == 0) {
                     pushVramDelta(session, state);
                 }
+                // Aggregates are the expensive push (findTotals alone scans the
+                // range twice more for tokens and cost), so they go out at a
+                // tenth of the request cadence and only when the request feed
+                // actually reported a change. Without this the page's counters
+                // never moved after load: stats only ever came with
+                // timeline_init, i.e. on connect and on a range change.
+                if (t % 10 == 0 && state.statsDirty) {
+                    state.statsDirty = false;
+                    pushStats(session, state);
+                }
             } catch (Exception e) {
                 log.warn("[ws/stats/v2] tick error for session {}: {}", entry.getKey(), e.getMessage());
             }
@@ -304,6 +320,31 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    /**
+     * Re-send the aggregates for the session's range.
+     *
+     * Deliberately not {@link #pushTimelineInit}: that one also ships every
+     * enqueue event in the range (up to 200k rows), which is fine once on
+     * connect and far too much to repeat while the page is open. The client
+     * keeps its event list current from the deltas instead.
+     */
+    private void pushStats(WebSocketSession session, SessionState state) {
+        try {
+            // A live selection keeps growing, so it has to be queried up to now,
+            // the same way pushRequests and pushTimelineDelta do it. Only the end
+            // moves; the start stays where the preset put it.
+            if (state.timelineLive) state.timelineEnd = Instant.now().toString();
+
+            Map<String, Object> stats = statsService.getRequestLogStats(
+                state.timelineStart, state.timelineEnd, state.targetBuckets);
+            state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n
+                ? n.intValue() : state.bucketSeconds;
+            send(session, Map.of("type", "stats", "payload", stats));
+        } catch (Exception e) {
+            log.warn("[ws/stats/v2] stats push error: {}", e.getMessage());
+        }
+    }
+
     private void pushTimelineDelta(WebSocketSession session, SessionState state) {
         try {
             String untilIso = Instant.now().toString();
@@ -349,6 +390,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
             Map<String, Object> payload = requestLogService.getLatestRequests(state.timelineStart, end);
             String sig = requestsSig(payload);
+            if (!sig.equals(state.prevReqSig)) {
+                // A request arrived, finished, or grew its usage — whatever the
+                // aggregates summarise has moved with it.
+                state.statsDirty = true;
+            }
             if (force || !sig.equals(state.prevReqSig)) {
                 state.prevReqSig = sig;
                 send(session, Map.of("type", "requests", "payload", payload));

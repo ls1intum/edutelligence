@@ -121,15 +121,16 @@ class LiquibaseBaselineTest {
     void migration012_requestFeedIndexMatchesTheFeedOrdering() {
         // The index only spares the request feed its sort if its column list
         // matches findLatestRequests' ORDER BY down to the nulls flag: Postgres
-        // defaults a DESC index to NULLS FIRST and matches sort orderings by that
-        // flag, so a (timestamp_request DESC) index would silently not apply.
-        // Asserting the definition, not just the name, keeps the two in step.
+        // matches sort orderings by that flag rather than reasoning about the
+        // NOT NULL constraint, so adding a NULLS LAST on either side alone would
+        // silently stop the index applying. Asserting the definition rather than
+        // just the name keeps the two in step.
         String def = jdbc.queryForObject(
             "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname=?",
             String.class, "idx_log_entry_request_feed");
         assertThat(def)
-            .contains("timestamp_request DESC NULLS LAST")
-            .contains("request_id DESC")
+            .contains("timestamp_request DESC, request_id DESC")
+            .doesNotContain("NULLS LAST")
             .contains("WHERE (request_id IS NOT NULL)");
     }
 

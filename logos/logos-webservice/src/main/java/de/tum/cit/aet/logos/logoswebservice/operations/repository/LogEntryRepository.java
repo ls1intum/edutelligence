@@ -137,40 +137,65 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             WHERE ut.log_entry_id = le.id
         ) c ON true
         WHERE le.request_id IS NOT NULL
-          AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :startTs AND :endTs
+          -- Ranged on timestamp_request, not on the COALESCE the aggregate
+          -- queries use: it is NOT NULL, so the COALESCE could only ever pick
+          -- another column, and the cursor below has to compare against the very
+          -- column the rows are ordered by. Filter, order and cursor all
+          -- agreeing on one column is also what lets
+          -- idx_log_entry_request_feed answer the whole query as a seek.
+          -- (No apostrophes in these comments: Spring Data scans the query for
+          -- quoted ranges before Postgres ever sees it and reads one as an
+          -- unterminated string literal.)
+          AND le.timestamp_request BETWEEN :startTs AND :endTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          -- Keyset cursor: everything strictly older than the last row handed
+          -- out. Unlike OFFSET this neither re-walks the skipped rows nor slides
+          -- when new requests arrive at the top while the operator pages.
+          AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
+               OR (le.timestamp_request, le.request_id)
+                  < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS TEXT)))
         -- request_id breaks ties: without it two rows sharing a timestamp_request
-        -- have no defined order, and OFFSET paging over an undefined order can
-        -- both repeat and skip rows at a page boundary.
-        ORDER BY le.timestamp_request DESC NULLS LAST, le.request_id DESC
-        -- The caller sizes this. Every row costs two correlated LATERALs (one of
-        -- them re-running the token_prices specificity lookup per usage_tokens
-        -- row) and the live feed runs once per open stats session every 2 s, so
-        -- it asks for exactly the rows it renders; only the operator-triggered
-        -- "load older" pages reach further back.
-        LIMIT :limitN OFFSET :offsetN
+        -- have no defined order, and the cursor comparison above could then both
+        -- repeat and skip rows at a page boundary. No NULLS LAST — see
+        -- 012_log_entry_request_feed_index.xml.
+        ORDER BY le.timestamp_request DESC, le.request_id DESC
+        -- The caller sizes this and asks for one row more than it renders, which
+        -- is how it knows whether a further page exists without counting. Every
+        -- row costs two correlated LATERALs (one of them re-running the
+        -- token_prices specificity lookup per usage_tokens row), and the live
+        -- feed runs once per open stats session every 2 s.
+        LIMIT :limitN
         """, nativeQuery = true)
     List<LatestRequestProjection> findLatestRequests(
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs,
-        @Param("limitN") int limitN,
-        @Param("offsetN") int offsetN);
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId,
+        @Param("cursorTs") Timestamp cursorTs,
+        @Param("cursorId") String cursorId,
+        @Param("limitN") int limitN);
 
     /**
-     * How many requests the range holds — the denominator of the "showing 10 of
-     * N" line above the feed, and what tells the UI whether another page exists.
-     * The predicate has to stay identical to {@link #findLatestRequests} or the
-     * count describes a different set than the rows.
+     * How many requests the range holds under the active filter — the "of N" in
+     * the feed's header. The predicate has to stay identical to
+     * {@link #findLatestRequests} (minus the cursor) or the count describes a
+     * different set than the rows.
      */
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT COUNT(*)
         FROM log_entry le
         WHERE le.request_id IS NOT NULL
-          AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :startTs AND :endTs
+          AND le.timestamp_request BETWEEN :startTs AND :endTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         """, nativeQuery = true)
     Long countRequestsInRange(
         @Param("startTs") Timestamp startTs,
-        @Param("endTs") Timestamp endTs);
+        @Param("endTs") Timestamp endTs,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     @Transactional(readOnly = true)
     @Query(value = """
@@ -229,60 +254,6 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
     @Transactional(readOnly = true)
     @Query(value = """
-        SELECT COUNT(*) FROM log_entry WHERE request_id IS NOT NULL AND api_key_id = :apiKeyId
-        """, nativeQuery = true)
-    Long countByApiKeyId(@Param("apiKeyId") int apiKeyId);
-
-    @Transactional(readOnly = true)
-    @Query(value = """
-        SELECT COUNT(*) FROM log_entry WHERE request_id IS NOT NULL
-        """, nativeQuery = true)
-    Long countAllRequests();
-
-    @Transactional(readOnly = true)
-    @Query(value = """
-        SELECT le.request_id AS requestId,
-               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
-               COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
-               p.provider_type::text AS providerType,
-               le.result_status::text AS resultStatus,
-               le.timestamp_request AS enqueueTs,
-               le.timestamp_forwarding AS scheduledTs,
-               le.timestamp_response AS requestCompleteTs,
-               CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
-                    ELSE NULL END AS runSeconds,
-               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
-                    ELSE NULL END AS queueSeconds,
-               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request))
-                    ELSE NULL END AS totalSeconds,
-               le.was_cold_start AS coldStart,
-               le.initial_priority AS initialPriority,
-               le.priority_when_scheduled AS priorityWhenScheduled,
-               le.queue_depth_at_enqueue AS queueDepthAtEnqueue,
-               le.error_message AS errorMessage,
-               t.name AS teamName,
-               u.username AS username,
-               le.environment AS environment
-        FROM log_entry le
-        LEFT JOIN models m ON m.id = le.model_id
-        LEFT JOIN providers p ON p.id = le.provider_id
-        LEFT JOIN teams t ON t.id = le.team_id
-        LEFT JOIN users u ON u.id = le.user_id
-        WHERE le.request_id IS NOT NULL
-          AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
-        ORDER BY le.timestamp_request DESC NULLS LAST
-        LIMIT :perPage OFFSET :offset
-        """, nativeQuery = true)
-    List<PaginatedRequestProjection> findPaginatedRequests(
-        @Param("apiKeyId") Integer apiKeyId,
-        @Param("perPage") int perPage,
-        @Param("offset") int offset);
-
-    @Transactional(readOnly = true)
-    @Query(value = """
         SELECT le.request_id AS requestId,
                COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
                COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
@@ -335,55 +306,6 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     List<RequestLogProjection> findRequestLogsByUser(
         @Param("userId") int userId,
         @Param("requestIds") List<String> requestIds);
-
-    @Transactional(readOnly = true)
-    @Query(value = """
-        SELECT COUNT(*) FROM log_entry WHERE request_id IS NOT NULL
-          AND api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId)
-        """, nativeQuery = true)
-    Long countByUserId(@Param("userId") int userId);
-
-    @Transactional(readOnly = true)
-    @Query(value = """
-        SELECT le.request_id AS requestId,
-               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
-               COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
-               p.provider_type::text AS providerType,
-               le.result_status::text AS resultStatus,
-               le.timestamp_request AS enqueueTs,
-               le.timestamp_forwarding AS scheduledTs,
-               le.timestamp_response AS requestCompleteTs,
-               CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
-                    ELSE NULL END AS runSeconds,
-               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
-                    ELSE NULL END AS queueSeconds,
-               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request))
-                    ELSE NULL END AS totalSeconds,
-               le.was_cold_start AS coldStart,
-               le.initial_priority AS initialPriority,
-               le.priority_when_scheduled AS priorityWhenScheduled,
-               le.queue_depth_at_enqueue AS queueDepthAtEnqueue,
-               le.error_message AS errorMessage,
-               t.name AS teamName,
-               u.username AS username,
-               le.environment AS environment
-        FROM log_entry le
-        LEFT JOIN models m ON m.id = le.model_id
-        LEFT JOIN providers p ON p.id = le.provider_id
-        LEFT JOIN teams t ON t.id = le.team_id
-        LEFT JOIN users u ON u.id = le.user_id
-        WHERE le.request_id IS NOT NULL
-          AND le.api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId)
-        ORDER BY le.timestamp_request DESC NULLS LAST
-        LIMIT :perPage OFFSET :offset
-        """, nativeQuery = true)
-    List<PaginatedRequestProjection> findPaginatedRequestsByUser(
-        @Param("userId") int userId,
-        @Param("perPage") int perPage,
-        @Param("offset") int offset);
 
     @Transactional(readOnly = true)
     @Query(value = """

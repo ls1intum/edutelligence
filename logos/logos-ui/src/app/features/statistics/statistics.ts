@@ -41,6 +41,7 @@ import type {
   LaneSignalData,
   RequestItem,
   RequestLogStats,
+  TimelineDeltaPayload,
   TimelineEnqueueEvent,
   TimelineInitPayload,
   VramProviderMeta,
@@ -54,7 +55,9 @@ import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
 import { LaneVramPieComponent } from './components/lane-vram-pie/lane-vram-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
-import { RecentRequests } from './components/recent-requests/recent-requests';
+import { FeedFilterOption, RecentRequests } from './components/recent-requests/recent-requests';
+import { UserManagementService } from '../../core/services/user-management.service';
+import { TeamManagementService } from '../../core/services/team-management.service';
 import { RequestVolumeChartComponent, ChartTooltip } from './components/request-volume-chart/request-volume-chart';
 import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
@@ -66,6 +69,13 @@ import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
 const RAW_VRAM_SAMPLE_CAP = 720;
+
+/**
+ * Ceiling on the accumulated enqueue events the volume chart re-buckets. Matches
+ * the server's own cap on the initial load, so a session that has been open for
+ * hours holds no more than a fresh one would.
+ */
+const TIMELINE_EVENT_CAP = 200_000;
 
 @Component({
   selector: 'app-statistics',
@@ -94,6 +104,12 @@ const RAW_VRAM_SAMPLE_CAP = 720;
 })
 export class Statistics implements OnInit, OnDestroy {
   private statsWs = inject(StatsWebsocketService);
+  private userManagement = inject(UserManagementService);
+  private teamManagement = inject(TeamManagementService);
+
+  /** Filter options for the request feed, loaded once on init. */
+  readonly feedUsers = signal<FeedFilterOption[]>([]);
+  readonly feedTeams = signal<FeedFilterOption[]>([]);
 
   // ── Raw WS signals ────────────────────────────────────────────────────────────
   readonly stats = signal<RequestLogStats | null>(null);
@@ -746,17 +762,52 @@ export class Statistics implements OnInit, OnDestroy {
     this.statsWs.connect({
       vramDayOffset: -1, // web path → vram_day = 'all'
       timeline: cfg,
-      timelineDeltas: false,
+      // Enabled: without the deltas the volume chart is drawn once from the
+      // events of the initial load and then never moves again.
+      timelineDeltas: true,
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
         onVramDelta: (p) => this.handleVramWsDeltaV2(p),
         onTimelineInit: (p) => this.handleTimelineInitV2(p),
-        onTimelineDelta: () => {},
+        onTimelineDelta: (p) => this.handleTimelineDeltaV2(p),
+        onStats: (p) => this.handleStatsRefreshV2(p),
         onRequestsData: (p) => this.handleRequestsWsData(p),
       },
     });
 
     this.nowInterval = setInterval(() => this.nowMs.set(Date.now()), 30_000);
+    void this.loadFilterOptions();
+  }
+
+  /**
+   * Requesters and teams for the request feed's filter. Both endpoints are
+   * admin-gated, like this page, and are read once — the lists are platform
+   * inventory, not something that moves while the page is open.
+   */
+  private async loadFilterOptions(): Promise<void> {
+    const [users, teams] = await Promise.allSettled([
+      this.userManagement.getUsers(),
+      this.teamManagement.getTeams(),
+    ]);
+    if (users.status === 'fulfilled') {
+      this.feedUsers.set(
+        users.value
+          .map((u) => ({
+            id: u.id,
+            label: `${u.prename ?? ''} ${u.name ?? ''}`.trim() || u.username,
+          }))
+          .sort((a, b) => a.label.localeCompare(b.label)),
+      );
+    }
+    if (teams.status === 'fulfilled') {
+      this.feedTeams.set(
+        teams.value
+          .map((t) => ({ id: t.id, label: t.name }))
+          .sort((a, b) => a.label.localeCompare(b.label)),
+      );
+    }
+    // A failure leaves the dropdown at "all", which is exactly the unfiltered
+    // view — no reason to bother the operator about it.
   }
 
   ngOnDestroy(): void {
@@ -934,6 +985,58 @@ export class Statistics implements OnInit, OnDestroy {
     this.hasResolvedStats = true;
   }
 
+  /**
+   * Recomputed aggregates for the range the page already shows.
+   *
+   * Same payload as `timeline_init` without the event list, so it replaces the
+   * totals, the status counts and the server-side buckets without touching the
+   * events the volume chart is drawn from — those arrive as deltas.
+   */
+  private handleStatsRefreshV2(payload: TimelineInitPayload): void {
+    if (payload.error || !payload.stats) return;
+    // A range change is in flight. The server pushes aggregates from its own
+    // timer, so one computed for the range we just left can still be on the
+    // wire — taking it would put the previous range's numbers back on screen
+    // under the new period, which is the exact thing `statsPending` prevents.
+    // `timeline_init` is what answers a range change.
+    if (this.statsPending()) return;
+
+    const cfg = this.wsTimelineConfig();
+    const rangeStart = payload.range?.start ? new Date(payload.range.start) : new Date(cfg.start);
+    const rangeEnd = payload.range?.end ? new Date(payload.range.end) : new Date(cfg.end);
+    // A live range keeps growing, and the server advances the end with it.
+    this.timelineRangeMs = {
+      startMs: rangeStart.getTime(),
+      endMs: rangeEnd.getTime(),
+      bucketMs: (payload.bucketSeconds || 60) * 1000,
+    };
+
+    const labeled = applyTimeSeriesLabels(payload.stats.timeSeries || [], rangeStart, rangeEnd);
+    this.stats.set({ ...payload.stats, timeSeries: labeled });
+  }
+
+  /**
+   * Newly enqueued requests, appended to the event list the volume chart
+   * re-buckets. Without this the chart would sit still while the counters
+   * beside it moved on every aggregate push.
+   */
+  private handleTimelineDeltaV2(payload: TimelineDeltaPayload): void {
+    if (!payload.events?.length) return;
+    // Same race as the aggregate push: a delta still in flight belongs to the
+    // range being left. `timeline_init` replaces the whole event list anyway.
+    if (this.statsPending()) return;
+    // Range first: `timelineRangeMs` is a plain field, so the series only picks
+    // a new end up when a signal it also reads changes. Appending the events is
+    // that signal — do it second or the chart trails the data by one delta.
+    if (payload.range?.end) {
+      const endMs = new Date(payload.range.end).getTime();
+      if (Number.isFinite(endMs) && this.timelineRangeMs) {
+        this.timelineRangeMs = { ...this.timelineRangeMs, endMs };
+      }
+    }
+    this.appendTimelineEvents(payload.events);
+  }
+
   // ── Raw-series updaters ───────────────────────────────────────────────────────
 
   private replaceRawVramSeries(providers: any[]): void {
@@ -1044,6 +1147,9 @@ export class Statistics implements OnInit, OnDestroy {
     if (next !== prev) this.vramRawDataByProvider.set(next);
   }
 
+  /** Request ids already in `timelineEvents`, so a delta can dedupe in O(1). */
+  private readonly knownEventIds = new Set<string>();
+
   private replaceTimelineEvents(events: TimelineEnqueueEvent[]): void {
     const nextMap = new Map<string, TimelineEnqueueEvent>();
     for (const event of events || []) {
@@ -1051,7 +1157,44 @@ export class Statistics implements OnInit, OnDestroy {
       nextMap.set(event.request_id, event);
     }
     const merged = Array.from(nextMap.values()).sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+    this.knownEventIds.clear();
+    for (const event of merged) this.knownEventIds.add(event.request_id);
     this.timelineEvents.set(merged);
+  }
+
+  /**
+   * Append delta events to the list the volume chart re-buckets.
+   *
+   * Appended rather than merged and re-sorted: the server hands out deltas from
+   * a cursor that only ever moves forward, starting at the end of the initially
+   * loaded range, so every delta event is newer than everything already here.
+   * That matters at this cadence — re-sorting a list that can hold 200k events
+   * every two seconds would be felt on the UI thread.
+   *
+   * Capped, dropping the oldest: a long session on a busy range would otherwise
+   * grow without bound. Losing the oldest thins out the left edge of the chart
+   * rather than its live end, which is the side being watched, and
+   * `stats.timeSeries` — refreshed alongside — still covers the whole range for
+   * anyone reading totals.
+   */
+  private appendTimelineEvents(events: TimelineEnqueueEvent[]): void {
+    const fresh: TimelineEnqueueEvent[] = [];
+    for (const event of events) {
+      if (!event?.request_id || !Number.isFinite(Number(event.timestamp_ms))) continue;
+      if (this.knownEventIds.has(event.request_id)) continue;
+      this.knownEventIds.add(event.request_id);
+      fresh.push(event);
+    }
+    if (fresh.length === 0) return;
+
+    const current = this.timelineEvents();
+    let next = [...current, ...fresh];
+    if (next.length > TIMELINE_EVENT_CAP) {
+      const dropped = next.slice(0, next.length - TIMELINE_EVENT_CAP);
+      for (const event of dropped) this.knownEventIds.delete(event.request_id);
+      next = next.slice(next.length - TIMELINE_EVENT_CAP);
+    }
+    this.timelineEvents.set(next);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────

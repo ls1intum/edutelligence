@@ -12,12 +12,19 @@
          (30 days by default) on every push - and paying the query's two
          correlated LATERALs over the sorted set rather than over ten rows.
 
-         The column list mirrors that query's ORDER BY exactly, including
-         "NULLS LAST": for a DESC index Postgres defaults to NULLS FIRST, and it
-         matches sort orderings by their nulls flag rather than deducing from the
-         NOT NULL constraint on timestamp_request that the two are equivalent
-         here. A plain (timestamp_request DESC) index would therefore not serve
-         the ordering and Postgres would sort anyway. Keep the two in step.
+         The column list mirrors that query's ORDER BY exactly. Postgres matches
+         sort orderings by their nulls flag rather than reasoning about the NOT
+         NULL constraint, so an index whose nulls placement differs from the
+         query's would silently not serve the ordering and the sort would happen
+         anyway - the two have to be kept in step. Both are plain DESC here
+         (NULLS FIRST by default), which is why findLatestRequests must not
+         reintroduce a NULLS LAST it does not need: timestamp_request is NOT
+         NULL.
+
+         The second column is what the keyset cursor compares against:
+         findLatestRequests pages with (timestamp_request, request_id) <
+         (:cursorTs, :cursorId), which this index answers as a seek rather than
+         a scan, at any depth.
 
          Partial on request_id IS NOT NULL, which the query requires and which
          keeps rows that never became a routed request out of the index.
@@ -31,7 +38,7 @@
         </preConditions>
         <sql>
             CREATE INDEX CONCURRENTLY idx_log_entry_request_feed
-                ON log_entry (timestamp_request DESC NULLS LAST, request_id DESC)
+                ON log_entry (timestamp_request DESC, request_id DESC)
                 WHERE request_id IS NOT NULL;
         </sql>
         <rollback>

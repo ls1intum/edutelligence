@@ -233,7 +233,7 @@ services:
       # Origins the webservice accepts browser requests from. Browsers attach an
       # Origin header to POST requests and WebSocket handshakes even when the UI
       # and API share an origin, so the Spring CorsFilter rejects every POST/WS
-      # (get_models, get_providers, paginated_requests, billing, /ws/stats, …)
+      # (get_models, get_providers, latest_requests, billing, /ws/stats, …)
       # if this is empty — while same-origin GETs (/me, /users) slip through.
       # The UI is served on the default HTTPS port, so default to the
       # bare-domain origin.

@@ -16,17 +16,113 @@
   color: rgb(var(--color-typography-300));
 }
 
-// ── Count line ───────────────────────────────────────────────────────────────
+// ── Toolbar (filters + pager, above the list) ────────────────────────────────
 
-.rr-count {
+.rr-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 0 2px 10px;
+}
+
+.rr-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.rr-filter {
+  min-width: 0;
+  max-width: 200px;
+}
+
+.rr-filter-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  background: transparent;
+  border: 1px solid rgb(var(--glass-stroke) / 0.2);
+  border-radius: 8px;
+  cursor: pointer;
+
+  .pi {
+    font-size: var(--font-size-2xs);
+  }
+
+  &:hover {
+    color: rgb(var(--color-typography-100));
+    background: rgb(var(--glass-fill) / var(--opacity-faint));
+  }
+}
+
+.rr-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.rr-pager__count {
   font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
-  padding: 0 2px 8px;
+  white-space: nowrap;
+  margin-right: 2px;
 
   strong {
     color: rgb(var(--color-typography-100));
     font-weight: var(--font-weight-semibold);
   }
+}
+
+.rr-pager__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  // Fixed box so the two buttons never move relative to each other, whatever
+  // the count line next to them says.
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-accent-cyan));
+  background: transparent;
+  border: 1px solid rgb(var(--color-accent-cyan) / var(--opacity-strong));
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-accent-cyan) / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
+.rr-pager__spinner,
+.rr-pager__live {
+  font-size: var(--font-size-2xs);
+  color: rgb(var(--color-typography-500));
+  // Same footprint either way, so swapping one for the other cannot nudge the
+  // buttons sideways mid-click.
+  width: 32px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.rr-pager__live {
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-wider);
 }
 
 // ── List ─────────────────────────────────────────────────────────────────────
@@ -40,48 +136,8 @@
   overflow-y: auto;
 }
 
-// ── Paging footer ────────────────────────────────────────────────────────────
-
-.rr-more {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  align-self: center;
-  margin: 4px 0 8px;
-  padding: 5px 14px;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: rgb(var(--color-accent-cyan));
-  background: transparent;
-  border: 1px solid rgb(var(--color-accent-cyan) / var(--opacity-strong));
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s;
-
-  .pi {
-    font-size: var(--font-size-xs);
-  }
-
-  &:hover:not(:disabled) {
-    background: rgb(var(--color-accent-cyan) / var(--opacity-soft));
-  }
-
-  &:disabled {
-    opacity: var(--opacity-disabled);
-    cursor: not-allowed;
-  }
-}
-
-.rr-end {
-  align-self: center;
-  padding: 4px 0 8px;
-  font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-500));
-}
-
 .rr-error {
-  margin-top: 8px;
+  margin: 0 2px 8px;
   font-size: var(--font-size-sm);
   color: rgb(var(--color-error));
 }

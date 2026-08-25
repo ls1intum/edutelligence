@@ -11,7 +11,12 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { formatUsd } from '../../../../shared/utils/currency';
-import { StatisticsService } from '../../services/statistics.service';
+import { AppSelectOption, SelectComponent } from '../../../../shared/components/select/select';
+import {
+  LatestRequestsPage,
+  RequestCursor,
+  StatisticsService,
+} from '../../services/statistics.service';
 import { RequestItem } from '../../statistics.models';
 import { StatsSkeletonComponent } from '../skeletons/skeletons';
 import {
@@ -23,15 +28,23 @@ import {
 } from '../../statistics.utils';
 
 /**
- * Rows the websocket pushes, and the page size of one "load older" step. Must
- * stay in sync with `RequestLogService.LATEST_REQUESTS_PAGE_SIZE`.
+ * Rows per page. Must stay in sync with
+ * `RequestLogService.LATEST_REQUESTS_PAGE_SIZE`, which is what the websocket
+ * pushes — otherwise page 1 (the live rows) and every fetched page would be
+ * sized differently and the "1-10 of n" count would skip or repeat numbers.
  */
 const PAGE_SIZE = 10;
+
+/** One entry of the requester/team filter dropdowns. */
+export interface FeedFilterOption {
+  id: number;
+  label: string;
+}
 
 @Component({
   selector: 'app-stats-recent-requests',
   standalone: true,
-  imports: [CommonModule, StatsSkeletonComponent],
+  imports: [CommonModule, SelectComponent, StatsSkeletonComponent],
   templateUrl: './recent-requests.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './recent-requests.scss',
@@ -39,22 +52,28 @@ const PAGE_SIZE = 10;
 export class RecentRequests implements OnChanges, OnDestroy {
   private statisticsService = inject(StatisticsService);
 
-  /** Live rows pushed by the stats WS (already scoped to the selected time range). */
+  /** Live rows pushed by the stats WS (newest page, unfiltered). */
   @Input() liveRequests: RequestItem[] = [];
 
   /**
-   * How many requests the selected range holds, taken from the statistics
-   * totals. It is the same range, resolved once per range change, so during a
-   * live session it can trail the live rows by a few — hence the floor in
-   * `totalCount()`.
+   * How many requests the selected range holds, from the statistics totals.
+   * Same range, resolved per aggregate push, so it can trail the live rows by a
+   * few — hence the floor in `totalCount()`. Only used while page 1 is showing
+   * live rows; a fetched page brings its own count.
    */
   @Input() totalInRange = 0;
 
-  /** The selected range as ISO strings — what "load older" pages through. */
+  /** The selected range as ISO strings — what the pages are cut out of. */
   @Input() range: { startIso: string; endIso: string } | null = null;
 
   /** True while a range change is in flight and the rows below are stale. */
   @Input() pending = false;
+
+  /** Requesters to offer in the filter (all platform users). */
+  @Input() users: FeedFilterOption[] = [];
+
+  /** Teams to offer in the filter. */
+  @Input() teams: FeedFilterOption[] = [];
 
   /** Shared ticker: ms since epoch, updated by setInterval. */
   now = signal(Date.now());
@@ -66,49 +85,92 @@ export class RecentRequests implements OnChanges, OnDestroy {
   // cache the very first value (an empty list) forever.
   private readonly _liveRequests = signal<RequestItem[]>([]);
   private readonly _totalInRange = signal(0);
+  private readonly _users = signal<FeedFilterOption[]>([]);
+  private readonly _teams = signal<FeedFilterOption[]>([]);
 
-  /** Pages fetched on demand, oldest step last. Cleared when the range moves. */
-  private readonly _olderRequests = signal<RequestItem[]>([]);
-  readonly loadingOlder = signal(false);
-  readonly olderError = signal<string | null>(null);
-  /**
-   * What the last fetched page reported about further rows — authoritative,
-   * unlike comparing against a count that can trail the live feed. Null until
-   * a page has been fetched.
-   */
-  private readonly _serverHasMore = signal<boolean | null>(null);
-  /**
-   * Range count as the paging endpoint counted it. Preferred over the input
-   * once present: it is counted at fetch time over the very same range, while
-   * the statistics totals are resolved once per range change.
-   */
-  private readonly _pageTotal = signal<number | null>(null);
+  // ── Filter ─────────────────────────────────────────────────────────────────
 
-  /**
-   * Live rows first, then the fetched history, de-duplicated by request id.
-   *
-   * The live push always carries the newest page, so a row appearing in both
-   * takes its state from there: an older page is a snapshot and would show a
-   * request that has since finished as still running.
-   */
-  readonly displayItems = computed<RequestItem[]>(() => {
-    const live = this._liveRequests();
-    const seen = new Set(live.map((r) => r.request_id));
-    const older = this._olderRequests().filter((r) => !seen.has(r.request_id));
-    return [...live, ...older];
-  });
+  readonly filterUserId = signal<number | null>(null);
+  readonly filterTeamId = signal<number | null>(null);
 
-  readonly shownCount = computed(() => this.displayItems().length);
-
-  /** The range total, floored at what is on screen (the push can lag a page). */
-  readonly totalCount = computed(() =>
-    Math.max(this._pageTotal() ?? this._totalInRange(), this.shownCount()),
+  readonly filterActive = computed(
+    () => this.filterUserId() !== null || this.filterTeamId() !== null,
   );
 
-  readonly hasMore = computed(() => {
-    const reported = this._serverHasMore();
-    if (reported !== null) return reported;
-    return this.shownCount() < this.totalCount();
+  // ── Paging ─────────────────────────────────────────────────────────────────
+
+  /** 0-based. Page 0 unfiltered is the live feed; everything else is fetched. */
+  readonly pageIndex = signal(0);
+
+  /**
+   * The cursor each page was fetched with, indexed by page. Page 0 is always
+   * `null` (start at the newest). Going back is a pop rather than a reverse
+   * query: a keyset cursor only points forwards, so the way back is the trail
+   * of cursors already used.
+   */
+  private cursorForPage: (RequestCursor | null)[] = [null];
+
+  private readonly _pageRows = signal<RequestItem[]>([]);
+  private readonly _pageTotal = signal<number | null>(null);
+  private readonly _pageHasMore = signal(false);
+  private readonly _pageNextCursor = signal<RequestCursor | null>(null);
+  readonly loading = signal(false);
+  readonly error = signal<string | null>(null);
+
+  /** True while page 1 shows what the websocket pushes rather than a fetch. */
+  readonly onLivePage = computed(() => this.pageIndex() === 0 && !this.filterActive());
+
+  readonly displayItems = computed<RequestItem[]>(() =>
+    this.onLivePage() ? this._liveRequests() : this._pageRows(),
+  );
+
+  readonly totalCount = computed(() => {
+    const known = this.onLivePage() ? this._totalInRange() : (this._pageTotal() ?? 0);
+    // Never promise fewer rows than are on screen: on the live page the
+    // aggregate push the total comes from can be a beat behind the feed.
+    return Math.max(known, this.firstRowNumber() + this.displayItems().length - 1);
+  });
+
+  /** 1-based number of the first row on this page, for the "11-20 of n" line. */
+  readonly firstRowNumber = computed(() =>
+    this.displayItems().length === 0 ? 0 : this.pageIndex() * PAGE_SIZE + 1,
+  );
+
+  readonly lastRowNumber = computed(
+    () => this.firstRowNumber() + Math.max(0, this.displayItems().length - 1),
+  );
+
+  readonly hasPrev = computed(() => this.pageIndex() > 0);
+
+  readonly hasNext = computed(() => {
+    if (this.loading()) return false;
+    // A full live page may have more behind it — same rule the server applies to
+    // a fetched page, which reports it outright.
+    return this.onLivePage()
+      ? this._liveRequests().length >= PAGE_SIZE
+      : this._pageHasMore();
+  });
+
+  // ── Filter dropdown options ────────────────────────────────────────────────
+
+  readonly userOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'All requesters' },
+    ...this._users().map((u) => ({ value: String(u.id), label: u.label })),
+  ]);
+
+  readonly teamOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'All teams' },
+    ...this._teams().map((t) => ({ value: String(t.id), label: t.label })),
+  ]);
+
+  readonly selectedUserValue = computed(() => {
+    const id = this.filterUserId();
+    return id === null ? '' : String(id);
+  });
+
+  readonly selectedTeamValue = computed(() => {
+    const id = this.filterTeamId();
+    return id === null ? '' : String(id);
   });
 
   private hasLive = computed(() =>
@@ -118,8 +180,13 @@ export class RecentRequests implements OnChanges, OnDestroy {
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['liveRequests']) this._liveRequests.set(this.liveRequests ?? []);
     if (changes['totalInRange']) this._totalInRange.set(this.totalInRange ?? 0);
-    // A new range invalidates every page fetched for the previous one.
-    if (changes['range'] && !changes['range'].firstChange) this.resetOlder();
+    if (changes['users']) this._users.set(this.users ?? []);
+    if (changes['teams']) this._teams.set(this.teams ?? []);
+    // A new range invalidates every page cut out of the previous one.
+    if (changes['range'] && !changes['range'].firstChange) {
+      this.resetToFirstPage();
+      if (this.filterActive()) void this.fetchPage(0, null);
+    }
     // Re-schedule ticker whenever inputs change so cadence stays correct.
     this.scheduleTicker();
   }
@@ -128,48 +195,126 @@ export class RecentRequests implements OnChanges, OnDestroy {
     this.clearTicker();
   }
 
-  private resetOlder(): void {
-    this._olderRequests.set([]);
-    this._serverHasMore.set(null);
-    this._pageTotal.set(null);
-    this.olderError.set(null);
-    this.loadingOlder.set(false);
+  // ── Filter handlers ────────────────────────────────────────────────────────
+
+  setUserFilter(value: string | null): void {
+    const id = value ? Number(value) : null;
+    if (id === this.filterUserId()) return;
+    this.filterUserId.set(Number.isFinite(id as number) ? id : null);
+    this.onFilterChanged();
+  }
+
+  setTeamFilter(value: string | null): void {
+    const id = value ? Number(value) : null;
+    if (id === this.filterTeamId()) return;
+    this.filterTeamId.set(Number.isFinite(id as number) ? id : null);
+    this.onFilterChanged();
+  }
+
+  clearFilter(): void {
+    if (!this.filterActive()) return;
+    this.filterUserId.set(null);
+    this.filterTeamId.set(null);
+    this.onFilterChanged();
   }
 
   /**
-   * Fetch the next page of older requests.
-   *
-   * Offsets are counted from the newest row, so requests arriving while pages
-   * are open shift the window and the next page overlaps what is already shown
-   * — which the de-duplication in `displayItems` absorbs. Overlapping is the
-   * safe direction: the alternative (a timestamp cursor) would have to guess
-   * which of the three timestamps the range predicate coalesced.
+   * A narrowed feed is served entirely over REST rather than taught to the
+   * websocket: the push runs every 2 s for every open session, and a filtered
+   * view is a question the operator asks, not a tail they watch.
    */
-  async loadOlder(): Promise<void> {
-    const range = this.range;
-    if (!range || this.loadingOlder() || !this.hasMore()) return;
+  private onFilterChanged(): void {
+    this.resetToFirstPage();
+    if (this.filterActive()) void this.fetchPage(0, null);
+  }
 
-    this.loadingOlder.set(true);
-    this.olderError.set(null);
-    const offset = this.shownCount();
+  private resetToFirstPage(): void {
+    this.pageIndex.set(0);
+    this.cursorForPage = [null];
+    this._pageRows.set([]);
+    this._pageTotal.set(null);
+    this._pageHasMore.set(false);
+    this._pageNextCursor.set(null);
+    this.error.set(null);
+  }
+
+  // ── Paging handlers ────────────────────────────────────────────────────────
+
+  async nextPage(): Promise<void> {
+    if (this.loading() || !this.hasNext()) return;
+    const cursor = this.cursorAfterCurrentPage();
+    if (!cursor) return;
+    const target = this.pageIndex() + 1;
+    this.cursorForPage[target] = cursor;
+    await this.fetchPage(target, cursor);
+  }
+
+  async prevPage(): Promise<void> {
+    if (this.loading() || !this.hasPrev()) return;
+    const target = this.pageIndex() - 1;
+    const cursor = this.cursorForPage[target] ?? null;
+    // Back to the live page: the websocket already holds those rows, so going
+    // there is a state change rather than a fetch.
+    if (target === 0 && !this.filterActive()) {
+      this.pageIndex.set(0);
+      this._pageRows.set([]);
+      return;
+    }
+    await this.fetchPage(target, cursor);
+  }
+
+  /**
+   * Where the next page starts: after a fetched page the server says so, and on
+   * the live page the last row on screen is the boundary.
+   */
+  private cursorAfterCurrentPage(): RequestCursor | null {
+    if (!this.onLivePage()) return this._pageNextCursor();
+    const rows = this._liveRequests();
+    const last = rows[rows.length - 1];
+    if (!last?.request_id) return null;
+    const ts = last.enqueue_ts ?? last.timestamp;
+    return ts ? { ts, request_id: last.request_id } : null;
+  }
+
+  private async fetchPage(index: number, cursor: RequestCursor | null): Promise<void> {
+    const range = this.range;
+    if (!range) return;
+
+    this.loading.set(true);
+    this.error.set(null);
     try {
-      const page = await this.statisticsService.getLatestRequests(
+      const page: LatestRequestsPage = await this.statisticsService.getLatestRequests(
         range.startIso,
         range.endIso,
         PAGE_SIZE,
-        offset,
+        { userId: this.filterUserId(), teamId: this.filterTeamId() },
+        cursor,
       );
-      this._olderRequests.update((current) => [...current, ...(page.requests ?? [])]);
-      if (typeof page.total === 'number') this._pageTotal.set(page.total);
-      this._serverHasMore.set(page.has_more === true);
+      const rows = page.requests ?? [];
+      // An empty page past the first is a dead end — the range held exactly a
+      // multiple of the page size, or rows fell out of it while the operator
+      // paged. Stay where we are and retire Next rather than parking them on a
+      // blank page they have to click back out of.
+      if (rows.length === 0 && index > 0) {
+        this._pageHasMore.set(false);
+        this._pageNextCursor.set(null);
+        return;
+      }
+      this._pageRows.set(rows);
+      this._pageTotal.set(typeof page.total === 'number' ? page.total : null);
+      this._pageHasMore.set(page.has_more === true);
+      this._pageNextCursor.set(page.next_cursor ?? null);
+      this.pageIndex.set(index);
     } catch (err: unknown) {
       const e = err as { status?: number; error?: { error?: string; detail?: string } };
       const detail = e.error?.error ?? e.error?.detail ?? `HTTP ${e.status}`;
-      this.olderError.set(`Could not load older requests: ${detail}`);
+      this.error.set(`Could not load requests: ${detail}`);
     } finally {
-      this.loadingOlder.set(false);
+      this.loading.set(false);
     }
   }
+
+  // ── Ticker ─────────────────────────────────────────────────────────────────
 
   private scheduleTicker(): void {
     this.clearTicker();
