@@ -5052,7 +5052,13 @@ async def warmup_model(model_id: str, request: Request):
         _demand_tracker.record_latent_demand(model_name)
         accepted = True
     if _capacity_planner is not None:
-        _capacity_planner.hint_capacity_needed(model_name)
+        # announce_upcoming_use, not hint_capacity_needed: the hint only wakes
+        # the cycle early, and the demand increment above cannot survive the
+        # per-cycle decay that runs before the planner evaluates it, so on its
+        # own a warmup would wake a cycle that then decides to do nothing —
+        # which is exactly what it did. The announcement is what lets the
+        # planner cold-load on VRAM that is free anyway.
+        _capacity_planner.announce_upcoming_use(model_name)
         accepted = True
 
     logger.info(

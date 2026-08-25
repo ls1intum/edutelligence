@@ -28,9 +28,14 @@ public class RequestLogStatsController {
         String endDate      = (String) body.get("end_date");
         int targetBuckets   = body.containsKey("target_buckets")
                 ? ((Number) body.get("target_buckets")).intValue() : 120;
+        // Absent means the whole platform, which is what this endpoint has
+        // always returned — the scope is opt-in, so existing callers are
+        // unaffected.
+        Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
+        Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
         try {
             return ResponseEntity.ok(
-                    requestLogStatsService.getRequestLogStats(startDate, endDate, targetBuckets));
+                    requestLogStatsService.getRequestLogStats(startDate, endDate, targetBuckets, userId, teamId));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }

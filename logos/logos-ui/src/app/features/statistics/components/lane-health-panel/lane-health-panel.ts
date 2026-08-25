@@ -167,17 +167,18 @@ export class LaneHealthPanel implements OnChanges {
   /**
    * The human-readable reason out of a failed lane action.
    *
-   * Spring wraps its own refusals as `{"error": …}` but passes an orchestrator
-   * refusal through verbatim, and FastAPI renders `HTTPException` as
-   * `{"detail": …}`. Reading only `error` turned the one message worth showing
-   * ("Provider is calibrating; its VRAM is reserved for the calibration
-   * probes.") into a bare "HTTP 409".
+   * Three shapes reach here and none of them can be assumed. Spring wraps its
+   * own refusals as `{"error": "…"}` but passes an orchestrator refusal through
+   * verbatim; FastAPI renders a bare `HTTPException` as `{"detail": "…"}`; and
+   * every user-facing Logos error is normalised to the OpenAI shape,
+   * `{"error": {"message": "…", "type": "…"}}`, where the text sits one level
+   * further down. That last one is why a refusal could surface as the literal
+   * "[object Object]": `error` held an object and went straight into the
+   * message. So walk the nesting instead of guessing its depth.
    */
   private failureDetail(err: unknown): string {
-    const e = err as { status?: number; error?: { error?: string; detail?: string } | string };
-    if (typeof e?.error === 'string' && e.error.trim()) return e.error;
-    const body = e?.error as { error?: string; detail?: string } | undefined;
-    return body?.error ?? body?.detail ?? `HTTP ${e?.status ?? 0}`;
+    const e = err as { status?: number; error?: unknown };
+    return messageIn(e?.error) ?? `HTTP ${e?.status ?? 0}`;
   }
 
   async handleUnload(laneId: string): Promise<void> {
@@ -309,7 +310,30 @@ export class LaneHealthPanel implements OnChanges {
       this.acceptedModel.set(model);
     } catch (err: unknown) {
       this.addingLane.set(false);
-      this.addError.set(`Loading ${model} failed: ${this.failureDetail(err)}`);
+      const e = err as { status?: number };
+      if (e.status === 404 || e.status === 501 || e.status === 0) {
+        this.addError.set('Action not available on this server yet.');
+      } else {
+        this.addError.set(`Loading ${model} failed: ${this.failureDetail(err)}`);
+      }
     }
   }
+}
+
+/**
+ * First human-readable string inside an error body, whatever it is nested in.
+ *
+ * `message` before `error` before `detail`, so the OpenAI shape resolves to its
+ * own text rather than to the object holding it. Bounded depth: an error body is
+ * a few levels at most, and a cycle in one must not take the page down with it.
+ */
+function messageIn(body: unknown, depth = 0): string | null {
+  if (typeof body === 'string') return body.trim() || null;
+  if (depth >= 4 || body === null || typeof body !== 'object') return null;
+  const record = body as Record<string, unknown>;
+  for (const key of ['message', 'error', 'detail']) {
+    const found = messageIn(record[key], depth + 1);
+    if (found) return found;
+  }
+  return null;
 }

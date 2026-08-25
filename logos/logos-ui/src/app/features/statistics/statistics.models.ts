@@ -281,3 +281,14 @@ export interface RequestItem {
   total_tokens: number | null;
   cost_microcents: number | null;
 }
+
+/**
+ * One entry of the team / requester dropdowns that scope the page.
+ *
+ * Lives here rather than with the request feed: the filter used to be part of
+ * that toolbar, and now narrows every request-derived panel on the page.
+ */
+export interface FeedFilterOption {
+  id: number;
+  label: string;
+}
