@@ -16,6 +16,7 @@ import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelTimeSerie
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.QueueDepthProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLogTotalsProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.RuntimeByColdStartProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ScopeOptionProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.StatusCountProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TimeSeriesProjection;
 
@@ -86,6 +87,47 @@ public class RequestLogStatsService {
         payload.put("bucketSeconds", bucketSeconds);
         payload.put("stats", stats);
         return payload;
+    }
+
+    /**
+     * What the filter dropdowns should offer for this range.
+     *
+     * Its own call rather than part of the aggregates: those go out every few
+     * seconds to every open session, and these two lists change only when the
+     * range or the team does. Requesters are narrowed to {@code teamId} when one
+     * is picked — that is the whole point, since the platform's full user list
+     * runs long enough to be unusable without a search box, and most of it has
+     * never made a request at all.
+     */
+    public Map<String, Object> getScopeOptions(String startDate, String endDate, Integer teamId) {
+        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        ZonedDateTime endDt = endDate != null ? ZonedDateTime.parse(endDate).withZoneSameInstant(ZoneOffset.UTC) : now;
+        ZonedDateTime startDt = startDate != null
+                ? ZonedDateTime.parse(startDate).withZoneSameInstant(ZoneOffset.UTC)
+                : endDt.minusDays(30);
+        if (startDt.isAfter(endDt)) {
+            throw new IllegalArgumentException("start_date must be before end_date");
+        }
+        Timestamp startTs = Timestamp.from(startDt.toInstant());
+        Timestamp endTs = Timestamp.from(endDt.toInstant());
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("teams", toScopeOptions(logEntryRepository.findTeamsWithTraffic(startTs, endTs)));
+        payload.put("requesters",
+            toScopeOptions(logEntryRepository.findRequestersWithTraffic(startTs, endTs, teamId)));
+        return payload;
+    }
+
+    private static List<Map<String, Object>> toScopeOptions(List<ScopeOptionProjection> rows) {
+        return rows.stream()
+            .map(p -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", p.getId());
+                m.put("label", p.getLabel());
+                m.put("requestCount", p.getRequestCount());
+                return m;
+            })
+            .toList();
     }
 
     private String queryLastEventTs(Timestamp start, Timestamp end, Integer userId, Integer teamId) {

@@ -283,12 +283,18 @@ export interface RequestItem {
 }
 
 /**
- * One entry of the team / requester dropdowns that scope the page.
+ * One entry of the team / requester dropdowns that scope the page, as
+ * `request_log_scope_options` returns it.
  *
  * Lives here rather than with the request feed: the filter used to be part of
  * that toolbar, and now narrows every request-derived panel on the page.
+ *
+ * `requestCount` is what picking this entry would select in the current range.
+ * It is shown in the option label, because the list is only useful if it says
+ * which of its entries hold anything.
  */
 export interface FeedFilterOption {
   id: number;
   label: string;
+  requestCount: number;
 }

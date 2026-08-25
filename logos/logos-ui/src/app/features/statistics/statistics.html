@@ -23,9 +23,13 @@
           [options]="userFilterOptions()"
           [value]="selectedUserValue()"
           [compact]="true"
+          [disabled]="noRequestersInScope()"
           ariaLabel="Filter by requester"
           (valueChange)="setUserFilter($event)"
         />
+        @if (noRequestersInScope()) {
+          <span class="stats-scope__note">no named requesters in this range</span>
+        }
         @if (filterActive()) {
           <button
             class="stats-scope__clear"

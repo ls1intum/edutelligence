@@ -134,6 +134,75 @@ class RequestLogStatsControllerTest {
            .andExpect(jsonPath("$.stats.totals.requests").value(0));
     }
 
+    // ── Scope options ────────────────────────────────────────────────────────
+    // What the filter dropdowns offer. The lists used to be the platform's user
+    // and team inventory, most of which has never sent a request; these hold
+    // only what the range actually contains.
+
+    @Test
+    void scopeOptions_listOnlyWhatSentSomething() throws Exception {
+        mvc.perform(post("/logosdb/request_log_scope_options")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           // One team and one requester, out of a seed holding several of each:
+           // 9002 carries neither, and every other seeded user and team has no
+           // traffic at all.
+           .andExpect(jsonPath("$.teams.length()").value(1))
+           .andExpect(jsonPath("$.teams[0].id").value(2001))
+           .andExpect(jsonPath("$.teams[0].label").value("test-team"))
+           .andExpect(jsonPath("$.teams[0].requestCount").value(1))
+           .andExpect(jsonPath("$.requesters.length()").value(1))
+           .andExpect(jsonPath("$.requesters[0].id").value(1001))
+           .andExpect(jsonPath("$.requesters[0].label").value("Test User"))
+           .andExpect(jsonPath("$.requesters[0].requestCount").value(1));
+    }
+
+    @Test
+    void scopeOptions_narrowRequestersToTheTeam() throws Exception {
+        mvc.perform(post("/logosdb/request_log_scope_options")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"team_id\": 2001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requesters.length()").value(1))
+           .andExpect(jsonPath("$.requesters[0].id").value(1001))
+           // The team list itself stays whole: it is the control being used to
+           // choose, so narrowing it by the current choice would leave no way
+           // back to the others.
+           .andExpect(jsonPath("$.teams.length()").value(1));
+    }
+
+    @Test
+    void scopeOptions_offerNoRequestersForASilentTeam() throws Exception {
+        mvc.perform(post("/logosdb/request_log_scope_options")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"team_id\": 999999}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requesters").isEmpty());
+    }
+
+    @Test
+    void scopeOptions_excludeARangeWithNoTraffic() throws Exception {
+        mvc.perform(post("/logosdb/request_log_scope_options")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"start_date\": \"2020-01-01T00:00:00Z\", \"end_date\": \"2020-01-02T00:00:00Z\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.teams").isEmpty())
+           .andExpect(jsonPath("$.requesters").isEmpty());
+    }
+
+    @Test
+    void scopeOptions_rejectUnauthenticated() throws Exception {
+        mvc.perform(post("/logosdb/request_log_scope_options")
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isUnauthorized());
+    }
+
     @Test
     void requestLogStats_rejectsInvalidDateRange() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")

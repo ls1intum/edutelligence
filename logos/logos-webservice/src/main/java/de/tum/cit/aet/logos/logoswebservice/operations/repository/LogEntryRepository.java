@@ -28,6 +28,61 @@ import de.tum.cit.aet.logos.logoswebservice.operations.entity.LogEntry;
  */
 public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
+    /**
+     * Teams that actually sent something in the range, with how much.
+     *
+     * The filter dropdowns were built from the platform's user and team
+     * inventory, which is a different list: it includes everyone who has never
+     * made a request, and every one of those entries is guaranteed to select
+     * nothing. Offering only what the range holds is both shorter and honest
+     * about what picking it will do.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.team_id AS id,
+               COALESCE(t.name, 'Team ' || le.team_id) AS label,
+               COUNT(*) AS requestCount
+        FROM log_entry le
+        LEFT JOIN teams t ON t.id = le.team_id
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND le.team_id IS NOT NULL
+        GROUP BY le.team_id, t.name
+        ORDER BY requestCount DESC
+        """, nativeQuery = true)
+    List<ScopeOptionProjection> findTeamsWithTraffic(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end);
+
+    /**
+     * Requesters that actually sent something in the range, optionally only
+     * within one team.
+     *
+     * Scoped by team but deliberately never by user: this list *is* the user
+     * picker, so narrowing it by the current selection would leave it holding
+     * only the entry already chosen and no way back to the others.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.user_id AS id,
+               COALESCE(
+                   NULLIF(TRIM(COALESCE(u.prename, '') || ' ' || COALESCE(u.name, '')), ''),
+                   u.username,
+                   'User ' || le.user_id
+               ) AS label,
+               COUNT(*) AS requestCount
+        FROM log_entry le
+        LEFT JOIN users u ON u.id = le.user_id
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND le.user_id IS NOT NULL
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+        GROUP BY le.user_id, u.prename, u.name, u.username
+        ORDER BY requestCount DESC
+        """, nativeQuery = true)
+    List<ScopeOptionProjection> findRequestersWithTraffic(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("teamId") Integer teamId);
+
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT le.request_id AS requestId,

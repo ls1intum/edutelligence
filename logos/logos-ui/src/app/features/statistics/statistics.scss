@@ -52,6 +52,12 @@
   max-width: 200px;
 }
 
+.stats-scope__note {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  white-space: nowrap;
+}
+
 .stats-scope__clear {
   display: inline-flex;
   align-items: center;
