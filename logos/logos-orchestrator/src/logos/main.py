@@ -1753,7 +1753,7 @@ async def internal_model_context_windows(request: Request):
 
     stats = _served_context_window_stats()
     return {
-        "windows": {model: entry["min"] for model, entry in stats.items() if "min" in entry},
+        "windows": {model: entry["current_min"] for model, entry in stats.items() if "current_min" in entry},
         "stats": stats,
     }
 
@@ -4808,17 +4808,18 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
 
     Three numbers per model, all in tokens and all omitted when unknown:
 
-    ``min``    the smallest window any worker currently serves. A request may
-               be routed to any of them, so this is the only value that is
-               safe unconditionally — it is what ``max_model_len`` reports.
-    ``best``   the largest window currently served anywhere. Reachable only
-               when the request lands on that worker, which is what the
-               context-aware routing in ``_filter_logosnode_deployments``
-               tries to arrange.
-    ``native`` the model's own limit, i.e. what a lane serves when it gets all
-               the KV cache it asks for. Independent of what is loaded right
-               now, so it is also known for models with no live lane, and it
-               is the ceiling ``best`` can ever grow to.
+    ``current_min``  the smallest window being served right now. A request may
+                     be routed to any deployment, so this is the only value
+                     that holds unconditionally.
+    ``current_max``  the largest window being served right now. Reachable only
+                     when the request lands there, which is what the
+                     context-aware routing in ``_filter_logosnode_deployments``
+                     arranges.
+    ``overall``      the widest this model is ever served with — what a lane
+                     runs at once it gets all the KV cache it asks for.
+                     Independent of what is loaded at the moment, so it is
+                     known even for a model with no live lane, and it is the
+                     ceiling ``current_max`` can grow to.
     """
     stats: dict[str, dict[str, int]] = {}
     try:
@@ -4847,7 +4848,7 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
         for model, profile in model_profiles.items():
             native = _profile_native_context_length(profile)
             if native > 0:
-                _record(model, "native", native)
+                _record(model, "overall", native)
         lanes = runtime.get("lanes")
         if not isinstance(lanes, list):
             continue
@@ -4858,8 +4859,8 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
             if window <= 0:
                 continue
             model = lane["model"]
-            _record(model, "min", window, keep_smallest=True)
-            _record(model, "best", window)
+            _record(model, "current_min", window, keep_smallest=True)
+            _record(model, "current_max", window)
     return stats
 
 
@@ -4869,33 +4870,43 @@ def _served_context_windows() -> dict[str, int]:
     The conservative view of :func:`_served_context_window_stats`, kept as its
     own helper because most callers only ever want the safe number.
     """
-    return {model: entry["min"] for model, entry in _served_context_window_stats().items() if "min" in entry}
+    return {
+        model: entry["current_min"] for model, entry in _served_context_window_stats().items() if "current_min" in entry
+    }
 
 
 def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
     """Context-window fields for one model in an OpenAI-style model object.
 
-    ``max_model_len`` is the field vLLM uses and the one clients should trust
-    unconditionally: the smallest window currently served, safe whichever
-    worker a request lands on. The two Logos extensions next to it describe
-    the room above that floor — ``max_model_len_best`` what some worker serves
-    right now, ``max_context_length`` what the model offers when a lane gets
-    the KV cache it wants. A client that never wants a rejected request stays
-    on ``max_model_len``; one that would rather advertise the ceiling (and
-    accept the occasional overflow) has the other two.
+    Three numbers, named for what they are:
 
-    Every field is omitted when unknown, so cloud models and never-calibrated
-    models keep the object they had before these fields existed.
+    ``max_model_len_current_min``  the smallest window being served right now.
+                                   The one figure that holds whichever worker
+                                   answers, so a client that never wants a
+                                   rejected request sizes itself from this.
+    ``max_model_len_current_max``  the largest window being served right now.
+                                   Reachable because long requests are routed
+                                   to a deployment that fits them.
+    ``max_model_len_overall``      the widest this model is ever served with,
+                                   independent of what is loaded at the moment.
+                                   The number to write into a config file that
+                                   is only read at startup.
+
+    ``max_model_len`` repeats the first of those under the name vLLM itself
+    uses, so an OpenAI-compatible client that already reads that field keeps
+    working. Every field is omitted when unknown, so cloud models and
+    never-calibrated models keep the object they had before any of this existed.
     """
     if not entry:
         return {}
     fields: dict[str, int] = {}
-    if entry.get("min"):
-        fields["max_model_len"] = entry["min"]
-    if entry.get("best"):
-        fields["max_model_len_best"] = entry["best"]
-    if entry.get("native"):
-        fields["max_context_length"] = entry["native"]
+    if entry.get("current_min"):
+        fields["max_model_len"] = entry["current_min"]
+        fields["max_model_len_current_min"] = entry["current_min"]
+    if entry.get("current_max"):
+        fields["max_model_len_current_max"] = entry["current_max"]
+    if entry.get("overall"):
+        fields["max_model_len_overall"] = entry["overall"]
     return fields
 
 
@@ -4981,6 +4992,83 @@ async def retrieve_model(model_id: str, request: Request):
             "owned_by": "logos",
             **_model_context_fields(stats.get(model["name"])),
         }
+    )
+
+
+def _resolve_accessible_model_name(api_key_id: int, model_id: str) -> Optional[str]:
+    """Canonical name of ``model_id`` if this key may use it, else None.
+
+    Shared by the model endpoints below: they all have to accept the same
+    aliases (planner-sanitized underscores, case differences) and all have to
+    refuse a model the key has no permission for.
+    """
+    with DBManager() as db:
+        model = db.get_model_for_api_key(api_key_id, model_id)
+        if model:
+            return model["name"]
+        models = db.get_models_for_api_key(api_key_id)
+        return _resolve_requested_model_name(
+            model_id,
+            [str(entry.get("name") or "").strip() for entry in models],
+        )
+
+
+@app.post("/v1/models/{model_id:path}/warmup", tags=["user-facing"])
+@app.post("/openai/models/{model_id:path}/warmup", tags=["user-facing"], include_in_schema=False)
+async def warmup_model(model_id: str, request: Request):
+    """Tell the planner a model is about to be used, and return immediately.
+
+    A coding assistant asks for the model list when it starts and then sits
+    idle while the developer reads the terminal — the first real request lands
+    seconds later, and pays for a cold load it could have overlapped with that
+    pause. This turns the startup into a hint.
+
+    It is a *hint*, not a reservation: it records the same latent demand the
+    scheduler records when classification prefers a model it did not get, and
+    wakes the planner cycle early. The planner still decides what to load using
+    its own fairness rules, so a warmup can never evict a lane that real
+    traffic is using, and a burst of them coalesces into one extra cycle. That
+    is also what keeps it from being a way to make the cluster thrash: the most
+    an authenticated caller can do is raise a model it already has access to
+    slightly in the queue of things worth loading.
+
+    Deliberately not "send a tiny request": that bills the caller, occupies a
+    slot, and returns a completion nobody wanted.
+    """
+    auth = authenticate_api_key(dict(request.headers))
+    model_name = _resolve_accessible_model_name(auth.api_key_id, model_id)
+    if model_name is None:
+        raise HTTPException(status_code=404, detail="Model not found or access denied")
+
+    stats = _served_context_window_stats().get(model_name) or {}
+    # A reported window means some lane is serving the model right now, which is
+    # the closest thing to "ready" this endpoint can answer without asking every
+    # worker. Already-warm models still record the hint: it keeps the model from
+    # decaying out of the planner's demand view while a session is open.
+    already_serving = bool(stats.get("current_min"))
+
+    accepted = False
+    if _demand_tracker is not None:
+        _demand_tracker.record_latent_demand(model_name)
+        accepted = True
+    if _capacity_planner is not None:
+        _capacity_planner.hint_capacity_needed(model_name)
+        accepted = True
+
+    logger.info(
+        "Warmup requested for model=%s (already serving: %s, hint accepted: %s)",
+        model_name,
+        already_serving,
+        accepted,
+    )
+    return JSONResponse(
+        status_code=202,
+        content={
+            "model": model_name,
+            "status": "serving" if already_serving else "preparing",
+            "hint_accepted": accepted,
+            **_model_context_fields(stats),
+        },
     )
 
 

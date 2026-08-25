@@ -28,17 +28,18 @@ public class OrchestratorModelWindowClient {
      * The three context windows the orchestrator reports per model, any of
      * which may be {@code null} when unknown.
      *
-     * @param min       smallest window currently served anywhere. A request may
-     *                  land on any worker, so this is the only figure that
-     *                  holds without further routing.
-     * @param best      largest window currently served anywhere — reachable
-     *                  when the request is routed to that worker.
-     * @param nativeMax the model's own context length, i.e. what a lane serves
-     *                  once it gets the KV cache it asks for. Known even for
-     *                  models with no live lane, and the ceiling {@code best}
-     *                  can grow to.
+     * @param currentMin smallest window being served right now. A request may
+     *                   land on any deployment, so this is the only figure
+     *                   that holds without further routing.
+     * @param currentMax largest window being served right now — reachable
+     *                   because long requests are routed to a deployment that
+     *                   fits them.
+     * @param overall    the widest this model is ever served with, independent
+     *                   of what is loaded at the moment. Known even for a model
+     *                   with no live lane, and the ceiling {@code currentMax}
+     *                   can grow to.
      */
-    public record ModelContextWindows(Integer min, Integer best, Integer nativeMax) {
+    public record ModelContextWindows(Integer currentMin, Integer currentMax, Integer overall) {
     }
 
     private final RestTemplate restTemplate;
@@ -102,10 +103,10 @@ public class OrchestratorModelWindowClient {
                 continue;
             }
             ModelContextWindows parsed = new ModelContextWindows(
-                positiveInt(fields.get("min")),
-                positiveInt(fields.get("best")),
-                positiveInt(fields.get("native")));
-            if (parsed.min() != null || parsed.best() != null || parsed.nativeMax() != null) {
+                positiveInt(fields.get("current_min")),
+                positiveInt(fields.get("current_max")),
+                positiveInt(fields.get("overall")));
+            if (parsed.currentMin() != null || parsed.currentMax() != null || parsed.overall() != null) {
                 windows.put(model, parsed);
             }
         }

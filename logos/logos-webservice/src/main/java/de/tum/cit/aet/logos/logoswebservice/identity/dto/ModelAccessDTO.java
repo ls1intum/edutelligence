@@ -7,19 +7,19 @@ public record ModelAccessDTO(
     @JsonInclude(JsonInclude.Include.NON_NULL)
     String provider_name,
     String provider_type,
-    // Served context window in tokens, from the orchestrator's live worker
-    // snapshots; null when no worker currently reports one for the model.
+    // Context window in tokens, from the orchestrator's live worker snapshots;
+    // null when nothing is known for the model.
     //
-    // Three views of the same thing, because a model can be placed with very
-    // different windows on different nodes: context_window is the smallest
-    // currently served (safe whichever worker answers), context_window_best
-    // the largest currently served, context_window_native what the model
-    // offers when a lane gets all the KV cache it wants. The last one is known
-    // even when nothing is loaded, which is what a client wants when it has to
-    // commit to one number up front.
-    Integer context_window,
+    // Three views of the same thing, because a model can be served with very
+    // different windows at once: context_window_current_min is the smallest
+    // being served right now (holds whichever deployment answers),
+    // context_window_current_max the largest, and context_window_overall the
+    // widest this model is ever served with. The last one is known even when
+    // nothing is loaded, which is what a client needs when it has to commit to
+    // one number up front.
+    Integer context_window_current_min,
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    Integer context_window_best,
+    Integer context_window_current_max,
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    Integer context_window_native
+    Integer context_window_overall
 ) {}

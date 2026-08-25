@@ -181,15 +181,10 @@
   background: rgb(var(--color-outline-200) / var(--opacity-border));
 }
 
-// Column header and footer: buttons that span the full cell so the whole
-// column reads as one clickable choice.
-.compare-col,
-.compare-cta {
-  border: none;
-  background: rgb(var(--color-background-50));
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+// The rows exist for the table semantics only; display:contents hands their
+// cells straight to the .compare grid, so a row cannot drift out of alignment.
+.compare-row {
+  display: contents;
 }
 
 .compare-col {
@@ -197,9 +192,9 @@
   flex-direction: column;
   gap: 7px;
   padding: 16px 16px 14px;
+  background: rgb(var(--color-background-50));
   text-align: left;
-
-  &:hover { background: rgb(var(--color-primary-400) / var(--opacity-faint)); }
+  transition: background 0.15s;
 
   &--active { background: rgb(var(--color-primary-500) / var(--opacity-soft)); }
 }
@@ -283,15 +278,29 @@
   &--minus { color: rgb(var(--color-typography-700)); }
 }
 
+// The action lives in a real <button> inside the cell rather than on the cell
+// itself: a cell with role="cell" that is also a button reports only one of the
+// two to assistive technology, and "you can click this" is the half that matters.
+.compare-cta-cell {
+  display: flex;
+  background: rgb(var(--color-background-50));
+}
+
 .compare-cta {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   justify-content: center;
   gap: 6px;
   padding: 12px 14px;
+  border: none;
+  background: transparent;
   color: rgb(var(--color-text-accent));
+  font-family: inherit;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
 
   &:hover { background: rgb(var(--color-primary-400) / var(--opacity-faint)); }
 
@@ -634,14 +643,27 @@
 
 // ── Mobile ────────────────────────────────────────────────────────────────
 @media (max-width: 900px) {
-  // Side-by-side comparison needs two columns to be a comparison at all; below
-  // this width the cards stack and the shared row labels carry the pairing.
-  .tool-choice {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .context-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  // Three columns stop fitting, but the two values still have to sit side by
+  // side or it is no longer a comparison. So the dimension label moves onto its
+  // own full-width row above the pair it labels.
+  .compare {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .compare-dim {
+    grid-column: 1 / -1;
+    padding-bottom: 2px;
+    background: rgb(var(--color-background-50));
+  }
+
+  .compare-corner {
+    display: none;
   }
 }
 

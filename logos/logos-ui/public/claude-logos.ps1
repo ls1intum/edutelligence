@@ -11,11 +11,11 @@
     claude-logos -p "..."            headless / one-shot
     claude-logos --resume            every claude flag is passed through unchanged
 
-    claude-logos -LogosCheck         check the connection and the model, then exit
-    claude-logos -LogosContext       show how much context this session would get
-    claude-logos -LogosInstall       install to %LOCALAPPDATA%\Programs\claude-logos
+    claude-logos -Check              show the connection, the model and how much
+                                     context this session would get, then exit
+    claude-logos -Install            install to %LOCALAPPDATA%\Programs\claude-logos
                                      (takes KEY=value lines via -LogosConfig)
-    claude-logos -LogosUninstall     remove the wrapper, its config and its key
+    claude-logos -Uninstall          remove the wrapper, its config and its key
 
   NOTHING OUTSIDE THIS WRAPPER IS TOUCHED. The Logos credential, base URL and model are
   set on this process only — never with [Environment]::SetEnvironmentVariable at User or
@@ -29,12 +29,11 @@
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [switch]$LogosInstall,
-    [switch]$LogosUninstall,
-    [switch]$LogosCheck,
-    [switch]$LogosContext,
+    [switch]$Install,
+    [switch]$Uninstall,
+    [switch]$Check,
     [switch]$Yes,
-    # KEY=value lines for -LogosInstall, passed as a here-string. Keeping it a
+    # KEY=value lines for -Install, passed as a here-string. Keeping it a
     # parameter rather than a pipeline read makes the install a single call that
     # behaves the same from the console, from a .cmd shim and from a script.
     [string]$LogosConfig,
@@ -58,7 +57,7 @@ function Write-Note([string]$Message) { Write-Host "claude-logos: $Message" }
 function Stop-WithError([string]$Message) { Write-Error "claude-logos: $Message"; exit 1 }
 
 # ── Settings, lowest precedence first ────────────────────────────────────────────
-# The config file is written by -LogosInstall (i.e. by the AI Tools page) and holds
+# The config file is written by -Install (i.e. by the AI Tools page) and holds
 # KEY=value lines. Environment variables win over it, so a single invocation can be
 # redirected without editing anything:
 #
@@ -97,7 +96,7 @@ $MaxOutputTokens = [int](Get-Setting 'LOGOS_MAX_OUTPUT_TOKENS' 20000)
 # match. Set LOGOS_EFFORT to an empty string to opt out.
 $Effort = Get-Setting 'LOGOS_EFFORT' 'xhigh'
 
-# ── -LogosInstall ───────────────────────────────────────────────────────────────
+# ── -Install ────────────────────────────────────────────────────────────────────
 # Takes KEY=value lines from -LogosConfig, or from stdin when that is empty.
 function Invoke-LogosInstall([string]$ConfigText) {
     if (-not $ConfigText -and [Console]::IsInputRedirected) {
@@ -109,8 +108,8 @@ function Invoke-LogosInstall([string]$ConfigText) {
         elseif ($line -match '^LOGOS_MODEL=(.*)$') { $model = $Matches[1] }
         elseif ($line -match '^LOGOS_KEY=(.*)$') { $key = $Matches[1] }
     }
-    if (-not $key) { Stop-WithError '-LogosInstall needs a LOGOS_KEY=… line in -LogosConfig' }
-    if (-not $url) { Stop-WithError '-LogosInstall needs a LOGOS_URL=… line in -LogosConfig' }
+    if (-not $key) { Stop-WithError '-Install needs a LOGOS_KEY=… line in -LogosConfig' }
+    if (-not $url) { Stop-WithError '-Install needs a LOGOS_URL=… line in -LogosConfig' }
 
     New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir | Out-Null
     if ($PSCommandPath -ne $InstallPath) {
@@ -128,7 +127,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0claude-logos.ps1" %*
     Protect-UserOnly $KeyFile
 
     $configLines = @(
-        '# Written by claude-logos -LogosInstall. Environment variables win over this file.',
+        '# Written by claude-logos -Install. Environment variables win over this file.',
         "LOGOS_URL=$($url.TrimEnd('/'))"
     )
     if ($model) { $configLines += "LOGOS_MODEL=$model" }
@@ -181,7 +180,7 @@ function Protect-UserOnly([string]$Path) {
     }
 }
 
-# ── -LogosUninstall ─────────────────────────────────────────────────────────────
+# ── -Uninstall ──────────────────────────────────────────────────────────────────
 function Invoke-LogosUninstall {
     $removed = $false
 
@@ -261,8 +260,8 @@ function Invoke-LogosUninstall {
     }
 }
 
-if ($LogosInstall) { Invoke-LogosInstall $LogosConfig; exit 0 }
-if ($LogosUninstall) { Invoke-LogosUninstall; exit 0 }
+if ($Install) { Invoke-LogosInstall $LogosConfig; exit 0 }
+if ($Uninstall) { Invoke-LogosUninstall; exit 0 }
 
 # ── Credential ──────────────────────────────────────────────────────────────────
 if (-not (Test-Path -LiteralPath $KeyFile)) {
@@ -288,18 +287,20 @@ function Get-Window($value) {
 
 $ContextGuaranteed = 0; $ContextAvailable = 0; $ContextMax = 0
 $ContextTokens = 0; $ContextOrigin = 'estimate'; $KnownModelIds = @()
+$AllModelIds = @()
 try {
     $headers = @{ Authorization = "Bearer $LogosKey" }
     $listing = Invoke-RestMethod -Uri "$LogosUrl/v1/models" -Headers $headers -TimeoutSec 15
     $served = $listing.data | Where-Object { $_.id -eq $LogosModel } | Select-Object -First 1
     if ($served) {
         # max_model_len is the size that always holds and the field vLLM itself uses;
-        # the other two are Logos extensions. Older gateways send only the first, so
-        # every step falls back to the one below it.
-        $ContextGuaranteed = Get-Window $served.max_model_len
-        $ContextAvailable = Get-Window $served.max_model_len_best
+        # the *_current_* and *_overall* names are Logos extensions. Older Logos
+        # versions send only the first, so every step falls back to the one below it.
+        $ContextGuaranteed = Get-Window $served.max_model_len_current_min
+        if ($ContextGuaranteed -le 0) { $ContextGuaranteed = Get-Window $served.max_model_len }
+        $ContextAvailable = Get-Window $served.max_model_len_current_max
         if ($ContextAvailable -le 0) { $ContextAvailable = $ContextGuaranteed }
-        $ContextMax = Get-Window $served.max_context_length
+        $ContextMax = Get-Window $served.max_model_len_overall
         if ($ContextMax -le 0) { $ContextMax = $ContextAvailable }
         $ContextTokens = switch ($ContextSource) {
             'guaranteed' { $ContextGuaranteed }
@@ -311,6 +312,7 @@ try {
     } else {
         $KnownModelIds = @($listing.data | ForEach-Object { $_.id })
     }
+    $AllModelIds = @($listing.data | ForEach-Object { $_.id } | Where-Object { $_ })
 } catch {
     Write-Note "could not ask Logos how much context is available ($($_.Exception.Message))"
 }
@@ -335,13 +337,50 @@ $ContextForCli = $ContextTokens - $Headroom
 $CompactAt = $ContextForCli - $MaxOutputTokens - 13000
 $HardStopAt = $ContextForCli - $MaxOutputTokens - 3000
 
+$KnownModelsFile = Join-Path $ConfigDir 'known-models'
+
+# ── New models since the last run ───────────────────────────────────────────────
+# Models get added to a team without anyone telling the people on it, and the
+# terminal someone is about to work in is the one place they will read it. First
+# run records the baseline silently instead of announcing everything as new.
+function Report-NewModels([string[]]$Current) {
+    if (-not $Current -or $Current.Count -eq 0) { return }
+    if (-not (Test-Path -LiteralPath $KnownModelsFile)) {
+        Set-Content -LiteralPath $KnownModelsFile -Value $Current -Encoding UTF8
+        return
+    }
+    $previous = @(Get-Content -LiteralPath $KnownModelsFile)
+    $added = @($Current | Where-Object { $previous -notcontains $_ })
+    if ($added.Count -gt 0) {
+        Write-Host ("new      : {0} now available to you" -f ($added -join ' '))
+        Write-Host '           (set $env:LOGOS_MODEL to use one, or re-run the setup on the Logos web UI)'
+    }
+    Set-Content -LiteralPath $KnownModelsFile -Value $Current -Encoding UTF8
+}
+
+# ── Warm-up ─────────────────────────────────────────────────────────────────────
+# A session starts, the developer reads the startup line, and the first real
+# request lands seconds later — paying for a cold load that could have happened
+# during those seconds. This tells Logos the model is about to be used and
+# returns immediately; no request is ever sent on the caller's behalf.
+function Invoke-Warmup {
+    try {
+        Invoke-RestMethod -Method Post -TimeoutSec 5 `
+            -Uri "$LogosUrl/v1/models/$LogosModel/warmup" `
+            -Headers @{ Authorization = "Bearer $LogosKey" } | Out-Null
+    } catch {
+        # Best-effort: a failed warm-up only means the first request pays for
+        # the load itself.
+    }
+}
+
 function Write-ContextReport {
     Write-Host ("model    : {0}" -f $LogosModel)
     Write-Host ("logos    : {0}" -f $LogosUrl)
     if ($ContextOrigin -eq 'estimate') {
         Write-Host ("context  : {0:N0} tokens (an estimate — Logos reports no size for this model)" -f $ContextTokens)
     } else {
-        Write-Host ("context  : {0:N0} tokens, using \"{1}\" of what Logos offers" -f $ContextTokens, $ContextOrigin)
+        Write-Host ("context  : {0:N0} tokens, using ""{1}"" of what Logos offers" -f $ContextTokens, $ContextOrigin)
         Write-Host ("           (guaranteed {0:N0} / available now {1:N0} / model max {2:N0})" -f `
             $ContextGuaranteed, $ContextAvailable, $ContextMax)
     }
@@ -381,27 +420,15 @@ $env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = "$MaxOutputTokens"
 # Keep telemetry, model discovery and other non-inference calls off api.anthropic.com.
 $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
 
-if ($LogosContext) { Write-ContextReport; exit 0 }
-
-if ($LogosCheck) {
+# Everything the startup line prints, plus which key and effort are in play. It
+# deliberately makes no inference request: reading the model list already proves
+# the URL, the key and that Logos serves this model.
+if ($Check) {
     Write-ContextReport
     Write-Host ("key      : {0} ({1} chars)" -f $KeyFile, $LogosKey.Length)
     Write-Host ("effort   : {0}" -f $(if ($Effort) { $Effort } else { '<not set by this wrapper>' }))
-    try {
-        $body = @{
-            model = $LogosModel; max_tokens = 16
-            messages = @(@{ role = 'user'; content = 'Reply with: OK' })
-        } | ConvertTo-Json -Depth 6
-        Invoke-RestMethod -Uri "$LogosUrl/v1/messages" -Method Post -Body $body `
-            -ContentType 'application/json' -TimeoutSec 180 -Headers @{
-                Authorization = "Bearer $LogosKey"; 'anthropic-version' = '2023-06-01'
-            } | Out-Null
-        Write-Host 'probe    : HTTP 200 — Logos reachable, key and model accepted'
-        exit 0
-    } catch {
-        Write-Host "probe    : $($_.Exception.Message)"
-        exit 1
-    }
+    Report-NewModels $AllModelIds
+    exit 0
 }
 
 # ── Launch ──────────────────────────────────────────────────────────────────────
@@ -409,10 +436,17 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
     Stop-WithError 'claude is not on your PATH — install Claude Code first'
 }
 
-# Say which window this session got. It changes between runs without anything the user
-# did changing, so printing it is the difference between "Claude Code compacted early
-# again" and "this lane is running narrow today".
+# Ask Logos to get the model ready before handing over. The endpoint answers
+# immediately (it records a hint rather than doing the work inline), so this is a
+# round trip and not a wait — no background job needed, and a failure changes
+# nothing except that the first request pays for the load itself.
+Invoke-Warmup
+
+# Say how much room this session got. It changes between runs without anything the
+# user having changed, so printing it is the difference between "Claude Code
+# compacted early again" and "there was less room today".
 Write-ContextReport
+Report-NewModels $AllModelIds
 Write-Host ''
 
 $passThrough = @()

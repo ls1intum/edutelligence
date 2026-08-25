@@ -384,10 +384,11 @@ async def test_retrieve_model_includes_served_context_window(monkeypatch):
 async def test_list_models_reports_best_and_native_next_to_the_minimum(monkeypatch):
     """Three figures, because one number cannot serve every client.
 
-    ``max_model_len`` stays the smallest window (safe whichever worker answers).
-    A client that would rather advertise the ceiling — and accept the occasional
-    overflow — gets ``max_model_len_best`` (widest served right now) and
-    ``max_context_length`` (the model's own limit).
+    ``max_model_len_current_min`` is the smallest window being served (holds
+    whichever deployment answers) and ``max_model_len`` repeats it under the
+    name vLLM uses. A client that would rather advertise the ceiling gets
+    ``max_model_len_current_max`` (widest served right now) and
+    ``max_model_len_overall`` (the widest it is ever served with).
     """
     models = [{"id": 1, "name": "qwen-27b", "description": None}]
     registry = DummyRegistry(
@@ -403,8 +404,9 @@ async def test_list_models_reports_best_and_native_next_to_the_minimum(monkeypat
     entries = await _list_ids_to_entries(monkeypatch, models, registry)
 
     assert entries["qwen-27b"]["max_model_len"] == 33000
-    assert entries["qwen-27b"]["max_model_len_best"] == 262144
-    assert entries["qwen-27b"]["max_context_length"] == 262144
+    assert entries["qwen-27b"]["max_model_len_current_min"] == 33000
+    assert entries["qwen-27b"]["max_model_len_current_max"] == 262144
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
 
 
 @pytest.mark.asyncio
@@ -419,9 +421,10 @@ async def test_list_models_native_length_without_a_live_lane(monkeypatch):
 
     entries = await _list_ids_to_entries(monkeypatch, models, registry)
 
-    assert entries["cold-model"]["max_context_length"] == 131072
+    assert entries["cold-model"]["max_model_len_overall"] == 131072
     assert "max_model_len" not in entries["cold-model"]
-    assert "max_model_len_best" not in entries["cold-model"]
+    assert "max_model_len_current_min" not in entries["cold-model"]
+    assert "max_model_len_current_max" not in entries["cold-model"]
 
 
 @pytest.mark.asyncio

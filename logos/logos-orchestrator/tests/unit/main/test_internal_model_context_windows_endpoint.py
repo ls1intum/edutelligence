@@ -59,8 +59,8 @@ async def test_returns_served_windows_per_model(monkeypatch):
     # With one worker, the smallest and the largest served window coincide, and
     # neither model's profile reports a context length, so there is no "native".
     assert result["stats"] == {
-        "qwen-14b": {"min": 40960, "best": 40960},
-        "mistral-7b": {"min": 32768, "best": 32768},
+        "qwen-14b": {"current_min": 40960, "current_max": 40960},
+        "mistral-7b": {"current_min": 32768, "current_max": 32768},
     }
 
 
@@ -68,9 +68,9 @@ async def test_returns_served_windows_per_model(monkeypatch):
 async def test_stats_separate_smallest_largest_and_native(monkeypatch):
     """Two workers serving the same model at different widths.
 
-    ``min`` has to stay the narrow one (a request may land there), ``best`` the
-    wide one, and ``native`` the model's own limit — which is known from the
-    profile even on the worker whose lane runs narrow.
+    ``current_min`` has to stay the narrow one (a request may land there),
+    ``current_max`` the wide one, and ``overall`` the widest it is ever served
+    with — known from the profile even on the worker whose lane runs narrow.
     """
     monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
 
@@ -115,7 +115,11 @@ async def test_stats_separate_smallest_largest_and_native(monkeypatch):
     result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     assert result["windows"] == {"qwen-27b": 33000}
-    assert result["stats"]["qwen-27b"] == {"min": 33000, "best": 262144, "native": 262144}
+    assert result["stats"]["qwen-27b"] == {
+        "current_min": 33000,
+        "current_max": 262144,
+        "overall": 262144,
+    }
 
 
 @pytest.mark.asyncio
@@ -141,4 +145,4 @@ async def test_native_is_known_without_a_live_lane(monkeypatch):
     result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     assert result["windows"] == {}
-    assert result["stats"] == {"cold-model": {"native": 131072}}
+    assert result["stats"] == {"cold-model": {"overall": 131072}}

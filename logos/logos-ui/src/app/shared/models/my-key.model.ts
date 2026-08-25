@@ -32,17 +32,17 @@ export interface ModelAccess {
   provider_name?: string;
   provider_type: string;
   /**
-   * Smallest context window (tokens) any worker currently serves for the model;
-   * null when none reports one. A request may land on any worker, so this is the
-   * only figure that holds without the orchestrator routing around it.
+   * Smallest context window (tokens) being served right now; null when nothing
+   * is known. A request may land on any deployment, so this is the only figure
+   * that holds without the orchestrator routing around it.
    */
-  context_window: number | null;
-  /** Largest window currently served anywhere. Absent when unknown. */
-  context_window_best?: number | null;
+  context_window_current_min: number | null;
+  /** Largest window being served right now. Absent when unknown. */
+  context_window_current_max?: number | null;
   /**
-   * The model's own context length — what a lane serves once it gets all the KV
-   * cache it asks for. Known even while nothing is loaded, which makes it the
-   * number to use when a config file has to commit to one up front.
+   * The widest this model is ever served with — independent of what is loaded
+   * at the moment, which makes it the number to use when a config file has to
+   * commit to one up front.
    */
-  context_window_native?: number | null;
+  context_window_overall?: number | null;
 }

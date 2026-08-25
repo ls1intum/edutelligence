@@ -86,9 +86,9 @@ public class MeKeysService {
                     r.getModelName(),
                     includeProviderNames ? r.getProviderName() : null,
                     r.getProviderType(),
-                    w != null ? w.min() : null,
-                    w != null ? w.best() : null,
-                    w != null ? w.nativeMax() : null);
+                    w != null ? w.currentMin() : null,
+                    w != null ? w.currentMax() : null,
+                    w != null ? w.overall() : null);
             })
             .toList());
     }

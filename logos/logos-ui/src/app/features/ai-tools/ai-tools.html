@@ -41,73 +41,81 @@
         how they handle the context window, and what they do to a setup you already have.
       </p>
 
-      <!-- One grid, every cell a direct child: the dimension label and both
-           values share a row, so the two tools stay aligned however the text
-           wraps. Clicking anywhere in a column picks that tool. -->
+      <!-- A real table: the dimension label and both values share one row, so
+           the two tools stay aligned however the text wraps. The rows carry
+           role="row" and are laid out with display:contents, which keeps every
+           cell a grid item of .compare while the semantics stay valid. -->
       <div class="compare" role="table" aria-label="Claude Code compared with OpenCode">
-        <div class="compare-corner" role="presentation"></div>
-        @for (tool of toolChoices; track tool) {
-          <button
-            type="button"
-            class="compare-col"
-            [class.compare-col--active]="activeTool() === tool"
-            [attr.aria-pressed]="activeTool() === tool"
-            (click)="chooseTool(tool)"
-          >
-            <span class="compare-col-head">
-              <i
-                [class]="tool === 'claudecode' ? 'pi pi-sparkles' : 'pi pi-code'"
-                aria-hidden="true"
-              ></i>
-              <span class="compare-col-name">{{ toolLabel(tool) }}</span>
-            </span>
-            <span class="compare-col-headline">{{ toolSummaries[tool].headline }}</span>
-            <span class="compare-col-caveat">
-              <i class="pi pi-exclamation-circle" aria-hidden="true"></i>
-              {{ toolSummaries[tool].caveat }}
-            </span>
-          </button>
-        }
-
-        @for (row of comparison; track row.dimension) {
-          <div class="compare-dim" role="rowheader">{{ row.dimension }}</div>
+        <div class="compare-row" role="row">
+          <div class="compare-corner" role="presentation"></div>
           @for (tool of toolChoices; track tool) {
             <div
-              class="compare-cell"
-              role="cell"
-              [class.compare-cell--active]="activeTool() === tool"
-              [class.compare-cell--plus]="row.favours === tool"
+              class="compare-col"
+              role="columnheader"
+              [class.compare-col--active]="activeTool() === tool"
             >
-              <i
-                [class]="
-                  row.favours === tool
-                    ? 'pi pi-check-circle compare-icon compare-icon--plus'
-                    : row.favours === 'even'
-                      ? 'pi pi-minus-circle compare-icon compare-icon--even'
-                      : 'pi pi-circle compare-icon compare-icon--minus'
-                "
-                aria-hidden="true"
-              ></i>
-              <span>{{ tool === 'claudecode' ? row.claudecode : row.opencode }}</span>
+              <span class="compare-col-head">
+                <i
+                  [class]="tool === 'claudecode' ? 'pi pi-sparkles' : 'pi pi-code'"
+                  aria-hidden="true"
+                ></i>
+                <span class="compare-col-name">{{ toolLabel(tool) }}</span>
+              </span>
+              <span class="compare-col-headline">{{ toolSummaries[tool].headline }}</span>
+              <span class="compare-col-caveat">
+                <i class="pi pi-exclamation-circle" aria-hidden="true"></i>
+                {{ toolSummaries[tool].caveat }}
+              </span>
             </div>
           }
+        </div>
+
+        @for (row of comparison; track row.dimension) {
+          <div class="compare-row" role="row">
+            <div class="compare-dim" role="rowheader">{{ row.dimension }}</div>
+            @for (tool of toolChoices; track tool) {
+              <div
+                class="compare-cell"
+                role="cell"
+                [class.compare-cell--active]="activeTool() === tool"
+                [class.compare-cell--plus]="row.favours === tool"
+              >
+                <i
+                  [class]="
+                    row.favours === tool
+                      ? 'pi pi-check-circle compare-icon compare-icon--plus'
+                      : row.favours === 'even'
+                        ? 'pi pi-minus-circle compare-icon compare-icon--even'
+                        : 'pi pi-circle compare-icon compare-icon--minus'
+                  "
+                  aria-hidden="true"
+                ></i>
+                <span>{{ tool === 'claudecode' ? row.claudecode : row.opencode }}</span>
+              </div>
+            }
+          </div>
         }
 
-        <div class="compare-corner" role="presentation"></div>
-        @for (tool of toolChoices; track tool) {
-          <button
-            type="button"
-            class="compare-cta"
-            [class.compare-cta--active]="activeTool() === tool"
-            (click)="chooseTool(tool)"
-          >
-            @if (activeTool() === tool) {
-              <i class="pi pi-check" aria-hidden="true"></i> Selected — continue below
-            } @else {
-              Choose {{ toolLabel(tool) }}
-            }
-          </button>
-        }
+        <div class="compare-row" role="row">
+          <div class="compare-corner" role="presentation"></div>
+          @for (tool of toolChoices; track tool) {
+            <div class="compare-cta-cell" role="cell">
+              <button
+                type="button"
+                class="compare-cta"
+                [class.compare-cta--active]="activeTool() === tool"
+                [attr.aria-pressed]="activeTool() === tool"
+                (click)="chooseTool(tool)"
+              >
+                @if (activeTool() === tool) {
+                  <i class="pi pi-check" aria-hidden="true"></i> Selected — continue below
+                } @else {
+                  Choose {{ toolLabel(tool) }}
+                }
+              </button>
+            </div>
+          }
+        </div>
       </div>
 
       <p class="tab-note tool-legend">
@@ -217,7 +225,7 @@
               <span class="context-cell-label">Always available</span>
               <span class="context-cell-value">
                 @if (hasReportedWindow()) {
-                  {{ contextMin() | number }}
+                  {{ contextCurrentMin() | number }}
                 } @else {
                   unknown
                 }
@@ -228,7 +236,7 @@
               <span class="context-cell-label">Available now</span>
               <span class="context-cell-value">
                 @if (hasReportedWindow()) {
-                  {{ contextBest() | number }}
+                  {{ contextCurrentMax() | number }}
                 } @else {
                   unknown
                 }
@@ -239,7 +247,7 @@
               <span class="context-cell-label">Model maximum</span>
               <span class="context-cell-value">
                 @if (hasReportedWindow()) {
-                  {{ contextNative() | number }}
+                  {{ contextOverall() | number }}
                 } @else {
                   {{ contextFallback() | number }}
                 }
@@ -498,10 +506,12 @@
         <p class="substep-label">a. Add the Logos provider to your config</p>
 
         <div class="os-tabs" role="tablist">
-          <button class="os-tab" role="tab"
+          <button type="button" class="os-tab" role="tab"
+            [attr.aria-selected]="connectMethod() === 'terminal'"
             [class.os-tab--active]="connectMethod() === 'terminal'"
             (click)="connectMethod.set('terminal')">Terminal</button>
-          <button class="os-tab" role="tab"
+          <button type="button" class="os-tab" role="tab"
+            [attr.aria-selected]="connectMethod() === 'download'"
             [class.os-tab--active]="connectMethod() === 'download'"
             (click)="connectMethod.set('download')">Download config</button>
         </div>
@@ -531,8 +541,7 @@
         } @else {
           <p class="apply-hint">
             Only if you have no <code class="inline-code">opencode.json</code> yet: save it as
-            <code class="inline-code">~/.config/opencode/opencode.json</code>
-            (Windows: <code class="inline-code">{{ openCodeConfigPath() }}</code>).
+            <code class="inline-code">{{ openCodeConfigPath() }}</code>.
           </p>
           <div class="code-header">
             <span class="file-tab">opencode.json</span>
@@ -598,9 +607,8 @@
           </button>
         </div>
         <p class="tab-note">
-          Every normal start prints the same context line, so you can always see which window
-          the session got. <code class="inline-code">claude-logos --logos-context</code> shows
-          it without making a request.
+          Every normal start prints the same context line, so you can always see how much room
+          the session got — this command just shows it without starting one.
         </p>
 
         <p class="substep-label">Remove it again</p>

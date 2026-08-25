@@ -646,6 +646,7 @@ class LogosNodeDataProvider:
                 enforce_eager_at_calibration=data.get("enforce_eager_at_calibration"),
                 kv_per_token_bytes=data.get("kv_per_token_bytes"),
                 max_context_length=data.get("max_context_length"),
+                min_context_fraction=data.get("min_context_fraction"),
                 measurement_count=int(data.get("measurement_count", 0) or 0),
                 last_measured_epoch=float(data.get("last_measured_epoch", 0.0) or 0.0),
                 residency_source=data.get("residency_source"),

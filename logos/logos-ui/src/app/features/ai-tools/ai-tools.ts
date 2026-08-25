@@ -203,26 +203,38 @@ export class AiTools implements OnInit {
   // ── Context windows ───────────────────────────────────────────────────────
   // Three numbers per model, and which one to use depends on who is asking.
   //
-  // A lane's context window is set by the capacity planner from the free KV cache
-  // on the node it lands on, so the same model can serve 262,144 tokens on one
-  // worker and a fraction of that on another, and a re-calibration moves it again.
-  // contextMin is the floor across the cluster — the only figure that holds
-  // whichever worker answers. contextBest is the widest currently served, which
-  // the orchestrator's context-aware routing steers long requests towards.
-  // contextNative is the model's own limit, known even while nothing is loaded.
-  contextMin = computed(() => positive(this.selected()?.context_window));
-  contextBest = computed(() => positive(this.selected()?.context_window_best) || this.contextMin());
-  contextNative = computed(
-    () => positive(this.selected()?.context_window_native) || this.contextBest(),
+  // How much context Logos can give a model depends on how much capacity is
+  // free, so the same model can be served at 262,144 tokens and at a fraction
+  // of that at the same time. contextCurrentMin is the floor — the only figure
+  // that holds whichever deployment answers. contextCurrentMax is the widest
+  // being served now, which long requests are routed towards. contextOverall is
+  // the widest it is ever served with, known even while nothing is loaded.
+  contextCurrentMin = computed(() => positive(this.selected()?.context_window_current_min));
+  contextCurrentMax = computed(
+    () => positive(this.selected()?.context_window_current_max) || this.contextCurrentMin(),
+  );
+  contextOverall = computed(
+    () => positive(this.selected()?.context_window_overall) || this.contextCurrentMax(),
   );
 
-  /** Conservative stand-in for a model the workers report nothing for. */
+  /**
+   * The window to write into a config file that is only read at startup: the
+   * widest this model is ever served with, or a conservative stand-in when
+   * Logos reports nothing for it.
+   */
+  static configuredContextFor(model: ModelAccess): number {
+    return (
+      positive(model.context_window_overall) ||
+      positive(model.context_window_current_max) ||
+      positive(model.context_window_current_min) ||
+      (model.provider_type !== 'cloud' ? 32768 : 128000)
+    );
+  }
+
+  /** The stand-in above, for display when nothing is reported. */
   contextFallback = computed(() => (this.selected()?.provider_type !== 'cloud' ? 32768 : 128000));
 
-  /** What OpenCode's config file gets: the ceiling, since it cannot re-read it. */
-  openCodeContext = computed(() => this.contextNative() || this.contextFallback());
-
-  hasReportedWindow = computed(() => this.contextMin() > 0);
+  hasReportedWindow = computed(() => this.contextCurrentMin() > 0);
 
   windowUnenforced = computed(() => {
     const name = (this.selected()?.model_name ?? '').toLowerCase();
@@ -238,16 +250,11 @@ export class AiTools implements OnInit {
     const modelsMap: Record<string, { name: string; limit: { context: number; output: number } }> =
       {};
     for (const m of allModels) {
-      // The widest window this model can be served with, for the same reason the
-      // selected model uses it: OpenCode reads its config once at startup, so a
-      // number that tracks the current lane would be wrong by the next
-      // re-calibration anyway. The orchestrator routes long requests to a worker
-      // that can take them.
-      const context =
-        positive(m.context_window_native) ||
-        positive(m.context_window_best) ||
-        positive(m.context_window) ||
-        (m.provider_type !== 'cloud' ? 32768 : 128000);
+      // The widest this model is ever served with: OpenCode reads its config
+      // once at startup, so a number that tracks what happens to be loaded
+      // right now would be wrong by the time it matters. Long requests are
+      // routed to wherever there is room for them.
+      const context = AiTools.configuredContextFor(m);
       modelsMap[m.model_name] = {
         name: m.model_name,
         limit: { context, output: Math.min(8192, Math.floor(context / 2)) },
@@ -366,7 +373,9 @@ export class AiTools implements OnInit {
     const model = this.selected()?.model_name ?? '';
     return [
       `curl -fsSL ${this.wrapperUrl()} -o ~/.claude-logos-install.sh \\`,
-      '  && bash ~/.claude-logos-install.sh --logos-install <<LOGOS',
+      // Quoted delimiter: an unquoted heredoc would let the shell expand a `$`
+      // or a backtick inside the key before the wrapper ever sees it.
+      "  && bash ~/.claude-logos-install.sh --install <<'LOGOS'",
       `LOGOS_URL=${this.baseUrl()}`,
       `LOGOS_MODEL=${model}`,
       `LOGOS_KEY=${key}`,
@@ -381,7 +390,7 @@ export class AiTools implements OnInit {
     return [
       "$p = Join-Path $env:TEMP 'claude-logos-install.ps1'",
       `Invoke-WebRequest -UseBasicParsing '${this.wrapperUrl()}' -OutFile $p`,
-      "& $p -LogosInstall -LogosConfig @'",
+      "& $p -Install -LogosConfig @'",
       `LOGOS_URL=${this.baseUrl()}`,
       `LOGOS_MODEL=${model}`,
       `LOGOS_KEY=${key}`,
@@ -392,11 +401,15 @@ export class AiTools implements OnInit {
 
   readonly claudeCodeUninstallCommand = computed(() =>
     this.installTab() === 'windows'
-      ? `& "$env:LOCALAPPDATA\\Programs\\claude-logos\\claude-logos.ps1" -LogosUninstall`
-      : 'claude-logos --logos-uninstall',
+      ? `& "$env:LOCALAPPDATA\\Programs\\claude-logos\\claude-logos.ps1" -Uninstall`
+      : 'claude-logos --uninstall',
   );
 
-  readonly claudeCodeVerifyCommand = computed(() => 'claude-logos --logos-check');
+  readonly claudeCodeVerifyCommand = computed(() =>
+    this.installTab() === 'windows'
+      ? '& "$env:LOCALAPPDATA\\Programs\\claude-logos\\claude-logos.ps1" -Check'
+      : 'claude-logos --check',
+  );
 
   // Paths and one-liners that contain backslashes or angle brackets. Kept here
   // rather than inline in the template, where both need escaping to survive the

@@ -9,11 +9,11 @@
 #   claude-logos -p "..."             headless / one-shot
 #   claude-logos --resume             every claude flag is passed through unchanged
 #
-#   claude-logos --logos-check        check the connection and the model, then exit
-#   claude-logos --logos-context      show how much context this session would get
-#   claude-logos --logos-install      install to ~/.local/bin (reads config from stdin)
-#   claude-logos --logos-uninstall    remove the wrapper, its config and its key
-#   claude-logos --logos-help         this text
+#   claude-logos --check              show the connection, the model and how much
+#                                     context this session would get, then exit
+#   claude-logos --install            install to ~/.local/bin (reads config from stdin)
+#   claude-logos --uninstall          remove the wrapper, its config and its key
+#   claude-logos --help               this text, then claude's own
 #
 # NOTHING OUTSIDE THIS WRAPPER IS TOUCHED. The Logos credential, base URL and model are
 # exported into the child process only, and the extra Claude Code settings live in this
@@ -33,7 +33,7 @@ SETTINGS_FILE_DEFAULT="$CONFIG_DIR/settings.json"
 INSTALL_PATH="${LOGOS_INSTALL_PATH:-$HOME/.local/bin/claude-logos}"
 
 # ── Settings, lowest precedence first ───────────────────────────────────────────
-# The config file is written by --logos-install (i.e. by the AI Tools page) and holds
+# The config file is written by --install (i.e. by the AI Tools page) and holds
 # KEY=value lines. Environment variables win over it so a single invocation can be
 # redirected without editing anything:
 #
@@ -76,7 +76,7 @@ LOGOS_CONTEXT_FALLBACK="${LOGOS_CONTEXT_FALLBACK:-111200}"
 # CLAUDE_CODE_MAX_OUTPUT_TOKENS it is given, and it subtracts that reservation from the
 # window itself (vLLM charges input and output against one budget, so that is correct).
 # Asking for more than the cap therefore buys nothing and costs context — see the
-# arithmetic printed by --logos-context.
+# arithmetic printed by --check.
 LOGOS_MAX_OUTPUT_TOKENS="${LOGOS_MAX_OUTPUT_TOKENS:-20000}"
 
 # Safety margin taken off the window before Claude Code is told about it. Claude Code
@@ -104,7 +104,7 @@ usage() {
   sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
 }
 
-# ── --logos-install ─────────────────────────────────────────────────────────────
+# ── --install ───────────────────────────────────────────────────────────────────
 # Reads KEY=value lines from stdin so the Logos key never appears in the process
 # list or the shell history of a `ps`-visible command line.
 logos_install() {
@@ -116,8 +116,8 @@ logos_install() {
       LOGOS_KEY) key="$value" ;;
     esac
   done
-  [[ -n "$key" ]] || die "--logos-install needs a LOGOS_KEY=… line on stdin"
-  [[ -n "$url" ]] || die "--logos-install needs a LOGOS_URL=… line on stdin"
+  [[ -n "$key" ]] || die "--install needs a LOGOS_KEY=… line on stdin"
+  [[ -n "$url" ]] || die "--install needs a LOGOS_URL=… line on stdin"
 
   mkdir -p "$(dirname "$INSTALL_PATH")" "$CONFIG_DIR"
   chmod 700 "$CONFIG_DIR"
@@ -130,7 +130,7 @@ logos_install() {
 
   ( umask 177; printf '%s\n' "${key//[$'\r\n']/}" > "$LOGOS_KEY_FILE" )
 
-  { printf '# Written by claude-logos --logos-install. Environment variables win over this file.\n'
+  { printf '# Written by claude-logos --install. Environment variables win over this file.\n'
     printf 'LOGOS_URL=%s\n' "${url%/}"
     [[ -n "$model" ]] && printf 'LOGOS_MODEL=%s\n' "$model"
   } > "$CONFIG_FILE"
@@ -180,7 +180,7 @@ login_profile() {
   esac
 }
 
-# ── --logos-uninstall ───────────────────────────────────────────────────────────
+# ── --uninstall ─────────────────────────────────────────────────────────────────
 logos_uninstall() {
   local assume_yes="${1:-no}" removed=0
 
@@ -228,7 +228,7 @@ PY
         read -r -p 'Remove those keys? [y/N] ' answer
         [[ "$answer" == [yY]* ]] && assume_yes="yes"
       else
-        note "not a terminal — re-run with --logos-uninstall --yes to remove them too"
+        note "not a terminal — re-run with --uninstall --yes to remove them too"
       fi
     fi
     if [[ "$assume_yes" == "yes" ]]; then
@@ -289,12 +289,20 @@ PY
 }
 
 # ── Argument handling ───────────────────────────────────────────────────────────
-# Only the --logos-* verbs are ours; everything else goes to claude untouched, which
-# is what makes `claude-logos <anything>` behave like `claude <anything>`.
+# Four verbs are ours; everything else goes to claude untouched, which is what
+# makes `claude-logos <anything>` behave like `claude <anything>`.
+#
+# --help is the one overlap: `claude --help` is a real command. So we print this
+# wrapper's own help and then hand over to claude's, which is what someone typing
+# it actually wants — both halves of what `claude-logos` can do.
 case "${1:-}" in
-  --logos-help|--logos-usage) usage; exit 0 ;;
-  --logos-install) shift; logos_install; exit 0 ;;
-  --logos-uninstall)
+  --help|-h)
+    usage
+    printf '\n── claude'"'"'s own options ──────────────────────────────────────────\n\n'
+    exec claude --help
+    ;;
+  --install) shift; logos_install; exit 0 ;;
+  --uninstall)
     shift
     assume_yes="no"
     [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]] && assume_yes="yes"
@@ -349,11 +357,11 @@ def window(field):
 
 
 # max_model_len is the size that always holds and the one field vLLM itself
-# uses; the other two are Logos extensions. Older gateways send only the first,
-# so every step falls back to the one below it.
-guaranteed = window("max_model_len")
-available = window("max_model_len_best") or guaranteed
-maximum = window("max_context_length") or available
+# uses; the *_current_* and *_overall* names are Logos extensions. Older Logos
+# versions send only the first, so every step falls back to the one below it.
+guaranteed = window("max_model_len_current_min") or window("max_model_len")
+available = window("max_model_len_current_max") or guaranteed
+maximum = window("max_model_len_overall") or available
 chosen = {
     "guaranteed": guaranteed,
     "available": available,
@@ -361,6 +369,62 @@ chosen = {
 }.get(source, available) or guaranteed
 print(f"window\t{chosen}\t{guaranteed}\t{available}\t{maximum}")
 ' "$LOGOS_MODEL" "$LOGOS_CONTEXT_SOURCE" || true
+}
+
+# Every model id this key can see, one per line. Used for the "new model
+# available" notice below; a separate call would double the startup cost, so
+# this reuses the same listing the window came from.
+model_ids_probe() {
+  curl -fsS -m 15 "$LOGOS_URL/v1/models" -H "Authorization: Bearer $LOGOS_KEY" 2>/dev/null |
+    python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for entry in data.get("data", []):
+    if isinstance(entry, dict) and entry.get("id"):
+        print(entry["id"])
+' || true
+}
+
+# ── New models since the last run ───────────────────────────────────────────────
+# Models get added to a team without anyone telling the people on it. The list is
+# already in hand from the call above, so noticing an addition costs one file
+# comparison — and the terminal someone is about to work in is the one place they
+# will actually read it.
+KNOWN_MODELS_FILE="$CONFIG_DIR/known-models"
+
+report_new_models() {
+  local current="$1" previous=""
+  [[ -n "$current" ]] || return 0
+  if [[ -r "$KNOWN_MODELS_FILE" ]]; then
+    previous="$(cat "$KNOWN_MODELS_FILE")"
+  else
+    # First run: record the baseline silently rather than announcing every
+    # model the team already had as "new".
+    printf '%s\n' "$current" > "$KNOWN_MODELS_FILE" 2>/dev/null || true
+    return 0
+  fi
+  local added
+  added="$(comm -13 <(printf '%s\n' "$previous" | sort -u) <(printf '%s\n' "$current" | sort -u))"
+  if [[ -n "$added" ]]; then
+    printf 'new      : %s now available to you\n' "$(printf '%s' "$added" | tr '\n' ' ' | sed 's/ $//')"
+    printf '           (set LOGOS_MODEL=<id> to use one, or re-run the setup on the Logos web UI)\n'
+  fi
+  printf '%s\n' "$current" > "$KNOWN_MODELS_FILE" 2>/dev/null || true
+}
+
+# ── Warm-up ─────────────────────────────────────────────────────────────────────
+# A session starts, the developer reads the startup line, and the first real
+# request lands seconds later — paying for a cold load that could have happened
+# during those seconds. This tells Logos the model is about to be used and
+# returns immediately; Logos decides what to do with that, and a request is
+# never sent on our behalf.
+trigger_warmup() {
+  curl -fsS -m 5 -o /dev/null -X POST \
+    "$LOGOS_URL/v1/models/$LOGOS_MODEL/warmup" \
+    -H "Authorization: Bearer $LOGOS_KEY" >/dev/null 2>&1 || true
 }
 
 LOGOS_CONTEXT_TOKENS=0
@@ -486,46 +550,32 @@ export CLAUDE_CODE_MAX_OUTPUT_TOKENS="$LOGOS_MAX_OUTPUT_TOKENS"
 # so the only traffic leaving this machine goes to Logos.
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
-# ── --logos-context ─────────────────────────────────────────────────────────────
-if [[ "${1:-}" == "--logos-context" ]]; then
-  context_report
-  exit 0
-fi
-
-# ── --logos-check ───────────────────────────────────────────────────────────────
-if [[ "${1:-}" == "--logos-check" ]]; then
+# ── --check ─────────────────────────────────────────────────────────────────────
+# Everything the startup line prints, plus which key and effort are in play. It
+# deliberately makes no inference request: reading the model list already proves
+# the URL, the key and that Logos serves this model, and a real prompt would cost
+# a GPU load just to say so.
+if [[ "${1:-}" == "--check" ]]; then
   context_report
   printf 'key      : %s (%s chars)\n' "$LOGOS_KEY_FILE" "${#LOGOS_KEY}"
   printf 'effort   : %s\n' "${LOGOS_EFFORT:-<not set by this wrapper>}"
-  printf 'probe    : '
-  probe_body="$(mktemp)"
-  code="$(curl -s -o "$probe_body" -w '%{http_code}' -m 180 \
-    "$LOGOS_URL/v1/messages" \
-    -H "Authorization: Bearer $LOGOS_KEY" \
-    -H 'anthropic-version: 2023-06-01' \
-    -H 'Content-Type: application/json' \
-    -d "{\"model\":\"$LOGOS_MODEL\",\"max_tokens\":16,\"messages\":[{\"role\":\"user\",\"content\":\"Reply with: OK\"}]}")"
-  body="$(head -c 400 "$probe_body")"; rm -f "$probe_body"
-  if [[ "$code" == "200" ]]; then
-    printf 'HTTP 200 — Logos reachable, key and model accepted\n'
-    exit 0
-  fi
-  printf 'HTTP %s\n%s\n' "$code" "$body"
-  case "$code" in
-    401|403) note "key rejected or not permitted for this model — check $LOGOS_KEY_FILE" ;;
-    404)     note "Logos does not serve '$LOGOS_MODEL', or LOGOS_URL is wrong" ;;
-    000)     note "no response — check the VPN/network, or the model is starting up (>180s)" ;;
-  esac
-  exit 1
+  report_new_models "$(model_ids_probe)"
+  exit 0
 fi
 
 # ── Launch ──────────────────────────────────────────────────────────────────────
 command -v claude >/dev/null 2>&1 || die "claude is not on your PATH — install Claude Code first"
 
-# Say which window this session got. It changes between runs without anything the user
-# did changing, so printing it is the difference between "Claude Code compacted early
-# again" and "this lane is running narrow today".
+# Ask Logos to get the model ready before handing over. Backgrounded and
+# best-effort: the session must not wait on it, and a warm-up that fails changes
+# nothing except that the first request pays for the load itself.
+trigger_warmup &
+
+# Say how much room this session got. It changes between runs without anything the
+# user having changed, so printing it is the difference between "Claude Code
+# compacted early again" and "there was less room today".
 context_report >&2
+report_new_models "$(model_ids_probe)" >&2
 printf '\n' >&2
 
 settings_args=()
