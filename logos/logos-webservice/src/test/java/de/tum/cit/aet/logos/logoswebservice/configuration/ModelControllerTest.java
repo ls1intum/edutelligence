@@ -13,6 +13,7 @@ import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -20,6 +21,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
 
 @SpringBootTest
@@ -100,6 +102,11 @@ class ModelControllerTest {
     }
 
     @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, supports_reasoning) "
+            + "VALUES (5001, true, false, false)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
     void updateModelInfo_updatesNameField() throws Exception {
         mvc.perform(post("/logosdb/update_model_info")
                 .with(TestJwt.logosAdmin())
@@ -107,6 +114,54 @@ class ModelControllerTest {
                 .content("{\"model_id\":5001,\"name\":\"updated-name\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.result").value("Model updated"));
+
+        // The rename triggers the async capability sync. 'updated-name' is not in the
+        // local catalog, so the seeded row gets deleted; await completion so the
+        // in-flight task cannot delete rows seeded by later tests.
+        awaitCapabilitiesRow(5001, false);
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, supports_reasoning) "
+            + "VALUES (5001, true, false, false)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void updateModelInfo_renameToUnknownNameDeletesCapabilitiesRow() throws Exception {
+        // A lingering async capability sync from a previous rename test may already have
+        // deleted the seeded row; (re-)insert until the row sticks.
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (modelCapabilitiesRepository.findByModelId(5001).isEmpty()) {
+            if (System.currentTimeMillis() > deadline) {
+                fail("could not (re-)insert the capability row for model 5001");
+            }
+            modelCapabilitiesRepository.save(new ModelCapabilities(5001, true, false, false));
+            Thread.sleep(50);
+        }
+        assertThat(modelCapabilitiesRepository.findByModelId(5001)).isPresent();
+
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"name\":\"renamed-unknown-model\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Model updated"));
+
+        // 'renamed-unknown-model' is not in the local catalog, so the async capability
+        // sync must delete the row; await completion so the in-flight task cannot
+        // interfere with later tests.
+        awaitCapabilitiesRow(5001, false);
+    }
+
+    private void awaitCapabilitiesRow(int modelId, boolean expectedPresent) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (modelCapabilitiesRepository.findByModelId(modelId).isPresent() != expectedPresent) {
+            if (System.currentTimeMillis() > deadline) {
+                fail("capability row for model " + modelId + " did not reach the expected state within the deadline");
+            }
+            Thread.sleep(50);
+        }
+        assertThat(modelCapabilitiesRepository.findByModelId(modelId).isPresent()).isEqualTo(expectedPresent);
     }
 
     @Test

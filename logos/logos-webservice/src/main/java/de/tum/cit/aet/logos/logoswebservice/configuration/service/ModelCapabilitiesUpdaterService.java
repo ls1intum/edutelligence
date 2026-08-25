@@ -134,10 +134,13 @@ public class ModelCapabilitiesUpdaterService {
             );
         }
         if (!found) {
+            // A renamed model that is unknown to the catalog keeps no stale flags:
+            // drop the row so the UI shows "capabilities unknown" instead.
             log.debug(
-                "capabilities_updater: model '{}' not found in local JSON registry",
+                "capabilities_updater: model '{}' not found in local JSON registry, deleting stored capabilities",
                 modelName
             );
+            modelCapabilitiesPersistenceService.deleteModelCapabilities(modelId);
             return false;
         }
         modelCapabilitiesPersistenceService.updateModelCapabilities(

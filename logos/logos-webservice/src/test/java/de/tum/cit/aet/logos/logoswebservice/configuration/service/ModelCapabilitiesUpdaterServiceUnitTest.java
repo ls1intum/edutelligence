@@ -2,6 +2,7 @@ package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,6 +13,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
@@ -166,10 +168,27 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         Map<String, Object> catalog = Map.of(
             "gpt-4o", Map.of("supports_function_calling", true)
         );
+        ModelCapabilities existing = new ModelCapabilities(5001, true, false, true);
+        when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(existing));
 
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
 
         verify(capabilitiesRepository, never()).save(any());
+        // a pre-existing row must be deleted so the stale flags are not displayed
+        verify(capabilitiesRepository).delete(existing);
+    }
+
+    @Test
+    void extractAndStore_unknownModelWithoutRowIsNoOp() {
+        Map<String, Object> catalog = Map.of(
+            "gpt-4o", Map.of("supports_function_calling", true)
+        );
+        when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.empty());
+
+        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
+
+        verify(capabilitiesRepository, never()).save(any());
+        verify(capabilitiesRepository, never()).delete(any());
     }
 
     @Test
@@ -183,9 +202,13 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         ));
         catalog.put("gpt-4", Map.of("supports_function_calling", true));
 
+        ModelCapabilities existing = new ModelCapabilities(5001, true, false, true);
+        when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(existing));
+
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "sample_spec")).isFalse();
 
         verify(capabilitiesRepository, never()).save(any());
+        verify(capabilitiesRepository).delete(existing);
     }
 
     @Test
@@ -194,8 +217,12 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         catalog.put("gpt-4", "not-a-model-entry");
         catalog.put("gpt-4o", Map.of("supports_function_calling", true));
 
+        ModelCapabilities existing = new ModelCapabilities(5001, true, false, true);
+        when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(existing));
+
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
 
         verify(capabilitiesRepository, never()).save(any());
+        verify(capabilitiesRepository).delete(existing);
     }
 }
