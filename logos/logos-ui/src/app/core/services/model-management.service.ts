@@ -35,6 +35,40 @@ export class ModelManagementService {
       ),
     );
   }
+
+  /**
+   * Manually override the capability flags for a model. While `manual_override`
+   * is set, the automatic LiteLLM catalog sync never touches the row again
+   * (no overwrite on match, no delete on no-match). The backend replies with
+   * the new state (`ModelCapabilityState`).
+   */
+  setModelCapabilities(
+    modelId: number,
+    supportsFunctionCalling: boolean,
+    supportsVision: boolean,
+    supportsReasoning: boolean,
+  ): Promise<ModelCapabilityState> {
+    return firstValueFrom(
+      this.http.post<ModelCapabilityState>('/api/logosdb/set_model_capabilities', {
+        model_id: modelId,
+        supports_function_calling: supportsFunctionCalling,
+        supports_vision: supportsVision,
+        supports_reasoning: supportsReasoning,
+      }),
+    );
+  }
+
+  /**
+   * Clear the manual override and re-sync the flags from the local catalog.
+   * The backend replies with the re-synced state (`ModelCapabilityState`).
+   */
+  resetModelCapabilities(modelId: number): Promise<ModelCapabilityState> {
+    return firstValueFrom(
+      this.http.post<ModelCapabilityState>('/api/logosdb/reset_model_capabilities', {
+        model_id: modelId,
+      }),
+    );
+  }
 }
 
 export interface ModelCapability {
@@ -43,4 +77,14 @@ export interface ModelCapability {
   supports_function_calling: boolean;
   supports_vision: boolean;
   supports_reasoning: boolean;
+  manual_override: boolean;
+}
+
+/** State map returned by set/reset_model_capabilities. */
+export interface ModelCapabilityState {
+  model_id: number;
+  supports_function_calling: boolean;
+  supports_vision: boolean;
+  supports_reasoning: boolean;
+  manual_override: boolean;
 }

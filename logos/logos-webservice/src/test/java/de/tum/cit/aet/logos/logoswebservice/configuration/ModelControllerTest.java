@@ -23,6 +23,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -42,6 +43,7 @@ class ModelControllerTest {
 
     @Autowired MockMvc mvc;
     @Autowired ModelCapabilitiesRepository modelCapabilitiesRepository;
+    @Autowired ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
@@ -249,7 +251,8 @@ class ModelControllerTest {
            .andExpect(jsonPath("$.5001.model_id").value(5001))
            .andExpect(jsonPath("$.5001.supports_function_calling").value(true))
            .andExpect(jsonPath("$.5001.supports_vision").value(false))
-           .andExpect(jsonPath("$.5001.supports_reasoning").value(false));
+           .andExpect(jsonPath("$.5001.supports_reasoning").value(false))
+           .andExpect(jsonPath("$.5001.manual_override").value(false));
     }
 
     @Test
@@ -310,5 +313,159 @@ class ModelControllerTest {
            .andExpect(jsonPath("$.result").value("Deleted Model"));
 
         assertThat(modelCapabilitiesRepository.findByModelId(5001)).isEmpty();
+    }
+
+    @Test
+    void setModelCapabilities_createsRowAndMarksManual() throws Exception {
+        // gpt-3.5 (5002) exists but has no model_capabilities row yet
+        mvc.perform(post("/logosdb/set_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5002,\"supports_function_calling\":true,"
+                    + "\"supports_vision\":true,\"supports_reasoning\":false}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.model_id").value(5002))
+           .andExpect(jsonPath("$.supports_function_calling").value(true))
+           .andExpect(jsonPath("$.supports_vision").value(true))
+           .andExpect(jsonPath("$.supports_reasoning").value(false))
+           .andExpect(jsonPath("$.manual_override").value(true));
+
+        mvc.perform(post("/logosdb/get_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"ids\":[5002]}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.5002.supports_function_calling").value(true))
+           .andExpect(jsonPath("$.5002.supports_vision").value(true))
+           .andExpect(jsonPath("$.5002.supports_reasoning").value(false))
+           .andExpect(jsonPath("$.5002.manual_override").value(true));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, supports_reasoning) "
+            + "VALUES (5001, true, false, false)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void setModelCapabilities_overwritesExistingRow() throws Exception {
+        mvc.perform(post("/logosdb/set_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"supports_function_calling\":false,"
+                    + "\"supports_vision\":true,\"supports_reasoning\":true}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.model_id").value(5001))
+           .andExpect(jsonPath("$.supports_function_calling").value(false))
+           .andExpect(jsonPath("$.supports_vision").value(true))
+           .andExpect(jsonPath("$.supports_reasoning").value(true))
+           .andExpect(jsonPath("$.manual_override").value(true));
+
+        mvc.perform(post("/logosdb/get_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"ids\":[5001]}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.5001.supports_function_calling").value(false))
+           .andExpect(jsonPath("$.5001.supports_vision").value(true))
+           .andExpect(jsonPath("$.5001.supports_reasoning").value(true))
+           .andExpect(jsonPath("$.5001.manual_override").value(true));
+    }
+
+    @Test
+    void setModelCapabilities_unknownModelReturns404() throws Exception {
+        mvc.perform(post("/logosdb/set_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":9999,\"supports_function_calling\":true,"
+                    + "\"supports_vision\":false,\"supports_reasoning\":false}"))
+           .andExpect(status().isNotFound())
+           .andExpect(jsonPath("$.error").value("Model not found: 9999"));
+    }
+
+    @Test
+    void setModelCapabilities_missingFieldsReturn400() throws Exception {
+        mvc.perform(post("/logosdb/set_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"supports_function_calling\":true}"))
+           .andExpect(status().isBadRequest());
+
+        mvc.perform(post("/logosdb/set_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"supports_function_calling\":true,\"supports_vision\":true,\"supports_reasoning\":false}"))
+           .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void resetModelCapabilities_clearsOverrideAndResyncsFromCatalog() throws Exception {
+        // Set a manual override that differs from the catalog (gpt-4 has
+        // supports_function_calling=true and no vision/reasoning entries)
+        mvc.perform(post("/logosdb/set_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"supports_function_calling\":false,"
+                    + "\"supports_vision\":true,\"supports_reasoning\":true}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.manual_override").value(true))
+           .andExpect(jsonPath("$.supports_vision").value(true));
+
+        mvc.perform(post("/logosdb/reset_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.model_id").value(5001))
+           .andExpect(jsonPath("$.supports_function_calling").value(true))
+           .andExpect(jsonPath("$.supports_vision").value(false))
+           .andExpect(jsonPath("$.supports_reasoning").value(false))
+           .andExpect(jsonPath("$.manual_override").value(false));
+
+        mvc.perform(post("/logosdb/get_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"ids\":[5001]}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.5001.supports_function_calling").value(true))
+           .andExpect(jsonPath("$.5001.supports_vision").value(false))
+           .andExpect(jsonPath("$.5001.supports_reasoning").value(false))
+           .andExpect(jsonPath("$.5001.manual_override").value(false));
+    }
+
+    @Test
+    void resetModelCapabilities_unknownModelReturns404() throws Exception {
+        mvc.perform(post("/logosdb/reset_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":9999}"))
+           .andExpect(status().isNotFound())
+           .andExpect(jsonPath("$.error").value("Model not found: 9999"));
+    }
+
+    @Test
+    void scheduledRefresh_keepsManualOverride() throws Exception {
+        // Core persistence requirement: once an admin overrides the capabilities,
+        // the catalog refresh must not touch the row (neither overwrite on match
+        // nor delete on no-match)
+        mvc.perform(post("/logosdb/set_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"supports_function_calling\":false,"
+                    + "\"supports_vision\":true,\"supports_reasoning\":true}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.manual_override").value(true));
+
+        // The scheduled daily refresh, invoked directly so it runs synchronously
+        modelCapabilitiesUpdaterService.updateAllModelCapabilities();
+
+        mvc.perform(post("/logosdb/get_model_capabilities")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"ids\":[5001]}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.5001.supports_function_calling").value(false))
+           .andExpect(jsonPath("$.5001.supports_vision").value(true))
+           .andExpect(jsonPath("$.5001.supports_reasoning").value(true))
+           .andExpect(jsonPath("$.5001.manual_override").value(true));
     }
 }

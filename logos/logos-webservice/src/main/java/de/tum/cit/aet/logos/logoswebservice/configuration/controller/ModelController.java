@@ -15,6 +15,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCapabilitiesRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ResetModelCapabilitiesRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetModelCapabilitiesRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
@@ -143,6 +145,43 @@ public class ModelController {
 
         try {
             return ResponseEntity.ok(modelService.getModelCapabilities(req.ids()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/set_model_capabilities")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> setModelCapabilities(
+            @RequestBody SetModelCapabilitiesRequestDTO req) {
+        if (req.modelId() == null
+                || req.supportsFunctionCalling() == null
+                || req.supportsVision() == null
+                || req.supportsReasoning() == null) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "error", "model_id, supports_function_calling, supports_vision, and supports_reasoning are required"));
+        }
+        try {
+            return ResponseEntity.ok(modelService.setModelCapabilities(
+                req.modelId(),
+                req.supportsFunctionCalling(),
+                req.supportsVision(),
+                req.supportsReasoning()
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/reset_model_capabilities")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> resetModelCapabilities(
+            @RequestBody ResetModelCapabilitiesRequestDTO req) {
+        if (req.modelId() == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "model_id is required"));
+        }
+        try {
+            return ResponseEntity.ok(modelService.resetModelCapabilities(req.modelId()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
         }

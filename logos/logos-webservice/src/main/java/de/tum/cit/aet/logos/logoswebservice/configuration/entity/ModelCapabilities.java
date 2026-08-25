@@ -27,6 +27,9 @@ public class ModelCapabilities {
     @Column(nullable = false)
     private boolean supportsReasoning;
 
+    @Column(name = "manual_override", nullable = false)
+    private boolean manualOverride;
+
     public ModelCapabilities() {}
 
     public ModelCapabilities(Integer modelId, boolean supportsFunctionCalling, boolean supportsVision, boolean supportsReasoning) {
@@ -42,9 +45,11 @@ public class ModelCapabilities {
     public boolean getSupportsFunctionCalling() { return supportsFunctionCalling; }
     public boolean getSupportsVision() { return supportsVision; }
     public boolean getSupportsReasoning() { return supportsReasoning; }
+    public boolean getManualOverride() { return manualOverride; }
 
     public void setModelId(Integer modelId) { this.modelId = modelId; }
     public void setSupportsFunctionCalling(boolean supportsFunctionCalling) { this.supportsFunctionCalling = supportsFunctionCalling; }
     public void setSupportsVision(boolean supportsVision) { this.supportsVision = supportsVision; }
     public void setSupportsReasoning(boolean supportsReasoning) { this.supportsReasoning = supportsReasoning; }
+    public void setManualOverride(boolean manualOverride) { this.manualOverride = manualOverride; }
 }
