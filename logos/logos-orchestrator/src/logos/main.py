@@ -1063,6 +1063,13 @@ def _record_log_failure(
         )
 
 
+# Anthropic Messages SSE event types the accumulator acts on. The stream also
+# emits content_block_start/stop and ping, which carry neither text nor usage.
+_MESSAGES_EVENT_TYPES = frozenset(
+    {"message_start", "message_delta", "message_stop", "content_block_delta"}
+)
+
+
 @dataclass
 class _StreamingLogAccumulator:
     """
@@ -1082,6 +1089,12 @@ class _StreamingLogAccumulator:
     # event carries the full response including usage).
     responses_final: Optional[Dict[str, Any]] = None
     _saw_responses_events: bool = False
+    # Usage accumulated from an Anthropic Messages stream. Kept apart from
+    # ``last_chunk`` because that stream ends on ``message_stop``, which carries
+    # no usage and would otherwise erase the figures that arrived one event
+    # earlier — see _consume_messages_event.
+    messages_usage: Optional[Dict[str, Any]] = None
+    _saw_messages_events: bool = False
     _decoder: Any = field(
         default_factory=lambda: codecs.getincrementaldecoder("utf-8")(errors="replace"),
         repr=False,
@@ -1111,6 +1124,8 @@ class _StreamingLogAccumulator:
             usage = self.responses_final.get("usage")
             if isinstance(usage, dict):
                 return usage
+        if isinstance(self.messages_usage, dict) and self.messages_usage:
+            return self.messages_usage
         if isinstance(self.last_chunk, dict):
             usage = self.last_chunk.get("usage")
             if isinstance(usage, dict):
@@ -1125,6 +1140,13 @@ class _StreamingLogAccumulator:
             return self.responses_final
         if self._saw_responses_events:
             return {"content": self.full_text}
+        if self._saw_messages_events:
+            # No chunk to rebuild from: an Anthropic stream never sends the
+            # response as one object, only the events that assemble it.
+            payload: Dict[str, Any] = {"content": self.full_text}
+            if self.messages_usage:
+                payload["usage"] = self.messages_usage
+            return payload
 
         usage = self.usage()
         response_payload: Dict[str, Any] = {"content": self.full_text}
@@ -1168,6 +1190,9 @@ class _StreamingLogAccumulator:
         if isinstance(event_type, str) and event_type.startswith("response."):
             self._consume_responses_event(event_type, blob)
             return
+        if isinstance(event_type, str) and event_type in _MESSAGES_EVENT_TYPES:
+            self._consume_messages_event(event_type, blob)
+            return
 
         self.last_chunk = blob
         if self.first_chunk is None:
@@ -1192,6 +1217,53 @@ class _StreamingLogAccumulator:
             response = blob.get("response")
             if isinstance(response, dict):
                 self.responses_final = response
+
+    def _consume_messages_event(self, event_type: str, blob: Dict[str, Any]) -> None:
+        """Consume one Anthropic Messages SSE event.
+
+        This is what Claude Code speaks, so it covers every session set up
+        through the AI-tools page — and none of it was being counted. The usage
+        arrives in two places and neither is the last event:
+
+            message_start   {"message": {"usage": {"input_tokens": 14, …}}}
+            content_block_delta …
+            message_delta   {"usage": {"input_tokens": 14, "output_tokens": 2}}
+            message_stop    — nothing
+
+        Reading the final chunk's ``usage`` therefore found ``message_stop`` and
+        came away empty, so every such request was logged with no tokens at all.
+        Both events are merged instead, later winning, since message_delta
+        carries the settled figures.
+        """
+        self._saw_messages_events = True
+        if event_type == "content_block_delta":
+            delta = blob.get("delta")
+            if isinstance(delta, dict):
+                text = delta.get("text")
+                if isinstance(text, str):
+                    self.full_text += text
+            return
+
+        usage: Any = None
+        if event_type == "message_start":
+            message = blob.get("message")
+            if isinstance(message, dict):
+                usage = message.get("usage")
+        elif event_type == "message_delta":
+            usage = blob.get("usage")
+        if not isinstance(usage, dict):
+            return
+
+        merged = dict(self.messages_usage or {})
+        merged.update(usage)
+        # Anthropic omits a total — it is the sum, so it says it once. Logos
+        # stores one row per token type and the statistics page reads
+        # total_tokens, so a stream without it lands as zero tokens used.
+        prompt = merged.get("input_tokens")
+        completion = merged.get("output_tokens")
+        if isinstance(prompt, int) and isinstance(completion, int):
+            merged["total_tokens"] = prompt + completion
+        self.messages_usage = merged
 
 
 def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
