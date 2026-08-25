@@ -1,15 +1,19 @@
-"""Model VRAM profiles — observation-only, no estimation.
+"""Model VRAM profiles.
 
 Sources of truth, in priority order:
   1. "calibrated"  — pre-measured by tools/calibrate_vram_profiles.py
   2. "measured"    — derived from live observations (loaded_vram - kv_cache_sent)
   3. "override"    — operator-provided values in config.yml
-  4. "cached"      — any of the above, reloaded from model_profiles.yml on restart
+  4. "hf"          — best-effort estimate from the model's Hugging Face
+                     config.json + safetensors sizes, applied by the
+                     calibration compatibility pre-check (hf_model_info.py)
+                     before a probe has ever run. Below "measured"/"calibrated"
+                     in authority — a real measurement always overwrites it.
+  5. "cached"      — any of the above, reloaded from model_profiles.yml on restart
 
-There is no HF API fetch and no name-based heuristic. If base_residency_mb is
-unknown, placement returns 0 (no estimate) and the lane manager skips auto-
-placement rather than guessing. The calibration script must be run once before
-the worker is expected to make placement decisions for uncalibrated models.
+If base_residency_mb is unknown (no override, no HF estimate, never
+calibrated), placement returns 0 (no estimate) and the lane manager skips
+auto-placement rather than guessing.
 
 Persists in the state directory as model_profiles.yml.
 """
@@ -110,8 +114,8 @@ class ModelProfileRecord:
     observed_gpu_memory_utilization: float | None = None
     min_gpu_memory_utilization_to_load: float | None = None
     tensor_parallel_size: int | None = None
-    kv_per_token_bytes: int | None = None  # manual override only
-    max_context_length: int | None = None  # manual override only
+    kv_per_token_bytes: int | None = None  # manual override or HF precheck
+    max_context_length: int | None = None  # manual override or HF precheck
     # Smallest share of this model's own context length a lane here may serve,
     # as a fraction in [0, 1]. Operator-set per model under
     # logos.capabilities_models; the master's capacity planner refuses to place
@@ -133,6 +137,11 @@ class ModelProfileRecord:
     #   "measured"   — derived from live observation: loaded_vram − kv_cache_sent.
     #                  Value is weights-only; callers DO add KV separately.
     #   "override"   — operator-provided value in config.yml.
+    #   "hf"         — best-effort estimate from the model's HF config.json +
+    #                  safetensors sizes, set by the pre-calibration
+    #                  compatibility precheck. Value is weights-only, same
+    #                  semantics as "measured"; a real calibration always
+    #                  replaces it.
     #   "cached"     — any of the above, loaded from persisted yml on restart.
     residency_source: str | None = None
     # Provenance: what enforce_eager mode the calibration ran under.
@@ -805,6 +814,65 @@ class ModelProfileRegistry:
             profile.calibration_unsupported_reason = reason_code if unsupported else None
         self._persist()
         return True
+
+    def apply_hf_precheck(
+        self,
+        model_name: str,
+        *,
+        disk_size_bytes: int | None = None,
+        base_residency_mb: float | None = None,
+        kv_per_token_bytes: int | None = None,
+        max_context_length: int | None = None,
+    ) -> bool:
+        """Persist HF-derived compatibility-precheck estimates.
+
+        Returns True when the stored value changed. Never overwrites an
+        operator-provided config.yml override for the same field. Only sets
+        base_residency_mb + residency_source="hf" when the profile has no
+        higher-priority source yet (None, "hf", or "cached") — a real
+        "measured"/"calibrated"/"override" value always wins.
+        kv_per_token_bytes/max_context_length/disk_size_bytes have no
+        higher-priority writer to conflict with, so they're set unconditionally
+        (subject only to the manual-override check).
+        """
+        overrides = self._manual_overrides.get(model_name) or {}
+        with self._lock:
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            changed = False
+
+            if "disk_size_bytes" not in overrides and disk_size_bytes and profile.disk_size_bytes != disk_size_bytes:
+                profile.disk_size_bytes = disk_size_bytes
+                changed = True
+            if (
+                "kv_per_token_bytes" not in overrides
+                and kv_per_token_bytes
+                and profile.kv_per_token_bytes != kv_per_token_bytes
+            ):
+                profile.kv_per_token_bytes = kv_per_token_bytes
+                changed = True
+            if (
+                "max_context_length" not in overrides
+                and max_context_length
+                and profile.max_context_length != max_context_length
+            ):
+                profile.max_context_length = max_context_length
+                changed = True
+            if (
+                "base_residency_mb" not in overrides
+                and base_residency_mb
+                and base_residency_mb > 0
+                and profile.residency_source in (None, "hf", "cached")
+            ):
+                if profile.base_residency_mb != base_residency_mb:
+                    profile.base_residency_mb = base_residency_mb
+                    changed = True
+                if profile.residency_source != "hf":
+                    profile.residency_source = "hf"
+                    changed = True
+
+        if changed:
+            self._persist()
+        return changed
 
     def get_profile(self, model_name: str) -> ModelProfileRecord | None:
         with self._lock:

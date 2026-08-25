@@ -2275,6 +2275,50 @@ def internal_calibration_probe_logs(model_name: str, request: Request):
     return JSONResponse(status_code=200, content=jsonable_encoder({"logs": rows}))
 
 
+@app.get("/internal/compatibility_precheck", tags=["admin"])
+async def internal_compatibility_precheck(model_name: str, request: Request, provider_id: int | None = None):
+    """On-demand HF compatibility check for one model, across one or all
+    connected logosnode workers.
+
+    Unlike calibration itself, this is safe to call any time — including
+    during the day, with live traffic on the nodes — because the worker-side
+    check (run_compatibility_precheck) never touches vLLM or lanes: it's
+    only an HF metadata fetch plus a read-only nvidia-smi query. Omitting
+    provider_id fans out across every connected worker, answering "would
+    this model run on ANY node" rather than requiring the caller to already
+    know which one to ask.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    provider_ids = [provider_id] if provider_id is not None else _logosnode_registry.active_provider_ids()
+    if not provider_ids:
+        return JSONResponse(status_code=200, content={"model": model_name, "results": []})
+
+    async def _check_one(pid: int) -> dict[str, Any]:
+        pname = _resolve_provider_name(pid)
+        try:
+            result = await _logosnode_registry.send_command(
+                pid, "run_compatibility_precheck", params={"model": model_name}, timeout_seconds=30
+            )
+        except LogosNodeOfflineError:
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": "Worker not connected"}
+        except LogosNodeCommandError as exc:
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": str(exc)}
+        return {"provider_id": pid, "provider_name": pname, **result}
+
+    results = await asyncio.gather(*(_check_one(pid) for pid in provider_ids))
+    return JSONResponse(status_code=200, content=jsonable_encoder({"model": model_name, "results": list(results)}))
+
+
 class _InternalCalibrateRequest(BaseModel):
     provider_id: int
 

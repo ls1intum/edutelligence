@@ -1552,6 +1552,25 @@ def calibrate_model(
             exc,
         )
 
+    # HF precheck weight estimate narrows the ceiling further, recomputed at
+    # this tp so it stays correct as the escalation tries different tp values.
+    # Non-positive means weights alone exceed the cap here — leave max_kv_mb
+    # as-is and let the sweep's OOM handling take it from there (the hard-skip
+    # in logos_bridge.py already ruled out "no tp works at all").
+    hf_weight_bytes = plan.get("_hf_weight_bytes")
+    if hf_weight_bytes and max_kv_mb < float("inf"):
+        weight_per_gpu_mb = (float(hf_weight_bytes) / (1024 * 1024)) / max(tp, 1)
+        hf_kv_ceiling_mb = max_kv_mb - weight_per_gpu_mb
+        if hf_kv_ceiling_mb > 0:
+            logger.info(
+                "  HF-derived weights ≈%.0f MB/GPU at tp=%d — narrowing KV search ceiling %.0f → %.0f MB",
+                weight_per_gpu_mb,
+                tp,
+                max_kv_mb,
+                hf_kv_ceiling_mb,
+            )
+            max_kv_mb = hf_kv_ceiling_mb
+
     # Phase 2 — Sweep KV cache sizes and derive the reachable max_model_len
     # curve on this hardware.
     #
@@ -2987,12 +3006,22 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
+def _max_tp_for_plan(
+    plan: dict[str, Any],
+    available_gpus: int,
+    *,
+    weight_derived_max_tp: int | None = None,
+) -> int:
     """Return the maximum tensor_parallel_size allowed for *plan*.
 
     TP must be a power of 2 for most model architectures (attention heads
     must be evenly divisible).  Round down to the largest power of 2 that
     fits within the available GPUs.
+
+    ``weight_derived_max_tp``, when given, tightens this further: the HF
+    compatibility precheck's estimate of the smallest TP the model's weights
+    actually fit at, so the search doesn't start at hardware-max TP for a
+    model that never needed it.
     """
     gpu_devices = str(plan.get("gpu_devices") or "").strip().lower()
     if not gpu_devices or gpu_devices == "all":
@@ -3001,8 +3030,13 @@ def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
         n = len([x for x in gpu_devices.split(",") if x.strip().isdigit()])
     # Largest power of 2 ≤ n  (e.g. 3 → 2, 5 → 4, 7 → 4, 8 → 8)
     if n < 1:
-        return 1
-    return 1 << (n.bit_length() - 1)
+        hw_max = 1
+    else:
+        hw_max = 1 << (n.bit_length() - 1)
+
+    if weight_derived_max_tp is not None and weight_derived_max_tp >= 1:
+        return max(1, min(hw_max, weight_derived_max_tp))
+    return hw_max
 
 
 def calibration_gpu_slice(available_gpus: int) -> list[int]:
@@ -3145,7 +3179,8 @@ def calibrate_with_tp_escalation(
     plan = pin_plan_gpu_devices(plan, available_gpus)
 
     original_tp = int(plan.get("tensor_parallel_size", 1))
-    max_tp = _max_tp_for_plan(plan, available_gpus)
+    max_tp = _max_tp_for_plan(plan, available_gpus, weight_derived_max_tp=plan.get("_hf_max_tp_ceiling"))
+    max_tp = max(max_tp, original_tp)  # never search below what the operator pinned
 
     # RAM caching is deferred: calibrate_model triggers it on the first
     # actual vLLM spawn so we don't waste time copying when all probes are

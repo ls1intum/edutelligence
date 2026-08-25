@@ -110,6 +110,11 @@ class LogosBridgeClient:
         self._active_calibration_session: _CalibrationSession | None = None
         # Sequence counter for calibration event_id (independent of lane events).
         self._calibration_event_seq: int = 0
+        # Lazily built by _get_hf_info_cache(); lives for the client's whole
+        # lifetime so repeated compatibility-precheck calls (calibration
+        # session, run_compatibility_precheck RPC) share the on-disk cache
+        # instance instead of re-reading it from disk every time.
+        self._hf_info_cache: Any | None = None
 
     @property
     def worker_id(self) -> str:
@@ -733,6 +738,8 @@ class LogosBridgeClient:
             return await self._handle_start_calibration_session(params)
         if action == "stop_calibration_session":
             return await self._handle_stop_calibration_session()
+        if action == "run_compatibility_precheck":
+            return await self._handle_run_compatibility_precheck(params)
 
         raise ValueError(f"Unsupported bridge command '{action}'")
 
@@ -756,6 +763,129 @@ class LogosBridgeClient:
             return False
         task = session.task
         return task is None or not task.done()
+
+    def _get_hf_info_cache(self) -> Any:
+        if self._hf_info_cache is None:
+            from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+            from logos_worker_node.hf_model_info import HfModelInfoCache  # noqa: PLC0415
+
+            self._hf_info_cache = HfModelInfoCache(get_state_dir())
+        return self._hf_info_cache
+
+    async def _run_hf_compatibility_precheck(self, model_name: str, *, persist: bool = True) -> dict[str, Any]:
+        """Best-effort HF compatibility check for one model on this node.
+
+        Shared by the calibration session's per-model loop and the standalone
+        ``run_compatibility_precheck`` RPC — the latter can run any time, not
+        just during the maintenance window, because this never touches vLLM
+        or lanes (only an HF fetch and a read-only nvidia-smi query).
+
+        Returns two tp answers because they mean different things to a
+        daytime caller with live lanes running:
+          - ``fit_tp_idle`` (against total VRAM): would this fit on an empty
+            node — the only one that persists calibration_unsupported, since
+            daytime load isn't a permanent property of the node.
+          - ``fit_tp_current`` (against free VRAM): fits right now without
+            evicting anything — informational only.
+
+        ``persist=False`` skips the model_profiles write. Never raises.
+        """
+        from logos_worker_node.calibration import _max_tp_for_plan, query_gpu_vram  # noqa: PLC0415
+        from logos_worker_node.hf_model_info import (  # noqa: PLC0415
+            MIN_VIABLE_CONTEXT_TOKENS,
+            REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
+            REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+            fetch_hf_model_metadata,
+            min_feasible_tp,
+        )
+
+        model_profiles = self._app.state.model_profiles
+
+        try:
+            hf_meta = fetch_hf_model_metadata(
+                model_name, token=os.environ.get("HF_TOKEN") or None, cache=self._get_hf_info_cache()
+            )
+        except Exception:  # noqa: BLE001
+            hf_meta = None
+            logger.debug("[Precheck] HF fetch raised unexpectedly for %s", model_name, exc_info=True)
+
+        result: dict[str, Any] = {
+            "model": model_name,
+            "hf_source": hf_meta.source if hf_meta is not None else "error:precheck-failed",
+            "weight_bytes": hf_meta.weight_bytes if hf_meta is not None else None,
+            "kv_per_token_bytes": hf_meta.kv_per_token_bytes if hf_meta is not None else None,
+            "max_context_length": hf_meta.max_context_length if hf_meta is not None else None,
+            "per_gpu_total_mb": None,
+            "per_gpu_free_mb": None,
+            "hardware_max_tp": None,
+            "fit_tp_idle": None,
+            "fit_tp_current": None,
+            "unsupported_reason": None,
+        }
+
+        if hf_meta is None or not hf_meta.weight_bytes:
+            return result
+
+        try:
+            gpu_snap = query_gpu_vram()
+        except Exception:  # noqa: BLE001
+            gpu_snap = {}
+            logger.debug("[Precheck] live VRAM query failed for %s", model_name, exc_info=True)
+
+        if not gpu_snap:
+            return result
+
+        per_gpu_total_mb = min(v["total_mb"] for v in gpu_snap.values())
+        per_gpu_free_mb = min(v["free_mb"] for v in gpu_snap.values())
+        hardware_max_tp = _max_tp_for_plan({"model": model_name}, len(gpu_snap))
+
+        min_kv_mb = 0.0
+        if hf_meta.kv_per_token_bytes:
+            min_kv_mb = (hf_meta.kv_per_token_bytes * MIN_VIABLE_CONTEXT_TOKENS) / (1024 * 1024)
+
+        unsupported_reason: str | None = None
+        weights_only_tp_idle = min_feasible_tp(hf_meta.weight_bytes, per_gpu_total_mb, hardware_max_tp)
+        fit_tp_idle: int | None = None
+        if weights_only_tp_idle is None:
+            unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+        else:
+            fit_tp_idle = min_feasible_tp(hf_meta.weight_bytes, per_gpu_total_mb, hardware_max_tp, min_kv_mb=min_kv_mb)
+            if fit_tp_idle is None:
+                unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
+
+        fit_tp_current = min_feasible_tp(hf_meta.weight_bytes, per_gpu_free_mb, hardware_max_tp, min_kv_mb=min_kv_mb)
+
+        result.update(
+            per_gpu_total_mb=per_gpu_total_mb,
+            per_gpu_free_mb=per_gpu_free_mb,
+            hardware_max_tp=hardware_max_tp,
+            fit_tp_idle=fit_tp_idle,
+            fit_tp_current=fit_tp_current,
+            unsupported_reason=unsupported_reason,
+        )
+
+        if persist:
+            model_profiles.apply_hf_precheck(
+                model_name,
+                disk_size_bytes=hf_meta.weight_bytes,
+                base_residency_mb=hf_meta.weight_bytes / (1024 * 1024),
+                kv_per_token_bytes=hf_meta.kv_per_token_bytes,
+                max_context_length=hf_meta.max_context_length,
+            )
+            if unsupported_reason is not None:
+                model_profiles.mark_calibration_unsupported(model_name, True, unsupported_reason)
+
+        return result
+
+    async def _handle_run_compatibility_precheck(self, params: dict[str, Any]) -> dict[str, Any]:
+        """RPC handler for an on-demand compatibility check, callable any
+        time — including outside the nightly maintenance window — since it
+        never touches vLLM or lanes."""
+        model_name = str(params.get("model", "")).strip()
+        if not model_name:
+            return {"ok": False, "error": "'model' is required"}
+        result = await self._run_hf_compatibility_precheck(model_name)
+        return {"ok": True, **result}
 
     async def _handle_start_calibration_session(self, params: dict[str, Any]) -> dict[str, Any]:
         """Start a worker-driven calibration session.
@@ -1178,6 +1308,36 @@ class LogosBridgeClient:
                     model_profiles.mark_sleep_mode_disabled(model_name, False)
 
                 plan = plan_by_model.get(model_name) or {"model": model_name}
+
+                # Pre-flight: HF compatibility precheck (see
+                # _run_hf_compatibility_precheck for the best-effort/skip rules).
+                precheck = await self._run_hf_compatibility_precheck(model_name)
+                if precheck["unsupported_reason"] is not None:
+                    logger.warning(
+                        "[Calibration] Skipping %s — %s",
+                        model_name,
+                        precheck["unsupported_reason"],
+                    )
+                    self._record_calibration_event(
+                        "calibration_model_skipped",
+                        model=model_name,
+                        details=f"unsupported reason={precheck['unsupported_reason']}",
+                    )
+                    continue
+                if precheck["fit_tp_idle"] is not None:
+                    plan = {
+                        **plan,
+                        "_hf_weight_bytes": precheck["weight_bytes"],
+                        "_hf_max_tp_ceiling": precheck["fit_tp_idle"],
+                    }
+                    logger.info(
+                        "[Calibration] HF precheck for %s: weights=%.0f MB, tp_ceiling=%d (hardware_max=%s)",
+                        model_name,
+                        precheck["weight_bytes"] / (1024 * 1024),
+                        precheck["fit_tp_idle"],
+                        precheck["hardware_max_tp"],
+                    )
+
                 self._record_calibration_event(
                     "calibration_model_started",
                     model=model_name,

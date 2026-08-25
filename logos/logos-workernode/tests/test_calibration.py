@@ -41,6 +41,7 @@ from logos_worker_node.calibration import (
     _remove_unsupported_model,
     auto_calibrate_models,
     calibrate_model,
+    calibrate_with_tp_escalation,
     calibration_gpu_slice,
     is_model_unsupported,
     load_existing_profiles,
@@ -802,6 +803,52 @@ def test_calibration_baseline_ignores_leftover_gpu_lane(monkeypatch):
     assert sample_vram_mb(gpu_indices) == 300.0  # 100 + 200, never the 9999 on GPU 2
 
 
+def test_max_tp_for_plan_with_weight_derived_ceiling():
+    # A tighter HF-derived ceiling wins over the hardware max.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=8, weight_derived_max_tp=2) == 2
+    # A looser HF-derived ceiling never raises above the hardware max.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=4, weight_derived_max_tp=16) == 4
+    # No ceiling supplied — unchanged from before this kwarg existed.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=4, weight_derived_max_tp=None) == 4
+    # Ceiling below 1 is clamped up to 1, never returns 0.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=4, weight_derived_max_tp=0) == 4
+
+
+def test_calibrate_with_tp_escalation_honors_hf_max_tp_ceiling(tmp_path):
+    """_hf_max_tp_ceiling bounds where the max-first escalation starts — it
+    must not probe at hardware-max tp when the HF precheck already knows a
+    lower tp is sufficient, but a ceiling below the operator's pinned tp
+    must be ignored (never search below what was explicitly pinned)."""
+
+    def _seen_tps(plan_overrides: dict) -> list[int]:
+        seen: list[int] = []
+
+        def side_effect(plan, **kw):
+            tp = plan.get("tensor_parallel_size", 1)
+            seen.append(tp)
+            return _success_result("big-model", tensor_parallel_size=tp)
+
+        with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+            result = calibrate_with_tp_escalation(
+                {"model": "big-model", **plan_overrides},
+                vllm_binary="vllm",
+                port=11499,
+                log_dir=tmp_path,
+                sleep_level=0,
+                ready_timeout_s=60.0,
+                available_gpus=8,
+            )
+        assert result.success
+        return seen
+
+    seen_tps = _seen_tps({"_hf_max_tp_ceiling": 2})
+    assert seen_tps[0] == 2  # HF ceiling, not hardware max (8)
+    assert 8 not in seen_tps
+
+    seen_tps = _seen_tps({"tensor_parallel_size": 4, "_hf_max_tp_ceiling": 1})
+    assert seen_tps[0] == 4  # ceiling below the pinned tp is ignored
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Group 6 — _format_kv_mb helper
 # ═══════════════════════════════════════════════════════════════════════
@@ -1230,6 +1277,32 @@ def test_vram_cap_uses_per_gpu_times_tp():
 
     assert result.success
     # The important thing: it didn't try to use 48000*0.8=38400 as cap
+
+
+def test_hf_weight_bytes_narrows_kv_cache_ceiling(caplog):
+    """_hf_weight_bytes narrows the KV search ceiling by the weights'
+    footprint at this tp. When the HF estimate alone would already exceed
+    the existing cap, max_kv_mb is left as-is instead of going negative —
+    the precheck's hard-skip already ruled out "no tp works at all"."""
+    import logging
+
+    def _narrowing_logs(hf_weight_bytes: int) -> list[str]:
+        patches = _patch_calibration_infra(wait_ready_side_effect=[None])
+        plan = _make_plan(_hf_weight_bytes=hf_weight_bytes)
+        with caplog.at_level(logging.INFO):
+            result, _ = _run_calibrate(patches, plan=plan)
+        assert result.success
+        return [r.message for r in caplog.records if "narrowing KV search ceiling" in r.message]
+
+    # Single GPU, 24000 MB total → cap = 24000 * 0.8 = 19200 MB before HF narrowing.
+    # 10 GB of HF-reported weights at tp=1 → 10240 MB/GPU → ceiling narrows to 8960 MB.
+    logs = _narrowing_logs(10 * 1024 * 1024 * 1024)
+    assert len(logs) == 1
+    assert "19200" in logs[0] and "8960" in logs[0]
+    caplog.clear()
+
+    # 30 GB of weights at tp=1 → 30720 MB/GPU, past the 19200 MB cap — no narrowing.
+    assert _narrowing_logs(30 * 1024 * 1024 * 1024) == []
 
 
 @pytest.mark.asyncio
