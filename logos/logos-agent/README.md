@@ -68,6 +68,26 @@ and a partial unique index in the schema rejects a second active session for a
 workspace outright. The second exists because a scheduler bug should raise
 rather than corrupt a checkout.
 
+## What is in the session image
+
+Enough to work on any part of this repository, and nothing else:
+
+| Tool | Version | Why |
+|---|---|---|
+| Claude Code | 2.1.245 | The agent. Driven headless: `claude -p … --output-format stream-json` |
+| Node | 22 | logos-ui |
+| Python | 3.11 (system) + **3.13 via uv** | Logos targets 3.13; bookworm ships 3.11, and a read-only rootfs cannot download an interpreter at runtime, so it is preinstalled into `/opt/uv-python` |
+| Temurin JDK | 25 | logos-webservice targets Java 25. From Adoptium — Debian bookworm packages no JDK that new. `./mvnw` fetches Maven itself |
+| gh | 2.98 | Opening the pull request |
+| Chromium (Playwright) | 151 | Screenshots of the dev environment |
+
+Versions are pinned as build args; bump them deliberately rather than letting a
+session's behaviour drift between builds.
+
+> **Adding a Dockerfile here?** The repository-root `.dockerignore` is a
+> *whitelist*. Anything a Dockerfile copies must be listed there, or the build
+> fails with `failed to compute cache key: … not found`.
+
 ## What a session may and may not do
 
 **May:** read and change the working copy, run tests and linters, push a branch
@@ -115,7 +135,7 @@ COMPOSE_PROFILES=agent docker compose up -d logos-agent
 ```
 
 Schema changes ship with the webservice's Liquibase changelog
-(`012_agent_sessions.xml`), so the tables exist as soon as the webservice has
+(`013_agent_sessions.xml`), so the tables exist as soon as the webservice has
 run its migrations.
 
 The UI lives at **Agents** in the sidebar (`logos_admin` only): capacity, all
