@@ -125,7 +125,7 @@ def _stub_request_setup(monkeypatch):
     monkeypatch.setattr(
         main,
         "request_setup",
-        lambda headers, api_key_id: (
+        lambda headers, api_key_id, db=None: (
             [{"model_id": 1, "provider_id": 1, "type": "openai"}],
             [1],
         ),

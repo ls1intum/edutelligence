@@ -333,6 +333,23 @@
                   }
                 </select>
 
+                <button
+                  class="btn-copy-log"
+                  type="button"
+                  [class.btn-copy-log--ok]="logCopied()"
+                  [class.btn-copy-log--error]="logCopyFailed()"
+                  [disabled]="!completeLog()"
+                  (click)="copyLog()"
+                >
+                  @if (logCopied()) {
+                    <i class="pi pi-check"></i> Copied!
+                  } @else if (logCopyFailed()) {
+                    <i class="pi pi-times"></i> Copy failed
+                  } @else {
+                    <i class="pi pi-copy"></i> Copy log
+                  }
+                </button>
+
               </div>
 
               <div class="log-viewer">
