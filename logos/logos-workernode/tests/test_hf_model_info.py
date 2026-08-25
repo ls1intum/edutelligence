@@ -123,13 +123,13 @@ def test_fetch_hf_model_metadata_distinguishes_not_found_from_gated():
     assert meta.source == "error:model-not-found"
 
     # GatedRepoError is a RepositoryNotFoundError subclass (a real repo the
-    # caller just lacks access to) — must NOT be classified as not-found.
+    # caller just lacks access to) — must be classified as gated, not not-found.
     with (
         patch("huggingface_hub.HfApi", side_effect=_hf_http_error(GatedRepoError, "gated")),
         patch("huggingface_hub.hf_hub_download", side_effect=_hf_http_error(GatedRepoError, "gated")),
     ):
         meta = fetch_hf_model_metadata("org/gated-model", token=None)
-    assert meta.source != "error:model-not-found"
+    assert meta.source == "error:model-gated"
 
 
 def test_fetch_hf_model_metadata_handles_huggingface_hub_unavailable(monkeypatch):

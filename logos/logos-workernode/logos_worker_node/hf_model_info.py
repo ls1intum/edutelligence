@@ -6,12 +6,14 @@ used to skip models that provably can't fit on a node before spending a
 maintenance-window slot probing them, and to narrow the TP/KV-cache search
 calibration actually runs.
 
-Network failures, gated repos, missing config fields, or a model with no HF
-page must never raise and must never block calibration — callers get an
+Network failures, missing config fields, or a model with no HF page must
+never raise and must never block calibration — callers get an
 HfModelMetadata with the relevant fields left None, and calibration proceeds
-exactly as it does today, with no extra bounds. Only a positive finding that
-a model provably doesn't fit causes a skip (see logos_bridge.py's precheck
-branch); this module itself never decides to skip anything.
+exactly as it does today, with no extra bounds. This module itself never
+decides to skip anything; that's logos_bridge.py's precheck branch, which
+skips on a nonexistent repo (permanent), an unfittable model (permanent), or
+a gated repo the worker's HF_TOKEN can't access (temporary — retried every
+session, since access can be granted later).
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ MIN_VIABLE_CONTEXT_TOKENS = 2048
 REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS = "insufficient-vram-for-weights"
 REASON_INSUFFICIENT_VRAM_FOR_MIN_KV = "insufficient-vram-for-min-kv-cache"
 REASON_MODEL_NOT_FOUND = "model-not-found"
+REASON_MODEL_GATED = "model-gated"
 
 _DTYPE_BYTES = {
     "float32": 4,
@@ -101,12 +104,14 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
     # GatedRepoError is a RepositoryNotFoundError subclass (a real, existing
     # repo the caller just lacks access to) — must be excluded from the
     # not-found verdict, or a gated model would wrongly look nonexistent.
+    gated = False
     weight_bytes: int | None = None
     try:
         info = HfApi().model_info(model_name, token=token, files_metadata=True, timeout=timeout_s)
         sizes = [s.size for s in (info.siblings or []) if s.rfilename.endswith(".safetensors") and s.size]
         weight_bytes = sum(sizes) if sizes else None
     except GatedRepoError as exc:
+        gated = True
         logger.debug("[HF precheck] model_info gated for %s: %s", model_name, exc)
     except RepositoryNotFoundError as exc:
         return HfModelMetadata(source="error:model-not-found", error=str(exc))
@@ -122,11 +127,19 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
         kv_per_token_bytes = _derive_kv_per_token_bytes(config, None)
         max_context_length = _get_config_field(config, "max_position_embeddings")
     except GatedRepoError as exc:
+        gated = True
         logger.debug("[HF precheck] config.json gated for %s: %s", model_name, exc)
     except RepositoryNotFoundError as exc:
         return HfModelMetadata(source="error:model-not-found", error=str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.debug("[HF precheck] config.json fetch failed for %s: %s", model_name, exc)
+
+    # Real calibration needs every file this precheck touched, so partial
+    # access (e.g. metadata visible, weights gated) is still a block — but a
+    # temporary one, unlike model-not-found, since an admin adding a working
+    # HF_TOKEN resolves it without any code/data change on our side.
+    if gated:
+        return HfModelMetadata(source="error:model-gated", error="repository access requires an authorized HF_TOKEN")
 
     if weight_bytes is None and kv_per_token_bytes is None and max_context_length is None:
         return HfModelMetadata(source="error:no-data", error="neither weights nor config.json were reachable")

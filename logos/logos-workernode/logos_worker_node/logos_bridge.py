@@ -795,6 +795,7 @@ class LogosBridgeClient:
             MIN_VIABLE_CONTEXT_TOKENS,
             REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
             REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+            REASON_MODEL_GATED,
             REASON_MODEL_NOT_FOUND,
             fetch_hf_model_metadata,
             min_feasible_tp,
@@ -830,6 +831,16 @@ class LogosBridgeClient:
             result["unsupported_reason"] = REASON_MODEL_NOT_FOUND
             if persist:
                 model_profiles.mark_calibration_unsupported(model_name, True, REASON_MODEL_NOT_FOUND)
+            return result
+
+        # Gating is temporary — an admin can add a working HF_TOKEN at any
+        # time — so this is deliberately NOT persisted via
+        # mark_calibration_unsupported: that flag drops the model out of
+        # _list_uncalibrated_models's candidate list, and it would never be
+        # picked again to notice access was granted. Skip this attempt only;
+        # the model stays a candidate and gets rechecked every session.
+        if hf_meta is not None and hf_meta.source == "error:model-gated":
+            result["unsupported_reason"] = REASON_MODEL_GATED
             return result
 
         if hf_meta is None or not hf_meta.weight_bytes:

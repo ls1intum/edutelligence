@@ -1354,6 +1354,39 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
 
 
 @pytest.mark.asyncio
+async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path, monkeypatch):
+    """Unlike not-found, a gated model must NOT be marked
+    calibration_unsupported: that flag drops it out of
+    _list_uncalibrated_models's candidate list, so it would never be
+    rechecked once an admin adds a working HF_TOKEN. It must be skipped
+    this attempt but stay eligible for every future session."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_MODEL_GATED, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/gated-model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:model-gated"),
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/gated-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] == REASON_MODEL_GATED
+    profile = app.state.model_profiles.get_profile("org/gated-model")
+    assert profile is None or profile.calibration_unsupported is not True
+    assert client._list_uncalibrated_models() == ["org/gated-model"]  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, monkeypatch):
     """A model that fits on an empty node but not around today's live
     traffic is reported as such WITHOUT being marked permanently unsupported
