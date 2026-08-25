@@ -47,31 +47,31 @@ class OrchestratorModelWindowClientTest {
     @Test
     void readsAllThreeWindows() {
         var client = clientReturning(stats(
-            "qwen-27b", Map.of("min", 33000, "best", 262144, "native", 262144)));
+            "qwen-27b", Map.of("current_min", 33000, "current_max", 262144, "overall", 262144)));
 
         ModelContextWindows windows = client.getContextWindows().get("qwen-27b");
 
-        assertThat(windows.min()).isEqualTo(33000);
-        assertThat(windows.best()).isEqualTo(262144);
-        assertThat(windows.nativeMax()).isEqualTo(262144);
+        assertThat(windows.currentMin()).isEqualTo(33000);
+        assertThat(windows.currentMax()).isEqualTo(262144);
+        assertThat(windows.overall()).isEqualTo(262144);
     }
 
     @Test
     void keepsPartialEntries() {
         // A model with a profile but nothing loaded reports only its own limit.
-        var client = clientReturning(stats("cold-model", Map.of("native", 131072)));
+        var client = clientReturning(stats("cold-model", Map.of("overall", 131072)));
 
         ModelContextWindows windows = client.getContextWindows().get("cold-model");
 
-        assertThat(windows.min()).isNull();
-        assertThat(windows.best()).isNull();
-        assertThat(windows.nativeMax()).isEqualTo(131072);
+        assertThat(windows.currentMin()).isNull();
+        assertThat(windows.currentMax()).isNull();
+        assertThat(windows.overall()).isEqualTo(131072);
     }
 
     @Test
     void dropsEntriesWithNothingUsable() {
         var client = clientReturning(stats(
-            "broken", Map.of("min", 0, "best", -5, "native", "lots")));
+            "broken", Map.of("current_min", 0, "current_max", -5, "overall", "lots")));
 
         assertThat(client.getContextWindows()).doesNotContainKey("broken");
     }
@@ -79,15 +79,15 @@ class OrchestratorModelWindowClientTest {
     @Test
     void fallsBackToTheFlatWindowsMapFromAnOlderOrchestrator() {
         // Before "stats" existed the endpoint sent model -> smallest window only.
-        // That value is the one that always holds, so it becomes min; the other
-        // two stay unknown rather than being guessed from it.
+        // That value is the one that always holds, so it becomes currentMin; the
+        // other two stay unknown rather than being guessed from it.
         var client = clientReturning(Map.of("windows", Map.of("qwen-14b", 40960)));
 
         ModelContextWindows windows = client.getContextWindows().get("qwen-14b");
 
-        assertThat(windows.min()).isEqualTo(40960);
-        assertThat(windows.best()).isNull();
-        assertThat(windows.nativeMax()).isNull();
+        assertThat(windows.currentMin()).isEqualTo(40960);
+        assertThat(windows.currentMax()).isNull();
+        assertThat(windows.overall()).isNull();
     }
 
     @Test
