@@ -29,6 +29,70 @@ import de.tum.cit.aet.logos.logoswebservice.operations.entity.LogEntry;
 public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
     /**
+     * One team's requests by stage, right now.
+     *
+     * Stage is read off the timestamps rather than a status column, because
+     * that is what actually distinguishes the two live states: a request that
+     * has been accepted but not yet forwarded is queued, and one forwarded
+     * without a response yet is running. ``result_status`` only settles at the
+     * end and says nothing about either.
+     *
+     * The in-flight counts stop at {@code inFlightSince} rather than counting
+     * every row that never got a response. Rows do get stranded — a client that
+     * disconnects, a worker that dies mid-stream — and they never gain one, so
+     * an unbounded count only grows. Team 5 alone had 142 of them, every one
+     * over a day old, which a live view would have reported as a queue backing
+     * up right now. Nothing older than the request timeout can still be
+     * running, so anything past it is wreckage, not work.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NULL AND le.timestamp_response IS NULL
+                                  AND le.timestamp_request >= :inFlightSince) AS queued,
+               COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NULL
+                                  AND le.timestamp_forwarding >= :inFlightSince) AS running,
+               COUNT(*) FILTER (WHERE le.timestamp_response IS NOT NULL AND le.timestamp_response >= :since) AS finished,
+               COUNT(*) FILTER (WHERE le.timestamp_response IS NOT NULL AND le.timestamp_response >= :since
+                                  AND (le.result_status IS DISTINCT FROM 'success'
+                                       OR (le.error_message IS NOT NULL AND le.error_message != ''))) AS failed
+        FROM log_entry le
+        WHERE le.team_id = :teamId
+          AND (le.timestamp_response IS NULL OR le.timestamp_response >= :since)
+        """, nativeQuery = true)
+    TeamActivityProjections.LiveCountsProjection findTeamLiveCounts(
+        @Param("teamId") int teamId,
+        @Param("since") Timestamp since,
+        @Param("inFlightSince") Timestamp inFlightSince);
+
+    /**
+     * What each of a team's API keys spent over the window.
+     *
+     * Keys with no traffic are left out rather than listed at zero: the answer
+     * being looked for is where the tokens went, and a roster of unused keys
+     * buries it.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT k.id AS keyId,
+               k.name AS keyName,
+               k.key_type::text AS keyType,
+               k.environment AS environment,
+               COUNT(DISTINCT le.id) AS requestCount,
+               SUM(ut.token_count) AS totalTokens
+        FROM log_entry le
+        JOIN api_keys k ON k.id = le.api_key_id
+        LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
+             AND ut.type_id = (SELECT id FROM token_types WHERE name = 'total_tokens')
+        WHERE le.team_id = :teamId
+          AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= :since
+        GROUP BY k.id, k.name, k.key_type, k.environment
+        ORDER BY totalTokens DESC NULLS LAST, requestCount DESC
+        """, nativeQuery = true)
+    List<TeamActivityProjections.KeyUsageProjection> findTeamKeyUsage(
+        @Param("teamId") int teamId,
+        @Param("since") Timestamp since);
+
+    /**
      * Teams that actually sent something in the range, with how much.
      *
      * The filter dropdowns were built from the platform's user and team

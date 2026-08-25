@@ -1,0 +1,172 @@
+@use 'styles/glass' as *;
+
+.ta-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.ta-header {
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.ta-control {
+  min-width: 0;
+  max-width: 240px;
+}
+
+.ta-note {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+}
+
+.ta-note--quiet {
+  margin-top: 12px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+}
+
+.ta-error {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-error));
+}
+
+// ── Section ──────────────────────────────────────────────────────────────────
+
+.ta-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-section__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.ta-section__title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+  margin: 0;
+}
+
+.ta-section__note {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+}
+
+// ── Live tiles ───────────────────────────────────────────────────────────────
+
+.ta-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.ta-tile {
+  @include glass-surface;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px;
+  min-width: 0;
+}
+
+// Only while something is actually in flight, so the colour means "look here"
+// rather than being permanent decoration on a quiet cluster.
+.ta-tile--active {
+  border-color: rgb(var(--color-accent-cyan) / var(--opacity-strong));
+
+  .ta-tile__value {
+    color: rgb(var(--color-accent-cyan));
+  }
+}
+
+.ta-tile--bad .ta-tile__value {
+  color: rgb(var(--color-error));
+}
+
+.ta-tile__value {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+  font-variant-numeric: tabular-nums;
+}
+
+.ta-tile__label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-100));
+}
+
+.ta-tile__note {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+}
+
+// ── Usage ────────────────────────────────────────────────────────────────────
+
+.ta-total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.ta-total__value {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-accent-cyan));
+  font-variant-numeric: tabular-nums;
+}
+
+.ta-total__label {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+}
+
+.ta-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+
+  th {
+    text-align: left;
+    padding: 6px 12px 6px 0;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: var(--letter-spacing-wider);
+    color: rgb(var(--color-typography-500));
+    border-bottom: 1px solid rgb(var(--glass-stroke) / 0.2);
+  }
+
+  td {
+    padding: 8px 12px 8px 0;
+    color: rgb(var(--color-typography-100));
+    border-bottom: 1px solid rgb(var(--glass-stroke) / 0.1);
+  }
+}
+
+.ta-table__num {
+  text-align: right;
+  padding-right: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ta-table__muted {
+  color: rgb(var(--color-typography-500));
+}
