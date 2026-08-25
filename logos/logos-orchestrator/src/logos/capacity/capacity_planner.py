@@ -5358,32 +5358,65 @@ class CapacityPlanner:
         still answer their client should consult
         :meth:`manual_load_rejection_reason` first; this re-checks because the
         snapshot can go away between that call and this one.
+
+        Serialized on the per-lane lock, like every other path that loads or
+        unloads a lane. The API answers 202 and leaves this running in the
+        background, so a second click — or a planner cycle deciding on the same
+        model — arrives while the first load is still in flight. Both derive the
+        same deterministic lane id, so without the lock both would dispatch
+        ``add_lane`` for it, and the check inside the lock is what turns the
+        second into a no-op instead of a duplicate.
         """
         rejection = self.manual_load_rejection_reason(provider_id)
         if rejection is not None:
             logger.warning("Refusing manual load of %s on worker=%s: %s", model_name, provider_id, rejection)
             return False
 
-        capacity = self._safe_get_capacity(provider_id)
-        if capacity is None:
-            logger.warning(
-                "Refusing manual load of %s on worker=%s: capacity snapshot went away before dispatch",
-                model_name,
-                provider_id,
-            )
-            return False
-
-        profile = self._safe_get_profiles(provider_id).get(model_name)
         lane_id = self._planner_lane_id(model_name)
-        action = CapacityPlanAction(
-            action="load",
-            provider_id=provider_id,
-            lane_id=lane_id,
-            model_name=model_name,
-            params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-            reason="Manual load requested by an operator",
-        )
-        return await self._execute_action_with_confirmation(action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S)
+        async with self._lane_lock(provider_id, lane_id):
+            # Everything below is re-read under the lock: a load takes minutes,
+            # so the provider state this was admitted on is long stale by the
+            # time the lock is free.
+            if self._lane_exists_in_runtime(provider_id, lane_id):
+                logger.info(
+                    "Manual load of %s on worker=%s is a no-op: lane %s already exists",
+                    model_name,
+                    provider_id,
+                    lane_id,
+                )
+                return False
+
+            rejection = self.manual_load_rejection_reason(provider_id)
+            if rejection is not None:
+                logger.warning(
+                    "Refusing manual load of %s on worker=%s after waiting for the lane lock: %s",
+                    model_name,
+                    provider_id,
+                    rejection,
+                )
+                return False
+
+            capacity = self._safe_get_capacity(provider_id)
+            if capacity is None:
+                logger.warning(
+                    "Refusing manual load of %s on worker=%s: capacity snapshot went away before dispatch",
+                    model_name,
+                    provider_id,
+                )
+                return False
+
+            profile = self._safe_get_profiles(provider_id).get(model_name)
+            action = CapacityPlanAction(
+                action="load",
+                provider_id=provider_id,
+                lane_id=lane_id,
+                model_name=model_name,
+                params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
+                reason="Manual load requested by an operator",
+            )
+            return await self._execute_action_with_confirmation(
+                action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S
+            )
 
     def _build_load_params(
         self,

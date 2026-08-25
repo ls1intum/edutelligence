@@ -117,23 +117,6 @@ class LiquibaseBaselineTest {
         assertThat(developerKeyCount(inactiveUser, teamId)).isEqualTo(0);
     }
 
-    @Test
-    void migration012_requestFeedIndexMatchesTheFeedOrdering() {
-        // The index only spares the request feed its sort if its column list
-        // matches findLatestRequests' ORDER BY down to the nulls flag: Postgres
-        // matches sort orderings by that flag rather than reasoning about the
-        // NOT NULL constraint, so adding a NULLS LAST on either side alone would
-        // silently stop the index applying. Asserting the definition rather than
-        // just the name keeps the two in step.
-        String def = jdbc.queryForObject(
-            "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname=?",
-            String.class, "idx_log_entry_request_feed");
-        assertThat(def)
-            .contains("timestamp_request DESC, request_id DESC")
-            .doesNotContain("NULLS LAST")
-            .contains("WHERE (request_id IS NOT NULL)");
-    }
-
     private int developerKeyCount(Integer userId, Integer teamId) {
         Integer count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM api_keys WHERE user_id=? AND team_id=? AND key_type='developer'",

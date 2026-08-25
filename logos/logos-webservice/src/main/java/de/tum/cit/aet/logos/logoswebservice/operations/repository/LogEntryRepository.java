@@ -141,8 +141,12 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           -- queries use: it is NOT NULL, so the COALESCE could only ever pick
           -- another column, and the cursor below has to compare against the very
           -- column the rows are ordered by. Filter, order and cursor all
-          -- agreeing on one column is also what lets
-          -- idx_log_entry_request_feed answer the whole query as a seek.
+          -- agreeing on one column is what lets idx_log_entry_timestamp_request
+          -- (012_log_entry_timestamp_index.xml) carry this query: it is scanned
+          -- backwards for the DESC order, bounds both the range and the cursor,
+          -- and stops at the LIMIT. Only the request_id tie-break is left to
+          -- sort, and an incremental sort handles that within the microsecond
+          -- groups it applies to.
           -- (No apostrophes in these comments: Spring Data scans the query for
           -- quoted ranges before Postgres ever sees it and reads one as an
           -- unterminated string literal.)
@@ -157,8 +161,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                   < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS TEXT)))
         -- request_id breaks ties: without it two rows sharing a timestamp_request
         -- have no defined order, and the cursor comparison above could then both
-        -- repeat and skip rows at a page boundary. No NULLS LAST — see
-        -- 012_log_entry_request_feed_index.xml.
+        -- repeat and skip rows at a page boundary. No NULLS LAST: timestamp_request
+        -- is NOT NULL, and Postgres matches an index to a sort ordering by its
+        -- nulls flag rather than reasoning about the constraint, so asking for a
+        -- placement the index does not have would cost the index scan.
         ORDER BY le.timestamp_request DESC, le.request_id DESC
         -- The caller sizes this and asks for one row more than it renders, which
         -- is how it knows whether a further page exists without counting. Every

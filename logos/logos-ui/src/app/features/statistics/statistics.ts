@@ -843,11 +843,26 @@ export class Statistics implements OnInit, OnDestroy {
    */
   readonly selectedTimeRangeMs = computed(() => {
     const cfg = this.wsTimelineConfig();
+    const cfgEndMs = new Date(cfg.end).getTime();
+    // Follow the ticker while the selection is live. wsTimelineConfig only
+    // recomputes when the preset, offset or zoom changes, so its end is the
+    // instant the range was picked — and the chart drops every sample past its
+    // window end, which would leave the curve standing still on an open page.
+    const nowMs = this.nowMs();
     return {
       startMs: new Date(cfg.start).getTime(),
-      endMs: new Date(cfg.end).getTime(),
+      endMs: this.isLiveEnd(cfgEndMs, nowMs) ? Math.max(cfgEndMs, nowMs) : cfgEndMs,
     };
   });
+
+  /**
+   * Whether a range end means "up to now" rather than a fixed past instant.
+   * Same 120 s tolerance the websocket applies, so the client and the server
+   * agree on which selections keep growing.
+   */
+  private isLiveEnd(endMs: number, nowMs: number): boolean {
+    return nowMs - endMs <= 120_000;
+  }
 
   /**
    * The range the request feed pages through.
@@ -860,9 +875,10 @@ export class Statistics implements OnInit, OnDestroy {
   readonly requestFeedRange = computed(() => {
     const cfg = this.wsTimelineConfig();
     const endMs = new Date(cfg.end).getTime();
-    // Same 120 s tolerance the websocket uses to call a window live.
-    const isLive = Date.now() - endMs <= 120_000;
-    return { startIso: cfg.start, endIso: isLive ? '' : cfg.end };
+    return {
+      startIso: cfg.start,
+      endIso: this.isLiveEnd(endMs, Date.now()) ? '' : cfg.end,
+    };
   });
 
   /**

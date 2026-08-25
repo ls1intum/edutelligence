@@ -142,13 +142,21 @@ export class LaneHealthPanel implements OnChanges {
     return this.canUnload;
   }
 
-  /** Models that don't already have a lane (lanes are keyed by model name). */
+  /**
+   * Models that don't already have a lane (lanes are keyed by model name).
+   *
+   * A model whose load was accepted counts as taken until its lane shows up in
+   * the status stream, which takes minutes: leaving it selectable invites a
+   * second load of the very lane the first request is still bringing up.
+   */
   get loadableModels(): ProviderModel[] {
     const name = this.providerName;
     const lanes = name ? (this.lanesByProvider[name] ?? {}) : {};
-    const loaded = new Set(Object.values(lanes).map((l) => (l.model ?? '').trim().toLowerCase()));
+    const taken = new Set(Object.values(lanes).map((l) => (l.model ?? '').trim().toLowerCase()));
+    const accepted = this.acceptedModel();
+    if (accepted) taken.add(accepted.trim().toLowerCase());
     return this.loadModels().filter(
-      (m) => m.model_name && !loaded.has(m.model_name.trim().toLowerCase()),
+      (m) => m.model_name && !taken.has(m.model_name.trim().toLowerCase()),
     );
   }
 
@@ -280,6 +288,13 @@ export class LaneHealthPanel implements OnChanges {
     // Guard against a provider switch between picking and submitting.
     if (this.pickerProviderId !== pid || !this.loadModels().some((m) => m.model_name === model)) {
       this.addError.set('The provider changed — reopen the picker and select a model again.');
+      return;
+    }
+    // Second guard, in case a selection survived the list it came from: the
+    // orchestrator answers 202 and loads in the background, so the only sign
+    // the first load is still running is this pending model.
+    if (this.acceptedModel()?.trim().toLowerCase() === model.trim().toLowerCase()) {
+      this.addError.set(`${model} is already being loaded.`);
       return;
     }
     this.addingLane.set(true);
