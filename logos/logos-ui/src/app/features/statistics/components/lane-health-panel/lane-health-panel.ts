@@ -327,7 +327,7 @@ export class LaneHealthPanel implements OnChanges {
  * own text rather than to the object holding it. Bounded depth: an error body is
  * a few levels at most, and a cycle in one must not take the page down with it.
  */
-function messageIn(body: unknown, depth = 0): string | null {
+export function messageIn(body: unknown, depth = 0): string | null {
   if (typeof body === 'string') return body.trim() || null;
   if (depth >= 4 || body === null || typeof body !== 'object') return null;
   const record = body as Record<string, unknown>;
