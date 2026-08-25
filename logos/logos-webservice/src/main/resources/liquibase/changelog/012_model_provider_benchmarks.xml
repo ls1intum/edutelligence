@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="012-model-provider-benchmarks" author="Tim">
+        <createTable tableName="model_provider_benchmarks">
+            <column name="id" type="INT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="model_provider_id" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="configuration" type="JSONB">
+                <constraints nullable="false"/>
+            </column>
+            <column name="dataset" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sample_size" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="metrics" type="JSONB">
+                <constraints nullable="false"/>
+            </column>
+            <column name="recorded_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addForeignKeyConstraint
+            baseTableName="model_provider_benchmarks"
+            baseColumnNames="model_provider_id"
+            constraintName="fk_model_provider_benchmarks_pair"
+            referencedTableName="model_provider"
+            referencedColumnNames="id"
+            onDelete="CASCADE"/>
+
+        <createIndex
+            tableName="model_provider_benchmarks"
+            indexName="idx_model_provider_benchmarks_pair_time">
+            <column name="model_provider_id"/>
+            <column name="recorded_at" descending="true"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>
