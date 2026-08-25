@@ -4194,6 +4194,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     configured_models=(
                         payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
                     ),
+                    calibrating=(
+                        bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
+                    ),
                 )
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":

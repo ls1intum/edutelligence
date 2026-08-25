@@ -14,13 +14,16 @@ never set that slot, so it does not see every session.
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
-from logos.capacity.capacity_planner import CapacityPlanner
-from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry, ProviderSession
+from logos.capacity.capacity_planner import _UNPLANNABLE_WARN_AFTER_SECONDS, CapacityPlanner
+from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry, ProviderSession, _utc_now
 
 # ---------------------------------------------------------------------------
 # Registry: calibrating flag driven by worker events
@@ -422,3 +425,253 @@ def test_a_replayed_event_is_still_recorded_in_the_session_history():
     asyncio.run(registry.append_event(1, _event("calibration_session_finished"), replay=True))
 
     assert [e["event"] for e in session.latest_events] == ["calibration_session_finished"]
+
+
+# ---------------------------------------------------------------------------
+# Registry: the worker's status is the periodic ground truth
+#
+# The lifecycle events are one-shot, which makes the flag they drive a latch.
+# A terminal event that never lands as a live event leaves the worker excluded
+# from lane placement with nothing left to release it — observed in production
+# as three workers holding no lanes for over seven hours after a nightly
+# calibration run, cleared only by restarting the container. Every status
+# carries the worker's own view of whether a session is running, so the flag
+# converges within one status interval regardless of which event was lost.
+# ---------------------------------------------------------------------------
+
+
+def _status(registry, provider_id: int = 1, *, calibrating: bool | None = None) -> None:
+    asyncio.run(registry.update_runtime(provider_id, {"lanes": []}, calibrating=calibrating))
+
+
+def test_a_status_releases_a_flag_that_no_event_ever_cleared():
+    """The production failure, end to end: the session's start is seen, its end
+    is not, and the next status is what gets the worker planning again."""
+    registry, session = _registry_with_session()
+    session.first_status_received = True
+    planner = _planner_with_registry(registry)
+
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    assert planner._is_plannable(1) is False
+
+    # The terminal event arrives as replay — dropped, as it must be — so the
+    # flag is still set with nothing else left to clear it.
+    asyncio.run(registry.append_event(1, _event("calibration_session_finished"), replay=True))
+    assert planner._is_plannable(1) is False
+
+    _status(registry, calibrating=False)
+    assert planner._is_plannable(1) is True
+
+
+def test_a_status_reporting_a_session_keeps_the_worker_excluded():
+    """The reconciliation is symmetric: a status can also be what first tells
+    the server a session is running."""
+    registry, session = _registry_with_session()
+    session.first_status_received = True
+    planner = _planner_with_registry(registry)
+
+    _status(registry, calibrating=True)
+    assert planner._is_plannable(1) is False
+
+    _status(registry, calibrating=False)
+    assert planner._is_plannable(1) is True
+
+
+def test_a_status_without_the_field_leaves_the_flag_untouched():
+    """Worker predating the field → the events stay the only source."""
+    registry, session = _registry_with_session()
+    session.calibrating = True
+
+    _status(registry, calibrating=None)
+    assert registry.is_calibrating(1) is True
+
+
+def test_a_status_predating_a_dispatched_start_cannot_release_it():
+    """A status built before start_calibration_session went out is still in
+    flight when the mark is set. Acting on it would undo the mark and reopen
+    exactly the window the dispatch-time marking exists to close."""
+    registry, _session, _ = _registry_answering_start()
+
+    asyncio.run(registry.send_command(1, "start_calibration_session", params={"sleep_level": 1}))
+    assert registry.is_calibrating(1) is True
+
+    _status(registry, calibrating=False)
+    assert registry.is_calibrating(1) is True, "an in-flight status must not clear a fresh mark"
+
+
+def test_a_start_that_never_materialises_is_released_after_the_grace():
+    """The window is bounded on purpose. A start the worker never acted on —
+    a timed-out command, a session that died before it began — must not latch
+    the worker out of lane placement indefinitely."""
+    registry, session, _ = _registry_answering_start()
+
+    asyncio.run(registry.send_command(1, "start_calibration_session", params={"sleep_level": 1}))
+    session.optimistic_calibration_until = _utc_now() - timedelta(seconds=1)
+
+    _status(registry, calibrating=False)
+    assert registry.is_calibrating(1) is False
+
+
+def test_a_confirming_status_retires_the_optimistic_window():
+    """Once the worker has reported the session, later statuses are trusted
+    immediately — the window is only there to bridge the dispatch."""
+    registry, session, _ = _registry_answering_start()
+
+    asyncio.run(registry.send_command(1, "start_calibration_session", params={"sleep_level": 1}))
+    _status(registry, calibrating=True)
+    assert session.optimistic_calibration_until is None
+
+    _status(registry, calibrating=False)
+    assert registry.is_calibrating(1) is False
+
+
+def test_a_started_event_retires_the_optimistic_window():
+    """Same for the event path, which normally lands before the first status."""
+    registry, session, _ = _registry_answering_start()
+
+    asyncio.run(registry.send_command(1, "start_calibration_session", params={"sleep_level": 1}))
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    assert session.optimistic_calibration_until is None
+
+    _status(registry, calibrating=False)
+    assert registry.is_calibrating(1) is False
+
+
+def test_a_terminal_event_retires_the_optimistic_window():
+    """A session that starts and ends inside the window must leave nothing
+    behind that would make the next status be ignored."""
+    registry, session, _ = _registry_answering_start()
+
+    asyncio.run(registry.send_command(1, "start_calibration_session", params={"sleep_level": 1}))
+    asyncio.run(registry.append_event(1, _event("calibration_session_finished")))
+
+    assert session.optimistic_calibration_until is None
+    assert registry.is_calibrating(1) is False
+
+
+def test_a_reconnect_retires_the_optimistic_window():
+    """A hello is a new connection: no command dispatched against the previous
+    one can still be answered on it, and hello reports the truth anyway."""
+    registry, session, _ = _registry_answering_start()
+
+    asyncio.run(registry.send_command(1, "start_calibration_session", params={"sleep_level": 1}))
+    asyncio.run(registry.on_hello(provider_id=1, worker_id="worker-a", calibrating=False))
+
+    assert session.optimistic_calibration_until is None
+    assert registry.is_calibrating(1) is False
+
+
+def test_a_refused_start_restores_the_previous_window():
+    """Undoing the mark has to undo the window with it, or the status that
+    would have corrected the state is ignored for a minute."""
+    registry, session, _ = _registry_answering_start(reply={"ok": False, "error": "node is in a degraded state"})
+
+    with pytest.raises(LogosNodeCommandError):
+        asyncio.run(registry.send_command(1, "start_calibration_session"))
+
+    assert session.optimistic_calibration_until is None
+    assert registry.is_calibrating(1) is False
+
+
+# ---------------------------------------------------------------------------
+# Planner: a worker nothing can be placed on says so
+# ---------------------------------------------------------------------------
+
+
+def _unplannable_planner(registry):
+    planner = _planner_with_registry(registry)
+    planner._unplannable_since = {}
+    planner._unplannable_warned_at = {}
+    planner._facade = MagicMock(**{"get_provider_name.return_value": "deimama"})
+    return planner
+
+
+def _connected_but_excluded_registry():
+    return MagicMock(
+        **{
+            "is_calibrating.return_value": True,
+            "has_received_first_status.return_value": True,
+            "is_provider_online.return_value": True,
+        }
+    )
+
+
+def test_a_briefly_unplannable_worker_is_not_warned_about(caplog):
+    """Skipping is the expected path for the seconds before a first status and
+    the minutes of a session — it must not be noise."""
+    planner = _unplannable_planner(_connected_but_excluded_registry())
+
+    with caplog.at_level(logging.WARNING):
+        planner._note_unplannable(1)
+
+    assert caplog.records == []
+
+
+def test_a_worker_stuck_unplannable_is_reported(caplog):
+    """Nothing else logs this state: the skip is silent by design, so an
+    excluded worker held no lanes for hours without a single line about it."""
+    planner = _unplannable_planner(_connected_but_excluded_registry())
+    planner._note_unplannable(1)
+    planner._unplannable_since[1] = time.time() - (_UNPLANNABLE_WARN_AFTER_SECONDS + 60)
+
+    with caplog.at_level(logging.WARNING):
+        planner._note_unplannable(1)
+    assert "deimama" in caplog.text
+    assert "excluded from lane placement" in caplog.text
+
+    # Repeats on a cooldown rather than once per cycle.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        planner._note_unplannable(1)
+    assert caplog.records == []
+
+
+def test_an_offline_worker_is_never_warned_about(caplog):
+    """An offline worker is unplannable too, and every other surface already
+    says so — the cycle panel prints it offline, the connected count is short.
+    Warning here would fire every 15 minutes forever for any node that is
+    simply switched off, drowning the case this line exists for."""
+    registry = MagicMock(
+        **{
+            "is_calibrating.return_value": False,
+            "has_received_first_status.return_value": False,
+            "is_provider_online.return_value": False,
+        }
+    )
+    planner = _unplannable_planner(registry)
+    planner._unplannable_since[1] = time.time() - (_UNPLANNABLE_WARN_AFTER_SECONDS * 10)
+
+    with caplog.at_level(logging.WARNING):
+        planner._note_unplannable(1)
+
+    assert caplog.records == []
+
+
+def test_an_offline_worker_restarts_the_clock_on_reconnect(caplog):
+    """Downtime is not exclusion. A worker that comes back must be given the
+    full grace period again, not warned about the moment it reconnects."""
+    registry = _connected_but_excluded_registry()
+    planner = _unplannable_planner(registry)
+
+    planner._note_unplannable(1)
+    planner._unplannable_since[1] = time.time() - (_UNPLANNABLE_WARN_AFTER_SECONDS + 60)
+
+    registry.is_provider_online.return_value = False
+    planner._note_unplannable(1)
+    assert planner._unplannable_since == {}
+
+    registry.is_provider_online.return_value = True
+    with caplog.at_level(logging.WARNING):
+        planner._note_unplannable(1)
+    assert caplog.records == []
+
+
+def test_a_recovered_worker_forgets_its_stuck_history():
+    """The next outage has to be timed from when it began, not from the last."""
+    planner = _unplannable_planner(_connected_but_excluded_registry())
+
+    planner._note_unplannable(1)
+    planner._clear_unplannable(1)
+
+    assert planner._unplannable_since == {}
+    assert planner._unplannable_warned_at == {}

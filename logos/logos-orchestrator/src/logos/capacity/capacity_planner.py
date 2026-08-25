@@ -44,6 +44,13 @@ from .vram_ledger import VRAMLedger
 
 logger = logging.getLogger(__name__)
 
+# How long a worker may stay excluded from lane placement before the planner
+# says so. A calibration session over a handful of models runs well past ten
+# minutes, so this sits above any plausible session; anything longer means the
+# worker is holding lanes it will never get back.
+_UNPLANNABLE_WARN_AFTER_SECONDS = 45 * 60.0
+_UNPLANNABLE_WARN_EVERY_SECONDS = 15 * 60.0
+
 
 class CapacityPlanner:
     """
@@ -380,6 +387,12 @@ class CapacityPlanner:
         # subset). Suppresses new load actions on the lane until expiry.
         self._lane_load_failure_until: dict[tuple[int, str], float] = {}
 
+        # Workers the cycle is currently skipping, and when the skipping began.
+        # Backs the stuck-worker warning in _note_unplannable: a worker no
+        # lane can be placed on is otherwise invisible in the logs.
+        self._unplannable_since: dict[int, float] = {}
+        self._unplannable_warned_at: dict[int, float] = {}
+
         # Phase 4b: Atomic VRAM reservation ledger — prevents double-booking
         # when concurrent load/wake/sleep/stop operations overlap.
         self._vram_ledger = VRAMLedger()
@@ -528,6 +541,54 @@ class CapacityPlanner:
             return False
         return not self._registry.is_calibrating(provider_id)
 
+    def _note_unplannable(self, provider_id: int) -> None:
+        """Log a worker that has been skipped long enough to be a fault.
+
+        Being unplannable is normal and short-lived — the seconds before a
+        first status, the minutes of a calibration session. *Staying*
+        unplannable is not: the worker's lanes were stopped and nothing is
+        putting them back, which no other log line reports because the skip
+        itself is the expected path. Say it out loud once it stops being
+        plausible, then repeat on a cooldown so the outage is visible for as
+        long as it lasts.
+
+        A worker with no live session is excluded too, but that is reported
+        everywhere already — the cycle panel prints it offline and the
+        connected count is short. Warning about it would fire forever for any
+        node that is simply switched off, and the point of this line is to
+        surface the case nothing else names: a *connected* worker that no lane
+        can be placed on. Its clock is reset so a reconnect starts fresh
+        rather than inheriting the downtime.
+        """
+        registry = self._registry
+        if registry is not None and not registry.is_provider_online(provider_id):
+            self._clear_unplannable(provider_id)
+            logger.debug("Skipping worker=%s: offline this cycle", provider_id)
+            return
+        now = time.time()
+        first_seen = self._unplannable_since.setdefault(provider_id, now)
+        worker = self._facade.get_provider_name(provider_id) or provider_id
+        stuck_for = now - first_seen
+        if stuck_for < _UNPLANNABLE_WARN_AFTER_SECONDS:
+            logger.debug("Skipping worker=%s: not plannable this cycle", worker)
+            return
+        if now - self._unplannable_warned_at.get(provider_id, 0.0) < _UNPLANNABLE_WARN_EVERY_SECONDS:
+            return
+        self._unplannable_warned_at[provider_id] = now
+        logger.warning(
+            "worker=%s is connected but has been excluded from lane placement "
+            "for %.0f min (calibrating=%s, first_status_received=%s) — no lane "
+            "can be placed on it while this holds",
+            worker,
+            stuck_for / 60.0,
+            registry.is_calibrating(provider_id) if registry else "n/a",
+            registry.has_received_first_status(provider_id) if registry else "n/a",
+        )
+
+    def _clear_unplannable(self, provider_id: int) -> None:
+        self._unplannable_since.pop(provider_id, None)
+        self._unplannable_warned_at.pop(provider_id, None)
+
     async def _run_cycle(self) -> None:
         """Execute one planner cycle."""
         cycle_start = time.time()
@@ -614,11 +675,9 @@ class CapacityPlanner:
             # we don't know what lanes are already loaded and acting on
             # stale/empty state can destroy existing lanes.
             if not self._is_plannable(provider_id):
-                logger.debug(
-                    "Skipping worker=%s: not plannable this cycle",
-                    self._facade.get_provider_name(provider_id) or provider_id,
-                )
+                self._note_unplannable(provider_id)
                 continue
+            self._clear_unplannable(provider_id)
 
             try:
                 lanes = self._facade.get_all_provider_lane_signals(provider_id)
@@ -1032,16 +1091,26 @@ class CapacityPlanner:
         Returns ``(ok, effective_available_mb, required_mb)``. *ok* is True
         when ``effective_available_mb >= required_mb``.
 
-        ``required_mb`` = ``HOST_RAM_SAFETY_MARGIN_MB + transient_estimate``,
-        where ``transient_estimate`` is:
+        ``required_mb`` = ``HOST_RAM_SAFETY_MARGIN_MB`` + the larger of two
+        costs, because host RAM has to cover both and they overlap:
 
-          1. The calibrated ``sleep_l{level}_transient_host_ram_mb`` from
-             the profile when present.
-          2. For sleep_l2 only: a rough estimate from ``disk_size_bytes``
-             (the weight-transfer dominates l2 transient cost) when the
-             calibrated value is missing.
-          3. ``HOST_RAM_SLEEP_HEADROOM_MB`` as a final flat fallback for
-             pre-calibration profiles.
+          * the *transient* peak while the sleep runs, from the calibrated
+            ``sleep_l{level}_transient_host_ram_mb``; for sleep_l2 a rough
+            estimate from ``disk_size_bytes`` when that is missing (the
+            weight transfer dominates l2), and a flat
+            ``HOST_RAM_SLEEP_HEADROOM_MB`` for pre-calibration profiles.
+          * the *residency* the lane keeps for as long as it stays asleep,
+            from ``host_ram_residual_mb``. sleep_l1 relocates the weights to
+            the host instead of dropping them, so the sleep does not hand
+            that memory back when it finishes — it holds it until the lane
+            wakes or is stopped.
+
+        Only the transient used to be counted, which asks "can this sleep
+        complete" and never "what does it leave behind". A worker could pass
+        the check for every lane in turn and still end up with its RAM spoken
+        for, because each sleep quietly kept what the check had treated as
+        borrowed. Failing here escalates the action to a stop, which is the
+        honest trade when the host cannot afford a resident sleeper.
 
         Fails open if the worker has no host-RAM telemetry.
         """
@@ -1067,7 +1136,11 @@ class CapacityPlanner:
         if transient_mb is None:
             transient_mb = self.HOST_RAM_SLEEP_HEADROOM_MB
 
-        required = self.HOST_RAM_SAFETY_MARGIN_MB + transient_mb
+        residency_mb = 0.0
+        if profile is not None and profile.host_ram_residual_mb:
+            residency_mb = max(float(profile.host_ram_residual_mb), 0.0)
+
+        required = self.HOST_RAM_SAFETY_MARGIN_MB + max(transient_mb, residency_mb)
         return effective_available >= required, effective_available, required
 
     async def _stop_sleeping_lanes_for_headroom(
@@ -2709,6 +2782,24 @@ class CapacityPlanner:
         # provider always claiming the model.
         if awake_lanes:
             return (0.0, free_vram)
+
+        # A cold load this worker just failed cannot serve the model, so it
+        # must not win the ranking either. The execution pass drops a load in
+        # cooldown (see the pre-pass in _validate_vram_budget), but the ranker runs
+        # first: leaving the failed worker as winner makes every other worker
+        # skip the model with "best-first ranker picked worker=X", and then X's
+        # own action is thrown away — nothing is placed anywhere until the
+        # cooldown expires. Observed in production on 2026-08-21, where a
+        # worker whose vLLM died during startup kept winning the ranking for
+        # the next two minutes while the other worker that could have served
+        # the model sat idle.
+        #
+        # Only the cold-load path is gated: a sleeping lane is a wake, which
+        # has its own cooldown and is already filtered above.
+        if not sleeping_lanes and self._lane_is_in_load_failure_cooldown(
+            provider_id, self._planner_lane_id(model_name)
+        ):
+            return None
 
         profile = profiles.get(model_name)
 
