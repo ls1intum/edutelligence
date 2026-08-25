@@ -141,6 +141,63 @@ class TeamActivityControllerTest {
            .andExpect(jsonPath("$.total_tokens").value(0));
     }
 
+    // ── Requests ─────────────────────────────────────────────────────────────
+    // Counts alone answer "is anything happening"; the list answers "what".
+
+    @Test
+    void itListsTheTeamsIndividualRequests() throws Exception {
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           // 9001 only — 9002 is in the same window and belongs to no team.
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-aaa-111"))
+           .andExpect(jsonPath("$.requests_total").value(1));
+    }
+
+    @Test
+    void itOffersTheTeamsRequestersForTheFilter() throws Exception {
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requesters.length()").value(1))
+           .andExpect(jsonPath("$.requesters[0].id").value(1001))
+           .andExpect(jsonPath("$.requesters[0].label").value("Test User"));
+    }
+
+    @Test
+    void theRequestFilterNarrowsToOneRequester() throws Exception {
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"user_id\": 1001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1));
+
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"user_id\": 1003}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests").isEmpty());
+    }
+
+    @Test
+    void aRequesterFromAnotherTeamStillCannotWidenTheScope() throws Exception {
+        // The team scope is applied on top of user_id, so naming a requester
+        // outside the team narrows to nothing rather than reaching past it.
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"user_id\": 1006}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests").isEmpty());
+    }
+
     // ── Window ───────────────────────────────────────────────────────────────
 
     @Test

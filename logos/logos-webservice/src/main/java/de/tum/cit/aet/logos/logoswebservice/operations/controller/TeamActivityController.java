@@ -56,6 +56,13 @@ public class TeamActivityController {
         }
         Map<String, Object> payload = body != null ? body : Map.of();
         Integer days = payload.get("days") instanceof Number n ? n.intValue() : null;
-        return ResponseEntity.ok(teamActivityService.getTeamActivity(teamId, days));
+        // Narrows the request list to one requester. The team scope still
+        // applies on top, so this can only ever cut the list down further —
+        // there is no user id that reaches outside the team checked above.
+        Integer userId = payload.get("user_id") instanceof Number n ? n.intValue() : null;
+        String cursorTs = payload.get("cursor_ts") instanceof String s ? s : null;
+        String cursorId = payload.get("cursor_id") instanceof String s ? s : null;
+        return ResponseEntity.ok(
+            teamActivityService.getTeamActivity(teamId, days, userId, cursorTs, cursorId));
     }
 }

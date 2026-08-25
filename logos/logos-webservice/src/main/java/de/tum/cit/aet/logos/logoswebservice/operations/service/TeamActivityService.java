@@ -10,15 +10,16 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ScopeOptionProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamActivityProjections;
 
 /**
  * The team-scoped activity view app administrators asked for (issue #776).
  *
- * Two questions, which is the whole of it: what is happening right now, and
- * what has the team spent. Not a second statistics page — the request feed,
- * the VRAM curves and the lane health belong to whoever runs the cluster, and
- * mean nothing to someone who runs one team on it.
+ * What is happening right now, what the team has spent, and the requests
+ * behind both. Not a second statistics page: the VRAM curves, the lane health
+ * and the per-worker GPUs belong to whoever runs the cluster and mean nothing
+ * to someone who runs one team on it.
  */
 @Service
 public class TeamActivityService {
@@ -40,10 +41,16 @@ public class TeamActivityService {
     private static final int DEFAULT_DAYS = 7;
     private static final int MAX_DAYS = 90;
 
-    private final LogEntryRepository logEntryRepository;
+    /** Rows of the request list per page. */
+    private static final int REQUEST_PAGE_SIZE = 20;
 
-    public TeamActivityService(LogEntryRepository logEntryRepository) {
+    private final LogEntryRepository logEntryRepository;
+    private final RequestLogService requestLogService;
+
+    public TeamActivityService(LogEntryRepository logEntryRepository,
+                               RequestLogService requestLogService) {
         this.logEntryRepository = logEntryRepository;
+        this.requestLogService = requestLogService;
     }
 
     /**
@@ -52,7 +59,8 @@ public class TeamActivityService {
      * The caller is responsible for having established that this team is one
      * the requester may look at; nothing here re-checks it.
      */
-    public Map<String, Object> getTeamActivity(int teamId, Integer requestedDays) {
+    public Map<String, Object> getTeamActivity(int teamId, Integer requestedDays,
+                                              Integer userId, String cursorTs, String cursorId) {
         int days = clampDays(requestedDays);
         Instant now = Instant.now();
         Timestamp since = Timestamp.from(now.minus(Duration.ofDays(days)));
@@ -79,6 +87,13 @@ public class TeamActivityService {
             .mapToLong(k -> (long) k.getOrDefault("request_count", 0L))
             .sum();
 
+        // The individual requests behind the counts. Counts alone answer "is
+        // anything happening"; the list answers "what", which is the question
+        // that follows within seconds of the first one.
+        Map<String, Object> requests = requestLogService.getLatestRequests(
+            since.toInstant().toString(), now.toString(),
+            userId, teamId, cursorTs, cursorId, REQUEST_PAGE_SIZE, true);
+
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("team_id", teamId);
         payload.put("days", days);
@@ -87,7 +102,30 @@ public class TeamActivityService {
         payload.put("keys", keys);
         payload.put("total_tokens", totalTokens);
         payload.put("total_requests", totalRequests);
+        // Who in this team sent anything in the window, for the request
+        // filter. Scoped to the team by the query, so it cannot name a
+        // requester from elsewhere, and never scoped by userId — this list is
+        // the picker, and narrowing it by the current pick would leave no way
+        // back to the others.
+        payload.put("requesters", toScopeOptions(logEntryRepository.findRequestersWithTraffic(
+            since, Timestamp.from(now), teamId)));
+        payload.put("requests", requests.get("requests"));
+        payload.put("requests_total", requests.get("total"));
+        payload.put("requests_has_more", requests.get("has_more"));
+        payload.put("requests_next_cursor", requests.get("next_cursor"));
         return payload;
+    }
+
+    private static List<Map<String, Object>> toScopeOptions(List<ScopeOptionProjection> rows) {
+        return rows.stream()
+            .map(p -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", p.getId());
+                m.put("label", p.getLabel());
+                m.put("requestCount", p.getRequestCount());
+                return m;
+            })
+            .toList();
     }
 
     private static Map<String, Object> toKeyUsage(TeamActivityProjections.KeyUsageProjection p) {

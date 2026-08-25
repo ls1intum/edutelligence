@@ -93,6 +93,10 @@
         />
       }
 
+      @if (activeTab() === 'activity') {
+        <app-activity-tab [teamId]="teamId()" />
+      }
+
       @if (activeTab() === 'billing') {
         <app-billing-tab [teamId]="teamId()" />
       }
