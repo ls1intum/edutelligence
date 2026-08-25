@@ -12,7 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from . import capacity, db, docker_engine, github
 from .auth import Principal, require_agent_operator
@@ -132,8 +132,16 @@ async def create_workspace(body: WorkspaceCreate, principal: Principal = Depends
     return Workspace(**row, active_sessions=0)
 
 
-@app.delete("/workspaces/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["workspaces"])
-async def delete_workspace(workspace_id: int, _: Principal = Depends(require_agent_operator)) -> None:
+@app.delete(
+    "/workspaces/{workspace_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    # 204 must carry no body, so the route returns a bare Response. Annotating
+    # it `-> None` instead makes FastAPI derive a response model and refuse to
+    # start the application.
+    response_class=Response,
+    tags=["workspaces"],
+)
+async def delete_workspace(workspace_id: int, _: Principal = Depends(require_agent_operator)) -> Response:
     workspace = await db.get_workspace(workspace_id)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
@@ -142,6 +150,7 @@ async def delete_workspace(workspace_id: int, _: Principal = Depends(require_age
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     await docker_engine.remove_volume(workspace["volume_name"], force=True)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # --- sessions -------------------------------------------------------------

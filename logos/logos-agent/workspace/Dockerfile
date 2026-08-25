@@ -17,12 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git \
       ca-certificates \
       curl \
+      gnupg \
       jq \
       ripgrep \
       python3 \
       python3-venv \
       python3-pip \
-      openjdk-21-jdk-headless \
       # Chromium's runtime dependencies. Installed explicitly rather than via
       # `playwright install-deps` so the layer is reproducible.
       libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
@@ -30,9 +30,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgbm1 libpango-1.0-0 libcairo2 libasound2 \
   && rm -rf /var/lib/apt/lists/*
 
+# A JDK, so a session can build and test logos-webservice. It targets Java 25
+# (see logos-webservice/pom.xml), which Debian bookworm does not package at all,
+# so it comes from Adoptium rather than from the distribution. The service's
+# Maven wrapper (`./mvnw`) fetches Maven itself, so no separate Maven here.
+ARG JDK_VERSION=25
+RUN curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
+      | gpg --dearmor -o /usr/share/keyrings/adoptium.gpg \
+  && echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+      > /etc/apt/sources.list.d/adoptium.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends "temurin-${JDK_VERSION}-jdk" \
+  && rm -rf /var/lib/apt/lists/*
+
 # GitHub CLI, from the official apt repository.
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && chmod a+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh \
@@ -41,10 +55,18 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # uv, matching the pin used by the other Logos images.
 COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv
 
-# The coding agent itself, and Playwright for screenshots. Both pinned so a
-# session's behaviour does not change under us between builds.
-ARG CLAUDE_CODE_VERSION=2.0.1
-ARG PLAYWRIGHT_VERSION=1.49.1
+# Logos targets Python 3.13; Debian bookworm ships 3.11. Install the interpreter
+# at build time into a shared location, so a session runs `uv venv --python
+# 3.13` instantly instead of downloading ~30 MB on every run — and so it works
+# at all, since the session's root filesystem is read-only.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
+RUN uv python install 3.13 && chmod -R a+rX /opt/uv-python
+
+# The coding agent itself — this image exists to run Claude Code — and
+# Playwright for screenshots. Both pinned so a session's behaviour does not
+# change under us between builds; bump them deliberately.
+ARG CLAUDE_CODE_VERSION=2.1.245
+ARG PLAYWRIGHT_VERSION=1.62.1
 RUN npm install -g \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       "playwright@${PLAYWRIGHT_VERSION}" \
