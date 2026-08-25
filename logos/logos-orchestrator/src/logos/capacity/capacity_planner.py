@@ -5130,20 +5130,42 @@ class CapacityPlanner:
             # fits the estimated per-GPU KV headroom — spawning it would only
             # yield a doomed vLLM start (the budget can't serve one request at
             # any calibrated context). Better to defer until VRAM frees up.
+            #
+            # The same check also enforces the context floor: pairs below
+            # _min_context_tokens are not counted as viable, so a node with
+            # room for a narrow lane but not a useful one defers instead of
+            # placing the lane that would drag the model's advertised window
+            # down cluster-wide.
             if profile is not None and profile.residency_source == "calibrated":
                 pairs = self._parse_kv_max_model_len_pairs(profile)
-                viable = [pkv for pkv, pmml in pairs if pmml and pmml > 0]
+                min_context = self._min_context_tokens(profile)
+                viable = [pkv for pkv, pmml in pairs if pmml and pmml >= max(1, min_context)]
                 if viable:
                     avail_kv = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
                     if avail_kv is not None and avail_kv < min(viable):
                         logger.info(
-                            "Feasibility FAILED for %s: smallest calibrated KV pair %.0fMB > "
-                            "available-for-KV %.0fMB/GPU — not spawning",
+                            "Feasibility FAILED for %s: smallest calibrated KV pair serving >=%d "
+                            "context tokens needs %.0fMB > available-for-KV %.0fMB/GPU — not spawning",
                             model_name,
+                            max(1, min_context),
                             min(viable),
                             avail_kv,
                         )
                         return False
+                elif min_context > 0 and pairs:
+                    # No calibrated point on this node reaches the floor at any
+                    # KV size. Nothing will free up that changes it, so say so
+                    # once per cycle and leave the model alone here.
+                    logger.info(
+                        "Feasibility FAILED for %s: no calibrated KV point serves the required "
+                        "minimum of %d context tokens (widest is %d) — not spawning. Lower "
+                        "min_context_fraction for this model in the worker's config.yml "
+                        "(logos.capabilities_models) to allow it",
+                        model_name,
+                        min_context,
+                        max((pmml for _pkv, pmml in pairs), default=0),
+                    )
+                    return False
         else:
             if kv_cache_bytes_str:
                 kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
@@ -5571,7 +5593,27 @@ class CapacityPlanner:
                 tp,
             )
         available_for_kv_mb = self._estimate_available_for_kv_mb(profile, capacity, provider_id, tp)
-        kv_mb, selected_max_model_len = self._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb)
+        min_context = self._min_context_tokens(profile)
+        kv_mb, selected_max_model_len = self._select_kv_mb_max_model_len_pair(
+            profile, available_for_kv_mb, min_context_tokens=min_context
+        )
+        if kv_mb is None and min_context > 0:
+            # Nothing that fits reaches the operator's context floor. A load
+            # reaching this point is one the gate did not screen (request-time
+            # cold load, or a contention path): a request is already waiting, so
+            # place it — but at the WIDEST pair that fits rather than the
+            # narrowest, since the floor says context is what matters for this
+            # model. Say so, because the lane will advertise less than the
+            # operator asked for until it is replaced.
+            kv_mb, selected_max_model_len = self._select_kv_mb_max_model_len_pair(profile, available_for_kv_mb)
+            if kv_mb is not None:
+                logger.warning(
+                    "%s: placing a lane at max_model_len=%s, below the configured floor of %d "
+                    "context tokens — no wider calibrated point fits the available KV headroom",
+                    model_name,
+                    selected_max_model_len,
+                    min_context,
+                )
         if kv_mb is None:
             # No calibrated pair fits the estimated KV headroom. If the profile
             # HAS a pair curve, fall back to the SMALLEST calibrated pair as a
@@ -5694,6 +5736,55 @@ class CapacityPlanner:
         return self._format_bytes_human(int(kv_mb * 1024 * 1024))
 
     @staticmethod
+    def _native_context_length(profile: Optional[ModelProfile]) -> int:
+        """The model's own context length, 0 when the profile does not say.
+
+        ``max_context_length`` when calibration recorded it, otherwise the
+        widest window any calibrated KV point reached — which is the best
+        available proxy for "all the context this model has".
+        """
+        if profile is None:
+            return 0
+        native = 0
+        try:
+            if profile.max_context_length:
+                native = int(profile.max_context_length)
+        except (TypeError, ValueError):
+            native = 0
+        for _kv_mb, max_model_len in CapacityPlanner._parse_kv_max_model_len_pairs(profile):
+            native = max(native, max_model_len)
+        return native if native > 0 else 0
+
+    @classmethod
+    def _min_context_tokens(cls, profile: Optional[ModelProfile]) -> int:
+        """Narrowest window a lane for this model may be placed with.
+
+        The share comes from ``min_context_fraction`` on the profile, which the
+        operator sets per model under ``logos.capabilities_models`` in the
+        worker's config.yml — the worker's hardware decides which windows are
+        reachable, so that is where the floor belongs.
+
+        0 means "no floor": either the worker sets none, or the profile does not
+        report a context length to take a share of. A model whose context length
+        is unknown is never blocked by this gate — the floor exists to stop the
+        planner from *choosing* a narrow window, not to stop uncalibrated models
+        from loading.
+        """
+        if profile is None:
+            return 0
+        try:
+            fraction = float(profile.min_context_fraction or 0.0)
+        except (TypeError, ValueError):
+            return 0
+        fraction = max(0.0, min(1.0, fraction))
+        if fraction <= 0:
+            return 0
+        native = cls._native_context_length(profile)
+        if native <= 0:
+            return 0
+        return int(native * fraction)
+
+    @staticmethod
     def _parse_kv_max_model_len_pairs(profile: ModelProfile) -> List[tuple[float, int]]:
         """Parse and normalize ``kv_cache_to_max_model_len_pairs`` from profile."""
         raw_pairs = profile.kv_cache_to_max_model_len_pairs or []
@@ -5759,17 +5850,26 @@ class CapacityPlanner:
         cls,
         profile: Optional[ModelProfile],
         available_for_kv_mb: Optional[float],
+        min_context_tokens: int = 0,
     ) -> tuple[Optional[float], Optional[int]]:
         """Select (kv_mb, max_model_len) using the calibrated pair curve.
 
         Rule:
-        1. keep fitting pairs (kv <= free)
-        2. pick highest max_model_len among fitting (never sacrifice context)
+        1. keep fitting pairs (kv <= free) that serve at least
+           ``min_context_tokens`` — the operator's floor for this model, so a
+           lane is never *chosen* below it even on a load path that bypasses
+           ``_passes_minimum_load_feasibility`` (contention, eviction-backed
+           cold load, request-time cold load)
+        2. pick highest max_model_len among those (never sacrifice context)
         3. among pairs serving that context, prefer the SMALLEST kv whose
            calibrated parallelity >= _MIN_TARGET_PARALLELITY so the lane can
            serve >=2 concurrent full-context requests; if none reach the target
            within budget, take the fitting pair with the HIGHEST parallelity;
            if parallelity is unknown (legacy profile), fall back to smallest kv.
+
+        Returns (None, None) when nothing qualifies, including when only
+        below-floor pairs would fit — the caller decides whether to defer or to
+        place anyway.
         """
         if profile is None:
             return None, None
@@ -5780,6 +5880,8 @@ class CapacityPlanner:
             fitting = parsed_pairs
         else:
             fitting = [t for t in parsed_pairs if t[0] <= float(available_for_kv_mb)]
+        if min_context_tokens > 0:
+            fitting = [t for t in fitting if t[1] >= min_context_tokens]
         if not fitting:
             return None, None
         best_max_model_len = max(mml for _, mml, _ in fitting)

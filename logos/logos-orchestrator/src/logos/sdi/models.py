@@ -347,6 +347,15 @@ class ModelProfile:
     enforce_eager_at_calibration: Optional[bool] = None
     kv_per_token_bytes: Optional[int] = None
     max_context_length: Optional[int] = None
+    # Smallest share of the model's own context length a lane may be placed
+    # with, as a fraction in [0, 1]. Set per model by the operator under
+    # ``logos.capabilities_models`` in the worker's config.yml and reported here
+    # in the runtime snapshot; the worker's hardware is what decides which
+    # windows are reachable, so that is where the floor belongs.
+    #
+    # None means the worker sets no floor for this model — place it at any
+    # width, which is what happened before this field existed.
+    min_context_fraction: Optional[float] = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
     residency_source: Optional[str] = None
@@ -427,6 +436,7 @@ class ModelProfile:
             "enforce_eager_at_calibration": self.enforce_eager_at_calibration,
             "kv_per_token_bytes": self.kv_per_token_bytes,
             "max_context_length": self.max_context_length,
+            "min_context_fraction": self.min_context_fraction,
             "measurement_count": self.measurement_count,
             "last_measured_epoch": self.last_measured_epoch,
             "residency_source": self.residency_source,

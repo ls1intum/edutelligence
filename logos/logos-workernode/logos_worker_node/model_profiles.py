@@ -112,6 +112,17 @@ class ModelProfileRecord:
     tensor_parallel_size: int | None = None
     kv_per_token_bytes: int | None = None  # manual override only
     max_context_length: int | None = None  # manual override only
+    # Smallest share of this model's own context length a lane here may serve,
+    # as a fraction in [0, 1]. Operator-set per model under
+    # logos.capabilities_models; the master's capacity planner refuses to place
+    # a lane below it.
+    #
+    # It exists because a lane's context window comes from whatever KV cache
+    # fits at load time, while the API can only promise the smallest window
+    # across the cluster — so one narrow lane defines what every client is told
+    # the model can do. 1.0 means "full context or nothing", 0 (or unset) means
+    # place it at any width. Manual override only; calibration never sets it.
+    min_context_fraction: float | None = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
     # Where base_residency_mb came from — also determines its semantics:
@@ -230,6 +241,7 @@ class ModelProfileRecord:
             "tensor_parallel_size": self.tensor_parallel_size,
             "kv_per_token_bytes": self.kv_per_token_bytes,
             "max_context_length": self.max_context_length,
+            "min_context_fraction": self.min_context_fraction,
             "measurement_count": self.measurement_count,
             "last_measured_epoch": self.last_measured_epoch,
             "residency_source": self.residency_source,
@@ -405,6 +417,18 @@ class ModelProfileRegistry:
                 applied.append(
                     "kv_cache_to_max_model_len_pairs=" f"{len(profile.kv_cache_to_max_model_len_pairs or [])}"
                 )
+        if "min_context_fraction" in overrides:
+            try:
+                fraction = float(overrides["min_context_fraction"])
+            except (TypeError, ValueError):
+                logger.warning(
+                    "%s: min_context_fraction=%r is not a number — ignoring it",
+                    model_name,
+                    overrides["min_context_fraction"],
+                )
+            else:
+                profile.min_context_fraction = max(0.0, min(1.0, fraction))
+                applied.append(f"min_context_fraction={profile.min_context_fraction:.2f}")
         if "engine" in overrides:
             profile.engine = str(overrides["engine"])
             applied.append(f"engine={profile.engine}")
@@ -786,6 +810,7 @@ class ModelProfileRegistry:
                     tensor_parallel_size=profile_data.get("tensor_parallel_size"),
                     kv_per_token_bytes=profile_data.get("kv_per_token_bytes"),
                     max_context_length=profile_data.get("max_context_length"),
+                    min_context_fraction=profile_data.get("min_context_fraction"),
                     measurement_count=int(profile_data.get("measurement_count", 0) or 0),
                     last_measured_epoch=float(profile_data.get("last_measured_epoch", 0.0) or 0.0),
                     residency_source=persisted_source or "cached",
