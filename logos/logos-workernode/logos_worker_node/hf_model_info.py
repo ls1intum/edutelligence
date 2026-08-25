@@ -38,6 +38,7 @@ MIN_VIABLE_CONTEXT_TOKENS = 2048
 # after an actual load attempt". These fire before any process is spawned.
 REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS = "insufficient-vram-for-weights"
 REASON_INSUFFICIENT_VRAM_FOR_MIN_KV = "insufficient-vram-for-min-kv-cache"
+REASON_MODEL_NOT_FOUND = "model-not-found"
 
 _DTYPE_BYTES = {
     "float32": 4,
@@ -93,14 +94,22 @@ def _derive_kv_per_token_bytes(config: dict[str, Any], kv_cache_dtype_override: 
 def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> HfModelMetadata:
     try:
         from huggingface_hub import HfApi, hf_hub_download
+        from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
     except ImportError as exc:
         return HfModelMetadata(source="error:huggingface_hub-unavailable", error=str(exc))
 
+    # GatedRepoError is a RepositoryNotFoundError subclass (a real, existing
+    # repo the caller just lacks access to) — must be excluded from the
+    # not-found verdict, or a gated model would wrongly look nonexistent.
     weight_bytes: int | None = None
     try:
         info = HfApi().model_info(model_name, token=token, files_metadata=True, timeout=timeout_s)
         sizes = [s.size for s in (info.siblings or []) if s.rfilename.endswith(".safetensors") and s.size]
         weight_bytes = sum(sizes) if sizes else None
+    except GatedRepoError as exc:
+        logger.debug("[HF precheck] model_info gated for %s: %s", model_name, exc)
+    except RepositoryNotFoundError as exc:
+        return HfModelMetadata(source="error:model-not-found", error=str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.debug("[HF precheck] model_info failed for %s: %s", model_name, exc)
 
@@ -112,6 +121,10 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
             config = json.load(f)
         kv_per_token_bytes = _derive_kv_per_token_bytes(config, None)
         max_context_length = _get_config_field(config, "max_position_embeddings")
+    except GatedRepoError as exc:
+        logger.debug("[HF precheck] config.json gated for %s: %s", model_name, exc)
+    except RepositoryNotFoundError as exc:
+        return HfModelMetadata(source="error:model-not-found", error=str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.debug("[HF precheck] config.json fetch failed for %s: %s", model_name, exc)
 

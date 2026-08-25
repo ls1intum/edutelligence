@@ -795,6 +795,7 @@ class LogosBridgeClient:
             MIN_VIABLE_CONTEXT_TOKENS,
             REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
             REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+            REASON_MODEL_NOT_FOUND,
             fetch_hf_model_metadata,
             min_feasible_tp,
         )
@@ -822,6 +823,14 @@ class LogosBridgeClient:
             "fit_tp_current": None,
             "unsupported_reason": None,
         }
+
+        # A repo that doesn't exist can never work here, on any node — skip
+        # before even querying VRAM.
+        if hf_meta is not None and hf_meta.source == "error:model-not-found":
+            result["unsupported_reason"] = REASON_MODEL_NOT_FOUND
+            if persist:
+                model_profiles.mark_calibration_unsupported(model_name, True, REASON_MODEL_NOT_FOUND)
+            return result
 
         if hf_meta is None or not hf_meta.weight_bytes:
             return result

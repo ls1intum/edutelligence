@@ -1324,6 +1324,36 @@ async def test_run_compatibility_precheck_rpc_returns_fit_result(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_run_compatibility_precheck_skips_nonexistent_repo_without_querying_vram(tmp_path, monkeypatch):
+    """A nonexistent HF repo can never work on any node — skip immediately,
+    without even querying GPU VRAM, and mark it a real (idle-based) verdict."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_MODEL_NOT_FOUND, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:model-not-found"),
+    )
+    gpu_query = MagicMock(side_effect=AssertionError("must not query VRAM for a nonexistent repo"))
+    monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", gpu_query)
+
+    response = await client._execute_command(  # noqa: SLF001
+        "run_compatibility_precheck", {"model": "org/does-not-exist"}
+    )
+
+    assert response["unsupported_reason"] == REASON_MODEL_NOT_FOUND
+    gpu_query.assert_not_called()
+    profile = app.state.model_profiles.get_profile("org/does-not-exist")
+    assert profile.calibration_unsupported is True
+    assert profile.calibration_unsupported_reason == REASON_MODEL_NOT_FOUND
+
+
+@pytest.mark.asyncio
 async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, monkeypatch):
     """A model that fits on an empty node but not around today's live
     traffic is reported as such WITHOUT being marked permanently unsupported
@@ -1800,6 +1830,7 @@ async def test_an_unreadable_profile_store_is_left_alone(tmp_path, monkeypatch):
     result. One lost measurement is recoverable; the file is not."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
@@ -1815,6 +1846,10 @@ async def test_an_unreadable_profile_store_is_left_alone(tmp_path, monkeypatch):
     profiles_path.write_text("model_profiles:\n  org/other: {unterminated\n")
     corrupt = profiles_path.read_text()
 
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:no-data"),
+    )
     monkeypatch.setattr(
         "logos_worker_node.calibration.calibrate_with_tp_escalation",
         lambda plan, **kwargs: CalibrationResult(
@@ -1845,6 +1880,7 @@ async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
     disk size recorded elsewhere — survive the write."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult, load_existing_profiles, save_profiles
+    from logos_worker_node.hf_model_info import HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
@@ -1865,6 +1901,10 @@ async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
         },
     )
 
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:no-data"),
+    )
     monkeypatch.setattr(
         "logos_worker_node.calibration.calibrate_with_tp_escalation",
         lambda plan, **kwargs: CalibrationResult(

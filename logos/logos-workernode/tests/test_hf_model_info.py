@@ -18,6 +18,13 @@ from logos_worker_node.hf_model_info import (
 )
 
 
+def _hf_http_error(cls, message: str):
+    response = MagicMock()
+    response.status_code = 404
+    response.headers = {}
+    return cls(message, response=response)
+
+
 def test_derive_kv_per_token_bytes():
     # Standard case: head_dim = hidden_size / num_attention_heads.
     llama_like = {
@@ -102,6 +109,27 @@ def test_fetch_hf_model_metadata_never_raises_on_failure(hf_api_patch):
 
     assert meta.weight_bytes is None
     assert meta.source.startswith("error:")
+
+
+def test_fetch_hf_model_metadata_distinguishes_not_found_from_gated():
+    from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
+
+    # A genuinely nonexistent repo is a definitive verdict.
+    with patch(
+        "huggingface_hub.HfApi",
+        side_effect=_hf_http_error(RepositoryNotFoundError, "not found"),
+    ):
+        meta = fetch_hf_model_metadata("org/does-not-exist", token=None)
+    assert meta.source == "error:model-not-found"
+
+    # GatedRepoError is a RepositoryNotFoundError subclass (a real repo the
+    # caller just lacks access to) — must NOT be classified as not-found.
+    with (
+        patch("huggingface_hub.HfApi", side_effect=_hf_http_error(GatedRepoError, "gated")),
+        patch("huggingface_hub.hf_hub_download", side_effect=_hf_http_error(GatedRepoError, "gated")),
+    ):
+        meta = fetch_hf_model_metadata("org/gated-model", token=None)
+    assert meta.source != "error:model-not-found"
 
 
 def test_fetch_hf_model_metadata_handles_huggingface_hub_unavailable(monkeypatch):
