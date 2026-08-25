@@ -58,11 +58,28 @@ TUTOR_VERIFIED_SOURCES = {
 # deployment would need a durable tombstone/version store instead.
 _write_coordination_lock = threading.Lock()
 _delete_generation: Dict[str, int] = {}
+# Same idea one scope up: a channel purge cannot bump the per-thread counters
+# (its keys are not known up front), so it bumps a per-channel counter instead
+# and ingestions check both. Without it, an ingestion in flight when a channel is
+# deleted or made private re-inserts its entry afterwards, and content from a
+# channel the course can no longer read keeps being served (req. 5).
+_channel_delete_generation: Dict[str, int] = {}
 
 
 def _current_delete_generation(obj_uuid: str) -> int:
     with _write_coordination_lock:
         return _delete_generation.get(obj_uuid, 0)
+
+
+def _channel_key(conversation_id: str, course_id: int) -> str:
+    return f"{course_id}:{conversation_id}"
+
+
+def _current_channel_delete_generation(conversation_id: str, course_id: int) -> int:
+    with _write_coordination_lock:
+        return _channel_delete_generation.get(
+            _channel_key(conversation_id, course_id), 0
+        )
 
 
 def _truncate(text: str, limit: int = 160) -> str:
@@ -149,12 +166,27 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
         """
         return _current_delete_generation(cls._deterministic_uuid(post_id, course_id))
 
+    @classmethod
+    def channel_delete_generation_for(cls, conversation_id: str, course_id: int) -> int:
+        """Current channel delete counter, for sampling at webhook accept time.
+
+        Channel-scoped counterpart of :meth:`delete_generation_for`, sampled at the
+        same moment and for the same reason: a channel purge accepted after this
+        ingestion must not be undone by it.
+        """
+        return _current_channel_delete_generation(conversation_id, course_id)
+
     @observe(name="Course Memory Ingestion Pipeline")
-    def __call__(self, start_delete_gen: Optional[int] = None) -> bool:
+    def __call__(
+        self,
+        start_delete_gen: Optional[int] = None,
+        start_channel_delete_gen: Optional[int] = None,
+    ) -> bool:
         """Run the ingestion.
 
-        ``start_delete_gen`` is the delete counter sampled by the caller when the
-        request was accepted; omitted, it is sampled here instead.
+        ``start_delete_gen`` and ``start_channel_delete_gen`` are the thread- and
+        channel-scoped delete counters sampled by the caller when the request was
+        accepted; omitted, they are sampled here instead.
         """
         try:
             # Kill-switch: disabling course memory must stop writes, not just
@@ -187,6 +219,10 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
                     self.dto.post_id, self.dto.course_id
                 )
                 start_delete_gen = _current_delete_generation(obj_uuid)
+            if start_channel_delete_gen is None:
+                start_channel_delete_gen = _current_channel_delete_generation(
+                    self.dto.conversation_id, self.dto.course_id
+                )
 
             self.callback.update()
             question, answer = self.extract_qa()
@@ -200,7 +236,12 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
             )
 
             self.callback.update()
-            self.upsert(question, answer, start_delete_gen=start_delete_gen)
+            self.upsert(
+                question,
+                answer,
+                start_delete_gen=start_delete_gen,
+                start_channel_delete_gen=start_channel_delete_gen,
+            )
             self.callback.finish(tokens=self.tokens)
             logger.info(
                 "Course memory ingestion finished for thread %s (triggered by message %s)",
@@ -368,13 +409,18 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
         return generate_uuid5(f"{course_id}:{post_id}")
 
     def upsert(
-        self, question: str, answer: str, start_delete_gen: Optional[int] = None
+        self,
+        question: str,
+        answer: str,
+        start_delete_gen: Optional[int] = None,
+        start_channel_delete_gen: Optional[int] = None,
     ):
         """Embed the question and insert/replace the entry keyed on postId.
 
-        ``start_delete_gen`` is the delete counter snapshot taken before
-        extraction; if a deletion bumped it since, the write is skipped so a
-        concurrent delete is not undone by this now-stale ingestion.
+        ``start_delete_gen`` / ``start_channel_delete_gen`` are the thread- and
+        channel-scoped delete counter snapshots taken before extraction; if either
+        was bumped since, the write is skipped so a concurrent delete of the thread
+        or of its whole channel is not undone by this now-stale ingestion.
         """
         vec = self.llm_embedding.embed(question)
         entry = CourseMemoryEntryDTO(
@@ -401,6 +447,19 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
                     "Skipping course memory write for thread %s: an entry "
                     "deletion occurred during ingestion",
                     self.dto.post_id,
+                )
+                return
+            channel_key = _channel_key(self.dto.conversation_id, self.dto.course_id)
+            if (
+                start_channel_delete_gen is not None
+                and _channel_delete_generation.get(channel_key, 0)
+                != start_channel_delete_gen
+            ):
+                logger.info(
+                    "Skipping course memory write for thread %s: channel %s was "
+                    "purged during ingestion",
+                    self.dto.post_id,
+                    self.dto.conversation_id,
                 )
                 return
             with batch_update_lock:
@@ -473,14 +532,18 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
         eligibility is only checked when an entry is written, so without this an entry
         would keep being served after its source stopped being readable by the course.
 
-        Unlike :meth:`delete_for_thread` this cannot bump the per-key delete counters:
-        the keys are not known up front, and an ingestion already in flight for one of
-        those threads may still land afterwards. Deleting a channel is a rare
-        administrative action and Artemis stops emitting ingestions for it at the same
-        moment, so the window is small; re-running the deletion clears any straggler.
+        Unlike :meth:`delete_for_thread` this cannot bump the per-thread delete
+        counters — the keys are not known up front — so it bumps a per-channel counter
+        instead. An ingestion accepted before the purge sampled the old value and is
+        refused at write time (see :meth:`upsert`), which keeps content from a deleted
+        or newly private channel from being re-inserted after the purge.
         """
         try:
             with _write_coordination_lock, batch_update_lock:
+                channel_key = _channel_key(conversation_id, course_id)
+                _channel_delete_generation[channel_key] = (
+                    _channel_delete_generation.get(channel_key, 0) + 1
+                )
                 result = self.collection.data.delete_many(
                     where=Filter.by_property(
                         CourseMemorySchema.CONVERSATION_ID.value

@@ -22,6 +22,7 @@ def _make_pipeline(
     existing_source: str = None,
     post_id: str = "post-1",
     message_id: str = "answer-1",
+    conversation_id: str = "conv-1",
 ):
     pipeline = object.__new__(CourseMemoryIngestionPipeline)
     pipeline.llm_embedding = MagicMock()
@@ -37,7 +38,7 @@ def _make_pipeline(
         course_id=7,
         post_id=post_id,
         message_id=message_id,
-        conversation_id="conv-1",
+        conversation_id=conversation_id,
         source=source,
         verified_at=None,
         verified_by=None,
@@ -209,6 +210,56 @@ def test_generation_sampled_in_the_worker_still_writes_without_a_delete():
     pipeline.extract_qa = MagicMock(return_value=("q", "a"))
 
     assert pipeline() is True
+
+    pipeline.collection.data.insert.assert_called_once()
+
+
+def test_channel_purge_during_ingestion_prevents_stale_write():
+    """A channel purge mid-ingestion must not be undone by the older write.
+
+    The purge cannot bump the per-thread counter — it does not know the thread
+    keys — so the channel-scoped counter is what stops the entry from coming back
+    after its source channel was deleted or made private (req. 5).
+    """
+    pipeline = _make_pipeline(exists=False, conversation_id="conv-purged")
+    start = cm_module._current_channel_delete_generation("conv-purged", 7)
+    pipeline.delete_for_conversation("conv-purged", 7)
+
+    pipeline.upsert("q", "a", start_channel_delete_gen=start)
+
+    pipeline.collection.data.insert.assert_not_called()
+    pipeline.collection.data.replace.assert_not_called()
+
+
+def test_channel_accepted_generation_survives_a_late_worker_start():
+    """An ingestion accepted before a channel purge must not resurrect its entry.
+
+    Same accept-time sampling as the per-thread case: the worker only starts after
+    the later-accepted purge has already finished.
+    """
+    pipeline = _make_pipeline(exists=False, conversation_id="conv-late")
+    accepted_gen = CourseMemoryIngestionPipeline.channel_delete_generation_for(
+        "conv-late", 7
+    )
+    pipeline.delete_for_conversation("conv-late", 7)
+    pipeline.dto.is_public_channel = True
+    pipeline.tokens = []
+    pipeline.callback = _real_callback()
+    pipeline.extract_qa = MagicMock(return_value=("q", "a"))
+
+    assert pipeline(start_channel_delete_gen=accepted_gen) is True
+
+    pipeline.collection.data.insert.assert_not_called()
+    pipeline.collection.data.replace.assert_not_called()
+
+
+def test_purge_of_another_channel_does_not_block_the_write():
+    """The counter is per channel, so an unrelated purge must not skip this write."""
+    pipeline = _make_pipeline(exists=False, conversation_id="conv-kept")
+    start = cm_module._current_channel_delete_generation("conv-kept", 7)
+    pipeline.delete_for_conversation("conv-other", 7)
+
+    pipeline.upsert("q", "a", start_channel_delete_gen=start)
 
     pipeline.collection.data.insert.assert_called_once()
 

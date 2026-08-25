@@ -325,12 +325,14 @@ def run_course_memory_ingestion_worker(
     dto: CourseMemoryIngestionExecutionDTO,
     variant_id: str,
     start_delete_gen: Optional[int] = None,
+    start_channel_delete_gen: Optional[int] = None,
 ):
     """Run the course memory ingestion pipeline in a separate thread.
 
-    ``start_delete_gen`` is the thread's delete counter as sampled when the
-    request was accepted, so a delete accepted afterwards cannot be undone by
-    this ingestion even if the OS schedules this worker later.
+    ``start_delete_gen`` / ``start_channel_delete_gen`` are the thread- and
+    channel-scoped delete counters as sampled when the request was accepted, so a
+    deletion accepted afterwards — of this thread or of its whole channel — cannot
+    be undone by this ingestion even if the OS schedules this worker later.
     """
     callback = None
     try:
@@ -351,7 +353,10 @@ def run_course_memory_ingestion_worker(
             variant=variant,
             local=is_local,
         )
-        pipeline(start_delete_gen=start_delete_gen)
+        pipeline(
+            start_delete_gen=start_delete_gen,
+            start_channel_delete_gen=start_channel_delete_gen,
+        )
     except Exception as e:
         logger.error("Error in course memory ingestion pipeline", exc_info=e)
         # If the pipeline never ran (e.g. Weaviate/variant init failed), its own
@@ -398,9 +403,14 @@ def course_memory_ingestion_webhook(dto: CourseMemoryIngestionExecutionDTO):
     start_delete_gen = CourseMemoryIngestionPipeline.delete_generation_for(
         dto.post_id, dto.course_id
     )
+    start_channel_delete_gen = (
+        CourseMemoryIngestionPipeline.channel_delete_generation_for(
+            dto.conversation_id, dto.course_id
+        )
+    )
     thread = Thread(
         target=run_course_memory_ingestion_worker,
-        args=(dto, variant, start_delete_gen),
+        args=(dto, variant, start_delete_gen, start_channel_delete_gen),
     )
     thread.start()
 
