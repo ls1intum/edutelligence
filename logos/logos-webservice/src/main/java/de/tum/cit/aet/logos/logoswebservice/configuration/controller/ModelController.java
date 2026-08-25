@@ -141,6 +141,10 @@ public class ModelController {
                 .body(Map.of("error", "ids are required"));
         }
 
-        return ResponseEntity.ok(modelService.getModelCapabilities(req.ids()));
+        try {
+            return ResponseEntity.ok(modelService.getModelCapabilities(req.ids()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        }
     }
 }
