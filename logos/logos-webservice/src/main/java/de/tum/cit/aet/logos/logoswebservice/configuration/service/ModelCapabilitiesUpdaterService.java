@@ -66,6 +66,10 @@ public class ModelCapabilitiesUpdaterService {
 
     @Async
     public void updateCapabilitiesForModelAsync(int modelId, String modelName) {
+        updateCapabilitiesForModel(modelId, modelName);
+    }
+
+    public void updateCapabilitiesForModel(int modelId, String modelName) {
         Map<String, Object> fullCatalog = loadLocalCatalog();
         if (fullCatalog == null) return;
         try {
@@ -75,11 +79,34 @@ public class ModelCapabilitiesUpdaterService {
         }
     }
 
+    boolean testExtractAndStoreCapabilities(
+            Map<String, Object> catalog,
+            int modelId,
+            String modelName) {
+        return extractAndStoreCapabilities(catalog, modelId, modelName);
+    }
+
+    String testExtractModelName(String catalogKey) {
+        return extractModelName(catalogKey);
+    }
+
+    String testNormalizeModelName(String modelName) {
+        return normalizeModelName(modelName);
+    }
+
+    boolean testModelNamesMatch(String requestedModelName, String catalogModelName) {
+        return modelNamesMatch(requestedModelName, catalogModelName);
+    }
+
     @SuppressWarnings("unchecked")
     private boolean extractAndStoreCapabilities(
             Map<String, Object> catalog,
             int modelId,
             String modelName) {
+        if (modelCapabilitiesPersistenceService.isManualOverride(modelId)) {
+            log.debug("capabilities_updater: skipping model '{}' (id={}): manual override is active", modelName, modelId);
+            return false;
+        }
         String normalizedModelName = normalizeModelName(modelName);
         boolean found = false;
         boolean supportsFunctionCalling = false;
@@ -115,10 +142,13 @@ public class ModelCapabilitiesUpdaterService {
             );
         }
         if (!found) {
+            // A renamed model that is unknown to the catalog keeps no stale flags:
+            // drop the row so the UI shows "capabilities unknown" instead.
             log.debug(
-                "capabilities_updater: model '{}' not found in local JSON registry",
+                "capabilities_updater: model '{}' not found in local JSON registry, deleting stored capabilities",
                 modelName
             );
+            modelCapabilitiesPersistenceService.deleteModelCapabilities(modelId);
             return false;
         }
         modelCapabilitiesPersistenceService.updateModelCapabilities(

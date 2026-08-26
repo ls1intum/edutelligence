@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -29,13 +30,19 @@ public class ModelService {
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelCapabilitiesRepository modelCapabilitiesRepository;
+    private final ModelCapabilitiesPersistenceService modelCapabilitiesPersistenceService;
+    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
 
     public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
-                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository) {
+                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository,
+                        ModelCapabilitiesPersistenceService modelCapabilitiesPersistenceService,
+                        ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService) {
         this.modelRepository = modelRepository;
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelCapabilitiesRepository = modelCapabilitiesRepository;
+        this.modelCapabilitiesPersistenceService = modelCapabilitiesPersistenceService;
+        this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
@@ -150,6 +157,14 @@ public class ModelService {
     }
 
     public Map<Integer, ModelCapabilitiesDTO> getModelCapabilities(List<Integer> modelIds) {
+        Set<Integer> existingModelIds = modelRepository.findAllById(modelIds).stream()
+            .map(Model::getId)
+            .collect(Collectors.toSet());
+        for (Integer modelId : modelIds) {
+            if (!existingModelIds.contains(modelId)) {
+                throw new IllegalArgumentException("Model not found: " + modelId);
+            }
+        }
         return modelCapabilitiesRepository.findByModelIdIn(modelIds)
             .stream()
             .map(ModelService::toModelCapabilitiesDTO)
@@ -159,12 +174,54 @@ public class ModelService {
             ));
     }
 
+    @Transactional
+    public Map<String, Object> setModelCapabilities(
+            Integer modelId,
+            boolean supportsFunctionCalling,
+            boolean supportsVision,
+            boolean supportsReasoning) {
+        modelRepository.findById(modelId)
+            .orElseThrow(() -> new IllegalArgumentException("Model not found: " + modelId));
+        modelCapabilitiesPersistenceService.setManualCapabilities(
+            modelId,
+            supportsFunctionCalling,
+            supportsVision,
+            supportsReasoning
+        );
+        return capabilitiesState(modelId);
+    }
+
+    @Transactional
+    public Map<String, Object> resetModelCapabilities(Integer modelId) {
+        Model model = modelRepository.findById(modelId)
+            .orElseThrow(() -> new IllegalArgumentException("Model not found: " + modelId));
+        modelCapabilitiesPersistenceService.clearManualOverride(modelId);
+        // Synchronous re-sync so the response (and the UI) reflects the catalog state
+        // immediately; the guard in the updater makes this a no-op only if the override
+        // was not actually cleared.
+        modelCapabilitiesUpdaterService.updateCapabilitiesForModel(modelId, model.getName());
+        return capabilitiesState(modelId);
+    }
+
+    private Map<String, Object> capabilitiesState(Integer modelId) {
+        ModelCapabilities capabilities = modelCapabilitiesRepository.findByModelId(modelId)
+            .orElse(null);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("model_id", modelId);
+        m.put("supports_function_calling", capabilities != null && capabilities.getSupportsFunctionCalling());
+        m.put("supports_vision", capabilities != null && capabilities.getSupportsVision());
+        m.put("supports_reasoning", capabilities != null && capabilities.getSupportsReasoning());
+        m.put("manual_override", capabilities != null && capabilities.getManualOverride());
+        return m;
+    }
+
     private static ModelCapabilitiesDTO toModelCapabilitiesDTO(ModelCapabilities capabilities) {
         return new ModelCapabilitiesDTO(
             capabilities.getModelId(),
             capabilities.getSupportsFunctionCalling(),
             capabilities.getSupportsVision(),
-            capabilities.getSupportsReasoning()
+            capabilities.getSupportsReasoning(),
+            capabilities.getManualOverride()
         );
     }
 }

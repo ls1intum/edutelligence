@@ -112,6 +112,17 @@
         @if (getCapabilities(model.id); as capabilities) {
           <div class="capability-chips">
 
+            @if (capabilities.manual_override) {
+              <span
+                class="capability-chip capability-chip--manual"
+                role="img"
+                aria-label="Manually overridden"
+                title="Manually overridden — automatic catalog updates are disabled for this model"
+              >
+                <i class="pi pi-lock" aria-hidden="true"></i>
+              </span>
+            }
+
             @if (capabilities.supports_function_calling) {
               <span
                 class="capability-chip capability-chip--supported"
@@ -146,6 +157,7 @@
             }
 
             @if (
+              !capabilities.manual_override &&
               !capabilities.supports_function_calling &&
               !capabilities.supports_vision &&
               !capabilities.supports_reasoning
@@ -510,6 +522,57 @@
         />
       </div>
     </div>
+
+    <p class="form-section-label form-section-label--mt">Capabilities</p>
+    <div class="cap-checks">
+      <label class="cap-check">
+        <input
+          type="checkbox"
+          class="cap-check-input"
+          [checked]="editCapFunctionCalling()"
+          (change)="toggleCapFunctionCalling()"
+          [disabled]="editLoading()"
+        />
+        <span class="cap-check-icon"><i class="pi pi-code" aria-hidden="true"></i></span>
+        Function Calling
+      </label>
+      <label class="cap-check">
+        <input
+          type="checkbox"
+          class="cap-check-input"
+          [checked]="editCapVision()"
+          (change)="toggleCapVision()"
+          [disabled]="editLoading()"
+        />
+        <span class="cap-check-icon"><i class="pi pi-eye" aria-hidden="true"></i></span>
+        Vision
+      </label>
+      <label class="cap-check">
+        <input
+          type="checkbox"
+          class="cap-check-input"
+          [checked]="editCapReasoning()"
+          (change)="toggleCapReasoning()"
+          [disabled]="editLoading()"
+        />
+        <span class="cap-check-icon"><i class="pi pi-lightbulb" aria-hidden="true"></i></span>
+        Reasoning
+      </label>
+    </div>
+    <p class="cap-hint">
+      Changing a flag manually disables automatic catalog updates for this model
+      until the override is reset.
+    </p>
+    @if (editTargetManualOverride()) {
+      <button
+        class="btn-secondary cap-reset"
+        type="button"
+        [disabled]="editLoading()"
+        (click)="resetCapabilities()"
+      >
+        Reset to automatic
+      </button>
+    }
 
     @if (editError()) {
       <app-error-message [message]="editError()!" />
