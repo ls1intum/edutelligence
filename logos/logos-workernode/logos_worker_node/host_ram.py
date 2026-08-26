@@ -110,9 +110,7 @@ def _walk_process_tree_macos(root_pid: int, max_pids: int) -> set[int]:
 
     def _children(pid: int) -> list[int]:
         try:
-            result = subprocess.run(
-                ["pgrep", "-P", str(pid)], capture_output=True, text=True, timeout=5
-            )
+            result = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True, timeout=5)
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return []
         # pgrep exits 1 when there are simply no children — not an error.

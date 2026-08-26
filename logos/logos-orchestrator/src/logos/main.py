@@ -512,9 +512,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
-        "telemetry_available": bool(
-            devices.get("telemetry_available", devices.get("nvidia_smi_available", False))
-        ),
+        "telemetry_available": bool(devices.get("telemetry_available", devices.get("nvidia_smi_available", False))),
         "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),

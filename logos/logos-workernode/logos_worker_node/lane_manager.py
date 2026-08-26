@@ -13,6 +13,8 @@ from typing import Any, Awaitable, Callable, Iterable
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.calibration import calibration_gpu_slice
 from logos_worker_node.host_ram import measure_process_tree_host_ram_mb
+from logos_worker_node.metal import is_metal_backend
+from logos_worker_node.metal_process import MetalVllmProcessHandle
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import (
     DeviceSummary,
@@ -28,8 +30,6 @@ from logos_worker_node.models import (
     VllmConfig,
     VllmEngineConfig,
 )
-from logos_worker_node.metal import is_metal_backend
-from logos_worker_node.metal_process import MetalVllmProcessHandle
 from logos_worker_node.ollama_process import OllamaProcessHandle
 from logos_worker_node.vllm_process import VllmProcessHandle, effective_gmu
 

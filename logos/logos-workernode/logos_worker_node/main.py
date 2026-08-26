@@ -22,10 +22,10 @@ from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
 from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 from logos_worker_node.config import get_state_dir, load_config
 from logos_worker_node.gpu import GpuMetricsCollector
-from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
 from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
+from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
 from logos_worker_node.model_cache import create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import model_can_sleep

@@ -445,9 +445,7 @@ class LogosNodeDataProvider:
             # this a Mac worker's real free/total figures are dropped and
             # total_vram_mb silently falls back to the value recorded at
             # registration time.
-            has_telemetry = bool(devices.get("telemetry_available")) or bool(
-                devices.get("nvidia_smi_available")
-            )
+            has_telemetry = bool(devices.get("telemetry_available")) or bool(devices.get("nvidia_smi_available"))
             if isinstance(devices, dict) and has_telemetry:
                 runtime_free_mb = int(devices.get("free_memory_mb", 0) or 0)
                 runtime_total_mb = int(devices.get("total_memory_mb", 0) or 0)

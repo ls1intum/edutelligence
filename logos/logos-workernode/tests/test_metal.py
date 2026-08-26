@@ -262,9 +262,7 @@ class TestMetalMetricsCollector:
         assert device.name == "Apple M3 Pro"
         assert device.extra["unified_memory"] is True
         assert device.extra["max_buffer_length_mb"] == pytest.approx(22613000192 / 1024**2)
-        assert snapshot.free_memory_mb == pytest.approx(
-            snapshot.total_memory_mb - snapshot.used_memory_mb, abs=0.1
-        )
+        assert snapshot.free_memory_mb == pytest.approx(snapshot.total_memory_mb - snapshot.used_memory_mb, abs=0.1)
 
     @pytest.mark.asyncio
     async def test_used_memory_tracks_wired_pages(self) -> None:
@@ -293,9 +291,7 @@ class TestMetalMetricsCollector:
         assert collector.available is True
         # Degraded, and it must say so — the estimate is not authoritative.
         assert "estimated" in snapshot.degraded_reason
-        assert snapshot.total_memory_mb == pytest.approx(
-            38654705664 * metal._DEFAULT_WIRED_FRACTION / 1024**2, abs=1
-        )
+        assert snapshot.total_memory_mb == pytest.approx(38654705664 * metal._DEFAULT_WIRED_FRACTION / 1024**2, abs=1)
 
     @pytest.mark.asyncio
     async def test_honours_an_explicit_wired_limit(self) -> None:

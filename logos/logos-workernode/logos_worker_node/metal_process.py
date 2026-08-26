@@ -46,14 +46,14 @@ import os
 from pathlib import Path
 from typing import Any
 
-from logos_worker_node.models import LaneConfig, MetalConfig, OllamaConfig, VllmEngineConfig
+from logos_worker_node.models import LaneConfig, MetalConfig
 from logos_worker_node.vllm_process import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
+    VllmProcessHandle,
     _infer_default_chat_template_kwargs,
     _infer_reasoning_parser,
     _infer_tool_call_parser,
     _resolve_chat_template,
-    VllmProcessHandle,
 )
 
 logger = logging.getLogger(__name__)

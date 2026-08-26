@@ -36,7 +36,6 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 from logos_worker_node.models import DeviceInfo, DeviceSummary
 
@@ -160,6 +159,7 @@ def read_swap_mb() -> tuple[float, float]:
     raw = _run(["sysctl", "-n", "vm.swapusage"])
     if raw is None:
         return 0.0, 0.0
+
     # Format: "total = 2048.00M  used = 512.25M  free = 1535.75M  (encrypted)"
     def _field(name: str) -> float:
         match = re.search(rf"{name}\s*=\s*([\d.]+)([MGK])", raw)

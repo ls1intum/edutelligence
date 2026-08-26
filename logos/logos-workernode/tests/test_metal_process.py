@@ -7,8 +7,6 @@ rejected on the other. These tests pin exactly which flags may appear.
 
 from __future__ import annotations
 
-import os
-import shutil
 from pathlib import Path
 from unittest.mock import patch
 

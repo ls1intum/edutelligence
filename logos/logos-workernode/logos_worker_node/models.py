@@ -408,9 +408,7 @@ class MetalConfig(BaseModel):
         cleaned = (value or "").strip()
         valid = {"", "auto", "text-only-compat", "multimodal-native"}
         if cleaned not in valid:
-            raise ValueError(
-                f"Invalid multimodal_mode: {value!r}. Use one of {sorted(valid - {''})}, or leave empty."
-            )
+            raise ValueError(f"Invalid multimodal_mode: {value!r}. Use one of {sorted(valid - {''})}, or leave empty.")
         return cleaned
 
 
