@@ -10,6 +10,13 @@ per-GPU VRAM in ``_KV_CACHE_MIN_STEP_MB`` steps) and records the
 ``(kv_cache_mb, max_model_len)`` curve. It measures real VRAM in awake and
 sleeping states and persists the results to ``model_profiles.yml``.
 
+Sleep capability is verified, not assumed: after the sleep measurement the
+model is woken again (``/wake_up``) and must answer a second test request.
+The capacity planner puts this lane to sleep in production on the strength
+of the profile, so a model that cannot wake — or cannot serve once awake
+again — fails the run and gets no profile rather than one that authorises
+an irreversible sleep.
+
 VRAM decomposition (exact, no guessing)::
 
     base_residency_mb    = loaded_vram_mb  (weights + KV cache — full footprint)
@@ -2336,19 +2343,21 @@ def calibrate_model(
             kv_cache_sent_mb,
         )
 
-        # Phases 4 and 5 measure sleep, and only sleep. Everything the planner
-        # needs to place a lane — base_residency_mb above — is already known,
-        # so a model that is not allowed to sleep on this worker skips them and
-        # finishes with sleeping_residual_mb unknown rather than being dropped.
-        # Dropping it is what left nosleep models (enable_sleep_mode: false)
-        # permanently uncalibrated: no profile means the worker never reports
-        # them as a capability, and no later session could recover them either.
+        # Phases 4 to 5.5 measure sleep and verify it: put the model to
+        # sleep, measure the sleeping footprint, wake it, and require it to
+        # serve a request again. Everything the planner needs to place a
+        # lane — base_residency_mb above — is already known, so a model that
+        # is not allowed to sleep on this worker skips them and finishes with
+        # sleeping_residual_mb unknown rather than being dropped. Dropping it
+        # is what left nosleep models (enable_sleep_mode: false) permanently
+        # uncalibrated: no profile means the worker never reports them as a
+        # capability, and no later session could recover them either.
         sleeping_residual_mb: float | None = None
         sleep_transient_mb: float | None = None
         host_ram_residual_mb: float | None = None
         if sleep_level <= 0:
             logger.info(
-                "  [4/6 + 5/6] Sleep phases skipped (sleep mode disabled for this model) — "
+                "  [4/6 + 5/6 + 5.5/6] Sleep phases skipped (sleep mode disabled for this model) — "
                 "sleeping_residual_mb stays unknown; base_residency is unaffected"
             )
         else:
@@ -2455,6 +2464,42 @@ def calibrate_model(
                 )
             else:
                 logger.info("        sleeping host RAM: /proc/meminfo unavailable — skipped")
+
+            # Phase 5.5 — Wake verification. Phase 4 proved the model can go
+            # to sleep; this proves it can come back. The planner sleeps this
+            # lane in production on the strength of the profile, so a model
+            # whose wake fails — or that cannot serve a request once awake
+            # again — must fail the run: a persisted profile would authorise
+            # a sleep the lane can never reverse (the lane manager kills a
+            # lane whose wake OOMs, and a wedged engine wedges the node).
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("  Calibration cancelled before Phase 5.5.")
+                partial.error = "cancelled"
+                return partial
+            logger.info("  [5.5/6] Waking model and verifying it serves again...")
+            wake_status, _ = _post(f"{base_url}/wake_up", timeout_s=_SLEEP_TIMEOUT_S)
+            if wake_status not in (200, 204):
+                partial.error = f"/wake_up returned HTTP {wake_status}"
+                logger.warning("  ERROR: %s", partial.error)
+                return partial
+            try:
+                wait_sleep_state(base_url, False, _SLEEP_TIMEOUT_S)
+            except TimeoutError as exc:
+                partial.error = str(exc)
+                logger.warning("  ERROR: %s", partial.error)
+                return partial
+            # Test request 2: a lane that wakes but cannot serve is as
+            # unusable as one that never wakes. Same call as the Phase 2.5
+            # warmup — one 1-token completion.
+            post_wake_ok = warmup_inference(base_url, model, timeout_s=600.0)
+            if not post_wake_ok:
+                partial.error = (
+                    "post-wake test request failed — model does not serve after "
+                    "sleep/wake, sleep capability not verified"
+                )
+                logger.warning("  ERROR: %s", partial.error)
+                return partial
+            logger.info("        wake verified — model serves a request after the sleep/wake cycle")
 
         logger.info("  Results:")
         logger.info(
