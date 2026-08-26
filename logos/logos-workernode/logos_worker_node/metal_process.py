@@ -188,6 +188,44 @@ class MetalVllmProcessHandle(VllmProcessHandle):
             return models_path
         return str(Path.home() / "Library" / "Caches" / "logos-workernode")
 
+    # Model families whose reasoning parser must not be inferred on this
+    # backend. Measured against vllm-metal 0.2.0 / vLLM 0.19.1 with
+    # mlx-community/Qwen3.5-2B-8bit: with --reasoning-parser qwen3 the response
+    # comes back with BOTH content and reasoning_content set to None while
+    # usage still reports the generated tokens — the text is parsed away and
+    # the caller gets an empty message. Without the flag the same request
+    # returns its content normally.
+    #
+    # Scoped to Metal on purpose. The shared rule in vllm_process.py was added
+    # for the CUDA image, which runs a much newer vLLM (0.28.x), and there is
+    # no CUDA hardware here to prove the same failure. Narrowing it to this
+    # backend fixes the observed breakage without touching a working path.
+    _REASONING_PARSER_UNSUPPORTED = ("qwen3.5", "qwen3.6", "qwen3.8")
+
+    def _resolve_reasoning_parser(self, lane_config: LaneConfig) -> str | None:
+        """Reasoning parser for this lane, or None to emit no flag.
+
+        An explicit vllm_config.reasoning_parser always wins — the suppression
+        below only applies to values this worker would have guessed.
+        """
+        vc = lane_config.vllm_config
+        assert vc is not None  # guarded by the caller
+        explicit = (vc.reasoning_parser or "").strip()
+        if explicit:
+            return None if explicit == "none" else explicit
+
+        model_lower = lane_config.model.lower()
+        if any(marker in model_lower for marker in self._REASONING_PARSER_UNSUPPORTED):
+            logger.info(
+                "[%s] suppressing inferred reasoning parser for %s — on vllm-metal it "
+                "consumes the response body (content=None). Set "
+                "vllm_config.reasoning_parser explicitly to override.",
+                self.lane_id,
+                lane_config.model,
+            )
+            return None
+        return _infer_reasoning_parser(lane_config.model)
+
     # ------------------------------------------------------------------
     # Command line
     # ------------------------------------------------------------------
@@ -264,10 +302,9 @@ class MetalVllmProcessHandle(VllmProcessHandle):
             cmd.append("--enable-auto-tool-choice")
             cmd.extend(["--tool-call-parser", parser])
 
-        if vc.reasoning_parser != "none":
-            reasoning_parser = vc.reasoning_parser or _infer_reasoning_parser(lane_config.model)
-            if reasoning_parser:
-                cmd.extend(["--reasoning-parser", reasoning_parser])
+        reasoning_parser = self._resolve_reasoning_parser(lane_config)
+        if reasoning_parser:
+            cmd.extend(["--reasoning-parser", reasoning_parser])
 
         cmd.extend(["--mm-processor-cache-gb", str(vc.mm_processor_cache_gb)])
 

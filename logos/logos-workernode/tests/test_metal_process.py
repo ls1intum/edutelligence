@@ -104,11 +104,10 @@ class TestBuildCmd:
         cmd = handle._build_cmd(lane)
         assert cmd[cmd.index("--max-model-len") + 1] == "16384"
 
-    def test_infers_tool_and_reasoning_parsers(self, handle) -> None:
+    def test_infers_the_tool_call_parser(self, handle) -> None:
         cmd = handle._build_cmd(make_lane())
         assert "--enable-auto-tool-choice" in cmd
         assert cmd[cmd.index("--tool-call-parser") + 1]
-        assert cmd[cmd.index("--reasoning-parser") + 1] == "qwen3"
 
     def test_reasoning_parser_none_suppresses_the_flag(self, handle) -> None:
         cmd = handle._build_cmd(make_lane(reasoning_parser="none"))
@@ -125,6 +124,52 @@ class TestBuildCmd:
         """MLX checkpoints declare quantization in config.json; vLLM infers it."""
         assert "--quantization" not in handle._build_cmd(make_lane())
         assert "--quantization" in handle._build_cmd(make_lane(quantization="awq"))
+
+
+class TestReasoningParserSuppression:
+    """Qwen3.5/3.6/3.8 must not get an inferred reasoning parser on Metal.
+
+    Measured against vllm-metal 0.2.0 (vLLM 0.19.1): with
+    --reasoning-parser qwen3 the response comes back with content=None AND
+    reasoning_content=None while usage still counts the generated tokens —
+    the answer is silently parsed away. Without the flag it returns normally.
+    """
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "mlx-community/Qwen3.8-27B-8bit",
+            "mlx-community/Qwen3.5-2B-8bit",
+            "mlx-community/Qwen3.6-9B-4bit",
+        ],
+    )
+    def test_no_parser_is_inferred_for_the_affected_families(self, handle, model) -> None:
+        lane = LaneConfig(model=model, vllm=True, vllm_config=VllmConfig())
+        assert "--reasoning-parser" not in handle._build_cmd(lane)
+
+    def test_an_explicit_parser_still_wins(self, handle) -> None:
+        """Suppression applies to guesses, never to an operator's choice."""
+        lane = LaneConfig(
+            model="mlx-community/Qwen3.8-27B-8bit",
+            vllm=True,
+            vllm_config=VllmConfig(reasoning_parser="qwen3"),
+        )
+        cmd = handle._build_cmd(lane)
+        assert cmd[cmd.index("--reasoning-parser") + 1] == "qwen3"
+
+    def test_explicit_none_still_suppresses(self, handle) -> None:
+        lane = LaneConfig(
+            model="mlx-community/Qwen3.8-27B-8bit",
+            vllm=True,
+            vllm_config=VllmConfig(reasoning_parser="none"),
+        )
+        assert "--reasoning-parser" not in handle._build_cmd(lane)
+
+    def test_unaffected_families_keep_their_inferred_parser(self, handle) -> None:
+        """The suppression must stay narrow, not disable inference wholesale."""
+        lane = LaneConfig(model="google/gemma-4-9b-it", vllm=True, vllm_config=VllmConfig())
+        cmd = handle._build_cmd(lane)
+        assert cmd[cmd.index("--reasoning-parser") + 1] == "gemma4"
 
 
 class TestBuildEnv:
