@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 import logos as main_mod
@@ -47,9 +49,7 @@ class _FakeDB:
 
 
 async def _attach(registry, provider_id, worker_id, capabilities):
-    ticket = await registry.consume_ticket(
-        await registry.issue_ticket(provider_id, worker_id, list(capabilities))
-    )
+    ticket = await registry.consume_ticket(await registry.issue_ticket(provider_id, worker_id, list(capabilities)))
     assert ticket is not None
     await registry.attach_session(ticket, _FakeWebSocket())
 
@@ -97,3 +97,42 @@ async def test_register_models_filters_connected_logosnode_by_live_capabilities(
     # model-a (100) and model-d (102) are skipped; model-b (100) and
     # model-c (101) are registered
     assert facade._model_to_provider == {2: {100}, 3: {101}}
+
+
+@pytest.mark.asyncio
+async def test_register_models_keeps_deployments_of_stale_logosnode_session(monkeypatch):
+    """A session whose heartbeat is older than the stale threshold counts as
+    offline: its DB deployments stay registered (offline fallback) instead of
+    being filtered against the frozen, stale capability list — the same view
+    the scheduler gets from is_provider_online."""
+    registry = LogosNodeRuntimeRegistry()
+    await _attach(registry, 100, "worker-a", ["model-b"])
+    # Simulate a hung worker: session still in the registry, heartbeat long gone
+    session = registry._sessions[100]  # noqa: SLF001
+    session.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=120)
+    assert not registry.is_provider_online(100)
+
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    db = _FakeDB(
+        deployments=[
+            {"model_id": 1, "provider_id": 100, "type": "logosnode"},  # not in stale snapshot
+            {"model_id": 2, "provider_id": 100, "type": "logosnode"},  # in stale snapshot
+        ],
+        models=[
+            {"id": 1, "name": "model-a", "parallel": 1},
+            {"id": 2, "name": "model-b", "parallel": 1},
+        ],
+        providers=[
+            {"id": 100, "name": "worker-a", "provider_type": "logosnode", "base_url": "http://a:8080"},
+        ],
+    )
+    monkeypatch.setattr(main_mod, "DBManager", lambda: db)
+
+    facade = LogosNodeSchedulingDataFacade(PriorityQueueManager(), db)
+    azure_facade = AzureSchedulingDataFacade(None)
+
+    await main_mod._register_models_with_facades(facade, azure_facade)
+
+    # The stale snapshot must not trigger filtering: both deployments are
+    # registered, model-a included, exactly as for a fully offline worker.
+    assert facade._model_to_provider == {1: {100}, 2: {100}}
