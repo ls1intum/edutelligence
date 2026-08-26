@@ -1288,6 +1288,14 @@ class LaneManager:
         SM-specific workarounds (e.g. disable_custom_all_reduce, quantization: awq
         on Turing) without requiring changes to the Logos server.
 
+        Keys are split by the VllmConfig schema itself: real vLLM engine keys
+        are merged and validated strictly (a type error there still fails the
+        lane), while profile-level keys an operator misplaced here
+        (min_context_fraction, base_residency_mb, ...) are routed to the model
+        profile registry instead of aborting lane creation — a single misplaced
+        knob must not kill add_lane for the whole model. Their documented home
+        is an inline entry under logos.capabilities_models in config.yml.
+
         The worker-wide engines.vllm.disable_sleep_mode kill switch is applied
         last so it cannot be re-enabled by a per-model override or by what the
         Logos server sends.
@@ -1298,11 +1306,26 @@ class LaneManager:
         disable_sleep = self._vllm_engine_config.disable_sleep_mode
         if not overrides and not disable_sleep:
             return lane_config
-        merged = {**lane_config.vllm_config.model_dump(), **overrides}
+        engine_fields = VllmConfig.model_fields
+        engine_overrides = {k: v for k, v in overrides.items() if k in engine_fields}
+        profile_overrides = {k: v for k, v in overrides.items() if k not in engine_fields}
+        if profile_overrides:
+            logger.warning(
+                "engines.vllm.model_overrides for %s contains profile-level key(s) %s — "
+                "routing them to the model profile registry. Their documented home is an "
+                "inline entry under logos.capabilities_models in config.yml.",
+                lane_config.model,
+                sorted(profile_overrides),
+            )
+            if self._model_profiles is not None:
+                self._model_profiles.add_overrides({lane_config.model: profile_overrides})
+        merged = {**lane_config.vllm_config.model_dump(), **engine_overrides}
         if disable_sleep:
             merged["enable_sleep_mode"] = False
         new_vc = VllmConfig.model_validate(merged)
-        applied = list(overrides)
+        applied = list(engine_overrides)
+        if profile_overrides:
+            applied.append(f"routed to profile registry: {sorted(profile_overrides)}")
         if disable_sleep:
             applied.append("enable_sleep_mode=false (engines.vllm.disable_sleep_mode)")
         logger.info(
