@@ -68,6 +68,13 @@ services:
       # 86400 to isolate scheduling from timeout-induced failures). Empty =
       # each stage keeps its own default (prod behaviour unchanged).
       LOGOS_TIMEOUT_S: "${LOGOS_TIMEOUT_S:-}"
+      # Startup grace period: how long a request whose only deployments are
+      # on worker nodes may wait for a worker to (re)connect before failing
+      # with "No available model deployments". A redeploy leaves a window in
+      # which no worker is connected; without this wait the first requests
+      # after the cut would 404 (see issue #793). Default 120s; set 0 to
+      # fail instantly.
+      LOGOS_STARTUP_GRACE_PERIOD_SECONDS: "${LOGOS_STARTUP_GRACE_PERIOD_SECONDS:-}"
       # Nightly calibration maintenance window (CalibrationOrchestrator). Set
       # LOGOS_CALIB_ENABLED=false to suppress it — the benchmark turns it off
       # for the duration of a run so a window session can't fire mid-benchmark.
