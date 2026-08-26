@@ -30,8 +30,15 @@ python run_guidellm_gsm8k.py \
   --model 'Qwen/Qwen3-8B'
 ```
 
-For a local endpoint without authentication, omit `MODEL_PROVIDER_API_KEY` and add
-`--no-provider-auth`.
+For a local endpoint without authentication, run:
+
+```bash
+python run_guidellm_gsm8k.py \
+  --model-provider-id 42 \
+  --target 'http://localhost:8000/v1' \
+  --model 'Qwen/Qwen3-8B' \
+  --no-provider-auth
+```
 
 Before the benchmark import endpoint is deployed, run the real benchmark and keep
 the report locally:
