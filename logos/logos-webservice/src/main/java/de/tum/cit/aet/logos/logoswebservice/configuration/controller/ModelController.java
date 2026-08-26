@@ -47,6 +47,11 @@ public class ModelController {
         return ResponseEntity.ok(modelService.getModels(auth));
     }
 
+    @PostMapping("/get_model_health")
+    public ResponseEntity<?> getModelHealth(@RequestAttribute("authContext") AuthContext auth) {
+        return ResponseEntity.ok(modelService.getModelHealth(auth));
+    }
+
     @PostMapping("/add_model")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addModel(

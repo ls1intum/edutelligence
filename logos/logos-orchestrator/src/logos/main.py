@@ -1921,6 +1921,115 @@ async def internal_provider_status(request: Request):
     return {"providers": providers}
 
 
+def _model_deployment_health(
+    deployment: Dict[str, Any],
+    provider_id: int,
+    worker_ids: set[int],
+    snapshots: Dict[int, Optional[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Health of one model deployment for the model-level health check.
+
+    Worker-backed deployments are checked live against the registry snapshot:
+    UP when the worker is online and the model is calibrated, with ``state``
+    narrowing the readiness (``warm`` a lane is loaded/running, ``sleeping``
+    a wake is needed, ``cold`` a load is needed). A worker reporting an
+    unhealthy node degrades to DEGRADED even with a warm lane, and DOWN with
+    ``offline`` (no fresh heartbeat) or ``uncalibrated``. Cloud deployments
+    are UP whenever configured — Logos does not probe cloud providers, which
+    matches the overall /health behaviour.
+    """
+    entry: Dict[str, Any] = {
+        "provider_id": provider_id,
+        "provider_name": deployment.get("provider_name"),
+        "type": deployment.get("type"),
+    }
+    if provider_id not in worker_ids:
+        entry.update(status="UP", state=None)
+        return entry
+    snapshot = snapshots.get(provider_id)
+    if not _logosnode_snapshot_is_connected(snapshot):
+        entry.update(status="DOWN", state="offline")
+        return entry
+    model_name = str(deployment.get("model_name") or "")
+    capabilities = snapshot.get("capabilities_models") or []
+    if model_name not in capabilities:
+        entry.update(status="DOWN", state="uncalibrated")
+        return entry
+    runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else {}
+    lanes = [
+        lane
+        for lane in (runtime.get("lanes") or [])
+        if isinstance(lane, dict) and str(lane.get("model") or "").strip() == model_name
+    ]
+    states = {str(lane.get("runtime_state") or "").strip() for lane in lanes}
+    if states & {"loaded", "running"}:
+        state = "warm"
+    elif "sleeping" in states:
+        state = "sleeping"
+    else:
+        state = "cold"
+    node_health = runtime.get("node_health")
+    degraded = isinstance(node_health, dict) and node_health.get("healthy") is False
+    entry.update(status="DEGRADED" if degraded else "UP", state=state)
+    return entry
+
+
+@app.get("/internal/model_health", tags=["admin"])
+async def internal_model_health(request: Request):
+    """Model-level health of every deployment, for the Spring webservice.
+
+    Applications want to know before sending traffic which models currently
+    have a healthy/available deployment. Like provider connection state, the
+    live lane state exists only in the orchestrator's worker registry, so it
+    is computed here and served by the webservice's public endpoint.
+
+    A model is UP when any of its deployments is, DEGRADED when only
+    degraded ones are, and DOWN otherwise.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal model health endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    with DBManager() as db:
+        deployments = db.get_all_deployments_with_names()
+        local_inventory = db.list_local_providers()
+
+    worker_ids: set[int] = set()
+    snapshots: Dict[int, Optional[Dict[str, Any]]] = {}
+    for provider in local_inventory:
+        provider_id = int(provider.get("provider_id") or 0)
+        if provider_id <= 0:
+            continue
+        worker_ids.add(provider_id)
+        snapshots[provider_id] = _logosnode_registry.peek_runtime_snapshot(provider_id)
+
+    models: Dict[int, Dict[str, Any]] = {}
+    for deployment in deployments:
+        model_id = int(deployment.get("model_id") or 0)
+        provider_id = int(deployment.get("provider_id") or 0)
+        model = models.setdefault(
+            model_id,
+            {
+                "model_id": model_id,
+                "name": deployment.get("model_name"),
+                "status": "DOWN",
+                "deployments": [],
+            },
+        )
+        model["deployments"].append(_model_deployment_health(deployment, provider_id, worker_ids, snapshots))
+    for model in models.values():
+        statuses = {deployment["status"] for deployment in model["deployments"]}
+        model["status"] = "UP" if "UP" in statuses else ("DEGRADED" if "DEGRADED" in statuses else "DOWN")
+    return {"models": sorted(models.values(), key=lambda model: str(model["name"] or "").lower())}
+
+
 @app.get("/internal/model_context_windows", tags=["admin"])
 async def internal_model_context_windows(request: Request):
     """Served context window per model name, for the Spring webservice.

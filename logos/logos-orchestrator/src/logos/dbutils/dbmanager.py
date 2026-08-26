@@ -1677,6 +1677,44 @@ class DBManager:
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
+    # ADMIN ONLY
+    def get_all_deployments_with_names(self) -> list[Dict[str, Any]]:
+        """
+        Get all model deployments with model and provider names.
+
+        Same deployment set as get_all_deployments() — cloud/azure providers
+        need model_provider + model_api_keys, logosnode providers need
+        model_provider + logosnode_provider_keys — plus the display names the
+        model-level health check reports per deployment.
+        """
+        sql = text(
+            """
+                   SELECT m.id               as model_id,
+                          m.name             as model_name,
+                          p.id               as provider_id,
+                          p.name             as provider_name,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                   WHERE p.provider_type != 'logosnode'
+                   UNION
+                   SELECT m.id               as model_id,
+                          m.name             as model_name,
+                          p.id               as provider_id,
+                          p.name             as provider_name,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                            JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
+                   WHERE p.provider_type = 'logosnode'
+                   ORDER BY model_id, provider_id
+                   """
+        )
+        rows = self.session.execute(sql, {}).mappings().all()
+        return [dict(row) for row in rows]
+
     def get_models_for_api_key(self, api_key_id: int) -> list[Dict[str, Any]]:
         """
         Get all models that an api key has access to.

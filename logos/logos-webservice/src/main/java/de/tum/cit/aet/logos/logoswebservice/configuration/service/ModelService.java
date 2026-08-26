@@ -3,7 +3,9 @@ package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -20,6 +22,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabi
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelWithPriceProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelHealthClient;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 @Service
@@ -29,13 +32,16 @@ public class ModelService {
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelCapabilitiesRepository modelCapabilitiesRepository;
+    private final OrchestratorModelHealthClient orchestratorModelHealthClient;
 
     public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
-                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository) {
+                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository,
+                        OrchestratorModelHealthClient orchestratorModelHealthClient) {
         this.modelRepository = modelRepository;
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelCapabilitiesRepository = modelCapabilitiesRepository;
+        this.orchestratorModelHealthClient = orchestratorModelHealthClient;
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
@@ -43,6 +49,31 @@ public class ModelService {
             ? modelRepository.findAllWithPricing()
             : modelRepository.findAllWithPricingForUser(auth.userId());
         return projections.stream().map(ModelService::toModelMap).toList();
+    }
+
+    /**
+     * Current health of every model the caller may access, as computed live
+     * by the orchestrator from its worker registry. Applications use this to
+     * check before sending traffic whether a model has a healthy/available
+     * deployment right now. Logos admins see every model; other callers only
+     * the models assigned to their teams, mirroring getModels().
+     */
+    public Map<String, Object> getModelHealth(AuthContext auth) {
+        List<Map<String, Object>> health = orchestratorModelHealthClient.getModelHealth();
+        if (isLogosAdmin(auth)) {
+            return Map.of("models", health);
+        }
+        Set<Integer> accessibleModelIds = modelRepository.findAllWithPricingForUser(auth.userId()).stream()
+            .map(ModelWithPriceProjection::getId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toSet());
+        List<Map<String, Object>> visible = health.stream()
+            .filter(entry -> {
+                Integer id = entry.get("model_id") instanceof Number n ? n.intValue() : null;
+                return id != null && accessibleModelIds.contains(id);
+            })
+            .toList();
+        return Map.of("models", visible);
     }
 
     @Transactional
