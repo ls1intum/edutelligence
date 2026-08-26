@@ -22,6 +22,7 @@ from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
 from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 from logos_worker_node.config import get_state_dir, load_config
 from logos_worker_node.gpu import GpuMetricsCollector
+from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
 from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
@@ -333,15 +334,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     _log_storage_layout(cfg)
 
-    gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
+    # Device telemetry. Both collectors expose the same surface, so everything
+    # downstream (LaneManager, runtime status) is backend-agnostic.
+    if is_metal_backend():
+        gpu_collector = MetalMetricsCollector(
+            poll_interval=cfg.worker.gpu_poll_interval,
+            metal_python=cfg.engines.metal.metal_python,
+        )
+    else:
+        gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
 
     # Watchdog for unrecoverable GPU wedges (GSP RPC failure, PCIe drop,
     # cudaErrorDevicesUnavailable). Drives the host through reboot(2) when
     # node_health reports a gpu-* failure for several consecutive ticks.
     # Requires CAP_SYS_BOOT in the container; see compose `cap_add: [SYS_BOOT]`.
-    gpu_watchdog = GpuWatchdog(state_dir=get_state_dir())
-    await gpu_watchdog.start()
+    #
+    # Skipped on Metal: every failure mode it detects is an NVIDIA driver
+    # condition read out of nvidia-smi, and its remedy — rebooting the host —
+    # has no counterpart here. Metal memory belongs to the process and the
+    # kernel reclaims it on exit, so a wedged lane is fixed by restarting the
+    # lane, which the lane manager already does.
+    gpu_watchdog = None
+    if not is_metal_backend():
+        gpu_watchdog = GpuWatchdog(state_dir=get_state_dir())
+        await gpu_watchdog.start()
 
     # Pre-warm FlashInfer JIT kernels (single-process, sequential) so that
     # subsequent vLLM launches — including TP>1 — find cached .so files and
@@ -523,8 +540,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gpu_force_poll=gpu_collector.force_poll,
         max_lanes=cfg.worker.max_lanes,
         model_cache=model_cache,
-        auto_reboot_on_stuck_gpu=cfg.worker.auto_reboot_on_stuck_gpu,
+        auto_reboot_on_stuck_gpu=cfg.worker.auto_reboot_on_stuck_gpu and not is_metal_backend(),
         reboot_sentinel_path=cfg.worker.reboot_sentinel_path,
+        metal_config=cfg.engines.metal,
     )
 
     # Validate capabilities models at startup (warnings only)
@@ -550,7 +568,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply static lanes from config")
             await lane_manager.close()
-            await gpu_watchdog.stop()
+            if gpu_watchdog is not None:
+                await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
 
@@ -582,7 +601,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply lanes from config")
             await lane_manager.close()
-            await gpu_watchdog.stop()
+            if gpu_watchdog is not None:
+                await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
     else:
@@ -665,7 +685,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Error destroying lanes", exc_info=True)
     await lane_manager.close()
-    await gpu_watchdog.stop()
+    if gpu_watchdog is not None:
+        await gpu_watchdog.stop()
     await gpu_collector.stop()
     # Cancel any pending background RAM cache copies. Won't roll back an
     # rsync that's already in flight, but stops the worker from queueing

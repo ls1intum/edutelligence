@@ -22,11 +22,14 @@ from logos_worker_node.models import (
     LaneEvent,
     LaneStatus,
     LoadedModel,
+    MetalConfig,
     OllamaConfig,
     ProcessState,
     VllmConfig,
     VllmEngineConfig,
 )
+from logos_worker_node.metal import is_metal_backend
+from logos_worker_node.metal_process import MetalVllmProcessHandle
 from logos_worker_node.ollama_process import OllamaProcessHandle
 from logos_worker_node.vllm_process import VllmProcessHandle, effective_gmu
 
@@ -248,9 +251,27 @@ def _create_handle(
     lane_config: LaneConfig,
     model_profiles: ModelProfileRegistry | None = None,
     per_gpu_total_mb: Callable[[], float] | None = None,
+    metal_config: MetalConfig | None = None,
 ) -> ProcessHandle:
-    """Factory: create the correct process handle based on backend type."""
+    """Factory: create the correct process handle based on backend type.
+
+    ``lane_config.vllm`` stays the only wire-level distinction: the orchestrator
+    asks for a vLLM lane and does not need to know whether this particular
+    worker serves it with CUDA or with Metal. Which of the two applies is a
+    property of the node, decided here, so no protocol change is needed to put
+    an Apple Silicon worker into the fleet.
+    """
     if lane_config.vllm:
+        if is_metal_backend():
+            return MetalVllmProcessHandle(
+                lane_id,
+                port,
+                global_config,
+                vllm_engine_config,
+                model_profiles=model_profiles,
+                per_gpu_total_mb=per_gpu_total_mb,
+                metal_config=metal_config,
+            )
         return VllmProcessHandle(
             lane_id,
             port,
@@ -293,9 +314,13 @@ class LaneManager:
         model_cache: Any | None = None,
         auto_reboot_on_stuck_gpu: bool = True,
         reboot_sentinel_path: str = "/host/reboot-requested",
+        metal_config: MetalConfig | None = None,
     ) -> None:
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
+        # Only consulted when is_metal_backend() is true; harmless defaults
+        # otherwise, so the CUDA path needs no conditional.
+        self._metal_config = metal_config or MetalConfig()
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
         self._gpu_device_count = gpu_device_count or (lambda: 1)
         self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
@@ -1767,6 +1792,10 @@ class LaneManager:
             )
             return lane_config
 
+        # Left as nvidia_smi_available on purpose — unlike the headroom gate,
+        # this one should NOT run on Metal. Auto-placement picks which physical
+        # GPU a lane is pinned to; Apple Silicon has exactly one, so there is
+        # nothing to choose and the lane's gpu_devices must stay untouched.
         if not snapshot.nvidia_smi_available:
             return lane_config
 
@@ -2021,13 +2050,16 @@ class LaneManager:
                 )
                 break  # can't check — proceed with spawn
 
-            if not snapshot.nvidia_smi_available:
+            # nvidia_smi_available stays False on Metal nodes (there is no
+            # nvidia-smi to speak of), so gate on the backend-neutral flag and
+            # fall back to the legacy one for snapshots that predate it.
+            if not (snapshot.telemetry_available or snapshot.nvidia_smi_available):
                 break
 
             # Check free VRAM on target devices
             min_free_mb = float("inf")
             for fallback_idx, device in enumerate(snapshot.devices):
-                if device.kind != "nvidia":
+                if device.kind not in ("nvidia", "metal"):
                     continue
                 raw_idx = device.extra.get("index", fallback_idx)
                 try:
@@ -2128,6 +2160,7 @@ class LaneManager:
             lane_config,
             model_profiles=self._model_profiles,
             per_gpu_total_mb=self._per_gpu_vram_mb,
+            metal_config=self._metal_config,
         )
         if hf_home_override and hasattr(handle, "hf_home_override"):
             handle.hf_home_override = hf_home_override
@@ -2216,6 +2249,7 @@ class LaneManager:
             new_config,
             model_profiles=self._model_profiles,
             per_gpu_total_mb=self._per_gpu_vram_mb,
+            metal_config=self._metal_config,
         )
         await new_handle.init()
 
@@ -2355,6 +2389,7 @@ class LaneManager:
                             orig_lc,
                             model_profiles=self._model_profiles,
                             per_gpu_total_mb=self._per_gpu_vram_mb,
+                            metal_config=self._metal_config,
                         )
                         await restored.init()
                         await restored.spawn(orig_lc)
@@ -2384,6 +2419,7 @@ class LaneManager:
                         lc,
                         model_profiles=self._model_profiles,
                         per_gpu_total_mb=self._per_gpu_vram_mb,
+                        metal_config=self._metal_config,
                     )
                     await restored.init()
                     await restored.spawn(lc)

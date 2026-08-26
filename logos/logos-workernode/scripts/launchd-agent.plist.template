@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logos Worker Node — launchd agent for Apple Silicon / MLX nodes.
+
+  Installed by bootstrap-macos.sh, which substitutes @INSTALL_ROOT@ and @LABEL@.
+  A LaunchAgent (per-user) rather than a LaunchDaemon (system): daemons run
+  outside a login session and do not reliably get Metal access, which would
+  quietly demote every lane to the CPU.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@LABEL@</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@INSTALL_ROOT@/.venv/bin/python</string>
+        <string>-m</string>
+        <string>logos_worker_node.main</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@INSTALL_ROOT@</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LOGOS_WORKER_NODE_CONFIG</key>
+        <string>@INSTALL_ROOT@/config.yml</string>
+        <key>LOGOS_STATE_DIR</key>
+        <string>@INSTALL_ROOT@/data</string>
+        <key>LOGOS_CHAT_TEMPLATE_DIR</key>
+        <string>@INSTALL_ROOT@/chat-templates</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <!--
+      Credentials (LOGOS_URL, LOGOS_API_KEY, HF_TOKEN) are NOT listed above.
+      launchd plists are world-readable, so secrets are read from
+      @INSTALL_ROOT@/.env by the worker's own config loader instead.
+    -->
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <!-- Restart on crash, but not after a clean shutdown, so that
+             `launchctl bootout` during a redeploy actually stops it. -->
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Model loads are slow; do not let launchd interpret a long startup as a
+         crash loop and back off aggressively. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>@INSTALL_ROOT@/logs/worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>@INSTALL_ROOT@/logs/worker.err.log</string>
+
+    <!-- Inference lanes hold one fd per in-flight proxied stream; the default
+         soft limit of 256 on macOS is exhausted far earlier than on Linux. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+</dict>
+</plist>

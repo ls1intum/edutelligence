@@ -53,6 +53,11 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
     mock_cache = MagicMock()
     mock_cache.enabled = False
 
+    # This test exercises the CUDA startup guard. Without pinning the backend
+    # it would pick the Metal path when the suite runs on a developer's Mac,
+    # instantiate the real MetalMetricsCollector instead of _FakeGpuCollector,
+    # and hang in lifespan startup instead of raising.
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
     monkeypatch.setattr(worker_main, "load_config", lambda: cfg)
     # get_state_dir must return a real Path now — gpu_watchdog uses it to
     # persist its rate-limit marker file at lifespan startup.

@@ -441,7 +441,14 @@ class LogosNodeDataProvider:
             snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
             runtime = (snap or {}).get("runtime") or {}
             devices = runtime.get("devices") or {}
-            if isinstance(devices, dict) and bool(devices.get("nvidia_smi_available")):
+            # Accept Metal telemetry too — see the note in main.py. Without
+            # this a Mac worker's real free/total figures are dropped and
+            # total_vram_mb silently falls back to the value recorded at
+            # registration time.
+            has_telemetry = bool(devices.get("telemetry_available")) or bool(
+                devices.get("nvidia_smi_available")
+            )
+            if isinstance(devices, dict) and has_telemetry:
                 runtime_free_mb = int(devices.get("free_memory_mb", 0) or 0)
                 runtime_total_mb = int(devices.get("total_memory_mb", 0) or 0)
         with self._lock:
