@@ -66,6 +66,17 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   private cursorForPage: (RequestCursor | null)[] = [null];
   readonly pageIndex = signal(0);
 
+  /**
+   * How many loads are in flight, and the number of the newest one. The pager
+   * only moves while none is in flight, and a load may only apply its answer
+   * while it is still the newest: with a page still loading, a click used to
+   * advance the index on the strength of the previous page's answer — its
+   * `has_more` flag and next cursor both pointed at the page behind — walking
+   * past the last page (issue #799).
+   */
+  private loadsInFlight = signal(0);
+  private loadSeq = 0;
+
   private timer: ReturnType<typeof setInterval> | null = null;
 
   readonly selectedDaysValue = computed(() => String(this.days()));
@@ -88,6 +99,13 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   readonly hasPrev = computed(() => this.pageIndex() > 0);
   readonly hasNext = computed(() => !!this.activity()?.requests_has_more);
+
+  /**
+   * A page load is in flight. The pager buttons wait for it to land: while
+   * the answer is out, the page on screen is not the newest one, so neither
+   * its `has_more` flag nor its next cursor may be acted on (issue #799).
+   */
+  readonly pageLoadInFlight = computed(() => this.loadsInFlight() > 0);
 
   /** 1-based number of the first row on this page, for the "21-40 of n" line. */
   readonly firstRowNumber = computed(() =>
@@ -143,7 +161,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   async nextPage(): Promise<void> {
     const cursor = this.activity()?.requests_next_cursor ?? null;
-    if (!cursor || !this.hasNext()) return;
+    if (!cursor || !this.hasNext() || this.pageLoadInFlight()) return;
     const target = this.pageIndex() + 1;
     this.cursorForPage[target] = cursor;
     this.pageIndex.set(target);
@@ -151,7 +169,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   }
 
   async prevPage(): Promise<void> {
-    if (!this.hasPrev()) return;
+    if (!this.hasPrev() || this.pageLoadInFlight()) return;
     this.pageIndex.set(this.pageIndex() - 1);
     await this.load();
   }
@@ -229,20 +247,29 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   private async load(): Promise<void> {
     if (!this.teamId) return;
+    const seq = ++this.loadSeq;
+    this.loadsInFlight.update((n) => n + 1);
     try {
-      this.activity.set(
-        await this.activityService.getActivity(this.teamId, this.days(), {
-          userId: this.filterUserId(),
-          cursor: this.cursorForPage[this.pageIndex()] ?? null,
-        }),
-      );
+      const payload = await this.activityService.getActivity(this.teamId, this.days(), {
+        userId: this.filterUserId(),
+        cursor: this.cursorForPage[this.pageIndex()] ?? null,
+      });
+      // A newer load has started while this one was out (a page turned, the
+      // window or the filter changed, the timer re-fired). Its answer belongs
+      // to the view we left: applying it would land old rows — and an old
+      // `has_more` flag — on the new page, which is how the pager walked past
+      // the last page (issue #799).
+      if (seq !== this.loadSeq) return;
+      this.activity.set(payload);
       this.error.set(null);
     } catch {
+      if (seq !== this.loadSeq) return;
       // Keep whatever is on screen: this runs on a timer, and blanking the tab
       // over one failed poll would make a brief network blip look like an
       // outage.
       this.error.set('Could not refresh activity.');
     } finally {
+      this.loadsInFlight.update((n) => n - 1);
       this.loading.set(false);
     }
   }
