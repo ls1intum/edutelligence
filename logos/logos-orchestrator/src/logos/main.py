@@ -2550,6 +2550,26 @@ async def _register_models_with_facades(
                 continue
 
             if provider_type == "logosnode":
+                # A live worker is the source of truth for what it serves:
+                # skip DB deployments it no longer announces (stale
+                # model_provider link, e.g. from a manual connect_model_provider)
+                # so the planner doesn't spawn lanes for non-capable models.
+                # Only applied to providers the scheduler also treats as
+                # online (fresh heartbeat): a stale session (worker hung,
+                # connection still open) counts as offline and its DB
+                # deployments stay registered as before, matching the
+                # scheduler's is_provider_online view of the same state.
+                if _logosnode_registry.is_provider_online(provider_id):
+                    snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+                    if snapshot is not None and model_name not in snapshot["capabilities_models"]:
+                        logger.warning(
+                            "Skipping deployment model %s for connected logosnode provider %s (%s): "
+                            "not in the worker's live capabilities (stale DB link)",
+                            model_name,
+                            provider_name,
+                            provider_id,
+                        )
+                        continue
                 logosnode_registrations.append(
                     {
                         "model_id": model_id,

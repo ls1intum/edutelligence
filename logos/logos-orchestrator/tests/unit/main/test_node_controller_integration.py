@@ -811,3 +811,32 @@ async def test_sync_response_falls_back_to_direct_http_for_logosnode_without_lan
         scheduling_stats=None,
     )
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_attach_session_fires_capabilities_changed_with_empty_list():
+    """A worker reconnecting with no capabilities must still fire the DB sync
+    callback (with []) so stale model_provider links get pruned."""
+    calls: list[tuple[int, list[str]]] = []
+    registry = LogosNodeRuntimeRegistry(on_capabilities_changed=lambda pid, names: calls.append((pid, names)))
+    token = await registry.issue_ticket(41, "worker-empty", [])
+    ticket = await registry.consume_ticket(token)
+    assert ticket is not None
+
+    await registry.attach_session(ticket, _FakeWebSocket())
+
+    assert calls == [(41, [])]
+
+
+@pytest.mark.asyncio
+async def test_attach_session_fires_capabilities_changed_with_sorted_names():
+    """Non-empty capabilities still fire the callback with the sorted list."""
+    calls: list[tuple[int, list[str]]] = []
+    registry = LogosNodeRuntimeRegistry(on_capabilities_changed=lambda pid, names: calls.append((pid, names)))
+    token = await registry.issue_ticket(42, "worker-caps", ["model-b", "model-a"])
+    ticket = await registry.consume_ticket(token)
+    assert ticket is not None
+
+    await registry.attach_session(ticket, _FakeWebSocket())
+
+    assert calls == [(42, ["model-a", "model-b"])]
