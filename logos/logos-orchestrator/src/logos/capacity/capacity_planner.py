@@ -94,6 +94,21 @@ class CapacityPlanner:
     # developer abandoned before sending anything stops holding a lane open.
     ANNOUNCED_USE_TTL_SECONDS = 300.0
 
+    # Balance wake: when the best-first winner is under queue pressure for a
+    # model (>= this many active+queued requests on it), the planner wakes a
+    # sleeping replica on a NON-winning worker (no eviction, no cold load, at
+    # most one per model per cycle). Without it, a hot model with N-1 awake
+    # replicas and one sleeping standby stays at N-1 capacity forever: the
+    # ranker always prefers the 0.0s awake lanes over the 2.0s wake and the
+    # standby just idle-sleeps (observed in production: Qwen3.8-27B on
+    # deimama/deipapa saturated with queue 2-8 while the deioma replica slept
+    # for 7h with GPU 2 fully free).
+    # The floor keeps single-request blips from flapping the lane against the
+    # 120s idle tier: at >=4 concurrent the next arrival would wait a full
+    # request duration (60-120s for long-context completions), which a ~2s
+    # wake + VRAM reservation pays back.
+    BALANCE_WAKE_QUEUE_FLOOR = 4
+
     # Competitive ratios: applied when eviction IS required.
     # target_effective_demand > max(eviction_set_demand) * RATIO to proceed.
     WAKE_COMPETITIVE_RATIO = 1.5  # target must beat eviction set by 50%
@@ -677,6 +692,11 @@ class CapacityPlanner:
         # providers, so two providers don't independently agree to load the
         # same model in the same cycle.
         cycle_planned_models: set[str] = set()
+        # Balance-wake tracking: at most one balance-wake per model per cycle,
+        # so a saturated winner doesn't fan out wakes to every sleeping
+        # replica at once (one extra replica per cycle is the escalation step;
+        # the next cycle re-evaluates with the updated queues).
+        cycle_balance_wake_models: set[str] = set()
 
         provider_ids = list(self._facade.provider_ids())
         # Sort providers by current queue pressure so the worker most under
@@ -742,6 +762,7 @@ class CapacityPlanner:
                     cycle_planned_models=cycle_planned_models,
                     best_provider_for_model=best_provider_for_model,
                     cluster_lanes_by_model=cluster_lanes_by_model,
+                    cycle_balance_wake_models=cycle_balance_wake_models,
                 )
             )
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
@@ -2979,6 +3000,84 @@ class CapacityPlanner:
     # Demand-based actions
     # ------------------------------------------------------------------
 
+    def _balance_wake_reason(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: List[LaneSchedulerSignals],
+        winner_pid: int,
+        cycle_balance_wake_models: Optional[set[str]],
+    ) -> Optional[str]:
+        """Decide whether this NON-winning provider should balance-wake.
+
+        Called from the demand loop when the best-first ranker picked a
+        different (cheaper) worker for the model. Returns the planned
+        action's reason when a balance-wake is warranted, else None.
+
+        Eligibility (all required):
+          - the model was not already balance-woken elsewhere this cycle
+            (one extra replica per cycle is the escalation step),
+          - the winner is AWAKE for the model (it is the saturated incumbent,
+            not a replica that also needs waking itself),
+          - the winner's combined demand for the model (active + vLLM queue
+            + scheduler queue) is >= BALANCE_WAKE_QUEUE_FLOOR,
+          - this provider has a sleeping lane for the model (wake path only —
+            a cold load is a replication decision, not a balance one).
+
+        Balance-wake is always on (no flag): it only spends VRAM an
+        idle-slept replica already parked, and the guardrails above keep it
+        from evicting, cold-loading, or fanning out.
+
+        VRAM feasibility and the no-eviction rule are enforced by the caller:
+        the WAKE branch only proceeds with the pre-computed reason when the
+        eviction set is empty.
+        """
+        if cycle_balance_wake_models is not None and model_name in cycle_balance_wake_models:
+            logger.info(
+                "Skipping balance-wake of %s on worker=%s: already balance-woken this cycle",
+                model_name,
+                self._facade.get_provider_name(provider_id) or provider_id,
+            )
+            return None
+        # Local check first — the common skip case (this worker has no
+        # sleeping lane for the model) exits before touching the winner.
+        sleeping = [
+            lane
+            for lane in lanes
+            if lane.model_name == model_name
+            and lane.sleep_state == "sleeping"
+            and not self._lane_is_in_wake_failure_cooldown(provider_id, lane.lane_id)
+        ]
+        if not sleeping:
+            return None
+        try:
+            winner_lanes = self._facade.get_all_provider_lane_signals(winner_pid)
+        except Exception:
+            return None
+        winner_awake = any(
+            lane.model_name == model_name
+            and lane.runtime_state in ("loaded", "running")
+            and lane.sleep_state != "sleeping"
+            for lane in winner_lanes
+        )
+        if not winner_awake:
+            return None
+        winner_queue = self._get_queue_depth_for_model(winner_pid, model_name, winner_lanes)
+        if winner_queue < self.BALANCE_WAKE_QUEUE_FLOOR:
+            logger.info(
+                "Skipping balance-wake of %s on worker=%s: winner queue=%d < floor=%d",
+                model_name,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                winner_queue,
+                self.BALANCE_WAKE_QUEUE_FLOOR,
+            )
+            return None
+        winner_name = self._facade.get_provider_name(winner_pid) or winner_pid
+        return (
+            f"Balance-wake: winner={winner_name} queue_depth={winner_queue} "
+            f"≥ floor={self.BALANCE_WAKE_QUEUE_FLOOR}; VRAM free"
+        )
+
     def _compute_demand_actions(
         self,
         provider_id: int,
@@ -2987,6 +3086,7 @@ class CapacityPlanner:
         cycle_planned_models: Optional[set[str]] = None,
         best_provider_for_model: Optional[dict[str, int]] = None,
         cluster_lanes_by_model: Optional[dict[str, int]] = None,
+        cycle_balance_wake_models: Optional[set[str]] = None,
     ) -> List[CapacityPlanAction]:
         """Compute wake/load actions based on demand patterns.
 
@@ -3095,19 +3195,36 @@ class CapacityPlanner:
             # different worker as the cheapest for this model, skip here so
             # the winner can serve it (wake on a sleeping lane beats a cold
             # load on a different worker even when both have capability).
+            #
+            # Exception: balance wake. The ranker's cost model answers
+            # "which worker is cheapest to make able to serve" — an awake
+            # lane costs 0.0s and always wins over a 2.0s wake, so a
+            # sleeping standby replica of a hot model is skipped forever
+            # while the awake incumbent's queue grows. When the winner is
+            # saturated, fall through so the WAKE branch can spread the
+            # load (wake path only, never evicts — enforced below).
+            balance_wake_reason: Optional[str] = None
             if (
                 self._cross_provider_best_first
                 and best_provider_for_model is not None
                 and best_provider_for_model.get(model_name, provider_id) != provider_id
             ):
-                logger.info(
-                    "Skipping demand action for worker=%s model=%s: best-first" " ranker picked worker=%s",
-                    self._facade.get_provider_name(provider_id) or provider_id,
+                winner_pid = best_provider_for_model[model_name]
+                balance_wake_reason = self._balance_wake_reason(
+                    provider_id,
                     model_name,
-                    self._facade.get_provider_name(best_provider_for_model[model_name])
-                    or best_provider_for_model[model_name],
+                    lanes,
+                    winner_pid,
+                    cycle_balance_wake_models,
                 )
-                continue
+                if balance_wake_reason is None:
+                    logger.info(
+                        "Skipping demand action for worker=%s model=%s: best-first" " ranker picked worker=%s",
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        model_name,
+                        self._facade.get_provider_name(winner_pid) or winner_pid,
+                    )
+                    continue
             model_lanes = lanes_by_model.get(model_name, [])
             # Phase 3.4: per-lane VRAM ledger gate — under v2, only skip this
             # model when an in-flight reservation overlaps the GPUs its target
@@ -3250,6 +3367,41 @@ class CapacityPlanner:
                         target_model_name=model_name,
                         target_lane_id=target.lane_id,
                     )
+
+                if balance_wake_reason is not None:
+                    # Balance wakes only spend free VRAM: the action spreads
+                    # load for the saturated winner, but no request is waiting
+                    # on this lane — evicting another model's lane for it
+                    # would be speculative preemption. Infeasible or
+                    # eviction-needing wakes are simply retried next cycle.
+                    if eviction_set is None:
+                        logger.info(
+                            "Skipping balance-wake of %s on worker=%s: " "needed VRAM not available",
+                            model_name,
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                        )
+                    elif eviction_set:
+                        logger.info(
+                            "Skipping balance-wake of %s on worker=%s: "
+                            "would evict other models' lanes "
+                            "(balance-wake is eviction-free)",
+                            model_name,
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                        )
+                    else:
+                        actions.append(
+                            CapacityPlanAction(
+                                action="wake",
+                                provider_id=provider_id,
+                                lane_id=target.lane_id,
+                                model_name=model_name,
+                                reason=balance_wake_reason,
+                            )
+                        )
+                        planned_models.add(model_name)
+                        if cycle_balance_wake_models is not None:
+                            cycle_balance_wake_models.add(model_name)
+                    continue
 
                 if eviction_set is None:
                     logger.info(
