@@ -130,6 +130,26 @@ export class StatisticsService {
     }));
   }
 
+  /**
+   * Put an awake, idle lane to sleep. The server refuses with a reason while
+   * the lane still serves requests — that refusal is what this rejects with.
+   * Sleep level 1 is fixed server-side: the weights stay resident, so the
+   * wake below does not pay for a cold load.
+   */
+  sleepLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/sleep', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
+  wakeLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/wake', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
   calibrateUncalibrated(providerId: number): Promise<{ count?: number; models?: string[]; error?: string }> {
     return firstValueFrom(this.http.post<{ count?: number; models?: string[]; error?: string }>(
       '/api/logosdb/providers/logosnode/calibrate_uncalibrated',

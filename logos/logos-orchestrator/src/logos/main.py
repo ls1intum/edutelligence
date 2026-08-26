@@ -2015,6 +2015,16 @@ class _InternalAddLaneRequest(BaseModel):
     lane: dict[str, Any]
 
 
+class _InternalSleepLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+class _InternalWakeLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
 async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
     """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
@@ -2124,6 +2134,78 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
     return JSONResponse(
         status_code=202,
         content={"status": "accepted", "model": model, "provider_id": data.provider_id},
+    )
+
+
+@app.post("/internal/logosnode/lanes/sleep", tags=["admin"])
+async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request: Request):
+    """Sleep a lane on a worker, called by Spring after JWT validation.
+
+    Level 1 keeps the weights resident in host memory, so the lane wakes in
+    seconds; level 2 would release them and pay for a full reload on the next
+    wake — a choice most operators cannot make well, so the button does not
+    offer it and neither does this endpoint.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Worker has not sent its first status yet"},
+        )
+    lanes = (snap.get("runtime") or {}).get("lanes") or []
+    lane = next(
+        (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id", "")) == data.lane_id),
+        None,
+    )
+    if lane is None:
+        return JSONResponse(status_code=404, content={"error": f"Lane '{data.lane_id}' not found on this worker"})
+    # A lane mid-generation cannot sleep without cutting requests off. The
+    # worker's mode="wait" drain would just wait it out (30 s budget) and end
+    # in a no-op, so answer the refusal synchronously with a reason the panel
+    # can display — same shape as manual_load_rejection_reason for loads.
+    active = int(lane.get("active_requests", 0) or 0)
+    if active > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Lane is serving {active} active request(s); wait for them to finish before sleeping it.",
+        )
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="sleep_lane",
+        params={"lane_id": data.lane_id, "level": 1, "mode": "wait"},
+    )
+
+
+@app.post("/internal/logosnode/lanes/wake", tags=["admin"])
+async def internal_logosnode_wake_lane(data: _InternalWakeLaneRequest, request: Request):
+    """Wake a sleeping lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="wake_lane",
+        params={"lane_id": data.lane_id},
     )
 
 

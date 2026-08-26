@@ -38,6 +38,14 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/logosnode/lanes/delete", Map.of("provider_id", providerId, "lane_id", laneId));
     }
 
+    public ResponseEntity<Map> sleepLane(int providerId, String laneId) {
+        return post("/internal/logosnode/lanes/sleep", Map.of("provider_id", providerId, "lane_id", laneId));
+    }
+
+    public ResponseEntity<Map> wakeLane(int providerId, String laneId) {
+        return post("/internal/logosnode/lanes/wake", Map.of("provider_id", providerId, "lane_id", laneId));
+    }
+
     /**
      * Requests a lane load. The orchestrator only accepts the request and loads
      * in the background — a model can take minutes — so this returns as quickly
