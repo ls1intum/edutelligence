@@ -334,21 +334,35 @@ class ModelProfileRegistry:
         return tp_changed
 
     def add_overrides(self, overrides: dict[str, dict[str, Any]]) -> None:
-        """Merge additional manual overrides (e.g. from capabilities_overrides)."""
-        for model_name, ov in overrides.items():
-            if not isinstance(ov, dict) or not ov:
-                continue
-            existing = self._manual_overrides.get(model_name)
-            if existing is not None:
-                existing.update(ov)
-            else:
-                self._manual_overrides[model_name] = dict(ov)
-        if overrides:
-            logger.info(
-                "Added inline profile overrides for %d model(s): %s",
-                len(overrides),
-                ", ".join(sorted(overrides)),
-            )
+        """Merge additional manual overrides (e.g. from capabilities_overrides).
+
+        Re-applies the merged overrides to profile records that already exist:
+        records loaded from the persisted model_profiles.yml are otherwise
+        never revisited after startup, so an override that arrives late — this
+        method is also called from the lane-spawn path for profile-level keys
+        routed out of engines.vllm.model_overrides — would be missing from the
+        live record and from the runtime snapshot the server planner reads.
+        """
+        if not overrides:
+            return
+        with self._lock:
+            for model_name, ov in overrides.items():
+                if not isinstance(ov, dict) or not ov:
+                    continue
+                existing = self._manual_overrides.get(model_name)
+                if existing is not None:
+                    existing.update(ov)
+                else:
+                    self._manual_overrides[model_name] = dict(ov)
+            for model_name in overrides:
+                profile = self._profiles.get(model_name)
+                if profile is not None:
+                    self._apply_manual_overrides(model_name, profile)
+        logger.info(
+            "Added inline profile overrides for %d model(s): %s",
+            len(overrides),
+            ", ".join(sorted(overrides)),
+        )
 
     def _apply_manual_overrides(self, model_name: str, profile: ModelProfileRecord) -> bool:
         """Apply operator-provided overrides from config.yml."""

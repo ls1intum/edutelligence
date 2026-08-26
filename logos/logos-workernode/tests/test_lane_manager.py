@@ -7,8 +7,10 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
+from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import (
     DeviceInfo,
     DeviceSummary,
@@ -2190,3 +2192,68 @@ def test_model_overrides_can_set_chat_template() -> None:
 
     assert merged.vllm_config is not None
     assert merged.vllm_config.chat_template == "qwen3-tools.jinja"
+
+
+def test_model_overrides_profile_keys_are_routed_to_registry() -> None:
+    """A profile-level key in model_overrides must not fail lane creation.
+
+    Production incident: an operator placed min_context_fraction under
+    engines.vllm.model_overrides; the extra="forbid" VllmConfig validation
+    aborted the whole add_lane. The key must instead be routed to the model
+    profile registry, where the server planner reads it from the runtime
+    snapshot — even when the profile record already exists (calibrated model).
+    """
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model-27b", 50000.0, engine="vllm", kv_cache_sent_mb=8000.0)
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(
+            model_overrides={
+                "org/model-27b": {
+                    "min_context_fraction": 1.0,
+                    "enable_sleep_mode": False,
+                }
+            }
+        ),
+        lane_port_start=15000,
+        lane_port_end=15010,
+        model_profiles=registry,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None
+    assert merged.vllm_config.enable_sleep_mode is False
+    profile = registry.get_profile("org/model-27b")
+    assert profile is not None
+    assert profile.min_context_fraction == 1.0
+
+
+def test_model_overrides_invalid_engine_value_still_fails() -> None:
+    """A genuinely type-invalid engine value must keep failing loudly."""
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(model_overrides={"org/model-27b": {"max_num_seqs": "abc"}}),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    with pytest.raises(ValidationError):
+        manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+
+def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
+    """An unrecognized key must not abort lane creation either."""
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(model_overrides={"org/model-27b": {"totally_bogus_key": 1}}),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None

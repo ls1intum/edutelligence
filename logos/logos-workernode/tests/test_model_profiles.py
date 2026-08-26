@@ -669,3 +669,34 @@ def test_kv_max_model_len_pairs_persist_across_restart(tmp_path):
         {"kv_mb": 1024.0, "max_model_len": 1000},
         {"kv_mb": 2048.0, "max_model_len": 2000},
     ]
+
+
+def test_add_overrides_reapplies_to_existing_record():
+    """Overrides arriving after a record exists must reach the live record.
+
+    Records loaded from the persisted model_profiles.yml are otherwise never
+    revisited after startup, so a late override would stay in the store but
+    not on the record — and the runtime snapshot the server planner reads
+    would miss it.
+    """
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model-27b", 50000.0, engine="vllm", kv_cache_sent_mb=8000.0)
+    profile = registry.get_profile("org/model-27b")
+    assert profile is not None
+    assert profile.min_context_fraction is None
+
+    registry.add_overrides({"org/model-27b": {"min_context_fraction": 0.5}})
+
+    profile = registry.get_profile("org/model-27b")
+    assert profile.min_context_fraction == 0.5
+
+
+def test_add_overrides_before_record_creation_lands_on_seeded_record():
+    """Overrides registered before the record exists apply at seed time."""
+    registry = ModelProfileRegistry()
+    registry.add_overrides({"org/model-7b": {"min_context_fraction": 1.0}})
+    registry.seed_capabilities(["org/model-7b"], engine="vllm")
+
+    profile = registry.get_profile("org/model-7b")
+    assert profile is not None
+    assert profile.min_context_fraction == 1.0
