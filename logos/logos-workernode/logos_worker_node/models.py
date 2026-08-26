@@ -342,10 +342,16 @@ class MetalConfig(BaseModel):
     """Apple-Silicon / vllm-metal engine settings.
 
     Only consulted when the worker runs the Metal backend (macOS, or
-    LOGOS_WORKER_BACKEND=metal). The vllm-metal plugin keeps vLLM's CLI, so
-    lanes still carry a VllmConfig; what differs is that Metal's tuning knobs
-    are environment variables rather than CLI flags, and that CUDA-only flags
-    must not be emitted at all.
+    LOGOS_WORKER_BACKEND=metal). The vllm-metal plugin keeps vLLM's CLI and
+    tracks vLLM releases closely — it currently vendors the same 0.28.x the
+    CUDA image pins — so lanes still carry an ordinary VllmConfig. What differs
+    is that Metal has a handful of knobs exposed only as environment variables,
+    and that a few CUDA-only CLI flags do not exist in this build at all.
+
+    Field set verified against vllm_metal.envs of
+    vllm-metal 0.3.0.dev20260826. Upstream renames these between dev builds
+    (0.2.0 had VLLM_METAL_BLOCK_SIZE and VLLM_METAL_PREFIX_CACHE*, both gone),
+    so re-check after an upgrade rather than assuming.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -367,41 +373,33 @@ class MetalConfig(BaseModel):
         gt=0.0,
         le=1.0,
         description="Fraction of the Metal working set a lane may use, passed "
-        "as VLLM_METAL_MEMORY_FRACTION. This is the Metal counterpart to "
-        "--gpu-memory-utilization, which vllm-metal does not honour. None "
-        "(default) leaves vllm-metal's own default in place.",
+        "as VLLM_METAL_MEMORY_FRACTION. None (default) leaves it at vllm-metal's "
+        "'auto', which derives a --gpu-memory-utilization itself (0.92 observed "
+        "on a 36 GB M3 Pro) and logs the full memory breakdown at startup. Set "
+        "a float only to override that.",
     )
     use_paged_attention: bool | None = Field(
         default=None,
         description="Select vllm-metal's paged-attention KV path via "
-        "VLLM_METAL_USE_PAGED_ATTENTION. None (default) leaves the plugin's "
-        "choice alone. Marked experimental upstream.",
-    )
-    block_size: int = Field(
-        default=0,
-        ge=0,
-        description="KV block size passed as VLLM_METAL_BLOCK_SIZE. 0 = plugin default.",
+        "VLLM_METAL_USE_PAGED_ATTENTION (upstream default: enabled). None "
+        "(default) leaves the plugin's choice alone. Required for hybrid "
+        "SDPA+GDN models such as Qwen3.5/3.8, where the plugin translates "
+        "vLLM's block size to a Metal-compatible one.",
     )
     multimodal_mode: str = Field(
         default="",
         description="VLLM_METAL_MULTIMODAL_MODE: 'auto' (default), "
         "'text-only-compat', or 'multimodal-native'. Relevant for the "
         "Qwen3.5/3.6/3.8 conditional-generation wrappers, which advertise a "
-        "multimodal config but which vllm-metal serves text-only unless the "
-        "native path is forced. Empty = leave unset.",
-    )
-    prefix_cache_fraction: float | None = Field(
-        default=None,
-        gt=0.0,
-        le=1.0,
-        description="Share of the KV budget reserved for prefix caching "
-        "(VLLM_METAL_PREFIX_CACHE_FRACTION). None = plugin default.",
+        "multimodal config even when served text-only. Empty = leave unset.",
     )
     env_overrides: dict[str, str] = Field(
         default_factory=dict,
         description="Extra environment variables for every Metal lane on this "
-        "worker. Applied before the lane's own vllm_config.env_overrides, so a "
-        "per-model setting still wins.",
+        "worker — the escape hatch for VLLM_METAL_* knobs without a dedicated "
+        "field (GDN_LAZY_KERNELS, DECODE_PIPELINE, COMPILED_MLP, MLA_KERNEL, "
+        "VISIBLE_DEVICES, …). Applied before the lane's own "
+        "vllm_config.env_overrides, so a per-model setting still wins.",
     )
 
     @field_validator("multimodal_mode")

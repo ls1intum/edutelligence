@@ -70,15 +70,18 @@ engines:
     model_overrides:
       "mlx-community/Qwen3.8-27B-8bit":
         tensor_parallel_size: 1
-        # KV cache is unusually expensive for this model: 64 layers × 4 KV
-        # heads × head_dim 256 = 256 KiB per token, i.e. 8 GiB at 32k context
-        # (twice what a head_dim-128 model of this size would cost). Leaving
-        # the context unbounded lets vLLM size against the model's full 262144
-        # window and the lane will not fit.
+        # Qwen3.8 is a hybrid: 16 SDPA layers carry a growing KV cache, the
+        # other 48 are GDN linear layers with a fixed per-sequence state. Only
+        # the SDPA layers scale with context. Leaving the window unbounded lets
+        # vLLM size against the model's full 262144 and the lane will not fit.
         max_model_len: 32768
-        # MLX quantization is described in the checkpoint's config.json; do not
+        # MLX quantization is declared in the checkpoint's config.json; do not
         # pass --quantization, vLLM infers it.
         quantization: ""
+        # Leave gpu_memory_utilization unset: vllm-metal derives one from
+        # VLLM_METAL_MEMORY_FRACTION=auto by measuring the real Metal working
+        # set (0.92 observed on a 36 GB M3 Pro) and logs the breakdown at
+        # startup. A hand-set value replaces that measurement with a guess.
 
 
 # ── Capacity profiles (hand-measured; replaces calibration) ──────────────────
@@ -88,28 +91,41 @@ engines:
 # with residency_source="override" counts as valid, so the model is advertised
 # normally (see main.py, the ready_caps filter).
 #
-# How to measure base_residency_mb: start the lane, let it idle, then read
-# used_memory_mb from GET /runtime — or `sysctl vm.page_pageable_internal_count`
-# before and after. Round up; underestimating causes the planner to
-# over-subscribe the node.
+# Read the numbers off the lane's own startup log — vllm-metal prints the full
+# breakdown, which beats estimating:
 #
-# Sizing reference, Qwen3.8-27B (kv_per_token_bytes = 262144):
-#   weights   8bit ≈ 27.5 GB | 4bit ≈ 15.0 GB
-#   KV cache  8 GiB per 32k of context
-#   budget    Metal working set ≈ 0.78 × RAM
-#     36 GB Mac → ~28 GB budget → 8bit does NOT fit; use 4bit at ≤16k
-#     64 GB Mac → ~50 GB budget → 8bit at 32k fits (27.5 + 8 = 35.5 GB)
-#    128 GB Mac → ~99 GB budget → 8bit at 128k fits comfortably
+#   Paged attention memory breakdown: metal_limit=30.15GB, fraction=0.92,
+#   usable_metal=27.74GB, model_memory=15.13GB, overhead=1.16GB,
+#   kv_budget=11.44GB, per_block_bytes=105902080, num_blocks=108,
+#   max_tokens_cached=84672
+#   Hybrid cache initialized: 16 SDPA layers (108 blocks), 48 linear layers
+#
+#   base_residency_mb  ≈ (model_memory + overhead) in MiB
+#   kv_per_token_bytes ≈ kv_budget / max_tokens_cached
+#
+# The values below come from that log for the 4bit build on a 36 GB M3 Pro
+# (measured 2026-08-26, vllm-metal 0.3.0.dev20260826 / vLLM 0.28.0). The 8bit
+# figures scale its weights by the quantization ratio and keep the same KV
+# cost — re-measure on the target Mac and correct them.
+#
+# Sizing reference, Qwen3.8-27B:
+#   weights   8bit ≈ 27.5 GB | 4bit ≈ 15.1 GB (measured)
+#   KV        ≈ 135 KiB per token (hybrid: only 16 of 64 layers scale)
+#   budget    Metal working set ≈ 0.78 × RAM, then × ~0.92 usable
+#     36 GB Mac → 27.7 GB usable → 8bit does NOT fit; 4bit leaves ~11 GB for KV
+#     64 GB Mac → ~46 GB usable  → 8bit fits with ~18 GB for KV
+#    128 GB Mac → ~91 GB usable  → 8bit fits comfortably at full context
 model_profile_overrides:
   "mlx-community/Qwen3.8-27B-8bit":
-    base_residency_mb: 28160
-    kv_per_token_bytes: 262144
+    base_residency_mb: 29400
+    kv_per_token_bytes: 138344
     max_context_length: 262144
     disk_size_bytes: 29527900160
 
   # 4bit alternative for Macs that cannot hold the 8bit weights.
+  # These two figures are measured, not estimated.
   "mlx-community/Qwen3.8-27B-4bit":
-    base_residency_mb: 15360
-    kv_per_token_bytes: 262144
+    base_residency_mb: 16680
+    kv_per_token_bytes: 138344
     max_context_length: 262144
     disk_size_bytes: 16106127360

@@ -53,6 +53,7 @@ CI (GitHub Actions)                    Mac (native)
 | CPU | Apple Silicon (arm64) — Rosetta Python cannot load MLX |
 | Python | 3.12+, native arm64 |
 | Docker | only to fetch and unpack the artifact |
+| vllm-metal | ≥ 0.3.0.dev20260826 for Qwen3.8 (0.2.0 cannot load it) |
 | RAM | see the sizing table below |
 
 ---
@@ -133,15 +134,31 @@ sysctl hw.memsize iogpu.wired_limit_mb
 ~/.venv-vllm-metal/bin/python -c "import mlx.core as mx; print(mx.device_info())"
 ```
 
-**Qwen3.8-27B** is unusually KV-hungry: 64 layers × 4 KV heads × head_dim 256 =
-**256 KiB per token**, twice what a head_dim-128 model of the same size costs.
-That is 8 GiB of KV cache for every 32k of context, and it dominates the sizing:
+**Qwen3.8-27B is a hybrid model**: 16 of its 64 layers use SDPA attention and
+carry a growing KV cache; the other 48 are GDN linear layers with a fixed
+per-sequence state. Only the SDPA layers scale with context, so the naive
+"64 layers × 4 KV heads × head_dim 256" figure overstates the cost roughly
+twofold.
 
-| RAM | GPU budget | 8bit (27.5 GB) | 4bit (15 GB) |
+Do not estimate — the plugin prints the real breakdown at lane startup:
+
+```
+Paged attention memory breakdown: metal_limit=30.15GB, fraction=0.92,
+usable_metal=27.74GB, model_memory=15.13GB, overhead=1.16GB,
+kv_budget=11.44GB, per_block_bytes=105902080, num_blocks=108,
+max_tokens_cached=84672
+Hybrid cache initialized: 16 SDPA layers (108 blocks), 48 linear layers
+```
+
+Measured on a 36 GB M3 Pro with the 4bit build (vllm-metal 0.3.0.dev20260826):
+15.1 GB of weights, 11.4 GB of KV budget, 84672 tokens cached — about
+135 KiB per token.
+
+| RAM | usable Metal | 8bit (27.5 GB) | 4bit (15.1 GB) |
 |---|---|---|---|
-| 36 GB | ~28 GB | does not fit | ✅ up to ~16k context |
-| 64 GB | ~50 GB | ✅ up to ~64k | ✅ comfortably |
-| 128 GB | ~99 GB | ✅ up to ~256k | ✅ comfortably |
+| 36 GB | ~27.7 GB | does not fit | ✅ measured, ~11 GB left for KV |
+| 64 GB | ~46 GB | ✅ ~18 GB for KV | ✅ comfortably |
+| 128 GB | ~91 GB | ✅ full context | ✅ comfortably |
 
 Raise the budget above the default fraction if needed (resets on reboot):
 
@@ -225,14 +242,29 @@ public once (Package settings → Change visibility). Until then:
 
 ## Version pinning
 
-Unlike the CUDA image, vLLM is **not** pinned here — `install.sh` upstream
-installs a matched (vllm, mlx, torch) set, and pulling those apart is how you
-get an unbootable lane. The two stacks therefore run different vLLM versions
-(CUDA 0.28.x, vllm-metal 0.19.x at time of writing), which is why
-`MetalVllmProcessHandle` builds its own command line rather than filtering the
-CUDA one.
+Unlike the CUDA image, vLLM is **not** pinned here. vllm-metal's `install.sh`
+pins it by full wheel URL (PyPI carries no macOS vLLM wheel) together with a
+matched mlx and torch; pulling that set apart is how you get an unbootable
+lane. As of 0.3.0.dev20260826 it installs vLLM 0.28.0 — the same release the
+CUDA image pins — but the two drift apart between upgrades, since vllm-metal
+can only follow vLLM releases that actually attach a macOS wheel.
 
-`logos_update-vllm.yml` only touches `Dockerfile`, not `Dockerfile.mlx`, so
-automated vLLM bumps do not affect this path. `tests/test_metal_process.py`
-cross-checks the generated flags against the installed vllm-metal whenever the
-suite runs on a Mac, which is what catches an upstream flag rename.
+That is why `MetalVllmProcessHandle` builds its own command line instead of
+filtering the CUDA one, and why `tests/test_metal_process.py` cross-checks the
+generated flags against the *installed* vllm-metal whenever the suite runs on a
+Mac. `logos_update-vllm.yml` only touches `Dockerfile`, not `Dockerfile.mlx`,
+so automated vLLM bumps do not reach this path.
+
+Keep vllm-metal current. It moves fast and dev builds are published daily;
+Qwen3.8 support landed in 08/2026, and 0.2.0 could not serve it at all. Re-run
+`install-macos.sh` — it is idempotent — or upstream's installer directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
+```
+
+Two things to re-check after an upgrade, both of which changed between 0.2.0
+and 0.3.0.dev: the `VLLM_METAL_*` names in `MetalConfig`
+(`VLLM_METAL_BLOCK_SIZE` and `VLLM_METAL_PREFIX_CACHE*` were removed), and
+whether any flag the worker emits has been renamed — the cross-check test
+covers the second.

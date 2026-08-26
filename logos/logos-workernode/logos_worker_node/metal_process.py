@@ -11,12 +11,14 @@ What this subclass changes, and why
 ───────────────────────────────────
 • The command line. CUDA-only flags must not merely be left at their defaults
   — several do not exist in the Metal build's argparse and would abort startup.
-  Note also that the two stacks are on different vLLM versions (the CUDA image
-  pins 0.28.x, vllm-metal currently vendors 0.19.x), so flag *syntax* diverges
-  too: ``--attention-config.backend`` on the CUDA side is ``--attention-backend``
-  here. Building the command separately keeps one from silently breaking the
-  other; tests/test_metal_process.py asserts the result against the real
-  ``vllm serve --help=all`` surface.
+  ``--attention-config.backend`` and ``--cuda-graph-sizes`` are both absent
+  (verified against vllm-metal 0.3.0.dev20260826, which vendors vLLM 0.28.0 —
+  the same release the CUDA image pins). The two builds do track each other
+  closely today, but vllm-metal pins vLLM by full wheel URL and lags real
+  releases, so the surfaces drift apart between upgrades. Building the command
+  separately keeps one from silently breaking the other, and
+  tests/test_metal_process.py asserts the result against the real
+  ``vllm serve --help=all`` surface whenever the suite runs on a Mac.
 
 • The environment. Metal's tuning knobs are env vars (``VLLM_METAL_*``), not
   CLI flags — most importantly VLLM_METAL_MEMORY_FRACTION, which takes the
@@ -188,44 +190,6 @@ class MetalVllmProcessHandle(VllmProcessHandle):
             return models_path
         return str(Path.home() / "Library" / "Caches" / "logos-workernode")
 
-    # Model families whose reasoning parser must not be inferred on this
-    # backend. Measured against vllm-metal 0.2.0 / vLLM 0.19.1 with
-    # mlx-community/Qwen3.5-2B-8bit: with --reasoning-parser qwen3 the response
-    # comes back with BOTH content and reasoning_content set to None while
-    # usage still reports the generated tokens — the text is parsed away and
-    # the caller gets an empty message. Without the flag the same request
-    # returns its content normally.
-    #
-    # Scoped to Metal on purpose. The shared rule in vllm_process.py was added
-    # for the CUDA image, which runs a much newer vLLM (0.28.x), and there is
-    # no CUDA hardware here to prove the same failure. Narrowing it to this
-    # backend fixes the observed breakage without touching a working path.
-    _REASONING_PARSER_UNSUPPORTED = ("qwen3.5", "qwen3.6", "qwen3.8")
-
-    def _resolve_reasoning_parser(self, lane_config: LaneConfig) -> str | None:
-        """Reasoning parser for this lane, or None to emit no flag.
-
-        An explicit vllm_config.reasoning_parser always wins — the suppression
-        below only applies to values this worker would have guessed.
-        """
-        vc = lane_config.vllm_config
-        assert vc is not None  # guarded by the caller
-        explicit = (vc.reasoning_parser or "").strip()
-        if explicit:
-            return None if explicit == "none" else explicit
-
-        model_lower = lane_config.model.lower()
-        if any(marker in model_lower for marker in self._REASONING_PARSER_UNSUPPORTED):
-            logger.info(
-                "[%s] suppressing inferred reasoning parser for %s — on vllm-metal it "
-                "consumes the response body (content=None). Set "
-                "vllm_config.reasoning_parser explicitly to override.",
-                self.lane_id,
-                lane_config.model,
-            )
-            return None
-        return _infer_reasoning_parser(lane_config.model)
-
     # ------------------------------------------------------------------
     # Command line
     # ------------------------------------------------------------------
@@ -238,7 +202,6 @@ class MetalVllmProcessHandle(VllmProcessHandle):
           --attention-config.backend not in this argparse (see module docstring)
           --cuda-graph-sizes         CUDA graph capture does not exist here
           --enable-sleep-mode        needs CuMemAllocator
-          --gpu-memory-utilization   ignored; VLLM_METAL_MEMORY_FRACTION instead
           --kv-cache-dtype           fp8 KV is a CUDA kernel feature
           --cpu-offload-gb           meaningless on unified memory
           --compilation-config       no inductor cache to place
@@ -289,6 +252,14 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
 
+        # Unlike the 0.2.0 line, this build honours --gpu-memory-utilization:
+        # it derives one from VLLM_METAL_MEMORY_FRACTION (0.92 observed with the
+        # default 'auto') and logs the resulting breakdown. Forward an explicit
+        # per-model value when one is configured; otherwise stay out of the way
+        # and let the plugin size itself against the real Metal working set.
+        if vc.gpu_memory_utilization is not None:
+            cmd.extend(["--gpu-memory-utilization", str(vc.gpu_memory_utilization)])
+
         if vc.enable_prefix_caching:
             cmd.append("--enable-prefix-caching")
 
@@ -302,9 +273,15 @@ class MetalVllmProcessHandle(VllmProcessHandle):
             cmd.append("--enable-auto-tool-choice")
             cmd.extend(["--tool-call-parser", parser])
 
-        reasoning_parser = self._resolve_reasoning_parser(lane_config)
-        if reasoning_parser:
-            cmd.extend(["--reasoning-parser", reasoning_parser])
+        # Inherited inference applies unchanged. On vllm-metal 0.2.0 (vLLM
+        # 0.19.1) --reasoning-parser qwen3 used to swallow the whole response
+        # for Qwen3.5/3.8 — content and reasoning_content both None. Re-measured
+        # on 0.3.0.dev20260826 / vLLM 0.28.0: content='METAL_OK' with
+        # reasoning_tokens=31 correctly split out, so no workaround is needed.
+        if vc.reasoning_parser != "none":
+            reasoning_parser = vc.reasoning_parser or _infer_reasoning_parser(lane_config.model)
+            if reasoning_parser:
+                cmd.extend(["--reasoning-parser", reasoning_parser])
 
         cmd.extend(["--mm-processor-cache-gb", str(vc.mm_processor_cache_gb)])
 
@@ -364,15 +341,8 @@ class MetalVllmProcessHandle(VllmProcessHandle):
             env["VLLM_METAL_MEMORY_FRACTION"] = str(mc.memory_fraction)
         if mc.use_paged_attention is not None:
             env["VLLM_METAL_USE_PAGED_ATTENTION"] = "1" if mc.use_paged_attention else "0"
-        if mc.block_size > 0:
-            env["VLLM_METAL_BLOCK_SIZE"] = str(mc.block_size)
         if mc.multimodal_mode:
             env["VLLM_METAL_MULTIMODAL_MODE"] = mc.multimodal_mode
-        if mc.prefix_cache_fraction is not None:
-            env["VLLM_METAL_PREFIX_CACHE_FRACTION"] = str(mc.prefix_cache_fraction)
-        # Prefix caching is requested on the command line; keep the plugin's
-        # own switch consistent with it so the two cannot disagree.
-        env["VLLM_METAL_PREFIX_CACHE"] = "1" if vc.enable_prefix_caching else "0"
 
         # Worker-wide Metal overrides first, then per-model ones, so a model
         # override still wins over a node-wide default.

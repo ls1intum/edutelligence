@@ -19,12 +19,17 @@ from logos_worker_node.models import LaneConfig, MetalConfig, OllamaConfig, Vllm
 
 # Flags that exist only in the CUDA build, or that vllm-metal ignores. Emitting
 # any of these either aborts argparse or silently misconfigures the lane.
+# Flags that must never reach a Metal lane. Either absent from this build's
+# argparse (verified against vllm-metal 0.3.0.dev20260826 / vLLM 0.28.0) or
+# meaningless on unified memory.
+#
+# --gpu-memory-utilization is deliberately NOT here: unlike the 0.2.0 line,
+# this build honours it and derives one from VLLM_METAL_MEMORY_FRACTION.
 FORBIDDEN_FLAGS = {
     "--tensor-parallel-size",
     "--attention-config.backend",
     "--cuda-graph-sizes",
     "--enable-sleep-mode",
-    "--gpu-memory-utilization",
     "--kv-cache-dtype",
     "--cpu-offload-gb",
     "--compilation-config",
@@ -104,10 +109,21 @@ class TestBuildCmd:
         cmd = handle._build_cmd(lane)
         assert cmd[cmd.index("--max-model-len") + 1] == "16384"
 
-    def test_infers_the_tool_call_parser(self, handle) -> None:
+    def test_infers_tool_and_reasoning_parsers(self, handle) -> None:
+        """Both are inherited. Verified end-to-end on the 27B model:
+        content='METAL_OK' with reasoning_tokens split into their own field."""
         cmd = handle._build_cmd(make_lane())
         assert "--enable-auto-tool-choice" in cmd
         assert cmd[cmd.index("--tool-call-parser") + 1]
+        assert cmd[cmd.index("--reasoning-parser") + 1] == "qwen3"
+
+    def test_gpu_memory_utilization_is_forwarded_when_set(self, handle) -> None:
+        cmd = handle._build_cmd(make_lane(gpu_memory_utilization=0.85))
+        assert cmd[cmd.index("--gpu-memory-utilization") + 1] == "0.85"
+
+    def test_gpu_memory_utilization_is_omitted_by_default(self, handle) -> None:
+        """Unset means: let vllm-metal size itself against the Metal working set."""
+        assert "--gpu-memory-utilization" not in handle._build_cmd(make_lane())
 
     def test_reasoning_parser_none_suppresses_the_flag(self, handle) -> None:
         cmd = handle._build_cmd(make_lane(reasoning_parser="none"))
@@ -126,52 +142,6 @@ class TestBuildCmd:
         assert "--quantization" in handle._build_cmd(make_lane(quantization="awq"))
 
 
-class TestReasoningParserSuppression:
-    """Qwen3.5/3.6/3.8 must not get an inferred reasoning parser on Metal.
-
-    Measured against vllm-metal 0.2.0 (vLLM 0.19.1): with
-    --reasoning-parser qwen3 the response comes back with content=None AND
-    reasoning_content=None while usage still counts the generated tokens —
-    the answer is silently parsed away. Without the flag it returns normally.
-    """
-
-    @pytest.mark.parametrize(
-        "model",
-        [
-            "mlx-community/Qwen3.8-27B-8bit",
-            "mlx-community/Qwen3.5-2B-8bit",
-            "mlx-community/Qwen3.6-9B-4bit",
-        ],
-    )
-    def test_no_parser_is_inferred_for_the_affected_families(self, handle, model) -> None:
-        lane = LaneConfig(model=model, vllm=True, vllm_config=VllmConfig())
-        assert "--reasoning-parser" not in handle._build_cmd(lane)
-
-    def test_an_explicit_parser_still_wins(self, handle) -> None:
-        """Suppression applies to guesses, never to an operator's choice."""
-        lane = LaneConfig(
-            model="mlx-community/Qwen3.8-27B-8bit",
-            vllm=True,
-            vllm_config=VllmConfig(reasoning_parser="qwen3"),
-        )
-        cmd = handle._build_cmd(lane)
-        assert cmd[cmd.index("--reasoning-parser") + 1] == "qwen3"
-
-    def test_explicit_none_still_suppresses(self, handle) -> None:
-        lane = LaneConfig(
-            model="mlx-community/Qwen3.8-27B-8bit",
-            vllm=True,
-            vllm_config=VllmConfig(reasoning_parser="none"),
-        )
-        assert "--reasoning-parser" not in handle._build_cmd(lane)
-
-    def test_unaffected_families_keep_their_inferred_parser(self, handle) -> None:
-        """The suppression must stay narrow, not disable inference wholesale."""
-        lane = LaneConfig(model="google/gemma-4-9b-it", vllm=True, vllm_config=VllmConfig())
-        cmd = handle._build_cmd(lane)
-        assert cmd[cmd.index("--reasoning-parser") + 1] == "gemma4"
-
-
 class TestBuildEnv:
     def test_sets_no_cuda_or_nccl_variables(self, handle) -> None:
         env = handle._build_env(make_lane())
@@ -182,31 +152,35 @@ class TestBuildEnv:
         handle._metal_config = MetalConfig(
             memory_fraction=0.85,
             use_paged_attention=True,
-            block_size=32,
             multimodal_mode="text-only-compat",
-            prefix_cache_fraction=0.25,
         )
         env = handle._build_env(make_lane())
         assert env["VLLM_METAL_MEMORY_FRACTION"] == "0.85"
         assert env["VLLM_METAL_USE_PAGED_ATTENTION"] == "1"
-        assert env["VLLM_METAL_BLOCK_SIZE"] == "32"
         assert env["VLLM_METAL_MULTIMODAL_MODE"] == "text-only-compat"
-        assert env["VLLM_METAL_PREFIX_CACHE_FRACTION"] == "0.25"
 
     def test_unset_knobs_emit_nothing(self, handle) -> None:
-        """An unset knob must leave vllm-metal's own default alone."""
+        """An unset knob must leave vllm-metal's own default alone.
+
+        Matters for memory_fraction in particular: its upstream default is the
+        string 'auto', under which the plugin measures the real working set and
+        derives a --gpu-memory-utilization. Writing a number here would replace
+        that measurement with a guess.
+        """
         env = handle._build_env(make_lane())
         for key in (
             "VLLM_METAL_MEMORY_FRACTION",
             "VLLM_METAL_USE_PAGED_ATTENTION",
-            "VLLM_METAL_BLOCK_SIZE",
             "VLLM_METAL_MULTIMODAL_MODE",
         ):
             assert key not in env
 
-    def test_prefix_cache_switch_follows_the_cli_flag(self, handle) -> None:
-        assert handle._build_env(make_lane(enable_prefix_caching=True))["VLLM_METAL_PREFIX_CACHE"] == "1"
-        assert handle._build_env(make_lane(enable_prefix_caching=False))["VLLM_METAL_PREFIX_CACHE"] == "0"
+    def test_no_stale_knobs_from_the_0_2_line(self, handle) -> None:
+        """VLLM_METAL_BLOCK_SIZE / PREFIX_CACHE* were removed upstream."""
+        handle._metal_config = MetalConfig(memory_fraction=0.85, use_paged_attention=True)
+        env = handle._build_env(make_lane())
+        for key in ("VLLM_METAL_BLOCK_SIZE", "VLLM_METAL_PREFIX_CACHE", "VLLM_METAL_PREFIX_CACHE_FRACTION"):
+            assert key not in env
 
     def test_model_overrides_beat_worker_wide_ones(self, handle) -> None:
         handle._metal_config = MetalConfig(env_overrides={"VLLM_METAL_DEBUG": "0", "SHARED": "worker"})
