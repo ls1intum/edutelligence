@@ -60,7 +60,7 @@ class ClassificationManager:
         classifier=None,
         system=None,
         skip_laura: bool = False,
-    ) -> List[Tuple[int, int, int, int]]:
+    ) -> List[Tuple[int, float, int]]:
         """
         Classify prompts and assign them to a model.
         Returns a sorted list with the best suited model-id at the front together with

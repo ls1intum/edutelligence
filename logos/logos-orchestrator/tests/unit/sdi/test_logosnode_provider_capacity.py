@@ -43,7 +43,9 @@ def _provider(monkeypatch, lanes, *, config=None, with_registry=True, model_ids=
         lambda self: {"models": []},
     )
 
-    facade = LogosNodeSchedulingDataFacade(PriorityQueueManager(), runtime_registry=_FakeRegistry() if with_registry else None)
+    facade = LogosNodeSchedulingDataFacade(
+        PriorityQueueManager(), runtime_registry=_FakeRegistry() if with_registry else None
+    )
     for model_id in model_ids or [1]:
         facade.register_model(model_id, "logosnode", "http://fake", model_name, 65536, provider_id=provider_id)
     return facade._providers[provider_id]
