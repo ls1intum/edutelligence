@@ -664,8 +664,8 @@ class DBManager:
                         text(
                             """
                         INSERT INTO models (name, weight_latency, weight_accuracy,
-                                            weight_cost, weight_quality, tags, parallel, description)
-                        VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                            weight_cost, weight_quality, tags, description)
+                        VALUES (:name, 0, 0, 0, 0, '', '')
                         RETURNING id
                     """
                         ),
@@ -774,8 +774,8 @@ class DBManager:
                         text(
                             """
                             INSERT INTO models (name, weight_latency, weight_accuracy,
-                                                weight_cost, weight_quality, tags, parallel, description)
-                            VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                                weight_cost, weight_quality, tags, description)
+                            VALUES (:name, 0, 0, 0, 0, '', '')
                             RETURNING id
                             """
                         ),
@@ -1870,7 +1870,6 @@ class DBManager:
                               m.weight_cost,
                               m.weight_quality,
                               m.tags,
-                              m.parallel,
                               m.description,
                               (
                                   SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -1937,7 +1936,6 @@ class DBManager:
                                 m.weight_cost,
                                 m.weight_quality,
                                 m.tags,
-                                m.parallel,
                                 m.description,
                                 (
                                     SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -1982,7 +1980,6 @@ class DBManager:
                 "weight_cost": r.weight_cost,
                 "weight_quality": r.weight_quality,
                 "tags": r.tags,
-                "parallel": r.parallel,
                 "description": r.description,
                 "input_usd_per_million": r.input_usd_per_million,
                 "output_usd_per_million": r.output_usd_per_million,
@@ -2009,7 +2006,6 @@ class DBManager:
             "weight_cost": result.weight_cost,
             "weight_quality": result.weight_quality,
             "tags": result.tags,
-            "parallel": result.parallel,
             "description": result.description,
         }
 

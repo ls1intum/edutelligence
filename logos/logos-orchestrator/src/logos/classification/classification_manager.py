@@ -126,7 +126,6 @@ class ClassificationManager:
                     i["id"],
                     i["classification_weight"].get_weight(),
                     adjusted_policy["priority"],
-                    i["parallel"],
                 )
                 for i in filtered
             ],

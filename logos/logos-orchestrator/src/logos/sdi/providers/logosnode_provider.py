@@ -384,7 +384,6 @@ class LogosNodeDataProvider:
                 capacity, source = int(configured), "config"
             else:
                 capacity, source = self.DEFAULT_PARALLEL_CAPACITY, "default"
-
         return capacity, source
 
     def get_model_status(self, model_id: int) -> ModelStatus:

@@ -2632,7 +2632,6 @@ def classifier() -> ClassificationManager:
                         "weight_cost": tpl["weight_cost"],
                         "weight_quality": tpl["weight_quality"],
                         "tags": tpl["tags"],
-                        "parallel": tpl["parallel"],
                         "description": tpl["description"],
                         "classification_weight": Balancer(),
                     }
