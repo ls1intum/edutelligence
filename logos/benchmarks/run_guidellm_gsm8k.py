@@ -83,10 +83,47 @@ def build_scenario(
     }
 
 
-def default_output_dir(model_provider_id: int) -> Path:
+def default_output_dir(model_provider_id: int | None, model: str) -> Path:
     """Create a unique default directory so previous runs are never overwritten."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return Path("benchmark_results") / "guidellm" / f"{timestamp}-pair-{model_provider_id}"
+    identifier = f"pair-{model_provider_id}" if model_provider_id is not None else model.replace("/", "-")
+    return Path("benchmark_results") / "guidellm" / f"{timestamp}-{identifier}"
+
+
+def validate_successful_report(report_path: Path, expected_samples: int) -> None:
+    """Reject reports without one complete, error-free benchmark."""
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not read GuideLLM report {report_path}: {exc}") from exc
+
+    failure_details: list[str] = []
+    for benchmark in report.get("benchmarks", []):
+        metrics = benchmark.get("metrics", {})
+        totals = metrics.get("request_totals", {})
+        successful = int(totals.get("successful", 0))
+        incomplete = int(totals.get("incomplete", 0))
+        errored = int(totals.get("errored", 0))
+        total = int(totals.get("total", 0))
+        if (
+            successful == expected_samples
+            and total == expected_samples
+            and incomplete == 0
+            and errored == 0
+        ):
+            return
+
+        failure_details.append(
+            f"successful={successful}/{expected_samples}, incomplete={incomplete}, errored={errored}"
+        )
+        for request in benchmark.get("requests", {}).get("errored", []):
+            error = request.get("info", {}).get("error")
+            if error:
+                failure_details.append(str(error))
+                break
+
+    detail = "; ".join(failure_details) or "no benchmark results"
+    raise RuntimeError(f"GuideLLM benchmark failed: {detail}. Report kept at {report_path}")
 
 
 def run(args: argparse.Namespace) -> Path:
@@ -107,10 +144,13 @@ def run(args: argparse.Namespace) -> Path:
                 "or pass --no-provider-auth for an unauthenticated local endpoint."
             )
 
-    if not os.environ.get(args.logos_token_env):
+    if not args.no_import and args.model_provider_id is None:
+        raise RuntimeError("--model-provider-id is required unless --no-import is used")
+
+    if not args.no_import and not os.environ.get(args.logos_token_env):
         raise RuntimeError(f"Set the Logos admin token in {args.logos_token_env}")
 
-    output_dir = args.output_dir or default_output_dir(args.model_provider_id)
+    output_dir = args.output_dir or default_output_dir(args.model_provider_id, args.model)
     output_dir.mkdir(parents=True, exist_ok=False)
     report_path = (output_dir / "benchmarks.json").resolve()
     scenario = build_scenario(
@@ -131,13 +171,18 @@ def run(args: argparse.Namespace) -> Path:
             scenario_path = Path(scenario_file.name)
         scenario_path.chmod(0o600)
 
+        pair_label = args.model_provider_id if args.model_provider_id is not None else "not imported"
         print(
-            f"Running GuideLLM: pair={args.model_provider_id}, model={args.model}, "
+            f"Running GuideLLM: pair={pair_label}, model={args.model}, "
             f"dataset={DEFAULT_DATASET}, samples={args.samples}"
         )
+        guidellm_env = os.environ.copy()
+        if sys.platform == "darwin":
+            guidellm_env.setdefault("GUIDELLM__MP_CONTEXT_TYPE", "spawn")
         subprocess.run(
             [guidellm_bin, "run", "--config", str(scenario_path)],
             check=True,
+            env=guidellm_env,
         )
     finally:
         if scenario_path is not None:
@@ -145,6 +190,11 @@ def run(args: argparse.Namespace) -> Path:
 
     if not report_path.is_file():
         raise RuntimeError(f"GuideLLM did not create {report_path}")
+
+    validate_successful_report(report_path, args.samples)
+
+    if args.no_import:
+        return report_path
 
     importer = Path(__file__).with_name("import_guidellm_results.py")
     subprocess.run(
@@ -168,7 +218,7 @@ def run(args: argparse.Namespace) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-provider-id", type=positive_int, required=True)
+    parser.add_argument("--model-provider-id", type=positive_int)
     parser.add_argument("--target", required=True, help="OpenAI-compatible base URL")
     parser.add_argument("--model", required=True, help="Model name expected by the provider")
     parser.add_argument("--samples", type=positive_int, default=100)
@@ -177,6 +227,11 @@ def main() -> None:
     parser.add_argument("--provider-token-env", default="MODEL_PROVIDER_API_KEY")
     parser.add_argument("--no-provider-auth", action="store_true")
     parser.add_argument("--logos-token-env", default="LOGOS_BENCHMARK_TOKEN")
+    parser.add_argument(
+        "--no-import",
+        action="store_true",
+        help="Keep benchmarks.json locally without calling the Logos import endpoint",
+    )
     parser.add_argument(
         "--logos-api-url",
         default="http://localhost:18082/logosdb/model_benchmarks/import",
@@ -191,7 +246,8 @@ def main() -> None:
         report_path = run(args)
     except (RuntimeError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"error: {exc}\n")
-    print(f"Benchmark imported successfully. Local report: {report_path}")
+    outcome = "saved locally" if args.no_import else "imported successfully"
+    print(f"Benchmark {outcome}. Local report: {report_path}")
 
 
 if __name__ == "__main__":
