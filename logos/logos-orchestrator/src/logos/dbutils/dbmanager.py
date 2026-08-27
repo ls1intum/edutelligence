@@ -412,7 +412,7 @@ class DBManager:
             text(
                 """
                  INSERT INTO jobs (status, request_payload, api_key_id, team_id, user_id, environment)
-                 VALUES (:status, :payload::jsonb, :aki, :tid, :uid, :env) RETURNING id
+                 VALUES (:status, CAST(:payload AS jsonb), :aki, :tid, :uid, :env) RETURNING id
                  """
             ),
             {
@@ -492,8 +492,8 @@ class DBManager:
                 INSERT INTO model_provider_benchmarks
                     (model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
                 VALUES
-                    (:model_provider_id, :configuration::jsonb, :dataset, :sample_size,
-                     :metrics::jsonb, :recorded_at)
+                    (:model_provider_id, CAST(:configuration AS jsonb), :dataset, :sample_size,
+                     CAST(:metrics AS jsonb), :recorded_at)
                 RETURNING id
                 """
             ),
