@@ -80,8 +80,8 @@
                   @if (row.lane.queue_waiting != null) {
                     <span class="stat-label">Queue <span class="stat-value neutral">{{ row.lane.queue_waiting }}</span></span>
                   }
-                  @if (row.lane.requests_running != null) {
-                    <span class="stat-label">Running <span class="stat-value neutral">{{ row.lane.requests_running }}</span></span>
+                  @if (row.runningLabel != null) {
+                    <span class="stat-label" [attr.title]="row.runningTooltip">Running <span class="stat-value neutral">{{ row.runningLabel }}</span></span>
                   }
                 </div>
               </div>

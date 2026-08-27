@@ -35,6 +35,39 @@ function ttftColor(secs: number): string {
   return 'rgb(var(--color-error))';
 }
 
+/**
+ * The vLLM lane's "Running" line as "a / b (min. c)":
+ * - a: requests running right now (vLLM `num_requests_running`).
+ * - b: current concurrency capacity — the already-running requests plus how
+ *      many full-context requests fit into the free KV headroom. Request
+ *      contexts are rarely full, so this floats with the workload, usually
+ *      above c.
+ * - c: the minimum the worker guarantees — its KV budget at full context
+ *      (vLLM's startup log line "Maximum concurrency for N tokens per
+ *      request"). Shown only when b actually exceeds it; at idle "0 / 8"
+ *      would just restate the minimum.
+ *
+ * Returns null when the lane reports no running count (the line stays
+ * hidden) and plain "a" while c is unknown (lane still starting up, or the
+ * startup log not parsed yet). Ollama lanes keep their "Active" line and
+ * never reach here.
+ */
+function runningLabel(
+  lane: Pick<LaneSignalData, 'requests_running' | 'num_parallel'>,
+  kvPct: number | null,
+): string | null {
+  const a = lane.requests_running;
+  if (a == null) return null;
+  const c = lane.num_parallel;
+  if (!c || c <= 0) return String(a);
+  if (kvPct == null) return `${a} / ${c}`;
+  const free = Math.max(0, 1 - kvPct / 100);
+  // Block rounding can push the KV fraction slightly past the token ratio,
+  // so clamp b to the guaranteed minimum instead of dipping below it.
+  const b = Math.max(c, a + Math.floor(c * free));
+  return b > c ? `${a} / ${b} (min. ${c})` : `${a} / ${b}`;
+}
+
 export interface LaneRow {
   laneId: string;
   lane: LaneSignalData;
@@ -44,6 +77,10 @@ export interface LaneRow {
   ttftLabel: string | null;
   /** Served context window, abbreviated — "111k". Null when unreported. */
   contextLabel: string | null;
+  /** "2 / 11 (min. 8)" — see runningLabel(); null when the line is hidden. */
+  runningLabel: string | null;
+  /** Tooltip explaining the running/capacity numbers; null when none apply. */
+  runningTooltip: string | null;
 }
 
 /**
@@ -110,6 +147,7 @@ export class LaneHealthPanel implements OnChanges {
       .map(([laneId, lane]) => {
         const kvPct = lane.gpu_cache_usage_percent;
         const ttft = lane.ttft_p95_seconds;
+        const running = runningLabel(lane, kvPct);
         return {
           laneId,
           lane,
@@ -123,18 +161,19 @@ export class LaneHealthPanel implements OnChanges {
                 : `${ttft.toFixed(2)}s`
               : null,
           contextLabel: formatContextWindow(lane.max_model_len),
+          runningLabel: running,
+          runningTooltip:
+            running != null && lane.num_parallel != null && lane.num_parallel > 0
+              ? 'Currently running / current capacity (live KV headroom). (min. N): guaranteed at full context — the worker-reported KV budget.'
+              : null,
         };
       });
   }
 
-  /** "GPU 0-1 · ×4" style placement line; null when the lane reports none. */
+  /** "GPU 0-1" style placement line; null when the lane reports none. */
   gpuLabel(lane: LaneSignalData): string | null {
     const gpu = (lane.effective_gpu_devices || lane.gpu_devices || '').trim();
-    const np = lane.num_parallel;
-    const parts: string[] = [];
-    if (gpu) parts.push(`GPU ${gpu}`);
-    if (np != null && np > 1) parts.push(`×${np}`);
-    return parts.length > 0 ? parts.join(' · ') : null;
+    return gpu ? `GPU ${gpu}` : null;
   }
 
   get providerId(): number | null {

@@ -32,7 +32,7 @@ class FcfScheduler(BaseScheduler):
             return None
 
         sorted_candidates = sorted(request.classified_models, key=lambda x: x[1], reverse=True)
-        target_model_id, weight, priority_int, _ = sorted_candidates[0]
+        target_model_id, weight, priority_int = sorted_candidates[0]
 
         # Multi-provider: find ALL deployments for the top candidate
         matching = [d for d in request.deployments if d["model_id"] == target_model_id]

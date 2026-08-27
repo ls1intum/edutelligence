@@ -281,7 +281,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
 
     class FakeClassifier:
         def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
-            return [(27, 1.0, 1, 1)]
+            return [(27, 1.0, 1)]
 
     class FakeScheduler:
         def __init__(self):
@@ -341,7 +341,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_raises():
 
     class FakeClassifier:
         def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
-            return [(27, 1.0, 1, 1)]
+            return [(27, 1.0, 1)]
 
     class FakeScheduler:
         def __init__(self):

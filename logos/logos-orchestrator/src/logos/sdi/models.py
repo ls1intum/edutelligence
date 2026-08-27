@@ -182,7 +182,7 @@ class LaneSchedulerSignals:
     ttft_p95_seconds: float  # computed from ttft_histogram, 0.0 if unavailable
     e2e_latency_p50_seconds: float  # p50 end-to-end request latency, 0.0 if unavailable
     effective_vram_mb: float
-    num_parallel: int  # Ollama: explicit, vLLM: 0 (continuous batching)
+    num_parallel: int  # Ollama: explicit; vLLM: worker-reported engine max concurrency (0 until the worker reports it)
     gpu_memory_utilization: Optional[float] = None  # vLLM planner target
     tensor_parallel_size: Optional[int] = None  # vLLM topology hint
     gpu_devices: Optional[str] = None  # GPU device indices e.g. "0,1"
