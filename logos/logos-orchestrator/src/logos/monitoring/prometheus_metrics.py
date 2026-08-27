@@ -89,6 +89,17 @@ PREFIX_AFFINITY_TOTAL = Counter(
     registry=registry,
 )
 
+WORKER_CANCELLATIONS_TOTAL = Counter(
+    "logos_worker_cancellations_total",
+    "Cancellations sent to a worker for a request whose client went away",
+    # aborted    — the worker stopped a generation that was still running
+    # already_done — the cancel raced a stream that had just finished
+    # unsupported  — worker predates the cancel action; the request runs on
+    # failed       — the cancel could not be delivered
+    ["result"],
+    registry=registry,
+)
+
 # ---------------------------------------------------------------------------
 # Demand tracker
 # ---------------------------------------------------------------------------

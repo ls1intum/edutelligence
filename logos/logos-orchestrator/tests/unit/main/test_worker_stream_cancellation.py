@@ -373,3 +373,63 @@ async def test_an_abandoned_response_reaches_the_worker_as_a_cancellation(monkey
     frames = websocket.cancel_frames()
     assert len(frames) == 1, "the worker was never told the request was abandoned"
     assert frames[0]["params"] == {"target_cmd_id": cmd_id}
+
+
+# ---------------------------------------------------------------------------
+# Observability — the counter is how the fix is verified in production
+# ---------------------------------------------------------------------------
+
+
+def _cancellation_counts() -> dict[str, float]:
+    from logos.monitoring import prometheus_metrics as prom
+
+    counts: dict[str, float] = {}
+    for metric in prom.registry.collect():
+        if metric.name != "logos_worker_cancellations":
+            continue
+        for sample in metric.samples:
+            if sample.name.endswith("_total"):
+                counts[sample.labels["result"]] = sample.value
+    return counts
+
+
+def _delta(before: dict[str, float], after: dict[str, float], label: str) -> float:
+    return after.get(label, 0.0) - before.get(label, 0.0)
+
+
+@pytest.mark.asyncio
+async def test_an_aborted_generation_is_counted():
+    registry, websocket = _registry_with_session()
+    before = _cancellation_counts()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
+    await consumer
+    await stream.aclose()
+    await _drain_pending_tasks()
+
+    assert _delta(before, _cancellation_counts(), "aborted") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_worker_that_cannot_cancel_is_counted_separately():
+    """Distinguishes "nothing to abort" from "this node still leaks ghosts",
+    which is what a rolling upgrade needs to be visible."""
+    registry, websocket = _registry_with_session(actions=set())
+    before = _cancellation_counts()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
+    await consumer
+    await stream.aclose()
+    await _drain_pending_tasks()
+
+    after = _cancellation_counts()
+    assert _delta(before, after, "unsupported") == 1
+    assert _delta(before, after, "aborted") == 0

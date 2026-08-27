@@ -14,6 +14,7 @@ from typing import Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
+from logos.monitoring import prometheus_metrics as prom
 from logos.terminal_logging import (
     BOLD,
     CYAN,
@@ -1162,6 +1163,7 @@ class LogosNodeRuntimeRegistry:
                 CANCEL_COMMAND_ACTION,
                 cmd_id[:8],
             )
+            prom.WORKER_CANCELLATIONS_TOTAL.labels(result="unsupported").inc()
             return
 
         async def _send() -> None:
@@ -1178,6 +1180,7 @@ class LogosNodeRuntimeRegistry:
                         cmd_id[:8],
                         session.worker_id,
                     )
+                    prom.WORKER_CANCELLATIONS_TOTAL.labels(result="aborted").inc()
                 else:
                     # It had already finished — the cancel simply raced it.
                     logger.debug(
@@ -1185,6 +1188,7 @@ class LogosNodeRuntimeRegistry:
                         cmd_id[:8],
                         session.worker_id,
                     )
+                    prom.WORKER_CANCELLATIONS_TOTAL.labels(result="already_done").inc()
             except Exception as exc:  # noqa: BLE001
                 # A worker that has gone away drops its lanes anyway; nothing
                 # here is worth escalating past debug.
@@ -1194,6 +1198,7 @@ class LogosNodeRuntimeRegistry:
                     session.worker_id,
                     exc,
                 )
+                prom.WORKER_CANCELLATIONS_TOTAL.labels(result="failed").inc()
 
         try:
             task = asyncio.get_running_loop().create_task(

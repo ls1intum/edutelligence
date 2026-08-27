@@ -303,4 +303,5 @@ At the default `0.25` that is worth roughly 15s of expected wait (penalty satura
 |--------|--------|---------|
 | `logos_admission_holds_total` | `reason` = `worker_capacity` \| `backend_queue` \| `kv_cache_pressure` \| `engine_at_capacity` | Requests kept at orchestrator level instead of forwarded |
 | `logos_prefix_affinity_total` | `result` = `hit` \| `miss` \| `honored` \| `diverted` | Affinity lookups and whether the scheduler followed them |
+| `logos_worker_cancellations_total` | `result` = `aborted` \| `already_done` \| `unsupported` \| `failed` | Cancellations sent for abandoned requests. `unsupported` counts nodes that still leak ghost generations — the number to watch during a rolling worker upgrade |
 | `DEFAULT_GENERATION_TIME_S` | `3.0` | `ettft_estimator.py` | Per-request generation time for queue wait estimation |
