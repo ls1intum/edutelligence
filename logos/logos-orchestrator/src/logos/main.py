@@ -3005,6 +3005,14 @@ async def _streaming_response(
             # registry is dropped in the finally below, so a client that walks
             # away cannot leave an entry behind.
             _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
+            # A client that walks away mid-stream closes this generator, which
+            # raises GeneratorExit at the `yield` — no exception reaches the
+            # handler below, so without this flag the request was recorded as
+            # a success. It is not one: nobody read the answer, and the
+            # generation was cancelled on the worker. Recording it honestly
+            # also completes the disconnect count, which until now only saw
+            # the clients that left *before* the first token.
+            stream_completed = False
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
@@ -3047,8 +3055,14 @@ async def _streaming_response(
                             continue
                         error_message = str(e)
                         raise e
+                    stream_completed = True
                     break  # stream completed without raising
             finally:
+                if not stream_completed and error_message is None:
+                    error_message = (
+                        "Client disconnected mid-stream; upstream generation cancelled "
+                        f"after {stream_log.streamed_tokens().get('completion_tokens', 0)} token(s)."
+                    )
                 _live_streams.finish(request_id)
                 stream_log.finish()
                 response_payload = stream_log.response_payload()

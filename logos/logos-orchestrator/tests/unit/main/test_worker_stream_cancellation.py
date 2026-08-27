@@ -433,3 +433,96 @@ async def test_a_worker_that_cannot_cancel_is_counted_separately():
     after = _cancellation_counts()
     assert _delta(before, after, "unsupported") == 1
     assert _delta(before, after, "aborted") == 0
+
+
+# ---------------------------------------------------------------------------
+# An abandoned stream must not be recorded as a success
+#
+# The client closing the response raises GeneratorExit at the `yield`, so no
+# exception reaches the handler and the request used to be logged as
+# "success". It is not one: nobody read the answer and the generation was
+# cancelled on the worker. It also means the disconnect count only ever saw
+# the clients that left before the first token.
+# ---------------------------------------------------------------------------
+
+
+async def _run_streamer(monkeypatch, *, abandon_after: int | None):
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    chunks = [
+        b'data: {"id":"c1","choices":[{"delta":{"content":"hel"}}]}\n\n',
+        b'data: {"id":"c2","choices":[{"delta":{"content":"lo"}}]}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+
+    async def fake_send_stream_command(**kwargs):  # noqa: ARG001
+        for chunk in chunks:
+            yield chunk
+
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=fake_send_stream_command),
+        raising=False,
+    )
+    completion_calls: list[dict] = []
+    pipeline, _c, _r = _make_pipeline(completion_calls=completion_calls)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        42,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-stream",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+
+    body = response.body_iterator
+    if abandon_after is None:
+        async for _chunk in body:
+            pass
+    else:
+        for _ in range(abandon_after):
+            await body.__anext__()
+        await body.aclose()
+    return completion_calls
+
+
+@pytest.mark.asyncio
+async def test_a_stream_read_to_the_end_is_a_success(monkeypatch):
+    calls = await _run_streamer(monkeypatch, abandon_after=None)
+    assert calls[-1]["result_status"] == "success"
+    assert calls[-1]["error_message"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_stream_the_client_walked_away_from_is_not(monkeypatch):
+    calls = await _run_streamer(monkeypatch, abandon_after=1)
+    assert calls[-1]["result_status"] == "error"
+    assert "disconnected mid-stream" in calls[-1]["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_reason_says_how_far_it_got(monkeypatch):
+    """Distinguishes "left immediately" from "read most of it", which is what
+    makes the number actionable."""
+    calls = await _run_streamer(monkeypatch, abandon_after=1)
+    assert "token(s)" in calls[-1]["error_message"]
