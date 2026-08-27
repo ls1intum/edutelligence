@@ -72,7 +72,7 @@ async def test_cloud_candidate_selected_immediately():
     """A cloud candidate is accepted by _try_immediate_select with no queueing."""
     scheduler = _make_scheduler()
 
-    candidates = [(1, 5.0, 1, 1)]
+    candidates = [(1, 5.0, 1)]
     deployments = [{"model_id": 1, "provider_id": 20, "type": "cloud"}]
     request = SchedulingRequest(
         request_id="req-cloud",
