@@ -24,9 +24,14 @@ from __future__ import annotations
 from typing import Any, Iterator, Optional
 
 # Characters per token. Real tokenizers land near 3.5-4 for English prose and
-# code; 3.0 keeps the estimate above the true count for the mixed text
-# (identifiers, JSON, diffs) coding assistants actually send.
-CHARS_PER_TOKEN = 3.0
+# code. Tool-heavy agent traffic (repeated tool names, JSON framing, diffs)
+# tokenizes at ~3.6-3.7 measured against the Qwen tokenizer, so 3.5 stays
+# slightly above the true count for prose while dropping the ~20 % overshoot
+# that 3.0 produced on agent payloads. That overshoot once pushed a request
+# that fit its 256k window over the estimate's limit and 404'd the whole
+# model out of routing (#810) — so the estimate must track the traffic it
+# actually sees, not a worst case.
+CHARS_PER_TOKEN = 3.5
 
 # What a client is assumed to reserve for its own output when the payload does
 # not say. 20000 is what Claude Code reserves — it caps its reservation there

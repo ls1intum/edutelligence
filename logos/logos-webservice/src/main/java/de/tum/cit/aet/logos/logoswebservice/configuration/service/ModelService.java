@@ -50,7 +50,6 @@ public class ModelService {
         Model model = new Model();
         model.setName(req.name());
         model.setTags(req.tags() != null ? req.tags() : "");
-        model.setParallel(req.parallel() != null ? req.parallel() : 1);
         model.setDescription(req.description() != null ? req.description() : "");
         model.setWeightLatency(0);
         model.setWeightAccuracy(0);
@@ -73,7 +72,6 @@ public class ModelService {
         if (req.name() != null) model.setName(req.name());
         if (req.description() != null) model.setDescription(req.description());
         if (req.tags() != null) model.setTags(req.tags());
-        if (req.parallel() != null) model.setParallel(req.parallel());
         if (req.weightLatency() != null) model.setWeightLatency(req.weightLatency());
         if (req.weightAccuracy() != null) model.setWeightAccuracy(req.weightAccuracy());
         if (req.weightCost() != null) model.setWeightCost(req.weightCost());
@@ -103,7 +101,6 @@ public class ModelService {
             map.put("weight_cost", m.getWeightCost());
             map.put("weight_quality", m.getWeightQuality());
             map.put("tags", m.getTags());
-            map.put("parallel", m.getParallel());
             map.put("description", m.getDescription());
             return map;
         });
@@ -137,7 +134,6 @@ public class ModelService {
         m.put("weight_cost", p.getWeightCost());
         m.put("weight_quality", p.getWeightQuality());
         m.put("tags", p.getTags());
-        m.put("parallel", p.getParallel());
         m.put("description", p.getDescription());
         m.put("input_usd_per_million", p.getInputUsdPerMillion());
         m.put("output_usd_per_million", p.getOutputUsdPerMillion());

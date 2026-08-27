@@ -303,20 +303,6 @@
       />
     </div>
 
-    <p class="form-section-label form-section-label--mt">Routing</p>
-    <div class="form-field">
-      <label class="field-label" for="add-parallel">Parallelism</label>
-      <input
-        id="add-parallel"
-        class="field-input field-input--short"
-        type="number"
-        min="1"
-        [value]="addParallel()"
-        (input)="addParallel.set($any($event.target).value)"
-        [disabled]="addLoading()"
-      />
-    </div>
-
     <p class="form-section-label form-section-label--mt">Weights</p>
     <div class="form-row">
       <div class="form-field">
@@ -440,20 +426,6 @@
         (input)="editTags.set($any($event.target).value)"
         [disabled]="editLoading()"
         autocomplete="off"
-      />
-    </div>
-
-    <p class="form-section-label form-section-label--mt">Routing</p>
-    <div class="form-field">
-      <label class="field-label" for="edit-parallel">Parallelism</label>
-      <input
-        id="edit-parallel"
-        class="field-input field-input--short"
-        type="number"
-        min="1"
-        [value]="editParallel()"
-        (input)="editParallel.set($any($event.target).value)"
-        [disabled]="editLoading()"
       />
     </div>
 

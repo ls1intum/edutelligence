@@ -143,7 +143,7 @@ class RequestPipeline:
             )
 
         sorted_candidates = sorted(classification_result.candidates, key=lambda x: x[1], reverse=True)
-        target_model_id, _, priority_int, _ = sorted_candidates[0]
+        target_model_id, _, priority_int = sorted_candidates[0]
         target_deployment = next(
             (d for d in request.deployments if d["model_id"] == target_model_id),
             None,
@@ -446,7 +446,7 @@ class RequestPipeline:
             "classification_time": elapsed,
             "candidate_count": len(candidates),
             "candidates": [
-                {"model_id": m, "weight": w, "priority": p} for m, w, p, _ in candidates[:5]  # Top 5 for logging
+                {"model_id": m, "weight": w, "priority": p} for m, w, p in candidates[:5]  # Top 5 for logging
             ],
         }
 

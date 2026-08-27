@@ -218,7 +218,7 @@ async def test_offline_logosnode_provider_is_skipped_in_favor_of_online_one():
         {"model_id": 1, "provider_id": offline_provider, "type": "logosnode"},
         {"model_id": 1, "provider_id": online_provider, "type": "logosnode"},
     ]
-    request = _make_request([(1, 1.0, 0, 4)], deployments)
+    request = _make_request([(1, 1.0, 0)], deployments)
 
     result = await scheduler.schedule(request)
 
@@ -239,7 +239,7 @@ async def test_offline_only_logosnode_provider_returns_no_candidate():
 
     scheduler = _make_scheduler(logosnode=logosnode)
     deployments = [{"model_id": 1, "provider_id": offline_provider, "type": "logosnode"}]
-    request = _make_request([(1, 1.0, 0, 4)], deployments)
+    request = _make_request([(1, 1.0, 0)], deployments)
 
     result = await scheduler.schedule(request)
     assert result is None
@@ -311,7 +311,7 @@ async def test_schedule_attaches_warmth_state_to_result():
     logosnode.set_view(1, 10, _make_view(model_id=1, provider_id=10, best_lane_state="running"))
     scheduler = _make_scheduler(logosnode=logosnode)
     request = _make_request(
-        [(1, 10.0, 5, 4)],
+        [(1, 10.0, 5)],
         [{"model_id": 1, "provider_id": 10, "type": "logosnode"}],
     )
     result = await scheduler.schedule(request)

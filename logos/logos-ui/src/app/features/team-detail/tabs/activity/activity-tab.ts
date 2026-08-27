@@ -67,15 +67,20 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   readonly pageIndex = signal(0);
 
   /**
-   * How many loads are in flight, and the number of the newest one. The pager
-   * only moves while none is in flight, and a load may only apply its answer
-   * while it is still the newest: with a page still loading, a click used to
-   * advance the index on the strength of the previous page's answer — its
-   * `has_more` flag and next cursor both pointed at the page behind — walking
-   * past the last page (issue #799).
+   * Load bookkeeping, numbered in the order the loads start. The pager only
+   * moves while the newest unsettled load is out, and a load may only apply
+   * its answer while it is still the newest: with a page still loading, a
+   * click used to advance the index on the strength of the previous page's
+   * answer — its `has_more` flag and next cursor both pointed at the page
+   * behind — walking past the last page (issue #799).
    */
-  private loadsInFlight = signal(0);
   private loadSeq = 0;
+  /** Seqs of the loads still out. */
+  private inFlightSeqs = new Set<number>();
+  /** Highest seq still out, 0 when none. */
+  private newestInFlight = signal(0);
+  /** Highest seq that has settled, however its answer was fated. */
+  private settledSeq = signal(0);
 
   private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -101,11 +106,13 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   readonly hasNext = computed(() => !!this.activity()?.requests_has_more);
 
   /**
-   * A page load is in flight. The pager buttons wait for it to land: while
-   * the answer is out, the page on screen is not the newest one, so neither
-   * its `has_more` flag nor its next cursor may be acted on (issue #799).
+   * A load the pager must wait for is still out. The pager waits only on the
+   * newest unsettled load: an older one's answer will be dropped, so it
+   * cannot push the page anywhere — letting a slow stale request hold the
+   * buttons shut would just stall the pager after the shown page is ready
+   * (issue #799).
    */
-  readonly pageLoadInFlight = computed(() => this.loadsInFlight() > 0);
+  readonly pageLoadInFlight = computed(() => this.newestInFlight() > this.settledSeq());
 
   /** 1-based number of the first row on this page, for the "21-40 of n" line. */
   readonly firstRowNumber = computed(() =>
@@ -248,7 +255,8 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   private async load(): Promise<void> {
     if (!this.teamId) return;
     const seq = ++this.loadSeq;
-    this.loadsInFlight.update((n) => n + 1);
+    this.inFlightSeqs.add(seq);
+    this.newestInFlight.set(seq);
     try {
       const payload = await this.activityService.getActivity(this.teamId, this.days(), {
         userId: this.filterUserId(),
@@ -269,7 +277,10 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
       // outage.
       this.error.set('Could not refresh activity.');
     } finally {
-      this.loadsInFlight.update((n) => n - 1);
+      this.inFlightSeqs.delete(seq);
+      this.settledSeq.update((s) => Math.max(s, seq));
+      const stillOut = [...this.inFlightSeqs];
+      this.newestInFlight.set(stillOut.length > 0 ? Math.max(...stillOut) : 0);
       this.loading.set(false);
     }
   }
