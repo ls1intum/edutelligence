@@ -1022,10 +1022,18 @@ def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
     request that was already settled, or one that never got as far as being
     enqueued.
     """
-    if not request_id or _pipeline is None:
+    if not request_id:
+        return
+    # `_pipeline` is bound by start_pipeline(), not at module scope, so before
+    # startup the *name* does not exist — a bare reference raises NameError
+    # rather than yielding None. This runs on the failure path, which is
+    # reachable before the pipeline is up: a request arriving during the
+    # startup grace period is rejected without one.
+    pipeline = globals().get("_pipeline")
+    if pipeline is None:
         return
     try:
-        _pipeline.discard_request(request_id, result_status)
+        pipeline.discard_request(request_id, result_status)
     except Exception:  # noqa: BLE001 — monitoring must never break a request
         logger.debug("Failed to discard in-flight state for %s", request_id, exc_info=True)
 

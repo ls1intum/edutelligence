@@ -149,3 +149,13 @@ def test_no_pipeline_yet_is_not_an_error(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", None, raising=False)
 
     main._record_log_failure(None, "req-1", "boom")  # must not raise
+
+
+def test_a_failure_before_the_pipeline_name_even_exists(monkeypatch):
+    """`_pipeline` is bound by start_pipeline(), not at module scope, so
+    before startup the name is absent rather than None — a bare reference
+    raises NameError. Requests do arrive then: the startup grace period
+    rejects them without a pipeline."""
+    monkeypatch.delattr(main, "_pipeline", raising=False)
+
+    main._record_log_failure(None, "req-1", "boom")  # must not raise
