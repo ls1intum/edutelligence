@@ -213,7 +213,7 @@ Admission reads the live lane signals the worker reports (the same ones §4 uses
 
 | Signal | Source | Gate |
 |--------|--------|------|
-| `queue_waiting` | vLLM `num_requests_waiting` | The engine is already parking work → hold (`LOGOS_BACKEND_QUEUE_THRESHOLD`, default 0) |
+| `queue_waiting` | vLLM `num_requests_waiting` | The engine is already parking work → hold (`BACKEND_QUEUE_PRESSURE_THRESHOLD`, a constant — see §12) |
 | `gpu_cache_usage_percent` | vLLM `gpu_cache_usage_perc` | ≥ 90% → hold: vLLM is about to preempt and recompute, which also evicts the prefix-cache blocks §11 depends on |
 
 **`num_parallel` is deliberately not used as a ceiling.** It is the concurrency vLLM guarantees *at full context* — the "Maximum concurrency for N tokens per request" line from its startup log, which the lane-health panel shows as `(min. c)`. Real requests use a fraction of their context, so the engine runs far past it: a production lane serves 8 concurrent requests with `num_parallel = 1` at 78% KV. Read as a ceiling, that lane would be throttled eightfold. It is a *lower bound on capacity*, which makes it sound as a step size and wrong as a limit.
@@ -293,14 +293,11 @@ At the default `0.25` that is worth roughly 15s of expected wait (penalty satura
 | `OVERHEAD_COLD_S` | `45.0` | `ettft_estimator.py` | Cold load time estimate |
 | `OVERHEAD_SLEEPING_S` | `2.5` | `ettft_estimator.py` | Sleep→wake transition estimate |
 | `OVERHEAD_RECLAIM_S` | `8.0` | `ettft_estimator.py` | VRAM eviction overhead |
-| `LOGOS_BACKEND_QUEUE_THRESHOLD` | `0` | env | Engine-side `queue_waiting` tolerated before holding at orchestrator level |
-| `LOGOS_KV_CACHE_PRESSURE_PERCENT` | `90` | env | KV-cache utilisation at which a vLLM lane stops being a forwarding target |
 | `LOGOS_PREFIX_AFFINITY_ENABLED` | `true` | env | Master switch; off restores random tie-break placement |
-| `LOGOS_PREFIX_AFFINITY_BONUS_FRACTION` | `0.25` | env | Affinity bonus as a fraction of the maximum ETTFT penalty |
-| `LOGOS_PREFIX_AFFINITY_TTL_S` | `900` | env | How long a (stream → worker) mapping stays valid |
-| `LOGOS_PREFIX_AFFINITY_BLOCK_CHARS` | `1024` | env | Prefix block granularity (~256 tokens) |
-| `LOGOS_PREFIX_AFFINITY_MAX_BLOCKS` | `32` | env | Blocks tracked per stream |
-| `LOGOS_PREFIX_AFFINITY_MAX_ENTRIES` | `20000` | env | LRU cap on the affinity table |
+| `BACKEND_QUEUE_PRESSURE_THRESHOLD` | `0` | `logosnode_provider.py` | Engine-side `queue_waiting` tolerated before holding. Derived, not tuned: any value above zero re-introduces the engine-side queueing the gate removes |
+| `KV_CACHE_PRESSURE_PERCENT` | `90` | `logosnode_provider.py` | KV utilisation at which a lane stops being a forwarding target |
+| `PREFIX_AFFINITY_BONUS_FRACTION` | `0.25` | `correcting_scheduler.py` | Affinity bonus as a fraction of the maximum ETTFT penalty (~15s of expected wait) |
+| `AFFINITY_TTL_S` / `AFFINITY_BLOCK_CHARS` / `AFFINITY_MAX_BLOCKS` / `AFFINITY_MAX_ENTRIES` | `900` / `1024` / `32` / `20000` | `prefix_affinity.py` | Stream-identity granularity and table bounds |
 
 ### Metrics
 

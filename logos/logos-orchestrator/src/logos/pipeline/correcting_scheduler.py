@@ -35,7 +35,7 @@ from .ettft_estimator import (
     estimate_ettft_cloud,
     estimate_ettft_local,
 )
-from .prefix_affinity import PrefixAffinityRouter, env_float
+from .prefix_affinity import PrefixAffinityRouter
 from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
@@ -44,8 +44,9 @@ logger = logging.getLogger(__name__)
 # penalty (weight_span × CORRECTION_STRENGTH).  0.25 makes stickiness worth
 # roughly 15s of expected wait: the familiar worker keeps the stream unless
 # a peer is meaningfully faster, which is the "if cheaply possible" the
-# routing is supposed to honour.  Set to 0 to score without affinity.
-PREFIX_AFFINITY_BONUS_FRACTION = env_float("LOGOS_PREFIX_AFFINITY_BONUS_FRACTION", 0.25)
+# routing is supposed to honour.  A policy weight in the same family as
+# CORRECTION_STRENGTH, and treated the same way — a constant, not a knob.
+PREFIX_AFFINITY_BONUS_FRACTION = 0.25
 
 
 class ClassificationCorrectingScheduler(BaseScheduler):

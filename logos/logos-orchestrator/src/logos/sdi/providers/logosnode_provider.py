@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -34,13 +33,6 @@ except ImportError:  # pragma: no cover
     PriorityQueueManager = None
 
 logger = logging.getLogger(__name__)
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
 
 
 class LogosNodeDataProvider:
@@ -806,21 +798,23 @@ class LogosNodeDataProvider:
             current_active = self._model_active.get(model_id, 0)
             self._model_active[model_id] = max(0, current_active - 1)
 
-    # Maximum backend queue_waiting tolerated before we refuse to forward.
-    # A request that only lands in the engine's own waiting queue is worse
-    # off there than in the orchestrator queue: it cannot be re-prioritised,
-    # re-scheduled onto a peer worker, or cancelled when the worker wants to
-    # drain for a restart — and it defeats prefix-aware routing, because the
-    # placement is already fixed.  Default 0 means "only forward what the
-    # engine can start now"; raise it via LOGOS_BACKEND_QUEUE_THRESHOLD to
-    # trade those properties back for a deeper engine-side pipeline.
-    BACKEND_QUEUE_PRESSURE_THRESHOLD = _env_float("LOGOS_BACKEND_QUEUE_THRESHOLD", 0.0)
+    # Engine-side queue_waiting tolerated before we stop forwarding.
+    #
+    # Zero is derived, not tuned. A request that only lands in the engine's
+    # own waiting queue is strictly worse off there than in the orchestrator
+    # queue: it cannot be re-prioritised, re-scheduled onto a peer, or
+    # cancelled when the worker wants to drain — and its placement is fixed,
+    # which defeats prefix-aware routing. Any value above zero re-introduces
+    # exactly the engine-side queueing this gate exists to remove, so there
+    # is no deployment for which a different number is right.
+    BACKEND_QUEUE_PRESSURE_THRESHOLD = 0.0
 
     # KV-cache utilisation (percent) at which a vLLM lane stops being a good
-    # forwarding target.  Past this point vLLM preempts and recomputes
-    # running sequences, which both stalls them and evicts the prefix-cache
-    # blocks that make sticky routing worthwhile.
-    KV_CACHE_PRESSURE_PERCENT = _env_float("LOGOS_KV_CACHE_PRESSURE_PERCENT", 90.0)
+    # forwarding target. Past this point vLLM preempts and recomputes running
+    # sequences, which both stalls them and evicts the prefix-cache blocks
+    # that make sticky routing worthwhile. A property of how vLLM behaves,
+    # not of any one deployment.
+    KV_CACHE_PRESSURE_PERCENT = 90.0
 
     def evaluate_admission(self, model_id: int) -> AdmissionDecision:
         """Should this worker be given another request for ``model_id`` now?

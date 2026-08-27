@@ -35,6 +35,12 @@ agree on the blocks they do produce.
 
 The map is deliberately soft state: an in-memory TTL/LRU table. Losing it
 costs one round of cache misses, nothing more.
+
+The sizing constants below are derived from how the mechanism works, not
+tuned per deployment, so they are plain constants — the same treatment
+``CORRECTION_STRENGTH`` and ``NORMALIZATION_HORIZON_S`` get in
+``ettft_estimator``. Only the on/off switch is an environment variable,
+because turning a routing change off in a hurry should not need a deploy.
 """
 
 from __future__ import annotations
@@ -52,45 +58,35 @@ logger = logging.getLogger(__name__)
 
 
 def env_bool(name: str, default: bool) -> bool:
-    # An unset *or empty* variable means "default": compose passes tuning
-    # knobs through as "${VAR:-}", so empty is the normal "not configured".
+    # An unset *or empty* variable means "default": compose passes the switch
+    # through as "${VAR:-}", so empty is the normal "not configured".
     raw = (os.getenv(name) or "").strip()
     if not raw:
         return default
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
-def env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-def env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-# Master switch — turning this off restores the previous random placement.
+# The one operational lever: turning this off restores the previous random
+# placement without a deploy, in the same spirit as
+# LOGOS_CAPACITY_PLANNER_ENABLED. Everything below is a derived constant
+# rather than a knob — see the module docstring.
 AFFINITY_ENABLED = env_bool("LOGOS_PREFIX_AFFINITY_ENABLED", True)
 
 # How long a (stream → worker) mapping stays useful. Roughly "how long the
 # engine is likely to still hold those KV blocks"; a stream that goes quiet
 # for longer than this has probably been evicted anyway.
-AFFINITY_TTL_S = env_float("LOGOS_PREFIX_AFFINITY_TTL_S", 900.0)
+AFFINITY_TTL_S = 900.0
 
-# Hard cap on the table (LRU beyond it). 20k entries ≈ a few MB.
-AFFINITY_MAX_ENTRIES = env_int("LOGOS_PREFIX_AFFINITY_MAX_ENTRIES", 20_000)
+# Hard cap on the table (LRU beyond it). 20k entries is a few MB.
+AFFINITY_MAX_ENTRIES = 20_000
 
 # Block granularity in characters (~4 chars/token, so ~256 tokens).
-AFFINITY_BLOCK_CHARS = env_int("LOGOS_PREFIX_AFFINITY_BLOCK_CHARS", 1024)
+AFFINITY_BLOCK_CHARS = 1024
 
 # Only the first N blocks are tracked: they already identify the stream, and
 # bounding them keeps hashing cost flat for very long conversations.
-AFFINITY_MAX_BLOCKS = env_int("LOGOS_PREFIX_AFFINITY_MAX_BLOCKS", 32)
+AFFINITY_MAX_BLOCKS = 32
+
 
 # Prompt-bearing fields that precede the conversation, in prompt order.
 _PREAMBLE_FIELDS = ("instructions", "system", "tools")
