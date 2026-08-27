@@ -319,6 +319,11 @@ class ProviderSession:
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
     max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
+    # Bumped once per absorbed runtime status. `last_heartbeat` cannot serve
+    # as a "new measurement" marker: stream chunks and command results bump
+    # it too, so under streaming load it changes constantly while the lane
+    # signals stay put.
+    runtime_revision: int = 0
     # Bridge actions the worker advertised in its hello. Used to feature-gate
     # commands a worker may not know yet — an unrecognised action comes back
     # as "Unsupported bridge command", so it is cheaper to ask first.
@@ -691,6 +696,7 @@ class LogosNodeRuntimeRegistry:
             return
         old_runtime = session.latest_runtime
         session.latest_runtime = runtime if isinstance(runtime, dict) else {}
+        session.runtime_revision += 1
         was_first = not session.first_status_received
         session.first_status_received = True
         session.last_heartbeat = _utc_now()
@@ -1271,6 +1277,7 @@ class LogosNodeRuntimeRegistry:
             "runtime": session.latest_runtime,
             "events": list(session.latest_events),
             "max_lanes": session.max_lanes,
+            "runtime_revision": session.runtime_revision,
         }
 
     def has_received_first_status(self, provider_id: int) -> bool:

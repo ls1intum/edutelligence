@@ -51,14 +51,25 @@ class _FakeRegistry:
 
     def __init__(self, lanes):
         self.lanes = lanes
+        self.runtime_revision = 0
         self.heartbeat = 0
 
     def new_report(self):
         """Stand in for the next status message arriving from the worker."""
+        self.runtime_revision += 1
+        self.heartbeat += 1
+
+    def chatter(self):
+        """Traffic that touches the session but carries no measurement —
+        a stream chunk, a command result, a bare heartbeat."""
         self.heartbeat += 1
 
     def peek_runtime_snapshot(self, provider_id: int):  # noqa: ARG002
-        return {"runtime": {"lanes": self.lanes}, "last_heartbeat": str(self.heartbeat)}
+        return {
+            "runtime": {"lanes": self.lanes},
+            "runtime_revision": self.runtime_revision,
+            "last_heartbeat": str(self.heartbeat),
+        }
 
     def is_provider_online(self, provider_id: int) -> bool:  # noqa: ARG002
         return True
@@ -370,3 +381,20 @@ def test_the_budget_is_tracked_per_model(monkeypatch):
     assert provider.try_reserve_capacity(1, "r1") is True
     assert provider.try_reserve_capacity(1, "r2") is False
     assert provider.try_reserve_capacity(2, "r3") is True
+
+
+def test_session_chatter_does_not_pass_for_a_measurement(monkeypatch):
+    """The budget must key on an actual runtime report. `last_heartbeat` is
+    bumped by stream chunks and command results too, so keying on it would
+    reset the budget on every chunk — disabling the gate under exactly the
+    streaming load it exists for.
+    """
+    provider = _provider(monkeypatch, [_lane(num_parallel=1)])
+    assert provider.try_reserve_capacity(1, "r0") is True
+    assert provider.try_reserve_capacity(1, "r1") is False
+
+    _registry_of(provider).chatter()
+    assert provider.try_reserve_capacity(1, "r2") is False, "chatter is not a measurement"
+
+    _registry_of(provider).new_report()
+    assert provider.try_reserve_capacity(1, "r3") is True

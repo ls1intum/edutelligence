@@ -890,8 +890,15 @@ class LogosNodeDataProvider:
         The new snapshot already accounts for those requests — in
         ``requests_running`` if the engine started them, in ``queue_waiting``
         if it did not. Either way the measurement supersedes our estimate.
+
+        Keyed on ``runtime_revision``, which the registry bumps once per
+        absorbed status. ``last_heartbeat`` would be wrong here: stream
+        chunks and command results bump it too, so under streaming load it
+        changes on every chunk and the budget would reset without any new
+        measurement behind it — leaving the gate a no-op under exactly the
+        load it exists for.
         """
-        marker = str((snapshot or {}).get("last_heartbeat") or "")
+        marker = str((snapshot or {}).get("runtime_revision") or "")
         if marker != self._snapshot_marker:
             self._snapshot_marker = marker
             self._forwarded_since_snapshot.clear()
