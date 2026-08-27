@@ -4145,26 +4145,23 @@ async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
 
 # How often the startup grace period re-checks for a (re)connected worker.
 _WORKER_CONNECT_POLL_SECONDS = 1.0
-# Default time a request may wait for a worker to (re)connect before failing.
-# A redeploy leaves a window in which no worker node is connected, during
-# which every logosnode deployment is filtered out and the request 404s with
-# "No available model deployments" — enough to kill a running consumer
-# mid-task. Workers re-attach within seconds of coming back up, so a bounded
-# wait turns the outage into a delay instead of a failure. Set
-# LOGOS_STARTUP_GRACE_PERIOD_SECONDS=0 to fail instantly.
-_DEFAULT_STARTUP_GRACE_PERIOD_S = 120.0
-_STARTUP_GRACE_PERIOD_ENV = "LOGOS_STARTUP_GRACE_PERIOD_SECONDS"
+# How long after startup the grace period lasts. A redeploy leaves a window
+# in which no worker node is connected, during which every logosnode
+# deployment is filtered out and the request 404s with "No available model
+# deployments" — enough to kill a running consumer mid-task. Workers
+# re-attach within seconds of coming back up, so during the first 120s a
+# request for a model no worker serves yet waits instead of failing, turning
+# the outage into a delay. Once the window has run out, the instant 404
+# comes back: a worker still missing then is down, not mid-redeploy.
+_STARTUP_GRACE_PERIOD_S = 120.0
+# Monotonic anchor for the grace window. The wall-clock _SERVER_START_TIME
+# can jump (NTP) and must not stretch or shrink the window with it.
+_SERVER_START_MONOTONIC = time.monotonic()
 
 
-def _startup_grace_period_s() -> float:
-    """The startup grace period in seconds; 0 disables the wait."""
-    raw = os.getenv(_STARTUP_GRACE_PERIOD_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_STARTUP_GRACE_PERIOD_S
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        return _DEFAULT_STARTUP_GRACE_PERIOD_S
+def _startup_grace_remaining_s() -> float:
+    """How much of the startup grace period is left (0 once it has run out)."""
+    return max(0.0, _STARTUP_GRACE_PERIOD_S - (time.monotonic() - _SERVER_START_MONOTONIC))
 
 
 def _client_timeout_s(payload: dict) -> Optional[float]:
@@ -4182,16 +4179,18 @@ async def _wait_for_worker_connect(
     request: Optional[Request] = None,
     client_timeout_s: Optional[float] = None,
 ) -> list[Deployment]:
-    """Re-run the deployment filter until a worker serves the model or the grace period expires.
+    """Re-run the deployment filter until a worker serves the model, the grace period runs out, or the client leaves.
 
     ``raw_deployments`` is what the DB granted this key before the logosnode
     filter dropped everything because no worker is connected (redeploy). Each
     poll re-asks the registry; the moment a worker re-attaches and declares
     its capabilities, the filter hands the deployments back and the request
-    proceeds. A client ``timeout_s`` bounds the wait too — it is how long the
-    client is willing to wait at all.
+    proceeds. The wait is bounded by what is left of the startup grace period
+    — it does not reset per request, and a worker that already re-attached
+    does not cancel it for the models still missing — and by the client's
+    ``timeout_s`` if it is smaller.
     """
-    wait_s = _startup_grace_period_s()
+    wait_s = _startup_grace_remaining_s()
     if client_timeout_s is not None:
         wait_s = min(wait_s, client_timeout_s)
     if wait_s <= 0:
@@ -4238,9 +4237,11 @@ async def handle_sync_request(path: str, request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
     if not deployments and raw_deployments:
-        # The key is granted models that no worker serves right now — a
-        # redeploy leaves exactly that window. Give the workers a chance to
-        # (re)connect instead of failing the request instantly.
+        # The key is granted models that no worker serves right now — the
+        # signature of a redeploy in progress. Within the first 120s after
+        # startup, give the still-missing workers a chance to (re)connect
+        # instead of failing the request instantly. The window stays in
+        # effect even though other workers may already have re-attached.
         deployments = await _wait_for_worker_connect(
             raw_deployments, payload=body, request=request, client_timeout_s=_client_timeout_s(body)
         )

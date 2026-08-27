@@ -2,9 +2,10 @@
 
 While no worker node is connected, every logosnode deployment is filtered out
 and the request 404s with "No available model deployments" — enough to kill a
-running consumer mid-task, which is exactly what a redeploy used to do. The
-startup grace period re-checks the filter until a worker (re)attaches or the
-period expires, so the outage becomes a delay instead of a failure.
+running consumer mid-task. For the first 120 seconds after the orchestrator
+starts, a request for a model no worker serves yet therefore waits for the
+remaining workers to (re)attach; once the window has run out, the request
+fails instantly again.
 """
 
 from __future__ import annotations
@@ -44,8 +45,11 @@ class _FakeDB:
 
 
 @pytest.fixture(autouse=True)
-def _fast_polling(monkeypatch):
+def _fresh_server(monkeypatch):
+    """Shrink the 120s window and pretend the orchestrator just started."""
     monkeypatch.setattr(main, "_WORKER_CONNECT_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(main, "_STARTUP_GRACE_PERIOD_S", 0.2)
+    monkeypatch.setattr(main, "_SERVER_START_MONOTONIC", time.monotonic())
 
 
 def _always_empty_filter():
@@ -83,25 +87,28 @@ def _stub_sync_path(monkeypatch, body, raw, filter_fn):
 
 
 # ---------------------------------------------------------------------------
-# _startup_grace_period_s / _client_timeout_s
+# _startup_grace_remaining_s / _client_timeout_s
 # ---------------------------------------------------------------------------
 
 
-def test_grace_period_env_parsing(monkeypatch):
-    monkeypatch.delenv(main._STARTUP_GRACE_PERIOD_ENV, raising=False)
-    assert main._startup_grace_period_s() == main._DEFAULT_STARTUP_GRACE_PERIOD_S
+def test_grace_window_starts_full_at_server_start():
+    # The autouse fixture set the start time to "now".
+    remaining = main._startup_grace_remaining_s()
+    assert 0 < remaining <= main._STARTUP_GRACE_PERIOD_S
 
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "0")
-    assert main._startup_grace_period_s() == 0.0
 
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "30")
-    assert main._startup_grace_period_s() == 30.0
+def test_grace_window_runs_out(monkeypatch):
+    monkeypatch.setattr(main, "_SERVER_START_MONOTONIC", time.monotonic() - main._STARTUP_GRACE_PERIOD_S - 10)
+    assert main._startup_grace_remaining_s() == 0.0
 
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "-5")
-    assert main._startup_grace_period_s() == 0.0
 
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "garbage")
-    assert main._startup_grace_period_s() == main._DEFAULT_STARTUP_GRACE_PERIOD_S
+def test_late_request_only_sees_the_rest_of_the_window(monkeypatch):
+    """The window is anchored to server start, not to each request."""
+    elapsed = main._STARTUP_GRACE_PERIOD_S - 0.05
+    monkeypatch.setattr(main, "_SERVER_START_MONOTONIC", time.monotonic() - elapsed)
+    remaining = main._startup_grace_remaining_s()
+    # ~0.05s left of the 0.2s window: well under half.
+    assert remaining < 0.1
 
 
 def test_client_timeout_parsing():
@@ -119,7 +126,6 @@ def test_client_timeout_parsing():
 
 
 async def test_wait_returns_as_soon_as_a_worker_connects(monkeypatch):
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "5")
     calls = []
 
     async def fake_filter(deployments, payload=None):
@@ -134,8 +140,7 @@ async def test_wait_returns_as_soon_as_a_worker_connects(monkeypatch):
     assert len(calls) == 3
 
 
-async def test_wait_gives_up_when_the_grace_period_expires(monkeypatch):
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "0.05")
+async def test_wait_gives_up_when_the_window_expires(monkeypatch):
     monkeypatch.setattr(main, "_filter_logosnode_deployments", _always_empty_filter())
 
     result = await main._wait_for_worker_connect(RAW, {"model": MODEL_NAME})
@@ -143,8 +148,8 @@ async def test_wait_gives_up_when_the_grace_period_expires(monkeypatch):
     assert result == []
 
 
-async def test_zero_grace_period_never_polls(monkeypatch):
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "0")
+async def test_no_wait_after_the_window_has_run_out(monkeypatch):
+    monkeypatch.setattr(main, "_SERVER_START_MONOTONIC", time.monotonic() - main._STARTUP_GRACE_PERIOD_S - 10)
     empty = _always_empty_filter()
     monkeypatch.setattr(main, "_filter_logosnode_deployments", empty)
 
@@ -154,8 +159,23 @@ async def test_zero_grace_period_never_polls(monkeypatch):
     assert empty.calls == []
 
 
+async def test_late_request_only_waits_the_rest_of_the_window(monkeypatch):
+    """A request arriving late must not get a fresh, full grace period."""
+    empty = _always_empty_filter()
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", empty)
+    monkeypatch.setattr(main, "_SERVER_START_MONOTONIC", time.monotonic() - (main._STARTUP_GRACE_PERIOD_S - 0.05))
+
+    started = time.monotonic()
+    result = await main._wait_for_worker_connect(RAW, {"model": MODEL_NAME})
+    elapsed = time.monotonic() - started
+
+    assert result == []
+    # ~50ms left in the window: the wait must stop long before the full 0.2s.
+    assert elapsed < 0.15
+    assert len(empty.calls) < 100
+
+
 async def test_client_disconnect_ends_the_wait(monkeypatch):
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "5")
     monkeypatch.setattr(main, "_filter_logosnode_deployments", _always_empty_filter())
 
     client = _Client(leaves=True)
@@ -166,7 +186,6 @@ async def test_client_disconnect_ends_the_wait(monkeypatch):
 
 
 async def test_client_timeout_caps_the_grace_wait(monkeypatch):
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "60")
     monkeypatch.setattr(main, "_filter_logosnode_deployments", _always_empty_filter())
 
     started = time.monotonic()
@@ -174,8 +193,8 @@ async def test_client_timeout_caps_the_grace_wait(monkeypatch):
     elapsed = time.monotonic() - started
 
     assert result == []
-    # The 60s grace period must not outlive the 50ms the client is willing to wait.
-    assert elapsed < 5.0
+    # The 0.2s window must not outlive the 50ms the client is willing to wait.
+    assert elapsed < 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +204,6 @@ async def test_client_timeout_caps_the_grace_wait(monkeypatch):
 
 async def test_sync_request_waits_for_the_worker_to_reconnect(monkeypatch):
     """The reported failure: no worker connected for a moment during a redeploy."""
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "5")
     # First check (before the wait) finds no worker; the re-check inside the
     # wait finds the worker that just re-attached.
     _stub_sync_path(monkeypatch, {"model": MODEL_NAME}, RAW, _empty_then_raw_filter())
@@ -204,8 +222,7 @@ async def test_sync_request_waits_for_the_worker_to_reconnect(monkeypatch):
     assert guarded[0]["deployments"] == RAW
 
 
-async def test_sync_request_fails_after_the_grace_period(monkeypatch):
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "0.05")
+async def test_sync_request_fails_after_the_window_expires(monkeypatch):
     _stub_sync_path(monkeypatch, {"model": MODEL_NAME}, RAW, _always_empty_filter())
 
     with pytest.raises(HTTPException) as excinfo:
@@ -217,7 +234,6 @@ async def test_sync_request_fails_after_the_grace_period(monkeypatch):
 
 async def test_sync_request_fails_immediately_when_the_key_has_no_deployments(monkeypatch):
     """Nothing can connect that the DB does not grant, so no waiting."""
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "5")
     empty = _always_empty_filter()
     _stub_sync_path(monkeypatch, {"model": MODEL_NAME}, [], empty)
 
@@ -229,13 +245,25 @@ async def test_sync_request_fails_immediately_when_the_key_has_no_deployments(mo
     assert len(empty.calls) == 1
 
 
+async def test_sync_request_fails_immediately_once_the_window_is_gone(monkeypatch):
+    """After the first 120s, a missing worker is a failure, not a redeploy."""
+    monkeypatch.setattr(main, "_SERVER_START_MONOTONIC", time.monotonic() - main._STARTUP_GRACE_PERIOD_S - 10)
+    empty = _always_empty_filter()
+    _stub_sync_path(monkeypatch, {"model": MODEL_NAME}, RAW, empty)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await main.handle_sync_request("chat/completions", _Client())
+
+    assert excinfo.value.status_code == 404
+    assert len(empty.calls) == 1
+
+
 # ---------------------------------------------------------------------------
 # execute_proxy_job
 # ---------------------------------------------------------------------------
 
 
 async def test_job_waits_for_the_worker_to_reconnect(monkeypatch):
-    monkeypatch.setenv(main._STARTUP_GRACE_PERIOD_ENV, "5")
     _stub_sync_path(monkeypatch, {"model": MODEL_NAME}, RAW, _empty_then_raw_filter())
 
     routed = []
