@@ -264,6 +264,20 @@ export class ModelErrorReport implements OnInit {
 
   readonly selectedLogProviderId = signal<number | null>(null);
 
+  private readonly logCopyResult =
+    signal<{ providerId: number; ok: boolean } | null>(null);
+  private logCopiedResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+  readonly logCopied = computed(() => {
+    const result = this.logCopyResult();
+    return result !== null && result.ok && result.providerId === this.selectedLogProviderId();
+  });
+
+  readonly logCopyFailed = computed(() => {
+    const result = this.logCopyResult();
+    return result !== null && !result.ok && result.providerId === this.selectedLogProviderId();
+  });
+
   private readonly rawLogsByProviderId =
     signal<ReadonlyMap<number, string>>(new Map());
 
@@ -636,6 +650,32 @@ export class ModelErrorReport implements OnInit {
     if (!Number.isNaN(providerId)) {
       this.selectedLogProviderId.set(providerId);
     }
+  }
+
+  async copyLog(): Promise<void> {
+    const providerId = this.selectedLogProviderId();
+    const text = this.completeLog();
+    if (!text || providerId == null) return;
+
+    if (this.logCopiedResetTimer !== null) {
+      clearTimeout(this.logCopiedResetTimer);
+    }
+
+    let ok = true;
+    try {
+      if (!navigator.clipboard) {
+        throw new Error('Clipboard API unavailable');
+      }
+      await navigator.clipboard.writeText(text);
+    } catch {
+      ok = false;
+    }
+
+    this.logCopyResult.set({ providerId, ok });
+    this.logCopiedResetTimer = setTimeout(() => {
+      this.logCopyResult.set(null);
+      this.logCopiedResetTimer = null;
+    }, 2000);
   }
 
   openNodeLog(

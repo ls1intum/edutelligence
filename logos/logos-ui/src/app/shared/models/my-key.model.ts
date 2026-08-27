@@ -31,6 +31,18 @@ export interface ModelAccess {
   model_name: string;
   provider_name?: string;
   provider_type: string;
-  /** Served context window in tokens; null when no worker reports one. */
-  context_window: number | null;
+  /**
+   * Smallest context window (tokens) being served right now; null when nothing
+   * is known. A request may land on any deployment, so this is the only figure
+   * that holds without the orchestrator routing around it.
+   */
+  context_window_current_min: number | null;
+  /** Largest window being served right now. Absent when unknown. */
+  context_window_current_max?: number | null;
+  /**
+   * The widest this model is ever served with — independent of what is loaded
+   * at the moment, which makes it the number to use when a config file has to
+   * commit to one up front.
+   */
+  context_window_overall?: number | null;
 }

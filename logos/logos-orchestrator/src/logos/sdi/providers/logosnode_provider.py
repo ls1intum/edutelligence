@@ -57,7 +57,6 @@ class LogosNodeDataProvider:
         self._last_refresh = 0.0
         self._model_active: Dict[int, int] = {}
         self._active_request_ids: Dict[str, int] = {}
-        self._db_parallel_ceiling: Dict[int, int] = {}
         self._lock = threading.RLock()
         self._provider_config = self._load_provider_config()
 
@@ -106,11 +105,6 @@ class LogosNodeDataProvider:
             ]
             for request_id in stale_request_ids:
                 self._active_request_ids.pop(request_id, None)
-
-    def set_db_parallel_ceilings(self, ceilings: Dict[int, int]) -> None:
-        """Set DB-configured parallel ceilings per model_id."""
-        with self._lock:
-            self._db_parallel_ceiling = dict(ceilings)
 
     def refresh_data(self) -> None:
         now = time.time()
@@ -358,22 +352,18 @@ class LogosNodeDataProvider:
             is_vllm = bool(lane.get("vllm"))
             capacity_hint = lane.get("num_parallel")
             if is_vllm and not capacity_hint:
-                # vLLM uses continuous batching — num_parallel=0 means unlimited.
-                # Default to 256 so the scheduler doesn't artificially
-                # serialize requests.  The DB parallel column is the real
-                # ceiling if one is needed.
+                # vLLM uses continuous batching.  The worker reports the
+                # engine's own max concurrency (KV-budget-derived, parsed
+                # from vLLM's startup log); 0 means it has not reported one
+                # yet (older worker or lane still starting).  Default to 256
+                # so the scheduler doesn't artificially serialize requests —
+                # vLLM's own scheduler then admits what the KV cache holds.
                 capacity_hint = 256
 
             try:
                 capacity = int(capacity_hint) if capacity_hint is not None else 0
             except (TypeError, ValueError):
                 capacity = 0
-
-            # Apply oversubscription for vLLM lanes: the reported
-            # num_parallel is based on worst-case full-context requests,
-            # but real requests typically use a fraction of context.
-            if is_vllm and capacity > 0 and capacity < 256:
-                capacity = capacity * self.VLLM_CONCURRENCY_OVERSUBSCRIPTION
 
             if capacity > 0:
                 total_capacity += capacity
@@ -394,19 +384,6 @@ class LogosNodeDataProvider:
                 capacity, source = int(configured), "config"
             else:
                 capacity, source = self.DEFAULT_PARALLEL_CAPACITY, "default"
-
-        # DB parallel ceiling: hard ceiling from the models table
-        db_ceiling = self._db_parallel_ceiling.get(model_id)
-        if db_ceiling is not None and db_ceiling > 0:
-            if capacity > db_ceiling:
-                logger.debug(
-                    "Capping parallel capacity for model %d from %d (%s) to %d (db_ceiling)",
-                    model_id,
-                    capacity,
-                    source,
-                    db_ceiling,
-                )
-                return db_ceiling, "db_ceiling"
         return capacity, source
 
     def get_model_status(self, model_id: int) -> ModelStatus:
@@ -646,11 +623,13 @@ class LogosNodeDataProvider:
                 enforce_eager_at_calibration=data.get("enforce_eager_at_calibration"),
                 kv_per_token_bytes=data.get("kv_per_token_bytes"),
                 max_context_length=data.get("max_context_length"),
+                min_context_fraction=data.get("min_context_fraction"),
                 measurement_count=int(data.get("measurement_count", 0) or 0),
                 last_measured_epoch=float(data.get("last_measured_epoch", 0.0) or 0.0),
                 residency_source=data.get("residency_source"),
                 sleep_l1_transient_host_ram_mb=data.get("sleep_l1_transient_host_ram_mb"),
                 sleep_l2_transient_host_ram_mb=data.get("sleep_l2_transient_host_ram_mb"),
+                host_ram_residual_mb=data.get("host_ram_residual_mb"),
                 sleep_mode_disabled=data.get("sleep_mode_disabled"),
                 calibration_unsupported=data.get("calibration_unsupported"),
                 calibration_unsupported_reason=data.get("calibration_unsupported_reason"),
@@ -813,19 +792,10 @@ class LogosNodeDataProvider:
 
     # Maximum backend queue_waiting before we refuse new reservations.
     # Prevents piling requests on an already-backlogged vLLM process.
-    # Raised from 2→8: with oversubscription enabled, vLLM's internal
-    # scheduler (PagedAttention) handles queuing efficiently; we only
-    # need to back off when the engine is genuinely saturated.
+    # Raised from 2→8: vLLM's internal scheduler (PagedAttention) handles
+    # queuing efficiently; we only need to back off when the engine is
+    # genuinely saturated.
     BACKEND_QUEUE_PRESSURE_THRESHOLD = 8
-
-    # vLLM reports "Maximum concurrency for N tokens per request" assuming
-    # every request fills the entire context window.  In practice, requests
-    # use a fraction of context (e.g. 200/4096 = 5%), so the KV cache can
-    # safely hold many more concurrent sequences.  This multiplier is
-    # applied to the vLLM-reported num_parallel to allow higher throughput
-    # while still letting vLLM's own scheduler handle fine-grained KV
-    # admission via PagedAttention preemption.
-    VLLM_CONCURRENCY_OVERSUBSCRIPTION = 3
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         with self._lock:

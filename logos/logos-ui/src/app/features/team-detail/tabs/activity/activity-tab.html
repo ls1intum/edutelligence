@@ -1,0 +1,175 @@
+<div class="activity-tab">
+
+  @if (loading() && !activity()) {
+    <p class="ac-note">Loading…</p>
+  } @else {
+
+    @if (error()) {
+      <p class="ac-error">{{ error() }}</p>
+    }
+
+    <!-- ── Live ─────────────────────────────────────────────────────────────
+         Counts, not a sample: every request of this team in each stage. -->
+    <div class="ac-section-head">
+      <h3 class="ac-section-title">Right now</h3>
+      <span class="ac-section-note">refreshes on its own</span>
+    </div>
+
+    <div class="ac-tiles">
+      <div class="ac-tile" [class.ac-tile--active]="(activity()?.live?.queued ?? 0) > 0">
+        <div class="ac-tile__value">{{ formatNumber(activity()?.live?.queued) }}</div>
+        <div class="ac-tile__label">Queued</div>
+        <div class="ac-tile__note">accepted, waiting for a provider</div>
+      </div>
+      <div class="ac-tile" [class.ac-tile--active]="(activity()?.live?.running ?? 0) > 0">
+        <div class="ac-tile__value">{{ formatNumber(activity()?.live?.running) }}</div>
+        <div class="ac-tile__label">Running</div>
+        <div class="ac-tile__note">being generated</div>
+      </div>
+      <div class="ac-tile">
+        <div class="ac-tile__value">{{ formatNumber(activity()?.live?.finished) }}</div>
+        <div class="ac-tile__label">Finished</div>
+        <div class="ac-tile__note">completed in this period</div>
+      </div>
+      <div class="ac-tile" [class.ac-tile--bad]="(activity()?.live?.failed ?? 0) > 0">
+        <div class="ac-tile__value">{{ formatNumber(activity()?.live?.failed) }}</div>
+        <div class="ac-tile__label">Failed</div>
+        <div class="ac-tile__note">
+          @if (failureRate() !== null) {
+            {{ failureRate()!.toFixed(1) }}% of finished
+          } @else {
+            of the finished ones
+          }
+        </div>
+      </div>
+    </div>
+
+    @if (inFlight() === 0 && activity()) {
+      <p class="ac-note ac-note--quiet">Nothing of this team's is in the cluster at the moment.</p>
+    }
+
+    <!-- ── Usage ────────────────────────────────────────────────────────── -->
+    <div class="ac-section-head ac-section-head--spaced">
+      <h3 class="ac-section-title">Tokens used</h3>
+      <app-select
+        class="ac-control"
+        [options]="dayOptions"
+        [value]="selectedDaysValue()"
+        [compact]="true"
+        ariaLabel="Select period"
+        (valueChange)="setDays($event)"
+      />
+    </div>
+
+    <div class="ac-total">
+      <span class="ac-total__value">{{ formatTokens(activity()?.total_tokens) }}</span>
+      <span class="ac-total__label">
+        tokens over {{ formatNumber(activity()?.total_requests) }} requests
+      </span>
+    </div>
+
+    @if ((activity()?.keys ?? []).length === 0) {
+      <p class="ac-note ac-note--quiet">No requests from this team in the selected period.</p>
+    } @else {
+      <!-- Per key, because that is the unit a team hands out and revokes —
+           "which of our keys is spending this" is the question behind the
+           total above. -->
+      <table class="ac-table">
+        <thead>
+          <tr>
+            <th scope="col">API key</th>
+            <th scope="col">Type</th>
+            <th scope="col" class="ac-table__num">Requests</th>
+            <th scope="col" class="ac-table__num">Tokens</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (key of activity()?.keys ?? []; track key.key_id) {
+            <tr>
+              <td>{{ keyLabel(key.key_name, key.environment) }}</td>
+              <td class="ac-table__muted">{{ key.key_type }}</td>
+              <td class="ac-table__num">{{ formatNumber(key.request_count) }}</td>
+              <td class="ac-table__num">{{ formatNumber(key.total_tokens) }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+
+    <!-- ── Requests ─────────────────────────────────────────────────────────
+         The counts above answer "is anything happening"; this answers "what",
+         which is the question that follows within seconds of the first. -->
+    <div class="ac-section-head ac-section-head--spaced">
+      <h3 class="ac-section-title">Requests</h3>
+      <div class="ac-toolbar">
+        <app-select
+          class="ac-control"
+          [options]="requesterOptions()"
+          [value]="selectedRequesterValue()"
+          [compact]="true"
+          ariaLabel="Filter by requester"
+          (valueChange)="setRequester($event)"
+        />
+        @if (requests().length > 0) {
+          <span class="ac-pager__count">
+            <strong>{{ formatNumber(firstRowNumber()) }}-{{ formatNumber(lastRowNumber()) }}</strong>
+            of <strong>{{ formatNumber(activity()?.requests_total) }}</strong>
+          </span>
+        }
+        <button
+          class="ac-pager__btn"
+          type="button"
+          [disabled]="!hasPrev()"
+          (click)="prevPage()"
+          aria-label="Newer requests"
+        >
+          <i class="pi pi-angle-left" aria-hidden="true"></i>
+        </button>
+        <button
+          class="ac-pager__btn"
+          type="button"
+          [disabled]="!hasNext()"
+          (click)="nextPage()"
+          aria-label="Older requests"
+        >
+          <i class="pi pi-angle-right" aria-hidden="true"></i>
+        </button>
+      </div>
+    </div>
+
+    @if (requests().length === 0) {
+      <p class="ac-note ac-note--quiet">
+        No requests match this filter in the selected period.
+      </p>
+    } @else {
+      <table class="ac-table">
+        <thead>
+          <tr>
+            <th scope="col">Model</th>
+            <th scope="col">Requester</th>
+            <th scope="col">When</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="ac-table__num">Duration</th>
+            <th scope="col" class="ac-table__num">Tokens</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (item of requests(); track trackByRequestId($index, item)) {
+            <tr>
+              <td class="ac-table__strong">{{ item.model_name }}</td>
+              <td class="ac-table__muted">{{ requesterOf(item) }}</td>
+              <td class="ac-table__muted">{{ ageOf(item) }}</td>
+              <td>
+                <span class="ac-badge" [class]="'ac-badge--' + stageOf(item)">
+                  {{ stageOf(item) === 'complete' ? item.status : stageOf(item) }}
+                </span>
+              </td>
+              <td class="ac-table__num">{{ durationOf(item) }}</td>
+              <td class="ac-table__num ac-table__muted">{{ tokensOf(item) }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  }
+</div>

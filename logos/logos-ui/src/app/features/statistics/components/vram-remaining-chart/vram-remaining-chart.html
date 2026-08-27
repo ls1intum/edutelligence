@@ -3,39 +3,14 @@
   <!-- ── Controls row ────────────────────────────────────────────────────────── -->
   <div class="vram-controls">
 
-    <!-- Day navigation (billing .period-nav style); locked while Live, since
-         the live window always tracks now regardless of the selected day -->
-    <div class="period-nav" [title]="view() === 'live' ? 'Switch to Full History to browse days' : ''">
-      <button
-        class="nav-btn"
-        type="button"
-        [disabled]="view() === 'live'"
-        (click)="navPrev()"
-        aria-label="Previous day"
-      >
-        <i class="pi pi-chevron-left" aria-hidden="true"></i>
-      </button>
-      <span class="period-label">{{ periodLabel() }}</span>
-      <button
-        class="nav-btn"
-        type="button"
-        [disabled]="view() === 'live' || vramDayOffset === 0"
-        (click)="navNext()"
-        aria-label="Next day"
-      >
-        <i class="pi pi-chevron-right" aria-hidden="true"></i>
-      </button>
-    </div>
-
-    <!-- Live / Full History toggle -->
-    <app-stats-segmented-switch
-      [options]="viewOptions"
-      [value]="view()"
-      (valueChange)="setView($event)"
-    />
-
-    <!-- Reset to full day view -->
-    <button class="vram-reset" type="button" (click)="resetView()" aria-label="Reset to full day view">
+    <!-- Reset the in-range zoom back to the full selected range -->
+    <button
+      class="vram-reset"
+      type="button"
+      [disabled]="!isZoomed()"
+      (click)="resetView()"
+      aria-label="Reset to full range view"
+    >
       <i class="pi pi-refresh" aria-hidden="true"></i> Reset
     </button>
 
@@ -65,7 +40,7 @@
   } @else if (isVramLoading && !hasData()) {
     <app-stats-skeleton variant="area" />
   } @else if (!hasData()) {
-    <div class="vram-empty">No VRAM data available for the selected day.</div>
+    <div class="vram-empty">No VRAM data available in the selected range.</div>
   } @else {
     <!-- ── Chart ────────────────────────────────────────────────────────────── -->
     <div class="vram-wrap">
@@ -176,26 +151,30 @@
 
     <!-- ── Range slider ──────────────────────────────────────────────────── -->
     <app-stats-vram-range-slider
-      [min]="dayStartMs()"
-      [max]="dayEndMs()"
-      [start]="visibleStart() !== 0 ? visibleStart() : dayStartMs()"
-      [end]="visibleEnd() !== 0 ? visibleEnd() : dayEndMs()"
+      [min]="timeRange.startMs"
+      [max]="timeRange.endMs"
+      [start]="visibleStart() !== 0 ? visibleStart() : timeRange.startMs"
+      [end]="visibleEnd() !== 0 ? visibleEnd() : timeRange.endMs"
       (windowChange)="setVisibleWindow($event)"
     />
 
     <!-- ── Legend ─────────────────────────────────────────────────────────── -->
-    <div class="vram-legend">
-      @for (s of chartData().series; track s.name) {
-        <div class="vram-legend-item">
-          <span
-            class="vram-legend-dot"
-            [style.background]="s.color"
-            aria-hidden="true"
-          ></span>
-          <span class="vram-legend-label">{{ s.name }}</span>
-        </div>
-      }
-    </div>
+    <!-- A single series needs no key to tell it apart; the panel subtitle
+         already names the provider it belongs to. -->
+    @if (chartData().series.length > 1) {
+      <div class="vram-legend">
+        @for (s of chartData().series; track s.name) {
+          <div class="vram-legend-item">
+            <span
+              class="vram-legend-dot"
+              [style.background]="s.color"
+              aria-hidden="true"
+            ></span>
+            <span class="vram-legend-label">{{ s.name }}</span>
+          </div>
+        }
+      </div>
+    }
   }
 
 </div>

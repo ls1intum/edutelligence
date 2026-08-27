@@ -26,6 +26,7 @@ import { ProvidersTabComponent } from './tabs/providers/providers-tab';
 import { ModelsTabComponent } from './tabs/models/models-tab';
 import { SettingsTabComponent } from './tabs/settings/settings-tab';
 import { BillingTabComponent } from './tabs/billing/billing-tab';
+import { ActivityTabComponent } from './tabs/activity/activity-tab';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 
 export type Tab =
@@ -35,6 +36,7 @@ export type Tab =
   | 'providers'
   | 'models'
   | 'settings'
+  | 'activity'
   | 'billing';
 
 @Component({
@@ -52,6 +54,7 @@ export type Tab =
     ModelsTabComponent,
     SettingsTabComponent,
     BillingTabComponent,
+    ActivityTabComponent,
   ],
   templateUrl: './team-detail.html',
   changeDetection: ChangeDetectionStrategy.Eager,
@@ -89,7 +92,9 @@ export class TeamDetail implements OnInit {
     const tabs: Tab[] = ['overview', 'members'];
     if (admin || owner) tabs.push('application_keys');
     if (admin) tabs.push('providers');
-    if (admin || owner) tabs.push('models', 'billing', 'settings');
+    // Activity before Cloud Usage: what the platform did, then what the cloud
+    // providers billed for the part of it that ran off-site.
+    if (admin || owner) tabs.push('models', 'activity', 'billing', 'settings');
     return tabs;
   });
 
@@ -100,7 +105,11 @@ export class TeamDetail implements OnInit {
     providers: 'Providers',
     models: 'Models',
     settings: 'Settings',
-    billing: 'Billing',
+    activity: 'Activity',
+    // Renamed from "Billing": it reports what cloud providers charged, which is
+    // only part of what a team uses — a local model bills nothing and still
+    // consumes the cluster. The Activity tab covers the rest.
+    billing: 'Cloud Usage',
   };
 
   ngOnInit(): void {

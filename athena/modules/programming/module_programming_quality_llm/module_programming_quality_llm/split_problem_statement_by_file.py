@@ -2,7 +2,7 @@ from typing import Optional, Sequence
 from collections import defaultdict
 
 from pydantic import BaseModel, Field
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
 from athena import emit_meta
 from athena.programming import Exercise, Submission

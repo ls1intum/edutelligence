@@ -7,8 +7,10 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
+from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import (
     DeviceInfo,
     DeviceSummary,
@@ -669,11 +671,12 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
 async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> None:
     """A kv-pinned lane must NOT be gated by the 0.5 GMU floor.
 
-    Same GPUs as the floor test: GPU 2 (7.6 GB free) was eliminated by the
-    12.3 GB floor. But when the lane pins kv_cache_memory_bytes, vLLM ignores
-    gpu_memory_utilization and only grabs weights + KV (~6 GB), so GPU 2 becomes
-    feasible — and best-fit (smallest leftover) now selects it. This is the fix
-    that lets small models (e.g. gemma-3-4b) place into tight free VRAM.
+    All three GPUs fall below the 0.5 × 24576 = 12288 MB floor vLLM would
+    attempt, so with the floor applied placement raises. With the lane pinning
+    kv_cache_memory_bytes, vLLM ignores gpu_memory_utilization and only grabs
+    weights + KV (~6 GB), so every GPU becomes feasible and the emptiest one
+    (GPU 0) is selected. This is the fix that lets small models (e.g.
+    gemma-3-4b) place into tight free VRAM.
     """
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
@@ -693,7 +696,7 @@ async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> No
                     device_id="gpu0",
                     kind="nvidia",
                     memory_total_mb=24576.0,
-                    memory_free_mb=16000.0,
+                    memory_free_mb=12000.0,
                     extra={"index": 0},
                 ),
                 DeviceInfo(
@@ -712,7 +715,7 @@ async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> No
                 ),
             ],
             total_memory_mb=3 * 24576.0,
-            free_memory_mb=35600.0,
+            free_memory_mb=31600.0,
         )
 
     manager = LaneManager(
@@ -729,9 +732,9 @@ async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> No
     )
 
     placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
-    # Floor skipped → threshold ≈ footprint (~6 GB); GPU 2 (7600) fits and is the
-    # tightest best-fit, so it is chosen rather than being eliminated.
-    assert placed.gpu_devices == "2"
+    # Floor skipped → threshold ≈ footprint (~6 GB) instead of 12288 MB, so the
+    # GPU-0/1 pair (12000 free each) is feasible and the emptiest one wins.
+    assert placed.gpu_devices == "0"
 
 
 @pytest.mark.asyncio
@@ -892,7 +895,9 @@ async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> N
 
 
 @pytest.mark.asyncio
-async def test_auto_place_gpu_devices_picks_smallest_feasible_tp_subset() -> None:
+async def test_auto_place_gpu_devices_picks_emptiest_feasible_tp_subset() -> None:
+    """A TP=2 lane takes the feasible GPU pair with the most free VRAM
+    (spread), so the emptiest GPUs stay intact for larger models."""
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
     profiles = ModelProfileRegistry()
@@ -956,7 +961,337 @@ async def test_auto_place_gpu_devices_picks_smallest_feasible_tp_subset() -> Non
     )
 
     placed = await manager._auto_place_gpu_devices("planner-big-model_70B", lane)  # noqa: SLF001
-    assert placed.gpu_devices == "1,2"
+    # Feasible pairs (GMU floor 12288 MB): (0,1)=39000, (0,2)=40000, (0,3)=64000,
+    # (1,2)=31000, (1,3)=55000, (2,3)=56000. Spread picks the emptiest pair.
+    assert placed.gpu_devices == "0,3"
+
+
+class _OccupyingLaneStub:
+    """Minimal ProcessHandle stand-in for placement-occupancy tests."""
+
+    def __init__(
+        self,
+        lane_id: str,
+        lane_config: LaneConfig,
+        *,
+        sleeping: bool = False,
+        state: ProcessState = ProcessState.RUNNING,
+    ) -> None:
+        self.lane_id = lane_id
+        self.port = 15100
+        self.lane_config = lane_config
+        self._sleeping = sleeping
+        self._state = state
+
+    def status(self) -> ProcessStatus:
+        return ProcessStatus(state=self._state)
+
+    async def is_sleeping(self) -> bool | None:
+        return self._sleeping
+
+
+@pytest.mark.asyncio
+async def test_auto_place_prefers_empty_gpu_over_sleeping_lane_residue() -> None:
+    """Reproduces the deioma incident (2026-08-25): the 27B lane on GPU 0 is
+    in sleep_l1 (weights in host RAM, ~3 GB VRAM residue), gpt-oss-120b fills
+    GPU 1, and GPU 2 is fully free. The new 22 GB embedding lane must go to
+    the truly empty GPU 2, not be stacked next to the sleeping lane's
+    residue on GPU 0.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen3.8-27B"] = ModelProfileRecord(loaded_vram_mb=64_000.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["openai/gpt-oss-120b"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=82_000.0, engine="vllm"
+    )
+    profiles._profiles["Qwen/Qwen3-Embedding-8B"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=22_545.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: sleeping 27B residue + worker CUDA context (~3.2 GB used).
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=94_687.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: gpt-oss-120b.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=15_565.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: fully free.
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=97_883.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=94_687.0 + 15_565.0 + 97_883.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-Qwen_Qwen3.8-27B"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-Qwen_Qwen3.8-27B",
+        LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=True,
+    )
+    manager._handles["planner-openai_gpt-oss-120b"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-openai_gpt-oss-120b",
+        LaneConfig(model="openai/gpt-oss-120b", vllm=True, gpu_devices="1", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="6G"),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen3-Embedding-8B", lane)  # noqa: SLF001
+    # GPU 1 is infeasible (15.5 GB < 22.7 GB threshold). GPU 0 and GPU 2 both
+    # hold no awake lane — the sleeping 27B must not count — so the tie breaks
+    # toward the more free GPU 2.
+    assert placed.gpu_devices == "2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_treats_sleeping_lane_gpu_as_empty() -> None:
+    """Inverse of the deioma case: when the GPU next to a sleeping lane has
+    MORE free VRAM than the alternative, it must win. Had the sleeping lane
+    counted as an awake occupant, the lane-free (but more filled) GPU would
+    have won instead — so this pins the sleep exclusion itself.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen3.8-27B"] = ModelProfileRecord(loaded_vram_mb=64_000.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["Qwen/Qwen3-Embedding-8B"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=22_545.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: sleeping 27B residue only.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=94_687.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: infeasible filler.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=15_565.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: no lane, but 7.9 GB of unknown usage.
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=90_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=94_687.0 + 15_565.0 + 90_000.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-Qwen_Qwen3.8-27B"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-Qwen_Qwen3.8-27B",
+        LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=True,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="6G"),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen3-Embedding-8B", lane)  # noqa: SLF001
+    # GPU 0 is "empty" of awake lanes and has more free VRAM than GPU 2.
+    assert placed.gpu_devices == "0"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_spreads_new_lane_away_from_awake_lane() -> None:
+    """A new lane must avoid a GPU that already holds an awake lane, even when
+    that GPU still has more free VRAM than the alternative — one active model
+    per GPU is the primary goal of the scoring.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["small/embed"] = ModelProfileRecord(loaded_vram_mb=22_500.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["small/rerank"] = ModelProfileRecord(loaded_vram_mb=10_000.0, engine="vllm")  # noqa: SLF001
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: one awake 22.5 GB lane, 70 GB free.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=70_000.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: infeasible filler.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=9_000.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: empty, 60 GB free (37.9 GB unknown usage).
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=60_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=70_000.0 + 9_000.0 + 60_000.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-small_embed"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-small_embed",
+        LaneConfig(model="small/embed", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="small/rerank",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="1G"),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-small_rerank", lane)  # noqa: SLF001
+    # GPU 0 has more free VRAM but one awake lane; GPU 2 is empty. The awake
+    # lane count (1 vs 0) must outweigh the free-VRAM tiebreak.
+    assert placed.gpu_devices == "2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_breaks_awake_ties_by_least_awake_vram() -> None:
+    """When two GPUs each hold exactly one awake lane, the one with the
+    smaller awake footprint wins — it leaves the most room for the new lane.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["small/embed"] = ModelProfileRecord(loaded_vram_mb=20_000.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["small/big"] = ModelProfileRecord(loaded_vram_mb=35_000.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["small/rerank"] = ModelProfileRecord(loaded_vram_mb=10_000.0, engine="vllm")  # noqa: SLF001
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: one awake 20 GB lane, 80 GB free.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=80_000.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: infeasible filler.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=9_000.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: one awake 35 GB lane, 60 GB free.
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=60_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=80_000.0 + 9_000.0 + 60_000.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-small_embed"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-small_embed",
+        LaneConfig(model="small/embed", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    manager._handles["planner-small_big"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-small_big",
+        LaneConfig(model="small/big", vllm=True, gpu_devices="2", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="small/rerank",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="1G"),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-small_rerank", lane)  # noqa: SLF001
+    # Both GPUs hold one awake lane; the smaller footprint (20 GB) wins over
+    # the larger one (35 GB) despite its lower free VRAM.
+    assert placed.gpu_devices == "0"
 
 
 @pytest.mark.asyncio
@@ -1857,3 +2192,68 @@ def test_model_overrides_can_set_chat_template() -> None:
 
     assert merged.vllm_config is not None
     assert merged.vllm_config.chat_template == "qwen3-tools.jinja"
+
+
+def test_model_overrides_profile_keys_are_routed_to_registry() -> None:
+    """A profile-level key in model_overrides must not fail lane creation.
+
+    Production incident: an operator placed min_context_fraction under
+    engines.vllm.model_overrides; the extra="forbid" VllmConfig validation
+    aborted the whole add_lane. The key must instead be routed to the model
+    profile registry, where the server planner reads it from the runtime
+    snapshot — even when the profile record already exists (calibrated model).
+    """
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model-27b", 50000.0, engine="vllm", kv_cache_sent_mb=8000.0)
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(
+            model_overrides={
+                "org/model-27b": {
+                    "min_context_fraction": 1.0,
+                    "enable_sleep_mode": False,
+                }
+            }
+        ),
+        lane_port_start=15000,
+        lane_port_end=15010,
+        model_profiles=registry,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None
+    assert merged.vllm_config.enable_sleep_mode is False
+    profile = registry.get_profile("org/model-27b")
+    assert profile is not None
+    assert profile.min_context_fraction == 1.0
+
+
+def test_model_overrides_invalid_engine_value_still_fails() -> None:
+    """A genuinely type-invalid engine value must keep failing loudly."""
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(model_overrides={"org/model-27b": {"max_num_seqs": "abc"}}),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    with pytest.raises(ValidationError):
+        manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+
+def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
+    """An unrecognized key must not abort lane creation either."""
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(model_overrides={"org/model-27b": {"totally_bogus_key": 1}}),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None

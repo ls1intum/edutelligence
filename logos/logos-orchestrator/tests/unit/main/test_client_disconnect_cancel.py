@@ -153,15 +153,23 @@ async def test_streaming_requests_are_guarded_too(monkeypatch):
         auth.api_key_id = 88
         return {}, auth, {"stream": True}, "127.0.0.1", None
 
-    async def fake_filter(deployments):
+    async def fake_filter(deployments, payload=None):
         return deployments
 
     async def fake_guard(request, **kwargs):
         guarded.append(kwargs)
         return "guarded"
 
+    class FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
     monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
-    monkeypatch.setattr(main, "request_setup", lambda headers, api_key_id: ([{"model_id": 1}], ["m"]))
+    monkeypatch.setattr(main, "DBManager", FakeDB)
+    monkeypatch.setattr(main, "request_setup", lambda headers, api_key_id, db=None: ([{"model_id": 1}], ["m"]))
     monkeypatch.setattr(main, "_filter_logosnode_deployments", fake_filter)
     monkeypatch.setattr(main, "_execute_cancelling_on_disconnect", fake_guard)
 

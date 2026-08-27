@@ -664,8 +664,8 @@ class DBManager:
                         text(
                             """
                         INSERT INTO models (name, weight_latency, weight_accuracy,
-                                            weight_cost, weight_quality, tags, parallel, description)
-                        VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                            weight_cost, weight_quality, tags, description)
+                        VALUES (:name, 0, 0, 0, 0, '', '')
                         RETURNING id
                     """
                         ),
@@ -774,8 +774,8 @@ class DBManager:
                         text(
                             """
                             INSERT INTO models (name, weight_latency, weight_accuracy,
-                                                weight_cost, weight_quality, tags, parallel, description)
-                            VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                                weight_cost, weight_quality, tags, description)
+                            VALUES (:name, 0, 0, 0, 0, '', '')
                             RETURNING id
                             """
                         ),
@@ -1624,7 +1624,9 @@ class DBManager:
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
                           p.provider_type    as type,
-                          p.privacy_level as privacy_level
+                          p.privacy_level    as privacy_level,
+                          p.cloud_provider_type as cloud_provider_type,
+                          p.base_url         as base_url
                    FROM models m
                         JOIN model_provider mp ON m.id = mp.model_id
                         JOIN providers p ON mp.provider_id = p.id
@@ -1868,7 +1870,6 @@ class DBManager:
                               m.weight_cost,
                               m.weight_quality,
                               m.tags,
-                              m.parallel,
                               m.description,
                               (
                                   SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -1935,7 +1936,6 @@ class DBManager:
                                 m.weight_cost,
                                 m.weight_quality,
                                 m.tags,
-                                m.parallel,
                                 m.description,
                                 (
                                     SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -1980,7 +1980,6 @@ class DBManager:
                 "weight_cost": r.weight_cost,
                 "weight_quality": r.weight_quality,
                 "tags": r.tags,
-                "parallel": r.parallel,
                 "description": r.description,
                 "input_usd_per_million": r.input_usd_per_million,
                 "output_usd_per_million": r.output_usd_per_million,
@@ -2007,7 +2006,6 @@ class DBManager:
             "weight_cost": result.weight_cost,
             "weight_quality": result.weight_quality,
             "tags": result.tags,
-            "parallel": result.parallel,
             "description": result.description,
         }
 
@@ -2439,9 +2437,9 @@ class DBManager:
                 """
                  SELECT COALESCE(SUM(bu.cost_micro_cents), 0) AS total
                  FROM budget_usage bu
-                          JOIN api_keys ak ON ak.id = bu.api_key_id
-                 WHERE ak.team_id = :tid
-                   AND ak.key_type = 'developer'
+                 WHERE bu.api_key_id = ANY(
+                         ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                       )
                    AND bu.month = :month
                  """
             ),

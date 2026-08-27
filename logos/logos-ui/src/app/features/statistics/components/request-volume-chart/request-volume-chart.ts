@@ -19,6 +19,7 @@ export interface ChartTooltip {
 }
 import { SegmentedSwitchComponent } from '../segmented-switch/segmented-switch';
 import { CHART_ROLE, seriesColor } from '../../statistics.constants';
+import { timeAxisLabels } from '../../statistics.utils';
 import { nearestIndex, pointerPlotFrac } from '../chart-interaction.util';
 
 export interface DataPoint {
@@ -48,15 +49,20 @@ function formatCount(v: number): string {
   return String(Math.round(v));
 }
 
+/**
+ * Full, unambiguous timestamp for tooltips (always carries the day, and the
+ * year once the span is wide enough for it to matter). Local time, like the
+ * x-axis ticks from `timeAxisLabels` and the range selection that produced
+ * them, so a tooltip never contradicts the tick above it.
+ */
 function formatTimestamp(ts: number, spanMs: number): string {
   const d = new Date(ts);
   if (spanMs <= 2 * 86_400_000) {
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    return d.toLocaleString('en-US', {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    });
   }
-  if (spanMs <= 32 * 86_400_000) {
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  }
-  return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 // ── Internal chart types ─────────────────────────────────────────────────────
@@ -272,40 +278,29 @@ export class RequestVolumeChartComponent implements OnChanges {
       label: formatCount(f * maxVal),
     }));
 
-    // X-axis labels
-    // For sub-2-day spans: evenly space up to 8 time labels.
-    // For wider spans: label on day (or month for 6m/year) boundaries only.
-    let xLabels: Array<{ x: number; label: string }>;
-    if (spanMs <= 2 * 86_400_000) {
-      const every = Math.max(1, Math.ceil(n / 8));
-      xLabels = buckets
-        .filter((_, i) => i % every === 0)
-        .map((b, fi) => ({
-          x: CHART_PAD_LEFT + fi * every * slotW + slotW / 2,
-          label: b.timeLabel,
-        }));
-    } else {
-      // Emit a label whenever the day (or month for 6m+) boundary changes.
-      const boundaryKey = (ts: number) => {
-        const d = new Date(ts);
-        return spanMs <= 32 * 86_400_000
-          ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
-          : `${d.getFullYear()}-${d.getMonth()}`;
-      };
-      let lastKey = '';
-      xLabels = [];
-      buckets.forEach((b, i) => {
-        const key = boundaryKey(b.ts);
-        if (key !== lastKey) {
-          lastKey = key;
-          xLabels.push({ x: CHART_PAD_LEFT + i * slotW + slotW / 2, label: b.timeLabel });
-        }
-      });
-      // Thin out if too crowded (keep at most 8 labels).
-      if (xLabels.length > 8) {
-        const step = Math.ceil(xLabels.length / 8);
-        xLabels = xLabels.filter((_, i) => i % step === 0);
+    // X-axis labels — deterministic and always unambiguous (hour labels for
+    // ≤24 h, "Mon D" for ≤32 d, "Mon YYYY" beyond; see timeAxisLabels). Each
+    // label is anchored to the nearest bucket so ticks align with bars.
+    const xLabels: Array<{ x: number; label: string }> = [];
+    const firstTs = total[0].timestamp;
+    const lastTs = total[n - 1].timestamp;
+    const bucketDurMs = n > 1 ? (lastTs - firstTs) / (n - 1) : 0;
+    if (bucketDurMs > 0) {
+      const seenX = new Set<number>();
+      for (const l of timeAxisLabels(firstTs, lastTs, 8)) {
+        const idx = Math.min(n - 1, Math.max(0, Math.round((l.tsMs - firstTs) / bucketDurMs)));
+        const x = Math.round(CHART_PAD_LEFT + idx * slotW + slotW / 2);
+        if (seenX.has(x)) continue; // two boundary labels collapsed onto one bucket
+        seenX.add(x);
+        xLabels.push({ x, label: l.label });
       }
+    } else if (Number.isFinite(firstTs)) {
+      // Single bucket: no span to place boundaries in, but the axis still
+      // needs to say which moment the lone bar covers.
+      xLabels.push({
+        x: Math.round(CHART_PAD_LEFT + slotW / 2),
+        label: formatTimestamp(firstTs, spanMs),
+      });
     }
 
     return {

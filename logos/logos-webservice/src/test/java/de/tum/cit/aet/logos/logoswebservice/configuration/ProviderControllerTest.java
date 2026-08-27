@@ -158,4 +158,30 @@ class ProviderControllerTest {
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.totalProviders").isNumber());
     }
+
+    @Test
+    void addLane_rejectsNonAdmin() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/add")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane\":{\"model\":\"llama3\"}}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void addLane_requiresProviderAndLane() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/add")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane are required"));
+
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/add")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"lane\":{\"model\":\"llama3\"}}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane are required"));
+    }
 }

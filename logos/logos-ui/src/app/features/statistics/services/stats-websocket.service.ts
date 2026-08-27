@@ -39,13 +39,31 @@ export interface StatsWsHandlers {
   onVramDelta: (payload: VramV2Payload) => void;
   onTimelineInit: (payload: TimelineInitPayload) => void;
   onTimelineDelta: (payload: TimelineDeltaPayload) => void;
+  /**
+   * Recomputed aggregates for the same range — the same shape as
+   * `timeline_init` minus its (far larger) event list. Pushed while the page is
+   * open, which is what keeps the KPI counters moving.
+   */
+  onStats: (payload: TimelineInitPayload) => void;
   onRequestsData: (payload: { requests?: Array<any> }) => void;
+}
+
+/**
+ * Who the page is looking at. Null on either side means "everyone", and the two
+ * combine. Narrows everything derived from requests — aggregates, the volume
+ * chart's events, the request feed — and nothing else: VRAM, lanes and GPUs
+ * belong to the hardware, not to a team.
+ */
+export interface StatsScope {
+  userId: number | null;
+  teamId: number | null;
 }
 
 export interface StatsWsConnectOptions {
   vramDayOffset: number;
   timeline: TimelineRequestConfig;
   timelineDeltas: boolean;
+  scope?: StatsScope;
   handlers: StatsWsHandlers;
 }
 
@@ -54,6 +72,7 @@ type ServerMessage =
   | { type: 'vram_delta'; payload: VramV2Payload }
   | { type: 'timeline_init'; payload: TimelineInitPayload }
   | { type: 'timeline_delta'; payload: TimelineDeltaPayload }
+  | { type: 'stats'; payload: TimelineInitPayload }
   | { type: 'requests'; payload: { requests?: Array<any> } }
   | { type: 'pong' };
 
@@ -98,6 +117,30 @@ export class StatsWebsocketService {
           start: t.start,
           end: t.end,
           target_buckets: t.targetBuckets,
+        })
+      );
+    }
+  }
+
+  /**
+   * Narrow every request-derived push to a team and/or a requester.
+   *
+   * Stored on the options as well as sent, so a reconnect re-applies it — the
+   * dropdowns keep showing the filter, and a socket that came back unscoped
+   * would quietly refill the page with platform-wide numbers underneath them.
+   * The server answers with a full re-push, since no delta turns the old scope's
+   * data into the new one's.
+   */
+  setScope(scope: StatsScope): void {
+    if (this.opts) {
+      this.opts = { ...this.opts, scope };
+    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(
+        JSON.stringify({
+          action: 'set_scope',
+          user_id: scope.userId,
+          team_id: scope.teamId,
         })
       );
     }
@@ -207,16 +250,23 @@ export class StatsWebsocketService {
 
       this.backoff = 2000;
 
+      // Read from this.opts, not the `opts` captured when the socket was
+      // opened: a scope set while the socket was down lives on the former, and
+      // the latter would re-init the session at whatever was current at connect
+      // time.
+      const current = this.opts ?? opts;
       ws.send(
         JSON.stringify({
           action: 'init',
           vram_day: this.currentVramDay,
-          timeline_deltas: opts.timelineDeltas,
+          timeline_deltas: current.timelineDeltas,
           timeline: {
-            start: opts.timeline.start,
-            end: opts.timeline.end,
-            target_buckets: opts.timeline.targetBuckets,
+            start: current.timeline.start,
+            end: current.timeline.end,
+            target_buckets: current.timeline.targetBuckets,
           },
+          user_id: current.scope?.userId ?? null,
+          team_id: current.scope?.teamId ?? null,
         })
       );
 
@@ -238,6 +288,8 @@ export class StatsWebsocketService {
           opts.handlers.onTimelineInit(msg.payload);
         } else if (msg.type === 'timeline_delta') {
           opts.handlers.onTimelineDelta(msg.payload);
+        } else if (msg.type === 'stats') {
+          opts.handlers.onStats(msg.payload);
         } else if (msg.type === 'requests') {
           opts.handlers.onRequestsData((msg as any).payload ?? {});
         }

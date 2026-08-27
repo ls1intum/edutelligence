@@ -4,8 +4,14 @@ When LOGOS_TMPFS_CACHE_PATH is set to a tmpfs mount (e.g. /mnt/ramcache),
 this module copies model directories from the source HF cache into the
 tmpfs for faster loading.  Only models in ``capabilities_models`` are cached.
 
-The cache copies entire ``models--org--name/`` directories using
-``rsync -aL`` (dereference symlinks) to produce a self-contained copy.
+The cache copies entire ``models--org--name/`` directories with ``rsync -a``,
+keeping HF's snapshot symlinks as symlinks. They are relative
+(``snapshots/<rev>/x -> ../../blobs/<sha>``) and ``blobs/`` is copied along
+with them, so the copy resolves inside itself and stays self-contained.
+Dereferencing them instead — which this used to do, with ``-aL`` — wrote
+every weight file twice, once as a blob and once as the snapshot entry
+pointing at it, for exactly double the RAM.
+
 Partial copies use a ``.partial`` suffix and are renamed atomically on
 completion to avoid serving incomplete data.
 """
@@ -88,6 +94,75 @@ def _has_valid_refs(model_dir: Path) -> bool:
     return False
 
 
+def _host_ram_available_bytes() -> int | None:
+    """MemAvailable in bytes, or None where /proc/meminfo is not readable.
+
+    tmpfs pages count against this: they are anonymous shared memory, not
+    reclaimable page cache, so a cache that has grown shows up here as RAM
+    the host does not have. That is exactly the property that makes this the
+    right number to bound the cache against.
+    """
+    try:
+        with open("/proc/meminfo", "rb") as f:
+            for line in f:
+                if line.startswith(b"MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _tree_size_bytes(directory: Path) -> int:
+    """Bytes a directory tree occupies, counting symlinks as links.
+
+    ``du`` semantics: a symlink costs its own entry, not its target. Used for
+    both the source estimate and the on-disk footprint of a cached copy, so
+    the two are directly comparable.
+    """
+    total = 0
+    for root, _dirs, files in os.walk(directory, followlinks=False):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def _snapshots_are_dereferenced(model_dir: Path) -> bool:
+    """Whether a cached copy materialised the snapshot symlinks.
+
+    Copies written before the cache stopped passing ``rsync -aL`` hold every
+    weight file twice — once under ``blobs/``, once as a real file under
+    ``snapshots/`` where the source has a link. They load fine, so nothing
+    else notices; they simply cost double. Detecting one lets the normal
+    staleness path rebuild it compactly the next time the model is needed.
+    """
+    snapshots = model_dir / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    try:
+        rev_dirs = [p for p in snapshots.iterdir() if p.is_dir()]
+    except OSError:
+        return False
+    for rev_dir in rev_dirs:
+        try:
+            entries = list(rev_dir.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                st = entry.lstat()
+            except OSError:
+                continue
+            # A materialised weight shard: a regular file where the source
+            # keeps a link. Small regular files are normal (HF writes some
+            # entries directly), so only bulk ones count.
+            if not os.path.islink(entry) and entry.is_file() and st.st_size >= _BULK_FILE_THRESHOLD_BYTES:
+                return True
+    return False
+
+
 def _is_tmpfs(path: str) -> bool:
     """Check if *path* is a tmpfs mount (Linux only, best-effort)."""
     proc_mounts = Path("/proc/mounts")
@@ -129,6 +204,15 @@ class ModelRamCache:
         self._cache_hub = self._tmpfs_root / "hub"
         self._source_hub = Path(source_hf_hub_path)
         self._max_size_bytes = max_size_bytes
+        # Host RAM that must stay out of this cache's reach, set from the
+        # cache plan once the sleep reserve is known. The tmpfs size is a
+        # fixed mount option — 400G of a 503G host on the production
+        # workers — so on its own it is a licence to take four fifths of the
+        # machine. This floor is what actually bounds the cache, and it is
+        # checked against live MemAvailable, so a lane that puts weights in
+        # host RAM shrinks what the cache may take without anyone
+        # recomputing anything.
+        self._host_ram_floor_bytes = 0
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_lock = asyncio.Lock()
         self._cached_models: set[str] = set()
@@ -159,29 +243,54 @@ class ModelRamCache:
         except OSError:
             return 0
 
+    def set_host_ram_floor_mb(self, floor_mb: float) -> None:
+        """Set the host RAM this cache must leave alone.
+
+        Called with the sleep reserve plus the safety margin once the cache
+        plan has computed them, so the bound the cache respects is the same
+        arithmetic that decided what to cache in the first place.
+        """
+        self._host_ram_floor_bytes = max(int(floor_mb * 1024 * 1024), 0)
+
+    def _would_starve_host(self, size_bytes: int) -> tuple[bool, int]:
+        """Whether caching *size_bytes* more would eat into the floor.
+
+        Returns ``(would_starve, available_bytes)``. Fails open — no
+        /proc/meminfo, or no floor configured, means the tmpfs check is left
+        to decide on its own, as it did before.
+        """
+        if self._host_ram_floor_bytes <= 0:
+            return False, 0
+        available = _host_ram_available_bytes()
+        if available is None:
+            return False, 0
+        return available - size_bytes < self._host_ram_floor_bytes, available
+
     def cached_models(self) -> list[str]:
         """List models currently in the cache."""
         return sorted(self._cached_models)
 
     def model_size_bytes(self, model_name: str) -> int:
-        """Get total size of model on the source filesystem."""
+        """Bytes this model will occupy in the cache.
+
+        Counts the bytes a copy actually writes, which is the blobs and
+        nothing else: HF stores every snapshot entry as a relative symlink
+        into ``blobs/``, and the copy keeps them as symlinks, so a snapshot
+        costs its link and not its target. Resolving the links here — which
+        ``getsize`` does, and ``followlinks`` compounds by walking into them —
+        counted every weight file twice and returned double the real
+        footprint to the capacity check above.
+        """
         src = self._source_hub / _hf_model_dir_name(model_name)
         if not src.exists():
             return 0
-        total = 0
-        for root, _dirs, files in os.walk(src, followlinks=True):
-            for f in files:
-                try:
-                    total += os.path.getsize(os.path.join(root, f))
-                except OSError:
-                    pass
-        return total
+        return _tree_size_bytes(src)
 
     async def ensure_cached(self, model_name: str) -> str:
         """Copy model into tmpfs if not already cached and space permits.
 
         Returns the path to use for loading (tmpfs path if cached, source
-        path if not).  Uses ``rsync -aL`` (dereferences symlinks).
+        path if not).  Uses ``rsync -a`` (snapshot symlinks stay links).
         """
         lock = await self._get_model_lock(model_name)
         async with lock:
@@ -221,6 +330,19 @@ class ModelRamCache:
                     size // (1024 * 1024),
                     available // (1024 * 1024),
                     safety_floor // (1024 * 1024),
+                )
+                return str(self._source_hub.parent)
+
+            starves, host_available = self._would_starve_host(size)
+            if starves:
+                logger.warning(
+                    "Skipping RAM cache for %s: need %d MB but only %d MB of host RAM "
+                    "is available above the %d MB reserved for sleeping lanes — "
+                    "loading from disk",
+                    model_name,
+                    size // (1024 * 1024),
+                    host_available // (1024 * 1024),
+                    self._host_ram_floor_bytes // (1024 * 1024),
                 )
                 return str(self._source_hub.parent)
 
@@ -276,6 +398,19 @@ class ModelRamCache:
             )
             return str(self._source_hub.parent)
 
+        starves, host_available = self._would_starve_host(size)
+        if starves:
+            logger.warning(
+                "Skipping RAM cache for %s: need %d MB but only %d MB of host RAM "
+                "is available above the %d MB reserved for sleeping lanes — "
+                "loading from disk",
+                model_name,
+                size // (1024 * 1024),
+                host_available // (1024 * 1024),
+                self._host_ram_floor_bytes // (1024 * 1024),
+            )
+            return str(self._source_hub.parent)
+
         ok = self._copy_model_sync(model_name)
         if ok:
             self._cached_models.add(model_name)
@@ -321,7 +456,7 @@ class ModelRamCache:
                 proc = subprocess.Popen(  # noqa: S603
                     [
                         "rsync",
-                        "-aL",
+                        "-a",
                         "--delete",
                         "--info=progress2",
                         "--no-inc-recursive",
@@ -354,7 +489,7 @@ class ModelRamCache:
                     shutil.rmtree(partial, ignore_errors=True)
                     return False
             else:
-                shutil.copytree(str(src), str(partial), symlinks=False, dirs_exist_ok=True)
+                shutil.copytree(str(src), str(partial), symlinks=True, dirs_exist_ok=True)
         except Exception:
             logger.exception("Failed to copy %s into RAM cache", model_name)
             shutil.rmtree(partial, ignore_errors=True)
@@ -551,6 +686,44 @@ class ModelRamCache:
             logger.info("Evicted %s from RAM cache", model_name)
         self._cached_models.discard(model_name)
 
+    def held_bytes(self) -> int:
+        """Host RAM this cache currently occupies.
+
+        tmpfs pages are anonymous shared memory, so everything in here is RAM
+        the host cannot use for anything else — and, unlike page cache, it is
+        never reclaimed under pressure. The number is what makes the cache's
+        share of the pool visible to a budget calculation.
+        """
+        total = 0
+        for model_name in list(self._cached_models):
+            target = self._cache_hub / _hf_model_dir_name(model_name)
+            if target.exists():
+                total += _tree_size_bytes(target)
+        return total
+
+    def reclaim(self, keep: set[str]) -> list[str]:
+        """Drop cached models outside *keep*, returning what was removed.
+
+        The cache and vLLM's sleep_l1 both hold model weights in host RAM,
+        and until this existed only one of them ever gave any back: the cache
+        filled to its tmpfs limit on first boot and stayed there, so every
+        later sleep competed against a copy of weights nobody had asked for
+        in hours. Reclaiming is safe precisely because the cache is an
+        accelerator — an evicted model still loads, just from disk.
+
+        Callers must exclude models a lane is currently serving: a lane
+        waking from sleep_l2 re-reads its weights from whatever HF_HOME it
+        was started with, and pulling that directory out from under it turns
+        a wake into a failed lane.
+        """
+        removed: list[str] = []
+        for model_name in sorted(self._cached_models):
+            if model_name in keep:
+                continue
+            self.evict(model_name)
+            removed.append(model_name)
+        return removed
+
     def get_effective_hf_home(self, model_name: str) -> str:
         """Return tmpfs-based HF_HOME if cached, else source HF_HOME."""
         if model_name in self._cached_models:
@@ -667,7 +840,7 @@ class ModelRamCache:
             if rsync_available:
                 progress_cmd = [
                     "rsync",
-                    "-aL",
+                    "-a",
                     "--delete",
                     "--info=progress2",
                     str(src) + "/",
@@ -682,7 +855,7 @@ class ModelRamCache:
                     shutil.rmtree(partial, ignore_errors=True)
                     fallback_cmd = [
                         "rsync",
-                        "-aL",
+                        "-a",
                         "--delete",
                         str(src) + "/",
                         str(partial) + "/",
@@ -702,7 +875,7 @@ class ModelRamCache:
                     shutil.copytree,
                     str(src),
                     str(partial),
-                    symlinks=False,
+                    symlinks=True,
                     dirs_exist_ok=True,
                 )
         except Exception:
@@ -791,8 +964,22 @@ class ModelRamCache:
         return proc.returncode or 0, " | ".join(output_tail[-3:])
 
     def _is_stale(self, src: Path, cached: Path) -> bool:
-        """Check if source is newer than cached copy by comparing mtimes."""
+        """Whether the cached copy should be rebuilt before it is served.
+
+        Either because the source moved on, or because the copy is one of the
+        dereferenced ones an older worker wrote: those hold every weight twice
+        and rebuilding one halves what it costs. Rebuilding is the same work
+        the copy path already does, so the reclaim happens on the next touch
+        of that model rather than as a migration step.
+        """
         try:
+            if _snapshots_are_dereferenced(cached):
+                logger.info(
+                    "Cached copy of %s materialised its snapshot symlinks (holds every "
+                    "weight twice) — rebuilding it compactly",
+                    cached.name,
+                )
+                return True
             src_mtime = self._newest_mtime(src)
             cached_mtime = self._newest_mtime(cached)
             return src_mtime > cached_mtime
@@ -849,6 +1036,15 @@ class _DisabledModelRamCache:
         pass
 
     def evict(self, model_name: str) -> None:  # noqa: ARG002
+        pass
+
+    def held_bytes(self) -> int:
+        return 0
+
+    def reclaim(self, keep: set[str]) -> list[str]:  # noqa: ARG002
+        return []
+
+    def set_host_ram_floor_mb(self, floor_mb: float) -> None:  # noqa: ARG002
         pass
 
     def get_effective_hf_home(self, model_name: str) -> str:  # noqa: ARG002

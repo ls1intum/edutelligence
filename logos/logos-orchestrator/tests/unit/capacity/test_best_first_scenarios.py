@@ -24,6 +24,7 @@ marked xfail with a TODO.
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import dataclass, field
 from types import ModuleType, SimpleNamespace
 from typing import Any, Dict, List
@@ -196,6 +197,7 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
     planner._registry = registry
     planner._demand = demand
     planner._lane_wake_failure_until = {}
+    planner._lane_load_failure_until = {}
     planner._cross_provider_best_first = True
     planner._replica_first_eviction = True
     planner._replicate_on_free_vram = False  # opt-in; tests turn it on
@@ -427,6 +429,73 @@ class TestEstimateDemandActionCost:
         )
         assert result is None
 
+    def test_a_cold_load_in_failure_cooldown_is_infeasible(self):
+        """A load this worker just failed cannot serve the model, so it cannot
+        be a ranking candidate either — see the deadlock test below."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            profiles={"X": _profile(loaded_vram_mb=20_000.0)},
+            available_vram_mb=80_000.0,
+        )
+        planner = _planner([provider])
+        planner._lane_load_failure_until[(1, planner._planner_lane_id("X"))] = time.time() + 120.0
+
+        result = planner._estimate_demand_action_cost(
+            1,
+            "X",
+            provider.lanes,
+            provider.profiles,
+            planner._facade.get_capacity_info(1),
+        )
+        assert result is None
+
+    def test_an_expired_cooldown_makes_the_worker_a_candidate_again(self):
+        """The cooldown is a pause, not a ban."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            profiles={"X": _profile(loaded_vram_mb=20_000.0)},
+            available_vram_mb=80_000.0,
+        )
+        planner = _planner([provider])
+        planner._lane_load_failure_until[(1, planner._planner_lane_id("X"))] = time.time() - 1.0
+
+        result = planner._estimate_demand_action_cost(
+            1,
+            "X",
+            provider.lanes,
+            provider.profiles,
+            planner._facade.get_capacity_info(1),
+        )
+        assert result is not None
+
+    def test_a_sleeping_lane_is_unaffected_by_the_load_cooldown(self):
+        """Waking a lane that is already resident is not the load that failed,
+        and has its own cooldown."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane(lane_id="planner-X", model_name="X", runtime_state="loaded", sleep_state="sleeping")],
+            profiles={"X": _profile(loaded_vram_mb=20_000.0, sleeping_residual_mb=1_000.0)},
+            available_vram_mb=80_000.0,
+        )
+        planner = _planner([provider])
+        planner._lane_load_failure_until[(1, "planner-X")] = time.time() + 120.0
+
+        result = planner._estimate_demand_action_cost(
+            1,
+            "X",
+            provider.lanes,
+            provider.profiles,
+            planner._facade.get_capacity_info(1),
+        )
+        assert result is not None
+        cost, _ = result
+        assert cost == pytest.approx(CapacityPlanner.TARGET_ACTION_COST_S["wake"])
+
 
 # ---------------------------------------------------------------------------
 # Cross-provider ranker tests
@@ -460,6 +529,72 @@ class TestRankProvidersForDemandedModels:
             [("X", 1.5)],
         )
         assert winners == {"X": a.provider_id}
+
+    def test_a_worker_whose_load_just_failed_does_not_win(self):
+        """Production, 2026-08-21: A's vLLM died during startup, so its lane
+        went into the load-failure cooldown. The ranker did not look at that
+        and kept naming A the winner, which made B skip the model with
+        "best-first ranker picked worker=A" — and A's own action was then
+        dropped by the cooldown check in _validate_vram_budget. Neither worker
+        loaded anything for the next two minutes, while a request sat queued.
+        """
+        a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=90_000,  # would otherwise win the free-VRAM tiebreak
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        planner._lane_load_failure_until[(a.provider_id, planner._planner_lane_id("X"))] = time.time() + 120.0
+
+        winners = planner._rank_providers_for_demanded_models(
+            [a.provider_id, b.provider_id],
+            [("X", 1.5)],
+        )
+        assert winners == {"X": b.provider_id}
+
+    def test_all_workers_in_cooldown_leaves_the_model_unranked(self):
+        """With no viable worker the ranker must name none, so nothing is
+        skipped for "another worker was picked" — the per-worker paths then
+        make their own decision instead of deferring to a winner that cannot
+        act. _compute_demand_actions defaults a missing entry to the worker
+        being evaluated for exactly this reason."""
+        a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=90_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        b = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
+        lane_id = planner._planner_lane_id("X")
+        planner._lane_load_failure_until[(a.provider_id, lane_id)] = time.time() + 120.0
+        planner._lane_load_failure_until[(b.provider_id, lane_id)] = time.time() + 120.0
+
+        winners = planner._rank_providers_for_demanded_models(
+            [a.provider_id, b.provider_id],
+            [("X", 1.5)],
+        )
+        assert "X" not in winners
 
     def test_sleeping_provider_beats_cold_provider(self):
         """Scenario 4: A has X sleeping (with eviction), B is cold (no eviction).
@@ -1634,3 +1769,230 @@ class TestWakeTargetSelfEviction:
         assert all(a.action != "wake" for a in actions)
         # Order: destructive stop before the recovering load.
         assert kinds.index(("stop", "planner-X")) < kinds.index(("load", "planner-X"))
+
+
+class TestBalanceWake:
+    """Balance wake: the best-first winner is awake but saturated (queue
+    >= BALANCE_WAKE_QUEUE_FLOOR) → the planner wakes a sleeping replica of
+    the same model on a NON-winning worker. Wake path only, never evicts,
+    at most one per model per cycle.
+
+    Regression for the deioma production case (2026-08-25): Qwen3.8-27B ran
+    on three workers; deimama and deipapa were awake and served the entire
+    queue (2-8 waiting, demand eff 2.12) while the deioma replica idle-slept
+    for ~7h with GPU 2 fully free. The ranker's cost model (awake lane 0.0s
+    vs wake 2.0s) can never let the standby win, and nothing else was
+    looking at the winner's queue depth.
+    """
+
+    def _full_path_planner(self, providers, ranked=("X", 2.0)):
+        """``_planner`` plus the attributes only the full demand path touches."""
+        planner = _planner(providers)
+        planner._cross_provider_dedup = False
+        planner._announced_use = {}
+        planner._provider_capacity_lock = lambda pid: SimpleNamespace(locked=lambda: False)
+        planner._vram_ledger = SimpleNamespace(
+            get_committed_mb=lambda pid: 0.0,
+            has_overlapping_reservation=lambda *a, **k: False,
+            get_gpu_effective_available_mb=lambda pid, g, f: f,
+        )
+        planner._demand.get_ranked_models.return_value = [ranked]
+        planner._demand.get_score.return_value = ranked[1]
+        return planner
+
+    def _winner_a(self, *, queue_active=3, queue_wait=5):
+        """Awake incumbent with a deep queue — the best-first winner (cost 0)."""
+        return _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[
+                _lane(
+                    lane_id="A-x",
+                    model_name="X",
+                    runtime_state="running",
+                    active_requests=queue_active,
+                    queue_waiting=queue_wait,
+                )
+            ],
+            capabilities=["X"],
+            available_vram_mb=5_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+
+    def _sleeper_b(self, provider_id=2, name="B", available_vram_mb=50_000):
+        """Sleeping standby replica (L1) with free VRAM for the wake."""
+        return _MockProvider(
+            provider_id=provider_id,
+            name=name,
+            lanes=[
+                _lane(
+                    lane_id=f"{name}-x",
+                    model_name="X",
+                    runtime_state="sleeping",
+                    sleep_state="sleeping",
+                    effective_vram_mb=500,
+                )
+            ],
+            capabilities=["X"],
+            available_vram_mb=available_vram_mb,
+            profiles={"X": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500)},
+        )
+
+    def test_wakes_sleeper_when_winner_is_saturated(self):
+        """Production case: A awake with queue depth 8 (winner), B has a
+        sleeping lane with free VRAM. B's LOCAL demand is below the regular
+        wake floor (score 0.3, no local queue) — only the winner's queue
+        justifies the wake, which is exactly what the balance path is for."""
+        a = self._winner_a(queue_active=3, queue_wait=5)  # depth 8 >= floor 4
+        b = self._sleeper_b()
+        planner = self._full_path_planner([a, b], ranked=("X", 0.3))
+        # Sanity: the ranker really picks the awake incumbent over the wake.
+        assert planner._rank_providers_for_demanded_models([1, 2], [("X", 0.3)]) == {"X": 1}
+
+        planned = set()
+        balance = set()
+        actions = planner._compute_demand_actions(
+            b.provider_id,
+            b.lanes,
+            cycle_planned_models=planned,
+            best_provider_for_model={"X": a.provider_id},
+            cycle_balance_wake_models=balance,
+        )
+        assert [(x.action, x.provider_id, x.lane_id) for x in actions] == [
+            ("wake", b.provider_id, "B-x"),
+        ]
+        assert "Balance-wake" in actions[0].reason
+        # Feeds both cycle-scoped dedup sets.
+        assert planned == {"X"}
+        assert balance == {"X"}
+
+    def test_no_balance_wake_below_queue_floor(self):
+        """Winner queue 3 < floor 4 → standby stays asleep (legacy skip).
+        A 1-3 request blip must not flap the lane against the 120s idle tier."""
+        a = self._winner_a(queue_active=2, queue_wait=1)  # depth 3
+        b = self._sleeper_b()
+        planner = self._full_path_planner([a, b])
+        actions = planner._compute_demand_actions(
+            b.provider_id,
+            b.lanes,
+            best_provider_for_model={"X": a.provider_id},
+        )
+        assert actions == []
+
+    def test_balance_wake_never_evicts(self):
+        """Wake on B needs VRAM that only an eviction frees → no action.
+        A balance wake spreads load for the incumbent; nothing is waiting on
+        B's lane, so preempting another model's lane would be speculative."""
+        a = self._winner_a()
+        b = self._sleeper_b(available_vram_mb=5_000)
+        planner = self._full_path_planner([a, b])
+        other = _lane(lane_id="B-emb", model_name="Embed", runtime_state="loaded")
+        planner._find_eviction_set = lambda *_, **__: [(other, "sleep", 0.0)]
+        actions = planner._compute_demand_actions(
+            b.provider_id,
+            b.lanes,
+            best_provider_for_model={"X": a.provider_id},
+        )
+        assert actions == []
+
+    def test_balance_wake_skipped_when_vram_infeasible(self):
+        """No eviction set can cover the deficit at all → no action (the
+        regular wake path would log the same, the balance path must not
+        plan anything either)."""
+        a = self._winner_a()
+        b = self._sleeper_b(available_vram_mb=5_000)
+        planner = self._full_path_planner([a, b])
+        planner._find_eviction_set = lambda *_, **__: None
+        actions = planner._compute_demand_actions(
+            b.provider_id,
+            b.lanes,
+            best_provider_for_model={"X": a.provider_id},
+        )
+        assert actions == []
+
+    def test_at_most_one_balance_wake_per_model_per_cycle(self):
+        """Two sleeping standbys → exactly one wakes this cycle; the second
+        is re-evaluated next cycle with the updated queues (escalation step,
+        not fan-out)."""
+        a = self._winner_a()
+        b1 = self._sleeper_b(provider_id=2, name="B")
+        b2 = self._sleeper_b(provider_id=3, name="C")
+        planner = self._full_path_planner([a, b1, b2])
+        planned = set()
+        balance = set()
+        best = {"X": a.provider_id}
+        actions_1 = planner._compute_demand_actions(
+            b1.provider_id,
+            b1.lanes,
+            cycle_planned_models=planned,
+            best_provider_for_model=best,
+            cycle_balance_wake_models=balance,
+        )
+        actions_2 = planner._compute_demand_actions(
+            b2.provider_id,
+            b2.lanes,
+            cycle_planned_models=planned,
+            best_provider_for_model=best,
+            cycle_balance_wake_models=balance,
+        )
+        wakes = [x for x in actions_1 + actions_2 if x.action == "wake"]
+        assert len(wakes) == 1
+        assert wakes[0].provider_id == b1.provider_id
+        assert balance == {"X"}
+
+    def test_no_cold_load_for_balance(self):
+        """A non-winner WITHOUT a lane for X must not cold-load it just
+        because the winner is saturated — a cold load is a replication
+        decision, not a balance one. C hosts an unrelated model Y (so it is
+        not an empty worker and the capability-seeding path is out of scope);
+        it has no sleeping X replica to wake."""
+        a = self._winner_a()
+        c = _MockProvider(
+            provider_id=3,
+            name="C",
+            lanes=[_lane(lane_id="C-y", model_name="Y", runtime_state="loaded")],
+            capabilities=["X", "Y"],
+            available_vram_mb=80_000,
+            profiles={
+                "X": _profile(loaded_vram_mb=20_000),
+                "Y": _profile(loaded_vram_mb=20_000),
+            },
+        )
+        planner = self._full_path_planner([a, c])
+        actions = planner._compute_demand_actions(
+            c.provider_id,
+            c.lanes,
+            best_provider_for_model={"X": a.provider_id},
+        )
+        assert actions == []
+
+    def test_no_balance_wake_when_winner_is_sleeping(self):
+        """If the winner itself is sleeping, it wakes via the regular demand
+        path (has_queued bypass) — the balance path only targets an awake,
+        saturated incumbent and must not double-plan on top of it."""
+        a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[
+                _lane(
+                    lane_id="A-x",
+                    model_name="X",
+                    runtime_state="sleeping",
+                    sleep_state="sleeping",
+                    effective_vram_mb=500,
+                )
+            ],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000, sleeping_residual_mb=500)},
+        )
+        b = self._sleeper_b()
+        planner = self._full_path_planner([a, b])
+        # Both sleeping: cost tie (2.0s) → free-VRAM tie (50k) → lowest id.
+        assert planner._rank_providers_for_demanded_models([1, 2], [("X", 2.0)]) == {"X": 1}
+        actions = planner._compute_demand_actions(
+            b.provider_id,
+            b.lanes,
+            best_provider_for_model={"X": 1},
+        )
+        assert actions == []
