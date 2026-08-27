@@ -209,7 +209,18 @@ None of that is lost while the request waits in the orchestrator queue. So the o
 
 Admission reads the live lane signals the worker reports (the same ones §4 uses for tier estimation):
 
-**Nothing outside the engine can predict whether vLLM will start a given request or park it.** That depends on whether the new sequence's KV blocks fit against what the running sequences currently occupy — neither exposed nor derivable from the outside. The engine reports the answer only afterwards, as `num_requests_waiting`. Admission is therefore retrospective by necessity: forward while nothing is observed waiting, stop at the first observed waiter. The engine-side queue then hovers at about one request — enough lookahead that the GPU never idles between generations, few enough that essentially everything stays re-prioritisable and re-routable.
+**Nothing outside the engine can predict whether vLLM will start a given request or park it.** That depends on whether the new sequence's KV blocks fit against what the running sequences currently occupy — neither exposed nor derivable from the outside. The engine reports the answer only afterwards, as `num_requests_waiting`. Admission is therefore retrospective by necessity: forward while nothing is observed waiting, stop at the first observed waiter.
+
+**What that buys, measured rather than assumed.** On logos-dev, 60 concurrent requests against a lane serving ~0.5 req/s:
+
+| | engine backlog (avg) | peak | share of samples at zero |
+|---|---|---|---|
+| before this gate | 0.35 | 4 | — |
+| with the gate | 0.53 | 5 | 71% |
+
+The gate does **not** drive the engine-side queue to zero, and the earlier claim in this document that it holds it "at about one request" was wrong. The reason is structural: the step granted per worker report (`batch_limit`) is not tied to the rate at which the lane drains. At 4 per report and roughly one report per second, admission runs at ~4/s against a service rate of ~0.5/s, so whenever the signal reads clear — 71% of samples — the queue grows again until the next report shows it. Holding it near zero would need the engine's true admission capacity, which is exactly what vLLM does not expose.
+
+What the gate does deliver is bounded exposure and gated decisions: a 60-wide burst is no longer committed wholesale (56 of 60 held), every dispatch consults the live signals, and the backlog stays small — peak 5 against 22 in flight.
 
 | Signal | Source | Gate |
 |--------|--------|------|
@@ -219,7 +230,7 @@ Admission reads the live lane signals the worker reports (the same ones §4 uses
 
 **`num_parallel` is deliberately not used as a ceiling.** It is the concurrency vLLM guarantees *at full context* — the "Maximum concurrency for N tokens per request" line from its startup log, which the lane-health panel shows as `(min. c)`. Real requests use a fraction of their context, so the engine runs far past it: a production lane serves 8 concurrent requests with `num_parallel = 1` at 78% KV. Read as a ceiling, that lane would be throttled eightfold. It is a *lower bound on capacity*, which makes it sound as a step size and wrong as a limit.
 
-**The signals are sampled, so the gate also counts its own sends.** Every request arriving inside one sampling window reads the same `queue_waiting`, so a simultaneous burst passes untouched — measured on logos-dev, 60 concurrent requests produced zero holds. The orchestrator therefore tracks what it has forwarded since the current worker report and spends `batch_limit` down by it, holding with reason `awaiting_signal` once the step is used up. The next report supersedes the estimate with a measurement and restores the budget, which is why a worker status also re-evaluates the queues (`on_worker_report`) — otherwise a held request would wait for the next completion, and on a ramp from idle nothing has completed yet. Measured feedback latency on dev: **0.21–1.11s, median ~0.9s**, because the worker marks its status dirty when a lane's in-flight count changes rather than waiting for its refresh interval.
+**The signals are sampled, so the gate also counts its own sends.** Every request arriving inside one sampling window reads the same `queue_waiting`, so a simultaneous burst passes untouched — measured on logos-dev, 60 concurrent requests produced zero holds before this, and 56 after. The orchestrator therefore tracks what it has forwarded since the current worker report and spends `batch_limit` down by it, holding with reason `awaiting_signal` once the step is used up. The next report supersedes the estimate with a measurement and restores the budget, which is why a worker status also re-evaluates the queues (`on_worker_report`) — otherwise a held request would wait for the next completion, and on a ramp from idle nothing has completed yet. Measured feedback latency on dev: **0.21–1.11s, median ~0.9s**, because the worker marks its status dirty when a lane's in-flight count changes rather than waiting for its refresh interval.
 
 The unit of the decision is `AdmissionDecision(can_admit, batch_limit, reason)`. `batch_limit` is how many queued requests one dispatch pass may release — `num_parallel` scaled by the free KV fraction (the same floating figure the panel shows), at least 1 — summed over the model's admissible lanes; a backlogged lane never masks an idle sibling. When a worker reports nothing usable (older worker, lane still starting), `batch_limit` is `None` and the decision falls back to the parallel-capacity gate alone — admission is never stricter than the signals justify.
 
