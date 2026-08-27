@@ -16,6 +16,8 @@ expressible. These tests pin that property rather than the call sequence.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from tests.unit.monitoring.test_recorder import _make_recorder, _patch_prom
 
@@ -26,9 +28,19 @@ from logos.monitoring import recorder as recorder_module
 def _isolated_state():
     """The tracked-request map is module state shared across tests."""
     recorder_module._request_states.clear()
-    recorder_module._last_stale_sweep = 0.0
+    _force_sweep_due()
     yield
     recorder_module._request_states.clear()
+
+
+def _force_sweep_due() -> None:
+    """Make the next arrival run the sweep.
+
+    Not `= 0.0`: the sweep is rate-limited against `time.monotonic()`, whose
+    origin is arbitrary — on a freshly booted CI runner it read 58s, so zero
+    was still "less than a minute ago" and the sweep never ran.
+    """
+    recorder_module._last_stale_sweep = time.monotonic() - recorder_module._STALE_SWEEP_INTERVAL_S - 1
 
 
 def _enqueue(recorder, request_id):
@@ -158,7 +170,7 @@ def test_requests_older_than_any_plausible_lifetime_are_swept(monkeypatch):
         model,
         provider,
     )
-    recorder_module._last_stale_sweep = 0.0
+    _force_sweep_due()
 
     _enqueue(recorder, "req-fresh")
 
@@ -174,7 +186,7 @@ def test_the_sweep_leaves_long_running_requests_alone(monkeypatch):
     _enqueue(recorder, "req-slow")
     start, model, provider = recorder_module._request_states["req-slow"]
     recorder_module._request_states["req-slow"] = (start - 1200, model, provider)
-    recorder_module._last_stale_sweep = 0.0
+    _force_sweep_due()
 
     _enqueue(recorder, "req-fresh")
 
@@ -187,8 +199,10 @@ def test_the_sweep_is_rate_limited(monkeypatch):
     recorder, _ = _make_recorder(monkeypatch, {27: "m"}, {12: "p"})
     _patch_prom(monkeypatch)
 
+    due_since = recorder_module._last_stale_sweep
     _enqueue(recorder, "req-1")
     first_sweep = recorder_module._last_stale_sweep
-    _enqueue(recorder, "req-2")
+    assert first_sweep > due_since, "the first arrival should have run the sweep"
 
+    _enqueue(recorder, "req-2")
     assert recorder_module._last_stale_sweep == first_sweep
