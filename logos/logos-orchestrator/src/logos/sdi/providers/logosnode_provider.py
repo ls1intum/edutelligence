@@ -358,15 +358,22 @@ class LogosNodeDataProvider:
 
             matched_lanes += 1
             is_vllm = bool(lane.get("vllm"))
-            capacity_hint = lane.get("num_parallel")
-            if is_vllm and not capacity_hint:
-                # vLLM uses continuous batching.  The worker reports the
-                # engine's own max concurrency (KV-budget-derived, parsed
-                # from vLLM's startup log); 0 means it has not reported one
-                # yet (older worker or lane still starting).  Default to 256
-                # so the scheduler doesn't artificially serialize requests —
-                # vLLM's own scheduler then admits what the KV cache holds.
-                capacity_hint = 256
+            if is_vllm:
+                # vLLM's `num_parallel` is the concurrency the engine
+                # guarantees at *full context*, so it is a lower bound on
+                # capacity, not a ceiling — measured on dev, a lane
+                # reporting 4 served 23 concurrent requests at 47% KV, and a
+                # production lane reporting 1 served 8. Using it here would
+                # have the local ledger throttle by 5-8x exactly where the
+                # admission gate was changed to stop doing so.  What the
+                # engine can really hold is bounded by the KV cache, which
+                # `evaluate_admission` reads live; this ledger only needs a
+                # ceiling loose enough not to bind before that does.
+                capacity_hint = self.DEFAULT_PARALLEL_CAPACITY
+            else:
+                # Ollama's num_parallel is an explicit `--parallel` slot
+                # count — a real ceiling, and the only one available.
+                capacity_hint = lane.get("num_parallel")
 
             try:
                 capacity = int(capacity_hint) if capacity_hint is not None else 0

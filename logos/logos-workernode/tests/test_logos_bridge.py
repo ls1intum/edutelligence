@@ -1797,8 +1797,12 @@ async def test_cancel_command_only_touches_its_target(monkeypatch):
     await upstream_a.first_chunk_sent.wait()
     await upstream_b.first_chunk_sent.wait()
 
+    task_a = client._command_tasks["cmd-a"]  # noqa: SLF001
     assert client.cancel_command("cmd-a") is True
-    await asyncio.sleep(0)
+    # The close happens in the task's finally, so wait for it rather than
+    # assuming one scheduler turn is enough.
+    with pytest.raises(asyncio.CancelledError):
+        await task_a
 
     assert upstream_a.closed is True
     assert upstream_b.closed is False

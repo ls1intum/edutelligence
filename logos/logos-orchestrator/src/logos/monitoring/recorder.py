@@ -189,12 +189,20 @@ class MonitoringRecorder:
         move the in-flight gauge.
         """
         status_value = result_status.value if isinstance(result_status, ResultStatus) else str(result_status)
-        prom.REQUESTS_TOTAL.labels(status=status_value).inc()
 
         state = _request_states.pop(request_id, None)
         _publish_in_flight()
         if state is None:
+            # Nothing to settle: either this request was already settled — a
+            # context-resolution failure passes through `_record_log_failure`
+            # twice, once in the mode handler and once in the outer exception
+            # handler — or it never got as far as being enqueued. Counting
+            # here would inflate the outcome totals past the enqueue count;
+            # keeping the counter inside this branch makes
+            # `enqueued == sum(terminal states)` hold by construction.
             return status_value
+
+        prom.REQUESTS_TOTAL.labels(status=status_value).inc()
 
         start, model, provider = state
         prom.REQUEST_DURATION_SECONDS.labels(
