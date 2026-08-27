@@ -9,11 +9,7 @@ still wins.
 """
 
 import pytest
-from tests.unit.pipeline.test_correcting_scheduler import (
-    MockAzureFacade,
-    MockLogosNodeFacade,
-    _make_view,
-)
+from tests.unit.pipeline.test_correcting_scheduler import MockAzureFacade, MockLogosNodeFacade, _make_view
 
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.prefix_affinity import PrefixAffinityRouter

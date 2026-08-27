@@ -9,11 +9,7 @@ Two properties carry the whole feature:
    single key running several agent loops in parallel keeps them apart.
 """
 
-from logos.pipeline.prefix_affinity import (
-    PrefixAffinityRouter,
-    affinity_keys,
-    serialize_prefix,
-)
+from logos.pipeline.prefix_affinity import PrefixAffinityRouter, affinity_keys, serialize_prefix
 
 BLOCK = 64  # small blocks keep the fixtures readable
 LIMIT = BLOCK * 8
