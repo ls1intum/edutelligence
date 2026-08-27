@@ -135,23 +135,23 @@ def test_rescue_survives_alongside_other_models(monkeypatch):
     registry.active_provider_ids = lambda: [NARROW_PROVIDER, 2]
     registry.peek_runtime_snapshot = lambda pid: {
         "runtime": {
-            "lanes": [
-                {
-                    "model": MODEL_NAME,
-                    "vllm": True,
-                    "backend_metrics": {"max_model_len": 33_000},
-                }
-            ]
-            if pid == NARROW_PROVIDER
-            else [],
+            "lanes": (
+                [
+                    {
+                        "model": MODEL_NAME,
+                        "vllm": True,
+                        "backend_metrics": {"max_model_len": 33_000},
+                    }
+                ]
+                if pid == NARROW_PROVIDER
+                else []
+            ),
             "model_profiles": {},
         }
     }
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    deployments = _deployments(NARROW_PROVIDER) + [
-        {"provider_id": 2, "model_id": OTHER_MODEL_ID, "type": "logosnode"}
-    ]
+    deployments = _deployments(NARROW_PROVIDER) + [{"provider_id": 2, "model_id": OTHER_MODEL_ID, "type": "logosnode"}]
     result = main_mod._prefer_deployments_with_context_room(
         deployments, _payload(150_000), {MODEL_ID: MODEL_NAME, OTHER_MODEL_ID: "embedding-8b"}
     )

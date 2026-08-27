@@ -2395,14 +2395,11 @@ def _prefer_deployments_with_context_room(
     fitting = [d for d in deployments if _keep(d)]
     if len(fitting) != len(deployments):
         logger.info(
-            "Context routing: request needs ~%d tokens; %d of %d deployment(s) serve a wide "
-            "enough window%s",
+            "Context routing: request needs ~%d tokens; %d of %d deployment(s) serve a wide " "enough window%s",
             required,
             len(fitting),
             len(deployments),
-            f" (+{len(rescued_widest)} widest lane(s) of fully-filtered model(s) kept)"
-            if rescued_widest
-            else "",
+            f" (+{len(rescued_widest)} widest lane(s) of fully-filtered model(s) kept)" if rescued_widest else "",
         )
     return fitting or deployments
 

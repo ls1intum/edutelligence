@@ -78,8 +78,7 @@ class TestEstimatePromptTokens:
             "system": "You are an assistant. " * 50,
             "messages": agent_messages,
             "tools": [
-                {"name": f"tool_{i}", "description": "d " * 30, "input_schema": {"type": "object"}}
-                for i in range(30)
+                {"name": f"tool_{i}", "description": "d " * 30, "input_schema": {"type": "object"}} for i in range(30)
             ],
         }
         true_tokens = sum(len(t) for t in _iter_text(payload)) / 3.7
