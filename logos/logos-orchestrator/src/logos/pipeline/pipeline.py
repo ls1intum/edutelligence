@@ -475,9 +475,7 @@ class RequestPipeline:
         # queueing, monitoring, log stats) agree on it.
         effective_priority = resolve_queue_priority(request.default_priority, policy.get("priority"))
         if candidates:
-            candidates = [
-                (model_id, weight, effective_priority, parallel) for model_id, weight, _, parallel in candidates
-            ]
+            candidates = [(model_id, weight, effective_priority) for model_id, weight, _ in candidates]
 
         elapsed = time.time() - start
 

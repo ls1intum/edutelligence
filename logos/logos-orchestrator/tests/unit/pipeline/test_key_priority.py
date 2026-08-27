@@ -30,7 +30,7 @@ class _FakeClassifier:
 
     def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
         priority = policy.get("priority", 0)
-        return [(mid, 1.0, priority, 1) for mid in (allowed or [])]
+        return [(mid, 1.0, priority) for mid in (allowed or [])]
 
 
 class _FakeScheduler:
@@ -121,7 +121,7 @@ async def test_key_priority_overrides_policy_priority():
     result = await pipeline.process(_request(default_priority=10))
 
     assert result.success is True
-    assert [prio for _, _, prio, _ in scheduler.last_request.classified_models] == [10]
+    assert [prio for _, _, prio in scheduler.last_request.classified_models] == [10]
 
 
 async def test_key_priority_wins_even_when_lower_than_policy():
@@ -129,7 +129,7 @@ async def test_key_priority_wins_even_when_lower_than_policy():
 
     await pipeline.process(_request(default_priority=1))
 
-    assert [prio for _, _, prio, _ in scheduler.last_request.classified_models] == [1]
+    assert [prio for _, _, prio in scheduler.last_request.classified_models] == [1]
 
 
 async def test_unset_key_falls_back_to_policy_priority():
@@ -138,7 +138,7 @@ async def test_unset_key_falls_back_to_policy_priority():
 
     await pipeline.process(_request(default_priority=0))
 
-    assert [prio for _, _, prio, _ in scheduler.last_request.classified_models] == [5]
+    assert [prio for _, _, prio in scheduler.last_request.classified_models] == [5]
 
 
 async def test_unset_key_without_policy_keeps_prior_behavior():
@@ -147,7 +147,7 @@ async def test_unset_key_without_policy_keeps_prior_behavior():
 
     await pipeline.process(_request(policy=None, default_priority=0))
 
-    assert [prio for _, _, prio, _ in scheduler.last_request.classified_models] == [0]
+    assert [prio for _, _, prio in scheduler.last_request.classified_models] == [0]
 
 
 async def test_enqueue_monitoring_uses_effective_priority():
