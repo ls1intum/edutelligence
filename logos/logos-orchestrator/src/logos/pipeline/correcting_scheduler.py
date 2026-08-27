@@ -820,13 +820,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                             provider_id=dispatched_pid,
                             priority=priority.name.lower(),
                         )
-                    # slot_transferred=True means a completing request kept its
-                    # slot for us (release path) — don't double-count.
-                    # slot_transferred=False means fresh dispatch from
-                    # reevaluate_model_queues — must increment active count.
+                    # Every dispatch out of the queue is a fresh one now that
+                    # a completing request no longer hands its slot to a
+                    # specific waiter, so the active count always grows here.
                     self._logosnode.on_request_begin_processing(
                         request.request_id,
-                        increment_active=not result.slot_transferred,
+                        increment_active=True,
                         provider_id=dispatched_pid,
                     )
                 except KeyError:

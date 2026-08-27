@@ -230,7 +230,7 @@ Two call sites use it:
 
 > **Operator note.** `providers.parallel_capacity` short-circuits the live path entirely: `get_parallel_capacity` returns the configured value whenever it differs from the `200` default, so the worker-reported `num_parallel` is never consulted. Every production provider currently has `parallel_capacity = 20`, which means the per-worker ceiling is a flat 20 and the live-signal capacity introduced in #781 is dormant. The gate described here reads the lane signals directly and is unaffected, but anyone reasoning about the ceiling should know which of the two is actually in force.
 
-The release path (slot transfer on completion) is deliberately *not* gated: a completing request hands its slot straight to the next waiter, which is the mechanism that keeps the engine busy while admission holds new arrivals back.
+A completion goes through the gate as well. It used to hand the freed slot straight to the next waiter, which treats requests as interchangeable units — a 200-token request finishing frees a sliver of KV cache, which says nothing about whether an 8000-token request queued behind it will fit. Worse, the handover bypassed admission entirely, so under load the engine's own queue was built there rather than by the gate: measured on dev, average engine backlog was 0.12 during the arrival ramp and 0.78 while completions were recycling slots. Capacity is now simply released and the queue re-evaluated, in the same call so nothing waits for the next worker report to make progress.
 
 ### Cancelling what was already forwarded
 

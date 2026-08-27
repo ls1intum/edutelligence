@@ -132,59 +132,25 @@ class BaseScheduler(SchedulerInterface):
         )
 
     def release(self, model_id: int, provider_id: int, provider_type: str, request_id: str) -> None:
-        """
-        Called when a request completes.
-        1. Notify SDI facade.
-        2. Check starvation (priority aging).
-        3. Wake up next queued request if any.
+        """Called when a request completes: free its capacity, then re-dispatch.
+
+        This used to hand the freed slot straight to the next waiter. That
+        treats requests as interchangeable units, and they are not: a 200-token
+        request finishing frees a sliver of KV cache, which says nothing about
+        whether an 8000-token request waiting behind it will fit. Transferring
+        the slot 1:1 over-commits in one direction and under-commits in the
+        other, and it bypassed admission entirely — so under load the engine's
+        own queue was built here rather than by the gate. Measured on dev, that
+        was the dominant source of engine-side queueing: 0.12 average during
+        the arrival ramp versus 0.78 while completions were recycling slots.
+
+        Now the capacity is simply released and the queue re-evaluated through
+        the normal gate, which reads what the engine can actually take. The
+        re-evaluation happens right here, so nothing waits for the next worker
+        report to make progress.
         """
 
         self._check_starvation(model_id, provider_id)
-
-        depth_before = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
-
-        next_task = None
-        entry = None
-        while True:
-            next_task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
-            if not next_task:
-                break
-            if isinstance(next_task, asyncio.Future) and next_task.done():
-                continue
-            break
-
-        has_waiters = next_task is not None
-
-        # For logosnode: check lane readiness BEFORE deciding reuse_slot.
-        # If the lane is sleeping/draining, we must NOT transfer the slot —
-        # that would create a phantom active count.  Instead, release the
-        # slot properly (reuse_slot=False) and re-enqueue the waiter so it
-        # can be served once the model is available again.
-        reuse_slot = has_waiters
-        if provider_type == "logosnode" and has_waiters:
-            try:
-                lane_ready = self._logosnode.is_model_lane_ready(model_id, provider_id)
-            except Exception:
-                lane_ready = True  # optimistic if check fails
-            if not lane_ready:
-                logger.info(
-                    "Request %s released model=%s but lane not ready — " "re-enqueuing waiter instead of slot transfer",
-                    request_id,
-                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
-                )
-                reuse_slot = False
-                # Put the waiter back in the queue
-                if isinstance(next_task, asyncio.Future) and not next_task.done():
-                    waiter_priority = entry.current_priority if entry else Priority.NORMAL
-                    self._queue_mgr.enqueue(
-                        next_task,
-                        model_id,
-                        provider_id,
-                        waiter_priority,
-                        is_cold_at_queue=(bool(entry.is_cold_at_queue) if entry else False),
-                    )
-                next_task = None
-                has_waiters = False
 
         if provider_type == "logosnode":
             try:
@@ -192,67 +158,28 @@ class BaseScheduler(SchedulerInterface):
                     request_id,
                     was_cold_start=False,
                     duration_ms=0,
-                    reuse_slot=reuse_slot,
+                    reuse_slot=False,
                     provider_id=provider_id,
                 )
                 logger.info(
-                    "Request %s released model=%s. Reusing slot? %s",
+                    "Request %s released model=%s",
                     request_id,
                     self._logosnode.get_model_name(model_id, provider_id) or model_id,
-                    reuse_slot,
                 )
             except KeyError:
                 pass
 
-        if next_task and isinstance(next_task, asyncio.Future):
-            if not next_task.done():
-                priority_str = entry.current_priority.name.lower() if entry else Priority.NORMAL.name.lower()
-                entry.current_priority.value if entry else Priority.NORMAL.value
-
-                provider_metrics = {}
-                # Trust the cold flag captured at queue entry: by the time
-                # we dispatch, the lane is loaded, so a fresh status check
-                # would always say "not cold". The flag is what tells us
-                # the request actually triggered a cold/wake load.
-                is_cold_start = bool(entry.is_cold_at_queue) if entry else None
-
-                if provider_type == "logosnode":
-
-                    try:
-                        cap = self._logosnode.get_capacity_info(provider_id)
-                        provider_metrics["available_vram_mb"] = cap.available_vram_mb
-                    except Exception:
-                        pass
-                elif provider_type == "azure":
-                    try:
-                        cap = self._azure.get_model_capacity(model_id, provider_id)
-                        if cap:
-                            provider_metrics["azure_rate_remaining_requests"] = cap.rate_limit_remaining_requests
-                            provider_metrics["azure_rate_remaining_tokens"] = cap.rate_limit_remaining_tokens
-                    except Exception:
-                        pass
-
-                result = SchedulingResult(
-                    model_id=model_id,
-                    provider_id=provider_id,
-                    provider_type=provider_type,
-                    queue_entry_id=None,
-                    was_queued=True,
-                    queue_depth_at_schedule=depth_before,
-                    queue_depth_at_arrival=depth_before,
-                    priority_when_scheduled=priority_str,
-                    is_cold_start=is_cold_start,
-                    provider_metrics=provider_metrics,
-                    available_vram_mb=provider_metrics.get("available_vram_mb"),
-                    azure_rate_remaining_requests=provider_metrics.get("azure_rate_remaining_requests"),
-                    azure_rate_remaining_tokens=provider_metrics.get("azure_rate_remaining_tokens"),
-                )
-
-                logger.info(
-                    "Waking up queued request for model=%s",
-                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
-                )
-                next_task.get_loop().call_soon_threadsafe(next_task.set_result, result)
+        # Hand the freed capacity to the queue through the gate rather than
+        # to one specific waiter. `reevaluate_model_queues` re-checks lane
+        # readiness and admission, so a lane that has gone to sleep or filled
+        # up simply dispatches nothing and the waiters stay queued.
+        model_name = None
+        if provider_type == "logosnode":
+            try:
+                model_name = self._logosnode.get_model_name(model_id, provider_id)
+            except Exception:  # noqa: BLE001
+                model_name = None
+        self.reevaluate_model_queues(model_name or f"model-{model_id}")
 
     def _check_starvation(self, model_id: int, provider_id: int) -> None:
         # Priority promotion is intentionally disabled: low-priority requests
@@ -299,9 +226,8 @@ class BaseScheduler(SchedulerInterface):
         """Reevaluate queued requests for a model after state change (load/wake).
 
         When a provider state changes (e.g. a new lane becomes available),
-        dispatches up to max_capacity queued futures immediately rather than
-        drip-feeding one at a time. Results are created with slot_transferred=False
-        so _queue_and_wait properly increments the active count.
+        dispatches as many queued futures as the gate allows rather than
+        drip-feeding one at a time.
         """
         for (model_id, provider_id), ptype in self._model_registry.items():
             if ptype != "logosnode":
@@ -386,7 +312,6 @@ class BaseScheduler(SchedulerInterface):
                     is_cold_start=bool(entry.is_cold_at_queue) if entry else None,
                     provider_metrics=provider_metrics,
                     available_vram_mb=provider_metrics.get("available_vram_mb"),
-                    slot_transferred=False,
                 )
 
                 logger.info(
