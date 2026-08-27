@@ -12,7 +12,7 @@ import re
 import secrets
 import threading
 import time
-from contextlib import asynccontextmanager, suppress
+from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
@@ -1015,6 +1015,29 @@ def _build_live_local_provider_vram_payload(
     return payload
 
 
+def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
+    """Stop counting a request that ended without reaching ``record_complete``.
+
+    Metrics only — the caller persists the log row itself. Safe to call for a
+    request that was already settled, or one that never got as far as being
+    enqueued.
+    """
+    if not request_id:
+        return
+    # `_pipeline` is bound by start_pipeline(), not at module scope, so before
+    # startup the *name* does not exist — a bare reference raises NameError
+    # rather than yielding None. This runs on the failure path, which is
+    # reachable before the pipeline is up: a request arriving during the
+    # startup grace period is rejected without one.
+    pipeline = globals().get("_pipeline")
+    if pipeline is None:
+        return
+    try:
+        pipeline.discard_request(request_id, result_status)
+    except Exception:  # noqa: BLE001 — monitoring must never break a request
+        logger.debug("Failed to discard in-flight state for %s", request_id, exc_info=True)
+
+
 def _record_log_failure(
     log_id: Optional[int],
     request_id: Optional[str],
@@ -1026,6 +1049,14 @@ def _record_log_failure(
     classification_stats: Optional[Dict[str, Any]] = None,
     scheduling_stats: Optional[Dict[str, Any]] = None,
 ) -> None:
+    # Close out the in-flight accounting first, and unconditionally: this is
+    # the common funnel for terminal failures that write the log row
+    # themselves (client disconnect, rate-limit and budget rejects), and
+    # none of them used to tell the recorder the request had ended. It also
+    # has to happen for requests without a log row — the `not log_id` return
+    # below is about persistence, not about whether the request finished.
+    _discard_in_flight(request_id, result_status)
+
     if not log_id:
         return
 
@@ -1519,6 +1550,28 @@ class _StreamingCostEnricher:
         return frame
 
 
+ORPHANED_REQUEST_ERROR = "Orchestrator restarted while the request was in flight; outcome unknown."
+
+
+def _close_orphaned_request_logs() -> None:
+    """Finalise log rows a previous orchestrator process left open.
+
+    Without this a deploy or crash strands every in-flight request in the
+    "running" state permanently — nothing else ever revisits those rows, so
+    the live-request views keep counting requests that ended when the process
+    did. Failing here must not keep the orchestrator from starting: stale rows
+    are a reporting defect, an orchestrator that will not boot is an outage.
+    """
+    try:
+        with DBManager() as db:
+            closed = db.close_orphaned_request_logs(ORPHANED_REQUEST_ERROR)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not close orphaned request logs at startup", exc_info=True)
+        return
+    if closed:
+        logger.info("Closed %d request log(s) left in-flight by a previous orchestrator process", closed)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -1556,6 +1609,11 @@ async def lifespan(app: FastAPI):
     # orchestrator no longer bootstraps a `root` user, initialises the schema,
     # or runs migrations — it expects an already-provisioned database and goes
     # straight to start_pipeline(), which queries that schema.
+
+    # Any request still marked in-flight belongs to the process that just
+    # went away — close it before accepting new traffic, while "no terminal
+    # state" unambiguously means "orphaned by a restart".
+    _close_orphaned_request_logs()
 
     # Start Pipeline
     await start_pipeline()
@@ -2461,6 +2519,9 @@ async def start_pipeline():
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
     )
+    # Every worker report restores the forwarding gate's budget, so it is
+    # also the moment to reconsider requests being held for it.
+    _logosnode_registry.set_on_runtime_updated(scheduler.on_worker_report)
     _context_resolver = ContextResolver(
         logosnode_registry=_logosnode_registry,
         lane_preparer=_capacity_planner,
@@ -2955,21 +3016,38 @@ async def _streaming_response(
             # registry is dropped in the finally below, so a client that walks
             # away cannot leave an entry behind.
             _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
+            # A client that walks away mid-stream closes this generator, which
+            # raises GeneratorExit at the `yield` — no exception reaches the
+            # handler below, so without this flag the request was recorded as
+            # a success. It is not one: nobody read the answer, and the
+            # generation was cancelled on the worker. Recording it honestly
+            # also completes the disconnect count, which until now only saw
+            # the clients that left *before* the first token.
+            stream_completed = False
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
                     produced = False
                     try:
-                        async for chunk in _new_logosnode_chunk_iter():
-                            produced = True
-                            yield chunk
-                            if chunk and not ttft_recorded:
-                                if log_id:
-                                    with DBManager() as db:
-                                        db.set_time_at_first_token(log_id)
-                                ttft_recorded = True
-                            stream_log.feed(chunk)
-                            _live_streams.update(request_id, stream_log.streamed_tokens())
+                        # `aclosing` is what makes an abandoned request reach
+                        # the worker promptly. When this generator is closed
+                        # mid-stream — a client that walked away — a bare
+                        # `async for` would leave the inner generator to the
+                        # async-generator GC hook, so its cleanup (which is
+                        # what sends the cancellation) would run at some
+                        # unspecified later point. Closing it here runs that
+                        # cleanup while the disconnect is being handled.
+                        async with aclosing(_new_logosnode_chunk_iter()) as chunk_iter:
+                            async for chunk in chunk_iter:
+                                produced = True
+                                yield chunk
+                                if chunk and not ttft_recorded:
+                                    if log_id:
+                                        with DBManager() as db:
+                                            db.set_time_at_first_token(log_id)
+                                    ttft_recorded = True
+                                stream_log.feed(chunk)
+                                _live_streams.update(request_id, stream_log.streamed_tokens())
                     except Exception as e:
                         # Retry ONLY if nothing has been streamed to the client yet:
                         # a pre-token failure (e.g. a just-woken level-1 lane whose
@@ -2988,8 +3066,14 @@ async def _streaming_response(
                             continue
                         error_message = str(e)
                         raise e
+                    stream_completed = True
                     break  # stream completed without raising
             finally:
+                if not stream_completed and error_message is None:
+                    error_message = (
+                        "Client disconnected mid-stream; upstream generation cancelled "
+                        f"after {stream_log.streamed_tokens().get('completion_tokens', 0)} token(s)."
+                    )
                 _live_streams.finish(request_id)
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
@@ -3799,6 +3883,7 @@ async def _execute_resource_mode(
         deployments=deployments,
         skip_laura=skip_laura,
         request_path=request_path,
+        api_key_id=auth.api_key_id,
     )
 
     # Process through classification and scheduling
@@ -4739,6 +4824,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     calibrating=(
                         bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
                     ),
+                    actions=(payload.get("actions") if isinstance(payload.get("actions"), list) else None),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -5028,6 +5114,9 @@ async def scheduler_state(request: Request):
         "queue_total": _pipeline.scheduler.get_total_queue_depth(),
         "logosnode": _logosnode_facade.debug_state(),
     }
+    prefix_router = getattr(_pipeline.scheduler, "_prefix_router", None)
+    if prefix_router is not None:
+        payload["prefix_affinity"] = prefix_router.debug_state()
     return JSONResponse(content=payload, status_code=200)
 
 

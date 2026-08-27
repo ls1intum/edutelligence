@@ -7,7 +7,15 @@ from typing import Dict, List, Optional, Set
 
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 
-from .models import LaneSchedulerSignals, ModelProfile, ModelSchedulerView, ModelStatus, OllamaCapacity, RequestMetrics
+from .models import (
+    AdmissionDecision,
+    LaneSchedulerSignals,
+    ModelProfile,
+    ModelSchedulerView,
+    ModelStatus,
+    OllamaCapacity,
+    RequestMetrics,
+)
 from .providers.logosnode_provider import LogosNodeDataProvider
 
 logger = logging.getLogger(__name__)
@@ -350,6 +358,17 @@ class LogosNodeSchedulingDataFacade:
     def try_reserve_capacity(self, model_id: int, provider_id: int, request_id: str) -> bool:
         provider = self._get_provider_for_model(model_id, provider_id)
         return provider.try_reserve_capacity(model_id, request_id)
+
+    def evaluate_admission(self, model_id: int, provider_id: int) -> AdmissionDecision:
+        """Whether this worker could start another request for the model now.
+
+        Read by the queue dispatcher so a batch release does not push more
+        requests onto a worker than its engine can begin serving — those
+        would only queue inside the engine, where the orchestrator can no
+        longer reorder, re-route, or cancel them.
+        """
+        provider = self._get_provider_for_model(model_id, provider_id)
+        return provider.evaluate_admission(model_id)
 
     def _get_provider_for_model(self, model_id: int, provider_id: Optional[int] = None) -> LogosNodeDataProvider:
         with self._lock:
