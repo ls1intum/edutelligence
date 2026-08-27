@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 _RUNNER_PATH = Path(__file__).resolve().parent.parent / "run_guidellm_gsm8k.py"
 _spec = importlib.util.spec_from_file_location("guidellm_runner_under_test", _RUNNER_PATH)
 runner = importlib.util.module_from_spec(_spec)
@@ -110,11 +109,7 @@ def test_validate_successful_report_surfaces_request_error(tmp_path):
                                 "total": 1,
                             }
                         },
-                        "requests": {
-                            "errored": [
-                                {"info": {"error": "404 model not available for this key"}}
-                            ]
-                        },
+                        "requests": {"errored": [{"info": {"error": "404 model not available for this key"}}]},
                     }
                 ]
             }

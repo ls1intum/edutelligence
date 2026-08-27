@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 _SECRET_KEYS = {
     "api_key",
     "apikey",
@@ -25,11 +24,7 @@ _SECRET_KEYS = {
 def redact_secrets(value: Any) -> Any:
     """Remove credential-like fields before benchmark configuration is stored."""
     if isinstance(value, dict):
-        return {
-            key: redact_secrets(item)
-            for key, item in value.items()
-            if key.lower() not in _SECRET_KEYS
-        }
+        return {key: redact_secrets(item) for key, item in value.items() if key.lower() not in _SECRET_KEYS}
     if isinstance(value, list):
         return [redact_secrets(item) for item in value]
     return value

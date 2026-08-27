@@ -26,9 +26,7 @@ def test_build_payloads_keeps_only_successful_benchmarks():
             },
             {
                 "config": {"rate": 4},
-                "metrics": {
-                    "request_totals": {"successful": 9, "incomplete": 0, "errored": 1, "total": 10}
-                },
+                "metrics": {"request_totals": {"successful": 9, "incomplete": 0, "errored": 1, "total": 10}},
             },
         ],
     }

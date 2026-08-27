@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_DATASET = "openai/gsm8k"
 
 
@@ -105,12 +104,7 @@ def validate_successful_report(report_path: Path, expected_samples: int) -> None
         incomplete = int(totals.get("incomplete", 0))
         errored = int(totals.get("errored", 0))
         total = int(totals.get("total", 0))
-        if (
-            successful == expected_samples
-            and total == expected_samples
-            and incomplete == 0
-            and errored == 0
-        ):
+        if successful == expected_samples and total == expected_samples and incomplete == 0 and errored == 0:
             return
 
         failure_details.append(

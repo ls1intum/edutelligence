@@ -429,9 +429,10 @@ class DBManager:
 
     def get_model_provider_benchmark_target(self, model_provider_id: int) -> Optional[Dict[str, Any]]:
         """Resolve the endpoint and credential for one exact provider-model pair."""
-        row = self.session.execute(
-            text(
-                """
+        row = (
+            self.session.execute(
+                text(
+                    """
                 SELECT mp.id AS model_provider_id,
                        m.id AS model_id,
                        m.name AS model_name,
@@ -444,16 +445,20 @@ class DBManager:
                 JOIN providers p ON p.id = mp.provider_id
                 WHERE mp.id = :model_provider_id
                 """
-            ),
-            {"model_provider_id": int(model_provider_id)},
-        ).mappings().first()
+                ),
+                {"model_provider_id": int(model_provider_id)},
+            )
+            .mappings()
+            .first()
+        )
         return dict(row) if row else None
 
     def find_active_model_benchmark_job(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """Return the newest queued/running benchmark for a provider, if any."""
-        row = self.session.execute(
-            text(
-                """
+        row = (
+            self.session.execute(
+                text(
+                    """
                 SELECT id, status, request_payload, created_at, updated_at
                 FROM jobs
                 WHERE environment = 'model-provider-benchmark'
@@ -462,9 +467,12 @@ class DBManager:
                 ORDER BY created_at DESC
                 LIMIT 1
                 """
-            ),
-            {"provider_id": int(provider_id)},
-        ).mappings().first()
+                ),
+                {"provider_id": int(provider_id)},
+            )
+            .mappings()
+            .first()
+        )
         return dict(row) if row else None
 
     def insert_model_provider_benchmark(
