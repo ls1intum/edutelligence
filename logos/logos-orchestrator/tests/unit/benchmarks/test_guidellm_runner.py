@@ -6,6 +6,7 @@ from logos.benchmarks.guidellm_runner import (
     build_scenario,
     extract_serving_configuration,
     redact_secrets,
+    resolve_benchmark_target,
     successful_summary,
 )
 
@@ -25,6 +26,28 @@ def test_build_scenario_uses_fixed_gsm8k_test_split() -> None:
     assert scenario["spec"]["data"][0]["source"] == "openai/gsm8k"
     assert scenario["spec"]["data"][0]["load_kwargs"] == {"name": "main", "split": "test"}
     assert scenario["spec"]["data_loader"]["samples"] == 5
+
+
+def test_resolve_benchmark_target_uses_internal_api_for_own_domain() -> None:
+    assert (
+        resolve_benchmark_target(
+            "https://logos-dev.aet.cit.tum.de/v1/",
+            logos_domain="logos-dev.aet.cit.tum.de",
+            internal_base_url="http://127.0.0.1:8080",
+        )
+        == "http://127.0.0.1:8080/v1"
+    )
+
+
+def test_resolve_benchmark_target_preserves_external_provider() -> None:
+    assert (
+        resolve_benchmark_target(
+            "https://provider.example/v1/",
+            logos_domain="logos-dev.aet.cit.tum.de",
+            internal_base_url="http://127.0.0.1:8080",
+        )
+        == "https://provider.example/v1"
+    )
 
 
 def test_redaction_and_serving_snapshot_never_keep_credentials() -> None:

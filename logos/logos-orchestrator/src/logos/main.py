@@ -29,7 +29,7 @@ from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
 from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
-from logos.benchmarks.guidellm_runner import extract_serving_configuration, run_benchmark_job
+from logos.benchmarks.guidellm_runner import extract_serving_configuration, resolve_benchmark_target, run_benchmark_job
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
@@ -2097,7 +2097,7 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
         run_benchmark_job(
             job_id=job_id,
             model_provider_id=data.model_provider_id,
-            target=endpoint,
+            target=resolve_benchmark_target(endpoint),
             model=model_name,
             api_key=str(target.get("api_key") or "") or None,
             samples=data.samples,

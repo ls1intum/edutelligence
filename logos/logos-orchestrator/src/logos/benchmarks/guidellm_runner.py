@@ -10,6 +10,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 DATASET = "openai/gsm8k"
 _SECRET_KEYS = {"api_key", "apikey", "authorization", "password", "secret", "token"}
@@ -29,6 +30,31 @@ _SERVING_KEYS = {
     "disable_custom_all_reduce",
     "hf_overrides",
 }
+
+
+def resolve_benchmark_target(
+    target: str,
+    *,
+    logos_domain: str | None = None,
+    internal_base_url: str | None = None,
+) -> str:
+    """Use the container-local API when benchmarking this Logos instance."""
+    normalized = target.rstrip("/")
+    configured_domain = (logos_domain if logos_domain is not None else os.getenv("LOGOS_DOMAIN", "")).strip()
+    if not configured_domain:
+        return normalized
+
+    domain_url = configured_domain if "://" in configured_domain else f"//{configured_domain}"
+    if urlsplit(normalized).hostname != urlsplit(domain_url).hostname:
+        return normalized
+
+    internal = (
+        internal_base_url
+        if internal_base_url is not None
+        else os.getenv("LOGOS_BENCHMARK_INTERNAL_BASE_URL", "http://127.0.0.1:8080")
+    ).rstrip("/")
+    path = urlsplit(normalized).path.rstrip("/")
+    return f"{internal}{path}"
 
 
 def redact_secrets(value: Any) -> Any:
