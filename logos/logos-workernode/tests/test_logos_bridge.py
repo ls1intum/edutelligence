@@ -1820,3 +1820,60 @@ async def test_hello_advertises_the_cancel_action():
     ws = _CollectWS()
     await client._send_hello(ws)  # noqa: SLF001
     assert "cancel_command" in ws.frames[0]["actions"]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
+    """The sync `infer` path is exposed the same way — a client that leaves
+    mid-request would otherwise keep the lane busy for the whole generation."""
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    posting = asyncio.Event()
+    state = {"closed": False}
+
+    class _BlockingHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            state["closed"] = True
+            return False
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            posting.set()
+            await asyncio.Event().wait()  # generation never finishes
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _BlockingHttpClient(),
+    )
+
+    ws = _CollectWS()
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-infer",
+                "action": "infer",
+                "params": {"lane_id": "lane-a", "payload": {"messages": []}},
+            }
+        ),
+    )
+    await posting.wait()
+    task = client._command_tasks["cmd-infer"]  # noqa: SLF001
+
+    assert client.cancel_command("cmd-infer") is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert state["closed"] is True, "the relay connection to the lane stayed open"
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
