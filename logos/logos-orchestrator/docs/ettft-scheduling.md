@@ -209,18 +209,23 @@ None of that is lost while the request waits in the orchestrator queue. So the o
 
 Admission reads the live lane signals the worker reports (the same ones §4 uses for tier estimation):
 
+**Nothing outside the engine can predict whether vLLM will start a given request or park it.** That depends on whether the new sequence's KV blocks fit against what the running sequences currently occupy — neither exposed nor derivable from the outside. The engine reports the answer only afterwards, as `num_requests_waiting`. Admission is therefore retrospective by necessity: forward while nothing is observed waiting, stop at the first observed waiter. The engine-side queue then hovers at about one request — enough lookahead that the GPU never idles between generations, few enough that essentially everything stays re-prioritisable and re-routable.
+
 | Signal | Source | Gate |
 |--------|--------|------|
-| `queue_waiting` | vLLM `num_requests_waiting` | Anything already waiting inside the engine → hold (`LOGOS_BACKEND_QUEUE_THRESHOLD`) |
-| `gpu_cache_usage_percent` | vLLM `gpu_cache_usage_perc` | ≥ 90% → hold: vLLM starts preempting and recomputing, which also evicts the prefix-cache blocks §11 depends on |
-| `requests_running` vs `num_parallel` | vLLM `num_requests_running` vs the worker-reported KV-budget concurrency | Lane full → hold |
+| `queue_waiting` | vLLM `num_requests_waiting` | The engine is already parking work → hold (`LOGOS_BACKEND_QUEUE_THRESHOLD`, default 0) |
+| `gpu_cache_usage_percent` | vLLM `gpu_cache_usage_perc` | ≥ 90% → hold: vLLM is about to preempt and recompute, which also evicts the prefix-cache blocks §11 depends on |
 
-The unit of the decision is `AdmissionDecision(can_admit, headroom, reason)`. `headroom` is the number of requests the engine could begin right now, summed over the model's routable lanes; a busy lane never masks an idle sibling. When a worker reports nothing usable (older worker, lane still starting), `headroom` is `None` and the decision falls back to the parallel-capacity gate alone — admission is never stricter than the signals justify.
+**`num_parallel` is deliberately not used as a ceiling.** It is the concurrency vLLM guarantees *at full context* — the "Maximum concurrency for N tokens per request" line from its startup log, which the lane-health panel shows as `(min. c)`. Real requests use a fraction of their context, so the engine runs far past it: a production lane serves 8 concurrent requests with `num_parallel = 1` at 78% KV. Read as a ceiling, that lane would be throttled eightfold. It is a *lower bound on capacity*, which makes it sound as a step size and wrong as a limit.
+
+The unit of the decision is `AdmissionDecision(can_admit, batch_limit, reason)`. `batch_limit` is how many queued requests one dispatch pass may release — `num_parallel` scaled by the free KV fraction (the same floating figure the panel shows), at least 1 — summed over the model's admissible lanes; a backlogged lane never masks an idle sibling. When a worker reports nothing usable (older worker, lane still starting), `batch_limit` is `None` and the decision falls back to the parallel-capacity gate alone — admission is never stricter than the signals justify.
 
 Two call sites use it:
 
 - **`try_reserve_capacity`** — the arrival path. A refusal sends the request to the orchestrator queue instead of the worker.
-- **`reevaluate_model_queues`** — the batch dispatcher that runs after a lane loads or wakes. Its batch size is `min(parallel_capacity − active, headroom)`, so a wake event cannot drain the whole queue onto one worker in a single pass.
+- **`reevaluate_model_queues`** — the batch dispatcher that runs after a lane loads or wakes. Its batch size is `min(parallel_capacity − active, batch_limit)`, so a wake event cannot drain the whole queue onto one worker in a single pass.
+
+> **Operator note.** `providers.parallel_capacity` short-circuits the live path entirely: `get_parallel_capacity` returns the configured value whenever it differs from the `200` default, so the worker-reported `num_parallel` is never consulted. Every production provider currently has `parallel_capacity = 20`, which means the per-worker ceiling is a flat 20 and the live-signal capacity introduced in #781 is dormant. The gate described here reads the lane signals directly and is unaffected, but anyone reasoning about the ceiling should know which of the two is actually in force.
 
 The release path (slot transfer on completion) is deliberately *not* gated: a completing request hands its slot straight to the next waiter, which is the mechanism that keeps the engine busy while admission holds new arrivals back.
 

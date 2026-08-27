@@ -85,29 +85,29 @@ def _dispatch(capacity, admission, queued):
         loop.close()
 
 
-def test_batch_is_capped_by_live_engine_headroom():
-    """Capacity says 256 slots; the engine can start 3 right now."""
-    _facade, done = _dispatch(256, AdmissionDecision(can_admit=True, headroom=3), queued=10)
+def test_the_batch_is_bounded_by_what_the_lane_signals_justify():
+    """Capacity says 256 slots; the lane signals justify releasing 3."""
+    _facade, done = _dispatch(256, AdmissionDecision(can_admit=True, batch_limit=3), queued=10)
     assert sum(done) == 3
 
 
 def test_nothing_is_dispatched_while_the_engine_is_backlogged():
     _facade, done = _dispatch(
         256,
-        AdmissionDecision(can_admit=False, headroom=0, reason="backend_queue"),
+        AdmissionDecision(can_admit=False, batch_limit=0, reason="backend_queue"),
         queued=5,
     )
     assert not any(done)
 
 
-def test_capacity_still_binds_when_it_is_tighter_than_headroom():
-    _facade, done = _dispatch(2, AdmissionDecision(can_admit=True, headroom=8), queued=5)
+def test_capacity_still_binds_when_it_is_tighter_than_the_batch():
+    _facade, done = _dispatch(2, AdmissionDecision(can_admit=True, batch_limit=8), queued=5)
     assert sum(done) == 2
 
 
 def test_worker_without_admission_signals_keeps_the_old_behaviour():
     """No usable signal → fall back to the capacity gate alone."""
-    _facade, done = _dispatch(4, AdmissionDecision(can_admit=True, headroom=None), queued=10)
+    _facade, done = _dispatch(4, AdmissionDecision(can_admit=True, batch_limit=None), queued=10)
     assert sum(done) == 4
 
 

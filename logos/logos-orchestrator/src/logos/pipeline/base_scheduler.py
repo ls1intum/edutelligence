@@ -330,15 +330,15 @@ class BaseScheduler(SchedulerInterface):
             current_active = status.active_requests
             available_slots = max(0, max_capacity - current_active)
 
-            # Cap the batch by what the engine can actually *start*. Without
-            # this, a wake/load event drains the whole orchestrator queue onto
-            # one worker in a single pass — precisely the forwarding we want to
-            # avoid, since a request sitting in the engine's own queue can no
-            # longer be reordered by priority, re-routed to a peer, or given up
-            # when the worker wants to drain for a restart.
-            admission = self._admission_headroom(model_id, provider_id)
-            if admission is not None:
-                available_slots = min(available_slots, admission)
+            # Bound the batch by what the lane signals justify releasing in
+            # one pass. Without this, a wake/load event drains the whole
+            # orchestrator queue onto one worker at once — precisely the
+            # forwarding we want to avoid, since a request sitting in the
+            # engine's own queue can no longer be reordered by priority,
+            # re-routed to a peer, or given up when the worker drains.
+            batch_limit = self._admission_batch_limit(model_id, provider_id)
+            if batch_limit is not None:
+                available_slots = min(available_slots, batch_limit)
 
             dispatched = 0
             while dispatched < available_slots:
@@ -395,12 +395,13 @@ class BaseScheduler(SchedulerInterface):
                     self._logosnode.get_provider_name(provider_id) or provider_id,
                 )
 
-    def _admission_headroom(self, model_id: int, provider_id: int) -> int | None:
-        """How many requests this worker could start right now, or None.
+    def _admission_batch_limit(self, model_id: int, provider_id: int) -> int | None:
+        """How many queued requests this worker may be handed in one pass.
 
-        None means the worker gave no usable signal (older worker, no runtime
-        snapshot yet) — callers then fall back to the capacity gate alone,
-        which is the pre-existing behaviour.
+        Zero when the lane signals say to hold off entirely. None means the
+        worker gave no usable signal (older worker, no runtime snapshot yet)
+        — callers then fall back to the capacity gate alone, which is the
+        pre-existing behaviour.
         """
         try:
             decision = self._logosnode.evaluate_admission(model_id, provider_id)
@@ -408,7 +409,7 @@ class BaseScheduler(SchedulerInterface):
             return None
         if not decision.can_admit:
             return 0
-        return decision.headroom
+        return decision.batch_limit
 
     def update_model_registry(self, model_registry: Dict[tuple[int, int], str]) -> None:
         self._model_registry = dict(model_registry or {})

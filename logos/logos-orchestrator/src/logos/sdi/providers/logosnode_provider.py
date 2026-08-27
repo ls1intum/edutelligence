@@ -823,37 +823,43 @@ class LogosNodeDataProvider:
     KV_CACHE_PRESSURE_PERCENT = _env_float("LOGOS_KV_CACHE_PRESSURE_PERCENT", 90.0)
 
     def evaluate_admission(self, model_id: int) -> AdmissionDecision:
-        """Can this worker *start* another request for ``model_id`` right now?
+        """Should this worker be given another request for ``model_id`` now?
 
         Walks the model's routable lanes in the latest runtime snapshot and
-        applies the live vLLM signals: ``queue_waiting`` (engine backlog),
-        ``gpu_cache_usage_percent`` (KV pressure) and ``requests_running``
-        against the lane's worker-reported ``num_parallel``.
+        applies the live vLLM signals: ``queue_waiting`` (the engine is
+        already parking work) and ``gpu_cache_usage_percent`` (it is about
+        to start preempting).
+
+        Deliberately *not* gated on ``requests_running`` against the lane's
+        ``num_parallel``: that number is the concurrency vLLM guarantees at
+        full context, which real traffic exceeds by a wide margin — a
+        production lane runs 8 concurrent requests with ``num_parallel=1``.
+        Read as a ceiling it would throttle such a lane eightfold.
 
         A model is admissible as soon as *one* lane can take the request —
         a busy lane must not mask an idle sibling.  When the worker reports
         no usable lane signals the decision is ``can_admit=True`` with
-        ``headroom=None`` so the caller falls back to the capacity gate.
+        ``batch_limit=None`` so the caller falls back to the capacity gate.
         """
         lanes = self._routable_lanes(model_id)
         if lanes is None:
-            return AdmissionDecision(can_admit=True, headroom=None, reason=None)
+            return AdmissionDecision(can_admit=True, batch_limit=None, reason=None)
 
-        headroom = 0
+        batch_limit = 0
         reasons: List[str] = []
         for lane in lanes:
-            lane_headroom, reason = self._lane_admission(lane)
+            lane_batch, reason = self._lane_admission(lane)
             if reason is not None:
                 reasons.append(reason)
                 continue
-            headroom += lane_headroom
+            batch_limit += lane_batch
 
-        if headroom > 0:
-            return AdmissionDecision(can_admit=True, headroom=headroom, reason=None)
+        if batch_limit > 0:
+            return AdmissionDecision(can_admit=True, batch_limit=batch_limit, reason=None)
         if reasons:
-            return AdmissionDecision(can_admit=False, headroom=0, reason=reasons[0])
-        # Lanes exist but none reported a usable limit — no opinion.
-        return AdmissionDecision(can_admit=True, headroom=None, reason=None)
+            return AdmissionDecision(can_admit=False, batch_limit=0, reason=reasons[0])
+        # Lanes exist but none reported anything usable — no opinion.
+        return AdmissionDecision(can_admit=True, batch_limit=None, reason=None)
 
     def _routable_lanes(self, model_id: int) -> Optional[List[Dict[str, Any]]]:
         """Lanes serving ``model_id`` that are not stopped/errored.
@@ -882,12 +888,15 @@ class LogosNodeDataProvider:
         return lanes or None
 
     def _lane_admission(self, lane: Dict[str, Any]) -> tuple[int, Optional[str]]:
-        """Free execution slots on one lane, or the reason it is unusable."""
+        """One lane's dispatch step size, or the reason it should be skipped."""
         backend = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
 
+        # The engine is already parking work: anything sent now waits behind
+        # it. Holding here is what keeps the engine-side queue at ~1.
         if _lane_metric_float(backend.get("queue_waiting")) > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
             return 0, "backend_queue"
 
+        cache_usage = None
         if bool(lane.get("vllm")):
             cache_usage = backend.get("gpu_cache_usage_percent")
             if cache_usage is None:
@@ -896,18 +905,19 @@ class LogosNodeDataProvider:
                 return 0, "kv_cache_pressure"
 
         try:
-            limit = int(lane.get("num_parallel") or 0)
+            guaranteed = int(lane.get("num_parallel") or 0)
         except (TypeError, ValueError):
-            limit = 0
-        if limit <= 0:
-            # Lane has not reported its concurrency yet — no per-lane opinion.
-            return 0, None
+            guaranteed = 0
 
-        running = int(_lane_metric_float(backend.get("requests_running")))
-        free = limit - running
-        if free <= 0:
-            return 0, "engine_at_capacity"
-        return free, None
+        # Scale the guaranteed full-context concurrency by the free KV
+        # fraction — the same figure the lane-health panel shows as the
+        # floating capacity. Always at least one: a lane that is admissible
+        # at all can take a request, and the release path keeps the pipeline
+        # moving from there.
+        free_fraction = 1.0
+        if cache_usage is not None:
+            free_fraction = max(0.0, 1.0 - _lane_metric_float(cache_usage) / 100.0)
+        return max(1, int(guaranteed * free_fraction)), None
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         with self._lock:

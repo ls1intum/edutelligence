@@ -3,12 +3,16 @@
 A request that is forwarded to a worker is committed: it cannot be
 re-prioritised ahead of what is already there, cannot be re-scheduled onto a
 peer, and cannot be given back when the worker wants to drain for a restart.
-So the orchestrator only forwards what the engine can *start* — everything
-else waits in the orchestrator queue, where all three remain possible.
+So the orchestrator forwards only while the engine is observed to be keeping
+up — everything else waits in the orchestrator queue, where all three remain
+possible.
 
-The gate reads the live vLLM lane signals the worker reports: ``queue_waiting``
-(engine backlog), ``gpu_cache_usage_percent`` (KV pressure) and
-``requests_running`` against the lane's ``num_parallel``.
+Nothing outside the engine can predict whether vLLM will start a given
+request or park it, so the gate is retrospective by necessity: it reads
+``queue_waiting`` (the engine is already parking work) and
+``gpu_cache_usage_percent`` (it is about to preempt). It deliberately does
+*not* compare ``requests_running`` against ``num_parallel`` — see
+``test_a_lane_running_far_past_num_parallel_is_still_admissible``.
 """
 
 from logos.queue import PriorityQueueManager
@@ -69,45 +73,47 @@ def _provider(monkeypatch, lanes, *, with_registry=True, provider_id=13, model_n
 
 
 # ---------------------------------------------------------------------------
-# Headroom
+# Dispatch step size
 # ---------------------------------------------------------------------------
 
 
-def test_idle_lane_offers_its_full_concurrency_as_headroom(monkeypatch):
+def test_an_idle_lane_offers_its_guaranteed_concurrency_as_a_batch(monkeypatch):
     provider = _provider(monkeypatch, [_lane(num_parallel=10)])
     decision = provider.evaluate_admission(1)
     assert decision.can_admit is True
-    assert decision.headroom == 10
+    assert decision.batch_limit == 10
 
 
-def test_headroom_shrinks_with_live_requests_running(monkeypatch):
-    provider = _provider(monkeypatch, [_lane(num_parallel=10, requests_running=7)])
-    assert provider.evaluate_admission(1).headroom == 3
+def test_the_batch_shrinks_as_the_kv_cache_fills(monkeypatch):
+    """The step size follows the free KV fraction — the same figure the
+    lane-health panel shows as the floating capacity."""
+    provider = _provider(monkeypatch, [_lane(num_parallel=10, gpu_cache_usage_percent=70.0)])
+    assert provider.evaluate_admission(1).batch_limit == 3
 
 
-def test_headroom_sums_across_lanes_of_the_same_model(monkeypatch):
+def test_the_batch_sums_across_lanes_of_the_same_model(monkeypatch):
     provider = _provider(
         monkeypatch,
         [
-            _lane(num_parallel=10, requests_running=8, lane_id="a"),
-            _lane(num_parallel=4, requests_running=1, lane_id="b"),
+            _lane(num_parallel=10, lane_id="a"),
+            _lane(num_parallel=4, lane_id="b"),
         ],
     )
-    assert provider.evaluate_admission(1).headroom == 5
+    assert provider.evaluate_admission(1).batch_limit == 14
 
 
-def test_a_busy_lane_does_not_mask_an_idle_sibling(monkeypatch):
+def test_a_backlogged_lane_does_not_mask_an_idle_sibling(monkeypatch):
     """One saturated lane must not block a model that has a free lane."""
     provider = _provider(
         monkeypatch,
         [
-            _lane(num_parallel=4, requests_running=4, lane_id="busy"),
-            _lane(num_parallel=4, requests_running=0, lane_id="free"),
+            _lane(num_parallel=4, queue_waiting=3, lane_id="backlogged"),
+            _lane(num_parallel=4, lane_id="free"),
         ],
     )
     decision = provider.evaluate_admission(1)
     assert decision.can_admit is True
-    assert decision.headroom == 4
+    assert decision.batch_limit == 4
 
 
 def test_stopped_and_error_lanes_are_not_counted(monkeypatch):
@@ -121,7 +127,7 @@ def test_stopped_and_error_lanes_are_not_counted(monkeypatch):
     decision = provider.evaluate_admission(1)
     # No routable lane at all → no opinion, capacity gate decides.
     assert decision.can_admit is True
-    assert decision.headroom is None
+    assert decision.batch_limit is None
 
 
 # ---------------------------------------------------------------------------
@@ -160,11 +166,14 @@ def test_kv_cache_pressure_is_ignored_for_non_vllm_lanes(monkeypatch):
     assert provider.evaluate_admission(1).can_admit is True
 
 
-def test_engine_at_capacity_holds_the_request(monkeypatch):
-    provider = _provider(monkeypatch, [_lane(num_parallel=4, requests_running=4)])
+def test_a_lane_running_far_past_num_parallel_is_still_admissible(monkeypatch):
+    """`num_parallel` is the concurrency vLLM guarantees at *full context*,
+    not a ceiling. Production runs this exact lane at 8 concurrent requests
+    with num_parallel=1; treating it as a ceiling would throttle it 8x."""
+    provider = _provider(monkeypatch, [_lane(num_parallel=1, requests_running=8, gpu_cache_usage_percent=78.0)])
     decision = provider.evaluate_admission(1)
-    assert decision.can_admit is False
-    assert decision.reason == "engine_at_capacity"
+    assert decision.can_admit is True
+    assert decision.reason is None
 
 
 # ---------------------------------------------------------------------------
@@ -172,20 +181,20 @@ def test_engine_at_capacity_holds_the_request(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_lane_without_a_reported_limit_gives_no_opinion(monkeypatch):
+def test_a_lane_without_a_reported_limit_still_takes_one_at_a_time(monkeypatch):
     """num_parallel=0 means the worker has not reported yet (older worker or
-    a lane still starting) — fall back to the capacity gate."""
+    a lane still starting). Admit, but step conservatively."""
     provider = _provider(monkeypatch, [_lane(num_parallel=0)])
     decision = provider.evaluate_admission(1)
     assert decision.can_admit is True
-    assert decision.headroom is None
+    assert decision.batch_limit == 1
 
 
 def test_no_runtime_registry_gives_no_opinion(monkeypatch):
     provider = _provider(monkeypatch, [], with_registry=False)
     decision = provider.evaluate_admission(1)
     assert decision.can_admit is True
-    assert decision.headroom is None
+    assert decision.batch_limit is None
 
 
 # ---------------------------------------------------------------------------
@@ -210,17 +219,17 @@ def test_reserve_succeeds_while_the_engine_has_headroom(monkeypatch):
     assert provider.get_active_count(1) == 1
 
 
-def test_reserve_is_refused_once_the_engine_runs_at_its_reported_limit(monkeypatch):
-    """The orchestrator's own counter says there is room (0 of 4 used), but
-    the engine reports it is already running 4 — trust the engine."""
-    provider = _provider(monkeypatch, [_lane(num_parallel=4, requests_running=4)])
-    assert provider.try_reserve_capacity(1, "r1") is False
+def test_reserve_succeeds_on_a_lane_running_past_num_parallel(monkeypatch):
+    """Mirrors production: num_parallel=1 while the engine happily runs 8.
+    As long as nothing is queued there, the lane is keeping up."""
+    provider = _provider(monkeypatch, [_lane(num_parallel=1, requests_running=8)])
+    assert provider.try_reserve_capacity(1, "r1") is True
 
 
 def test_debug_state_exposes_the_admission_decision(monkeypatch):
     provider = _provider(monkeypatch, [_lane(num_parallel=10, requests_running=2)])
     admission = provider.get_debug_state()[1]["admission"]
-    assert admission == {"can_admit": True, "headroom": 8, "reason": None}
+    assert admission == {"can_admit": True, "batch_limit": 10, "reason": None}
 
 
 def test_facade_exposes_admission_for_the_queue_dispatcher(monkeypatch):
@@ -228,4 +237,42 @@ def test_facade_exposes_admission_for_the_queue_dispatcher(monkeypatch):
     facade = LogosNodeSchedulingDataFacade(PriorityQueueManager())
     facade._providers[provider.provider_id] = provider
     facade._model_to_provider[1] = {provider.provider_id}
-    assert facade.evaluate_admission(1, provider.provider_id).headroom == 4
+    assert facade.evaluate_admission(1, provider.provider_id).batch_limit == 6
+
+
+# ---------------------------------------------------------------------------
+# The production lane that motivated the design
+# ---------------------------------------------------------------------------
+
+
+def test_the_production_lane_behaves_as_the_operator_expects(monkeypatch):
+    """deimama/Qwen3.8-27B, observed live: num_parallel=1, running=8, kv=78%.
+
+    The lane-health panel shows this as "8 / 8 (min. 1)" and the number keeps
+    climbing as requests arrive — which is correct, because vLLM admits on
+    actual KV block occupancy, not on the full-context guarantee. The gate
+    must follow the engine, not the guarantee: hold only once the engine
+    itself starts parking work.
+    """
+    keeping_up = _provider(monkeypatch, [_lane(num_parallel=1, requests_running=8, gpu_cache_usage_percent=78.0)])
+    assert keeping_up.evaluate_admission(1).can_admit is True
+
+    # Same lane, one request now waiting: the engine said it could not start
+    # it, so the next one stays at orchestrator level.
+    parking = _provider(
+        monkeypatch,
+        [_lane(num_parallel=1, requests_running=8, queue_waiting=1, gpu_cache_usage_percent=78.0)],
+    )
+    decision = parking.evaluate_admission(1)
+    assert decision.can_admit is False
+    assert decision.reason == "backend_queue"
+
+
+def test_the_engine_side_queue_is_held_at_about_one(monkeypatch):
+    """The policy in one line: forward while nothing waits, stop at the first
+    observed waiter. That leaves the engine one request of lookahead — enough
+    to never idle between generations, few enough that essentially everything
+    stays re-prioritisable."""
+    for waiting, expected in ((0, True), (1, False), (5, False)):
+        provider = _provider(monkeypatch, [_lane(num_parallel=8, queue_waiting=waiting)])
+        assert provider.evaluate_admission(1).can_admit is expected, f"queue_waiting={waiting}"

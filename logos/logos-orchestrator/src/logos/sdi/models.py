@@ -210,28 +210,34 @@ class LaneSchedulerSignals:
 
 @dataclass(frozen=True)
 class AdmissionDecision:
-    """Whether a worker can *start* another request for a model right now.
+    """Whether a worker should be given another request for a model right now.
 
-    Distinct from :meth:`get_parallel_capacity`, which answers "how many
-    requests may this worker hold in total". Admission answers the narrower
-    question the forwarding gate actually needs: is there a lane that would
-    begin generating immediately, or would the request only land in the
-    engine's own waiting queue?
+    Nothing outside the engine can predict whether vLLM will *start* a given
+    request or park it: that depends on whether the new sequence's KV blocks
+    fit against what the running sequences currently occupy, which is neither
+    exposed nor derivable. The engine reports the answer only afterwards, as
+    ``num_requests_waiting``. So admission is retrospective by necessity —
+    forward while nothing is observed waiting, stop as soon as something is.
+    That keeps the engine-side queue at roughly one request: enough to hand
+    the GPU its next piece of work without a round-trip, few enough that
+    almost everything stays re-prioritisable and re-routable.
 
-    ``headroom`` is the number of requests the engine could start at once,
-    summed over the model's routable lanes. ``None`` means the worker has
-    not reported enough to tell (no runtime snapshot, no lane signals) — in
-    that case callers fall back to the capacity gate alone.
+    ``batch_limit`` bounds how many queued requests a single dispatch pass
+    may release. It is a *step size*, not a capacity: the per-lane
+    ``num_parallel`` it derives from is the concurrency vLLM guarantees at
+    full context — a lower bound (production runs a lane at 8 concurrent
+    with ``num_parallel=1``), which is sound to add in one go and wrong to
+    treat as a ceiling. ``None`` means the worker reported nothing usable.
     """
 
     can_admit: bool
-    headroom: Optional[int] = None
-    reason: Optional[str] = None  # backend_queue | kv_cache_pressure | engine_at_capacity
+    batch_limit: Optional[int] = None
+    reason: Optional[str] = None  # backend_queue | kv_cache_pressure
 
     def to_dict(self) -> dict:
         return {
             "can_admit": self.can_admit,
-            "headroom": self.headroom,
+            "batch_limit": self.batch_limit,
             "reason": self.reason,
         }
 
