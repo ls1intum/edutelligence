@@ -1345,6 +1345,34 @@ def calibrate_model(
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
 ) -> CalibrationResult:
+    """Calibrate one model on this worker and return a :class:`CalibrationResult`.
+
+    Runs the full probe sequence for *plan*: baseline VRAM, the KV-cache
+    sweep, the awake measurement (with a 1-token warmup request), and — when
+    ``sleep_level > 0`` — the sleep phases, which end with a wake verification
+    (Phase 5.5): the model must wake and answer a second test request, or the
+    run fails so no profile authorises an irreversible sleep.
+
+    Args:
+        plan: Calibration plan (model name plus vLLM settings), as merged by
+            ``plans_from_config``.
+        vllm_binary: vLLM executable to spawn.
+        port: Port the calibration probe listens on.
+        log_dir: Directory for the per-model vLLM log and the blacklist files.
+        sleep_level: vLLM sleep level to probe; 0 skips the sleep phases.
+        ready_timeout_s: Seconds to wait for a probe to become ready.
+        nccl_p2p_available: True on NVLink topologies (keeps P2P enabled).
+        hf_home: tmpfs HF cache to load from, when provided.
+        model_cache: Optional model cache; the first real spawn copies the
+            model into it.
+        cancel_event: When set, aborts the run at the next checkpoint.
+
+    Returns:
+        A ``CalibrationResult`` with ``success=True`` and the measured
+        footprints, or ``success=False`` with ``error`` (and optionally
+        ``unsupported_reason`` / ``node_unhealthy_reason``) when any phase
+        fails.
+    """
     # Honor the production enforce_eager setting (default False, matching the
     # worker schema). Calibrating in a different mode than production runs
     # produces systematically wrong loaded_vram_mb / sleeping_residual_mb

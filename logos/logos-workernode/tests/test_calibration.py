@@ -2360,6 +2360,7 @@ def _capturing_post(**routing):
     urls: list[str] = []
 
     def post_side_effect(url, body=None, timeout_s=30.0):
+        """Record *url*, then return its routed response or the default 200."""
         urls.append(url)
         for suffix, response in routing.items():
             if url.endswith(suffix):
@@ -2415,6 +2416,7 @@ def test_calibrate_fails_when_model_stays_asleep_after_wake():
     patches = _patch_calibration_infra()
 
     def wait_sleep_side_effect(base_url, target, timeout_s):
+        """Simulate a wake that never reaches the awake state."""
         if target is False:
             raise TimeoutError(f"/is_sleeping did not reach {target} within {timeout_s:.0f}s")
 
@@ -2433,6 +2435,7 @@ def test_calibrate_fails_when_post_wake_request_fails():
     """A model that wakes but cannot serve is as bad as one that never wakes."""
 
     def completions_response():
+        """200 for the Phase 2.5 warmup, 500 for the post-wake request."""
         # post_side_effect appends the URL before routing, so the count
         # includes the current call: 1 = Phase 2.5 warmup, 2 = post-wake.
         completions_so_far = sum(1 for u in urls if u.endswith("/v1/completions"))
