@@ -235,7 +235,7 @@ Holding requests back shrinks the window but does not close it: a request that *
 
 The bridge therefore carries a `cancel_command` action:
 
-```
+```text
 orchestrator                              worker
      │  infer_stream (cmd_id=X)              │
      │─────────────────────────────────────▶ │  relay task X ──▶ lane (httpx stream)
@@ -264,7 +264,7 @@ With the same model deployed on several workers, two warm workers tie on correct
 
 A stream is neither a user nor an API key — one key can drive many agent loops at once. Identity is `(api_key_id, actual request prefix)`, hashed into a chain of fixed-size blocks the way an engine hashes its own prefix-cache blocks:
 
-```
+```text
 block₁ = H(api_key_id ‖ text[0:B])
 blockᵢ = H(blockᵢ₋₁  ‖ text[(i−1)B : iB])
 ```
@@ -277,7 +277,7 @@ The map (`PrefixAffinityRouter`) is soft state — an in-memory TTL/LRU table. L
 
 A hit does not pin the request. It adds a bounded bonus to the corrected score:
 
-```
+```text
 bonus = weight_span × CORRECTION_STRENGTH × PREFIX_AFFINITY_BONUS_FRACTION
 ```
 

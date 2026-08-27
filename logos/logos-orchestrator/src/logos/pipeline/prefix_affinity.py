@@ -100,14 +100,27 @@ _FIELD_SEP = "\x1f"
 _RECORD_SEP = "\x1e"
 
 
-def _canonical(value: Any) -> str:
-    """Stable textual form of one payload fragment."""
+def _canonical(value: Any, budget: int) -> str:
+    """Stable textual form of one payload fragment, at most ``budget`` chars.
+
+    The budget is applied to the *input* wherever possible rather than to the
+    result: a prompt may carry megabytes of inline base64, and rendering all
+    of it only to slice off the first kilobyte would put that work on the
+    event loop once per request. Slicing first is safe because the caller
+    only ever hashes a fixed-size prefix — the discarded tail could not have
+    influenced a single block hash.
+    """
     if isinstance(value, str):
-        return value
+        return value[:budget]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return json.dumps(value)
     try:
-        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+        # json.dumps has no incremental form, so a large nested fragment is
+        # still rendered whole. Bounded by the request body the server has
+        # already parsed, and the same traversal the token estimator does.
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)[:budget]
     except (TypeError, ValueError):  # pragma: no cover — default=str covers ~everything
-        return repr(value)
+        return repr(value)[:budget]
 
 
 def serialize_prefix(payload: Any, limit: int) -> str:
@@ -119,11 +132,12 @@ def serialize_prefix(payload: Any, limit: int) -> str:
     single ``json.dumps`` of the message list would not qualify, because the
     closing bracket moves with every turn.
 
-    Stops once ``limit`` characters are produced; callers only hash the
-    first ``max_blocks`` blocks anyway, and prompts can carry megabytes of
-    inline base64.
+    Never renders more than ``limit`` characters: each fragment is bounded by
+    the budget still outstanding, and the walk stops as soon as that budget is
+    spent. Callers only hash the first ``max_blocks`` blocks anyway, so the
+    work is capped no matter how large a payload arrives.
     """
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or limit <= 0:
         return ""
 
     chunks: List[str] = []
@@ -132,7 +146,10 @@ def serialize_prefix(payload: Any, limit: int) -> str:
     def _append(kind: str, value: Any) -> bool:
         """Append one record; return False once the limit is reached."""
         nonlocal produced
-        rendered = f"{kind}{_FIELD_SEP}{_canonical(value)}{_RECORD_SEP}"
+        remaining = limit - produced
+        if remaining <= 0:
+            return False
+        rendered = f"{kind}{_FIELD_SEP}{_canonical(value, remaining)}{_RECORD_SEP}"
         chunks.append(rendered)
         produced += len(rendered)
         return produced < limit

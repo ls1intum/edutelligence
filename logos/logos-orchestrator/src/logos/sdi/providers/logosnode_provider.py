@@ -920,6 +920,24 @@ class LogosNodeDataProvider:
         return max(1, int(guaranteed * free_fraction)), None
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
+        """Book a slot for one request, or refuse and leave it queued here.
+
+        Two gates, in order, and they answer different questions.
+
+        ``_model_active`` against the parallel capacity is the *local ledger*:
+        it counts what this orchestrator has forwarded and not yet seen
+        complete, so it is exact and updates on every reservation.
+
+        ``evaluate_admission`` is the *engine's* view, and it is sampled — it
+        reads the last runtime snapshot, so several arrivals within one
+        heartbeat all see the same "nothing waiting". That gap is inherent:
+        vLLM only reveals that it could not start a request after the fact
+        (see :class:`AdmissionDecision`). The local ledger is what bounds the
+        overshoot; the sampled gate is what keeps the engine-side queue near
+        zero in steady state. Tightening the gap further — refusing until a
+        fresher snapshot arrives — would cap throughput at one request per
+        heartbeat, which costs far more than the overshoot it prevents.
+        """
         with self._lock:
             # Reject if no lane is ready (loaded/running) — requests for sleeping
             # or unloaded models should go to the scheduler queue instead.

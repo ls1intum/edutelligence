@@ -46,7 +46,7 @@ def _lane(
     }
 
 
-def _provider(monkeypatch, lanes, *, with_registry=True, provider_id=13, model_name="m"):
+def _provider(monkeypatch, lanes, *, with_registry=True, provider_id=13, model_name="m", config=None):
     class _FakeRegistry:
         @staticmethod
         def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
@@ -58,7 +58,7 @@ def _provider(monkeypatch, lanes, *, with_registry=True, provider_id=13, model_n
 
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
-        lambda self: {},
+        lambda self: dict(config or {}),
     )
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
@@ -276,3 +276,16 @@ def test_the_engine_side_queue_is_held_at_about_one(monkeypatch):
     for waiting, expected in ((0, True), (1, False), (5, False)):
         provider = _provider(monkeypatch, [_lane(num_parallel=8, queue_waiting=waiting)])
         assert provider.evaluate_admission(1).can_admit is expected, f"queue_waiting={waiting}"
+
+
+def test_the_local_ledger_bounds_what_the_sampled_gate_lets_through(monkeypatch):
+    """The engine's view is sampled, so several arrivals inside one heartbeat
+    all read the same "nothing waiting". The orchestrator's own count is what
+    stops that from becoming unbounded: it is exact and updates per
+    reservation, so the snapshot never has to be fresh for the ceiling to
+    hold."""
+    provider = _provider(monkeypatch, [_lane(num_parallel=8)], config={"parallel_capacity": 3})
+
+    # The snapshot never changes — every call sees an idle-looking engine.
+    assert [provider.try_reserve_capacity(1, f"r{i}") for i in range(5)] == [True, True, True, False, False]
+    assert provider.get_active_count(1) == 3

@@ -9,7 +9,7 @@ Two properties carry the whole feature:
    single key running several agent loops in parallel keeps them apart.
 """
 
-from logos.pipeline.prefix_affinity import PrefixAffinityRouter, affinity_keys, serialize_prefix
+from logos.pipeline.prefix_affinity import PrefixAffinityRouter, _canonical, affinity_keys, serialize_prefix
 
 BLOCK = 64  # small blocks keep the fixtures readable
 LIMIT = BLOCK * 8
@@ -183,3 +183,49 @@ def test_router_debug_state_reports_hit_rate():
     assert state["hits"] == 1
     assert state["misses"] == 1
     assert state["hit_rate"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Bounded work on untrusted payloads
+#
+# A prompt can carry megabytes of inline base64. Rendering all of it only to
+# slice off the first kilobyte would put that work on the event loop once per
+# request, so the budget is applied to the input, not the result. That must
+# not cost the append-only property the block hashes depend on.
+# ---------------------------------------------------------------------------
+
+
+def test_a_huge_fragment_is_sliced_before_it_is_rendered():
+    """The string path is the one that matters — message content is a string
+    or a list of text parts."""
+    assert _canonical("x" * 1_000_000, 10) == "x" * 10
+
+
+def test_a_nested_fragment_is_bounded_too():
+    assert len(_canonical({"content": "y" * 1_000_000}, 32)) == 32
+
+
+def test_serialization_of_a_megabyte_payload_stays_within_the_limit():
+    payload = {"messages": [{"role": "user", "content": "z" * 5_000_000}]}
+    assert len(serialize_prefix(payload, limit=LIMIT)) == LIMIT
+
+
+def test_append_only_still_holds_when_the_budget_truncates():
+    """Turn n+1 must still start with turn n's rendering — otherwise every
+    long conversation would re-key itself on every turn and the affinity map
+    would never hit."""
+    short = serialize_prefix(_conversation(2), limit=LIMIT)
+    long = serialize_prefix(_conversation(6), limit=LIMIT)
+    assert len(short) == LIMIT, "fixture must actually exercise truncation"
+    assert long.startswith(short)
+
+
+def test_a_truncated_conversation_keeps_its_keys_across_turns():
+    """The end-to-end consequence: the stream stays recognisable."""
+    first = _keys(7, _conversation(2))
+    second = _keys(7, _conversation(6))
+    assert set(first) & set(second)
+
+
+def test_a_non_positive_limit_produces_nothing():
+    assert serialize_prefix(_conversation(3), limit=0) == ""
