@@ -71,7 +71,7 @@ async def test_execute_resource_mode_failure_records_error(monkeypatch):
 
 
 async def test_execute_resource_mode_forwards_api_key_priority_to_pipeline(monkeypatch):
-    """The authenticated key's default_priority reaches the PipelineRequest (issue #673)."""
+    """The authenticated key's default_priority reaches the PipelineRequest."""
 
     captured = {}
 

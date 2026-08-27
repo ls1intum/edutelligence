@@ -3776,7 +3776,7 @@ async def _execute_resource_mode(
         deployments=deployments,
         skip_laura=skip_laura,
         request_path=request_path,
-        # The key owner's queue priority (issue #673); 0 falls back to the
+        # The key owner's queue priority; 0 falls back to the
         # policy-level priority inside the pipeline.
         default_priority=auth.default_priority,
     )

@@ -470,9 +470,9 @@ class RequestPipeline:
         )
 
         # The classifier bakes the policy's priority into every candidate, but
-        # the key owner's default_priority takes precedence (issue #673):
-        # resolve the effective priority here so all downstream consumers
-        # (schedulers, queueing, monitoring, log stats) agree on it.
+        # the key owner's default_priority takes precedence: resolve the
+        # effective priority here so all downstream consumers (schedulers,
+        # queueing, monitoring, log stats) agree on it.
         effective_priority = resolve_queue_priority(request.default_priority, policy.get("priority"))
         if candidates:
             candidates = [

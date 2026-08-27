@@ -1,4 +1,4 @@
-"""API-key default_priority drives queue ordering (issue #673).
+"""API-key default_priority drives queue ordering.
 
 The classifier bakes the policy's priority into every candidate; the pipeline
 then applies the requesting key's default_priority on top, so the key owner's
