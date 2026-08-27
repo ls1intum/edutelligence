@@ -6,6 +6,7 @@ import asyncio
 import base64
 import logging
 import secrets
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -337,6 +338,11 @@ class LogosNodeRuntimeRegistry:
         # Lanes pre-marked as cold by the capacity planner — excluded from
         # scheduling so new requests don't route to lanes about to be stopped.
         self._cold_marked_lanes: set[tuple[int, str]] = set()
+        # provider_id -> monotonic timestamp of the last live-session drop.
+        # A worker that went down a moment ago is mid-reboot, not dead: the
+        # request path uses this to extend the startup grace period past the
+        # orchestrator's own boot, so its models don't 404 while it comes back.
+        self._recently_disconnected: dict[int, float] = {}
         # Optional callback invoked when a worker's capabilities_models change.
         # Signature: (provider_id, sorted_model_names) -> None
         self._on_capabilities_changed = on_capabilities_changed
@@ -559,6 +565,7 @@ class LogosNodeRuntimeRegistry:
             if websocket is not None and session.websocket is not websocket:
                 return
             self._sessions.pop(provider_id, None)
+            self._recently_disconnected[int(provider_id)] = time.monotonic()
         pending_cmds = len(session.pending_commands)
         pending_streams = len(session.pending_streams)
         logger.warning(
@@ -1153,6 +1160,20 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return False
         return not session.is_stale(stale_after_seconds)
+
+    def disconnect_grace_remaining_s(self, provider_id: int, grace_period_s: float) -> float:
+        """Seconds left until a recently dropped worker's reconnect grace expires.
+
+        0.0 when the provider's worker never dropped a live session, or the
+        drop is older than ``grace_period_s``. Mirrors the orchestrator's
+        startup window, anchored to the drop instead of the server boot, so a
+        worker that reboots (or is redeployed on its own) gets the same
+        "wait, don't 404" treatment for its models as a fresh orchestrator.
+        """
+        dropped_at = self._recently_disconnected.get(int(provider_id))
+        if dropped_at is None:
+            return 0.0
+        return max(0.0, grace_period_s - (time.monotonic() - dropped_at))
 
     def get_desired_lane_set(self, provider_id: int) -> list[dict[str, Any]]:
         """Return the server's last-intended lane configuration for a provider."""

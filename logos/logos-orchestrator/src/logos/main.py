@@ -4145,14 +4145,15 @@ async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
 
 # How often the startup grace period re-checks for a (re)connected worker.
 _WORKER_CONNECT_POLL_SECONDS = 1.0
-# How long after startup the grace period lasts. A redeploy leaves a window
-# in which no worker node is connected, during which every logosnode
-# deployment is filtered out and the request 404s with "No available model
-# deployments" — enough to kill a running consumer mid-task. Workers
-# re-attach within seconds of coming back up, so during the first 120s a
-# request for a model no worker serves yet waits instead of failing, turning
-# the outage into a delay. Once the window has run out, the instant 404
-# comes back: a worker still missing then is down, not mid-redeploy.
+# How long the grace period lasts, both for the window after the orchestrator
+# starts and for the window after an already-connected worker drops (reboot).
+# Such a window is one in which no worker node serves a model, during which
+# every logosnode deployment of it is filtered out and the request 404s with
+# "No available model deployments" — enough to kill a running consumer
+# mid-task. Workers re-attach within seconds of coming back up, so while the
+# window is open a request for a model no worker serves yet waits instead of
+# failing, turning the outage into a delay. Once it has run out, the instant
+# 404 comes back: a worker still missing then is down, not mid-redeploy.
 _STARTUP_GRACE_PERIOD_S = 120.0
 # Monotonic anchor for the grace window. The wall-clock _SERVER_START_TIME
 # can jump (NTP) and must not stretch or shrink the window with it.
@@ -4162,6 +4163,27 @@ _SERVER_START_MONOTONIC = time.monotonic()
 def _startup_grace_remaining_s() -> float:
     """How much of the startup grace period is left (0 once it has run out)."""
     return max(0.0, _STARTUP_GRACE_PERIOD_S - (time.monotonic() - _SERVER_START_MONOTONIC))
+
+
+def _worker_reconnect_grace_remaining_s(raw_deployments: list[Deployment]) -> float:
+    """How long a request may wait because one of the key's workers recently dropped.
+
+    The startup window only covers the orchestrator's own (re)start. A worker
+    node that reboots or is redeployed on its own drops its session later,
+    and its models go unroutable the moment the registry loses them — the
+    same failure, anchored to the drop instead of the boot. For every
+    logosnode deployment of the key, take the latest of the drop-grace
+    deadlines; the freshest drop dominates.
+    """
+    remaining = 0.0
+    for deployment in raw_deployments:
+        if _normalize_provider_type(deployment.get("type")) != "logosnode":
+            continue
+        remaining = max(
+            remaining,
+            _logosnode_registry.disconnect_grace_remaining_s(int(deployment["provider_id"]), _STARTUP_GRACE_PERIOD_S),
+        )
+    return remaining
 
 
 def _client_timeout_s(payload: dict) -> Optional[float]:
@@ -4185,12 +4207,14 @@ async def _wait_for_worker_connect(
     filter dropped everything because no worker is connected (redeploy). Each
     poll re-asks the registry; the moment a worker re-attaches and declares
     its capabilities, the filter hands the deployments back and the request
-    proceeds. The wait is bounded by what is left of the startup grace period
-    — it does not reset per request, and a worker that already re-attached
-    does not cancel it for the models still missing — and by the client's
-    ``timeout_s`` if it is smaller.
+    proceeds. The wait is bounded by the later of the two grace windows —
+    what is left of the startup window, and what is left of a recently
+    dropped worker's reconnect window (see ``_worker_reconnect_grace_remaining_s``)
+    — and by the client's ``timeout_s`` if it is smaller. Neither window
+    resets per request, and a worker that already re-attached does not cancel
+    the wait for the models still missing.
     """
-    wait_s = _startup_grace_remaining_s()
+    wait_s = max(_startup_grace_remaining_s(), _worker_reconnect_grace_remaining_s(raw_deployments))
     if client_timeout_s is not None:
         wait_s = min(wait_s, client_timeout_s)
     if wait_s <= 0:
@@ -4237,11 +4261,13 @@ async def handle_sync_request(path: str, request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
     if not deployments and raw_deployments:
-        # The key is granted models that no worker serves right now — the
-        # signature of a redeploy in progress. Within the first 120s after
-        # startup, give the still-missing workers a chance to (re)connect
-        # instead of failing the request instantly. The window stays in
-        # effect even though other workers may already have re-attached.
+        # The key is granted models that no worker serves right now — either
+        # the orchestrator just (re)started and the workers are still
+        # (re)attaching, or a worker dropped a moment ago (reboot) and its
+        # models are unroutable until it comes back. Give the missing
+        # workers a chance to (re)connect instead of failing instantly; the
+        # window stays in effect even though other workers may already have
+        # re-attached.
         deployments = await _wait_for_worker_connect(
             raw_deployments, payload=body, request=request, client_timeout_s=_client_timeout_s(body)
         )
@@ -4521,8 +4547,9 @@ async def execute_proxy_job(
         _, err_body = coerce_upstream_error(400, {"error": str(e)})
         return {"status_code": 400, "data": err_body}
 
-    # Same window as the sync path: a job submitted while no worker is
-    # connected (redeploy) must not fail before the workers re-attach.
+    # Same windows as the sync path: a job submitted while no worker is
+    # connected (startup or a worker reboot) must not fail before the
+    # workers re-attach.
     if not deployments and raw_deployments:
         deployments = await _wait_for_worker_connect(
             raw_deployments, payload=json_data, client_timeout_s=_client_timeout_s(json_data)

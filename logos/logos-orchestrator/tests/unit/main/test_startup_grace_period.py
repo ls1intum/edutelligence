@@ -2,10 +2,10 @@
 
 While no worker node is connected, every logosnode deployment is filtered out
 and the request 404s with "No available model deployments" — enough to kill a
-running consumer mid-task. For the first 120 seconds after the orchestrator
-starts, a request for a model no worker serves yet therefore waits for the
-remaining workers to (re)attach; once the window has run out, the request
-fails instantly again.
+running consumer mid-task. Two windows protect requests instead: the first
+120 seconds after the orchestrator starts, and the 120 seconds after an
+already-connected worker drops (reboot). Once a window has run out, the
+request fails instantly again.
 """
 
 from __future__ import annotations
@@ -175,6 +175,80 @@ async def test_late_request_only_waits_the_rest_of_the_window(monkeypatch):
     assert len(empty.calls) < 100
 
 
+# ---------------------------------------------------------------------------
+# _worker_reconnect_grace_remaining_s (a worker that drops after startup)
+# ---------------------------------------------------------------------------
+
+
+def test_worker_reconnect_grace_ignores_cloud_deployments(monkeypatch):
+    registry = MagicMock()
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    deployments = [{"provider_id": 99, "model_id": 1, "type": "azure"}]
+
+    assert main._worker_reconnect_grace_remaining_s(deployments) == 0.0
+    registry.disconnect_grace_remaining_s.assert_not_called()
+
+
+def test_worker_reconnect_grace_takes_the_freshest_drop(monkeypatch):
+    registry = MagicMock()
+    registry.disconnect_grace_remaining_s = lambda pid, grace: {7: 10.0, 8: 45.0}[pid]
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    deployments = [
+        {"provider_id": 7, "model_id": 1, "type": "logosnode"},
+        {"provider_id": 8, "model_id": 1, "type": "logosnode"},
+        {"provider_id": 99, "model_id": 1, "type": "azure"},
+    ]
+
+    assert main._worker_reconnect_grace_remaining_s(deployments) == 45.0
+
+
+def test_worker_reconnect_grace_zero_when_nothing_dropped(monkeypatch):
+    registry = MagicMock()
+    registry.disconnect_grace_remaining_s = lambda pid, grace: 0.0
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+
+    assert main._worker_reconnect_grace_remaining_s(RAW) == 0.0
+
+
+async def test_wait_covers_a_worker_drop_after_the_startup_window(monkeypatch):
+    """A reboot of the only worker mid-service gets the same grace as a redeploy."""
+    monkeypatch.setattr(main, "_SERVER_START_MONOTONIC", time.monotonic() - main._STARTUP_GRACE_PERIOD_S - 10)
+    registry = MagicMock()
+    registry.disconnect_grace_remaining_s = lambda pid, grace: 0.1
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", _empty_then_raw_filter())
+
+    result = await main._wait_for_worker_connect(RAW, {"model": MODEL_NAME})
+
+    assert result == RAW
+
+
+async def test_wait_expires_with_the_disconnect_window(monkeypatch):
+    monkeypatch.setattr(main, "_SERVER_START_MONOTONIC", time.monotonic() - main._STARTUP_GRACE_PERIOD_S - 10)
+    registry = MagicMock()
+    registry.disconnect_grace_remaining_s = lambda pid, grace: 0.05
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", _always_empty_filter())
+
+    result = await main._wait_for_worker_connect(RAW, {"model": MODEL_NAME})
+
+    assert result == []
+
+
+async def test_no_wait_once_both_windows_are_gone(monkeypatch):
+    monkeypatch.setattr(main, "_SERVER_START_MONOTONIC", time.monotonic() - main._STARTUP_GRACE_PERIOD_S - 10)
+    registry = MagicMock()
+    registry.disconnect_grace_remaining_s = lambda pid, grace: 0.0
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    empty = _always_empty_filter()
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", empty)
+
+    result = await main._wait_for_worker_connect(RAW, {"model": MODEL_NAME})
+
+    assert result == []
+    assert empty.calls == []
+
+
 async def test_client_disconnect_ends_the_wait(monkeypatch):
     monkeypatch.setattr(main, "_filter_logosnode_deployments", _always_empty_filter())
 
@@ -280,3 +354,41 @@ async def test_job_waits_for_the_worker_to_reconnect(monkeypatch):
 
     assert result == {"status_code": 200, "data": {}}
     assert routed[0]["deployments"] == RAW
+
+
+# ---------------------------------------------------------------------------
+# LogosNodeRuntimeRegistry: a dropped session opens the reconnect window
+# ---------------------------------------------------------------------------
+
+
+def _registry_with_session(provider_id: int = 7):
+    from logos.logosnode_registry import LogosNodeRuntimeRegistry, ProviderSession
+
+    registry = LogosNodeRuntimeRegistry()
+    registry._sessions[provider_id] = ProviderSession(
+        provider_id=provider_id, worker_id="worker-1", websocket=MagicMock()
+    )
+    return registry
+
+
+async def test_detach_records_the_drop_for_the_grace_window():
+    registry = _registry_with_session()
+    assert registry.disconnect_grace_remaining_s(7, 120.0) == 0.0
+
+    await registry.detach_session(7)
+
+    remaining = registry.disconnect_grace_remaining_s(7, 120.0)
+    assert 0 < remaining <= 120.0
+
+
+async def test_a_drop_longer_ago_no_longer_extends_the_window():
+    registry = _registry_with_session()
+    await registry.detach_session(7)
+    registry._recently_disconnected[7] = time.monotonic() - 200
+
+    assert registry.disconnect_grace_remaining_s(7, 120.0) == 0.0
+
+
+async def test_a_provider_that_never_connected_has_no_window():
+    registry = _registry_with_session()
+    assert registry.disconnect_grace_remaining_s(99, 120.0) == 0.0
