@@ -2332,16 +2332,21 @@ def _prefer_deployments_with_context_room(
     the same 3000-token margin Claude Code keeps) and keep only the workers
     that offer it.
 
-    Two deliberate escape hatches, because this filter runs on an estimate:
+    Deliberate escape hatches, because this filter runs on an estimate:
 
     * A worker whose window is unknown is always kept. ``max_model_len`` is
       absent for cloud providers, for Ollama lanes and for a vLLM lane the
       worker has not reported a window for — none of those are evidence of a
       *narrow* window.
-    * When no worker is left, the widest ones are returned instead of nothing.
-      The request then fails upstream exactly as it did before this filter
-      existed, rather than turning into a 404 that hides which model was
-      asked for.
+    * A model is never filtered out entirely. If every lane of a model has a
+      known window that is too narrow, the widest of them is kept anyway.
+      Downstream, proxy mode narrows this list to the requested model and
+      turns an emptied model into a 404 "no deployment found" that hides the
+      real state; the engine, by contrast, either serves the request or
+      answers its own honest 400 — which is what the client should see (#810).
+    * When no worker is left, the widest ones are returned instead of nothing,
+      so the request fails upstream exactly as it did before this filter
+      existed.
     """
     required = required_context_tokens(payload)
     if required is None:
@@ -2359,27 +2364,44 @@ def _prefer_deployments_with_context_room(
             return None
         return windows.get((int(deployment["provider_id"]), model_name))
 
-    fitting = [d for d in deployments if (_window_of(d) or required) >= required]
-    if fitting:
-        if len(fitting) != len(deployments):
-            logger.info(
-                "Context routing: request needs ~%d tokens; %d of %d deployment(s) serve a wide " "enough window",
+    # Models whose known windows are all too narrow. Keep their widest lane
+    # anyway: proxy mode narrows the result to the requested model, so an
+    # emptied model would 404 "no deployment found" here, while the engine
+    # would either serve the request or answer its own honest 400.
+    rescued_widest: dict[int, int] = {}
+    by_model: dict[int, list[Deployment]] = {}
+    for deployment in deployments:
+        by_model.setdefault(int(deployment["model_id"]), []).append(deployment)
+    for model_id, model_deployment in by_model.items():
+        if any((_window_of(d) or required) >= required for d in model_deployment):
+            continue
+        widest = max((_window_of(d) for d in model_deployment), default=0)
+        if widest > 0:
+            rescued_widest[model_id] = widest
+            logger.warning(
+                "Context routing: request needs ~%d tokens but the widest served window for "
+                "model %s is %d — keeping the widest lane so the engine can answer",
                 required,
-                len(fitting),
-                len(deployments),
+                model_names.get(model_id, str(model_id)),
+                widest,
             )
-        return fitting
 
-    # Every known window is too narrow. Hand back the widest so the request
-    # gets the best available shot instead of a synthetic 404.
-    widest = max((w for w in (_window_of(d) for d in deployments) if w), default=0)
-    logger.warning(
-        "Context routing: request needs ~%d tokens but the widest served window is %d — "
-        "falling back to the widest deployment(s)",
-        required,
-        widest,
-    )
-    return [d for d in deployments if (_window_of(d) or 0) >= widest] or deployments
+    def _keep(deployment: Deployment) -> bool:
+        if (_window_of(deployment) or required) >= required:
+            return True
+        widest = rescued_widest.get(int(deployment["model_id"]))
+        return widest is not None and (_window_of(deployment) or 0) >= widest
+
+    fitting = [d for d in deployments if _keep(d)]
+    if len(fitting) != len(deployments):
+        logger.info(
+            "Context routing: request needs ~%d tokens; %d of %d deployment(s) serve a wide " "enough window%s",
+            required,
+            len(fitting),
+            len(deployments),
+            f" (+{len(rescued_widest)} widest lane(s) of fully-filtered model(s) kept)" if rescued_widest else "",
+        )
+    return fitting or deployments
 
 
 async def start_pipeline():
