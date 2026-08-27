@@ -434,6 +434,109 @@
             </button>
           </div>
 
+          <details class="performance-glossary">
+            <summary>
+              <span>
+                <i class="pi pi-info-circle" aria-hidden="true"></i>
+                Glossary &amp; abbreviations
+              </span>
+              <small>Metrics and vLLM parameters</small>
+            </summary>
+
+            <dl class="glossary-grid">
+              <div><dt>TTFT</dt><dd>Time To First Token</dd></div>
+              <div><dt>TPOT</dt><dd>Time Per Output Token</dd></div>
+              <div><dt>Latency</dt><dd>Full request duration</dd></div>
+              <div><dt>Throughput</dt><dd>Output tokens per second</dd></div>
+              <div><dt>p50 / p95 / p100</dt><dd>Median / 95% / slowest</dd></div>
+              <div><dt>Prefix hit</dt><dd>Reused prompt-prefix rate</dd></div>
+              <div><dt>MTP accept</dt><dd>Multi-Token Prediction acceptance</dd></div>
+              <div><dt>AWQ</dt><dd>Activation-aware Weight Quantization</dd></div>
+              <div><dt>KV cache</dt><dd>Cached attention keys and values</dd></div>
+              <div><dt>GSM8K</dt><dd>Grade School Math 8K dataset</dd></div>
+              <div><dt>CUDA</dt><dd>Compute Unified Device Architecture</dd></div>
+              <div><dt>vLLM</dt><dd>Model-serving engine</dd></div>
+              <div><dt><code>tensor_parallel_size</code></dt><dd>GPUs sharing tensor work</dd></div>
+              <div><dt><code>pipeline_parallel_size</code></dt><dd>Model-layer pipeline stages</dd></div>
+              <div><dt><code>kv_cache_dtype</code></dt><dd>KV-cache precision</dd></div>
+              <div><dt><code>kv_cache_memory</code></dt><dd>Memory reserved for KV cache</dd></div>
+              <div><dt><code>max_num_seqs</code></dt><dd>Concurrent sequences</dd></div>
+              <div><dt><code>max_num_batched_tokens</code></dt><dd>Tokens per batch</dd></div>
+              <div><dt><code>enable_prefix_caching</code></dt><dd>Reuse common prompt starts</dd></div>
+              <div><dt><code>max_model_len</code></dt><dd>Maximum context length</dd></div>
+              <div><dt><code>gpu_memory_utilization</code></dt><dd>vLLM GPU-memory fraction</dd></div>
+              <div><dt><code>quantization</code></dt><dd>Weight-compression format</dd></div>
+              <div><dt><code>dtype</code></dt><dd>Calculation precision</dd></div>
+              <div><dt><code>enforce_eager</code></dt><dd>Disable CUDA graph execution</dd></div>
+              <div><dt><code>disable_custom_all_reduce</code></dt><dd>Use standard GPU reduction</dd></div>
+              <div><dt><code>hf_overrides</code></dt><dd>Hugging Face config overrides</dd></div>
+            </dl>
+          </details>
+
+          @if (benchmarkPairs().length > 0) {
+            <section class="benchmark-runner">
+              <header class="benchmark-runner__header">
+                <div>
+                  <h3>Run benchmark</h3>
+                  <p>GSM8K main/test · 5 samples · 512 max output tokens</p>
+                </div>
+                <span>One active run per provider</span>
+              </header>
+
+              <div class="benchmark-runner__pairs">
+                @for (pair of benchmarkPairs(); track pair.model_provider_id) {
+                  <div class="benchmark-pair">
+                    <div class="benchmark-pair__identity">
+                      <strong>{{ pair.provider_name }}</strong>
+                      <span>{{ pair.model_name }}</span>
+                    </div>
+
+                    <div class="benchmark-pair__state">
+                      @if (latestBenchmarkRun(pair.model_provider_id); as run) {
+                        <span class="run-status" [ngClass]="'run-status--' + run.status">
+                          @if (isBenchmarkActive(run)) {
+                            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                          }
+                          {{ benchmarkStatusLabel(run) }}
+                        </span>
+                        @if (run.status === 'failed' && run.error_message) {
+                          <small>{{ run.error_message }}</small>
+                        }
+                      } @else if (!pair.endpoint_configured) {
+                        <span class="run-status run-status--failed">Endpoint missing</span>
+                        <small>Add it under Providers before running a benchmark.</small>
+                      } @else {
+                        <span class="run-status">Ready</span>
+                      }
+                    </div>
+
+                    <button
+                      class="benchmark-run-button"
+                      type="button"
+                      (click)="startBenchmark(pair)"
+                      [disabled]="benchmarkStartingPairId() === pair.model_provider_id || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
+                      [attr.title]="!pair.endpoint_configured ? 'Configure the provider endpoint first' : null"
+                    >
+                      @if (benchmarkStartingPairId() === pair.model_provider_id) {
+                        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                        Starting…
+                      } @else if (providerHasActiveBenchmark(pair.provider_id)) {
+                        Running…
+                      } @else {
+                        <i class="pi pi-play" aria-hidden="true"></i>
+                        Run benchmark
+                      }
+                    </button>
+                  </div>
+                }
+              </div>
+
+              @if (benchmarkStartError(); as error) {
+                <p class="benchmark-runner__error">{{ error }}</p>
+              }
+            </section>
+          }
+
           @if (performanceLoading()) {
 
             <div class="performance-message">Loading performance…</div>
@@ -477,24 +580,79 @@
                       <strong>TTFT</strong>
                       <span>p50 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p50') }}</b></span>
                       <span>p95 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p95') }}</b></span>
-                      <span>p99 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p99') }}</b></span>
+                      <span>p100 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p100') }}</b></span>
                     </section>
 
                     <section class="metric">
                       <strong>TPOT</strong>
                       <span>p50 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p50') }}</b></span>
                       <span>p95 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p95') }}</b></span>
-                      <span>p99 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p99') }}</b></span>
+                      <span>p100 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p100') }}</b></span>
                     </section>
 
                     <section class="metric">
                       <strong>Request latency</strong>
                       <span>p50 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p50', 'seconds') }}</b></span>
                       <span>p95 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p95', 'seconds') }}</b></span>
-                      <span>p99 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p99', 'seconds') }}</b></span>
+                      <span>p100 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p100', 'seconds') }}</b></span>
+                    </section>
+
+                    <section class="metric">
+                      <strong>Output throughput</strong>
+                      <span>Mean <b>{{ formatBenchmarkRate(benchmark.metrics.output_tokens_per_second, 'mean') }}</b></span>
+                      <span>p50 <b>{{ formatBenchmarkRate(benchmark.metrics.output_tokens_per_second, 'p50') }}</b></span>
+                      <span>p95 <b>{{ formatBenchmarkRate(benchmark.metrics.output_tokens_per_second, 'p95') }}</b></span>
                     </section>
 
                   </div>
+
+                  <details class="benchmark-configuration">
+                    <summary>
+                      <span>Configuration</span>
+                      <small>Benchmark and serving setup</small>
+                    </summary>
+
+                    <div class="benchmark-configuration__content">
+                      <div class="configuration-headings">
+                        <h4>GuideLLM benchmark</h4>
+                        <div>
+                          <h4>vLLM serving</h4>
+                          <small>Snapshot at benchmark time</small>
+                        </div>
+                      </div>
+
+                      <dl class="configuration-grid">
+                        @for (row of configurationRows(benchmark); track $index) {
+                          <div class="configuration-comparison-row">
+                            <div class="configuration-row">
+                              @if (row.benchmark; as item) {
+                                <dt><code>{{ item.key }}</code></dt>
+                                <dd [class.configuration-value--missing]="!item.captured">
+                                  {{ item.value }}
+                                </dd>
+                              }
+                            </div>
+
+                            <div class="configuration-row">
+                              @if (row.serving; as item) {
+                                <dt><code>{{ item.key }}</code></dt>
+                                <dd [class.configuration-value--missing]="!item.captured">
+                                  {{ item.value }}
+                                </dd>
+                              }
+                            </div>
+                          </div>
+                        }
+                      </dl>
+
+                      @if (servingCommand(benchmark); as command) {
+                        <div class="serving-command">
+                          <strong>vLLM command</strong>
+                          <pre><code>{{ command }}</code></pre>
+                        </div>
+                      }
+                    </div>
+                  </details>
 
                   <footer class="performance-card__footer">
                     {{ benchmark.dataset }} · {{ benchmarkProfile(benchmark) }} ·

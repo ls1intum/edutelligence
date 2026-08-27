@@ -2,10 +2,11 @@
 <databaseChangeLog
     xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    logicalFilePath="liquibase/changelog/012_model_provider_benchmarks.xml"
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <changeSet id="014-model-provider-benchmarks" author="Tim">
+    <changeSet id="012-model-provider-benchmarks" author="Tim">
         <createTable tableName="model_provider_benchmarks">
             <column name="id" type="INT" autoIncrement="true">
                 <constraints primaryKey="true" nullable="false"/>

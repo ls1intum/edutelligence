@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  OnDestroy,
   OnInit,
   computed,
   inject,
@@ -13,18 +14,24 @@ import {
   ScrollingModule,
 } from '@angular/cdk/scrolling';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { Model } from '../../shared/models/model.model';
 import {
   GuideLlmStatusDistributionSummary,
+  ModelBenchmarkPair,
+  ModelBenchmarkRun,
   ModelProviderBenchmark,
 } from '../../shared/models/provider.model';
 
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import {
+  benchmarkConfigurationRows,
+  servingCommand,
+} from './benchmark-configuration';
 
 
 // ==========================================================================
@@ -231,11 +238,14 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
   ],
 
   templateUrl: './model-error-report.html',
-  styleUrl: './model-error-report.scss',
+  styleUrls: [
+    './model-error-report.scss',
+    './model-performance-details.scss',
+  ],
 
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class ModelErrorReport implements OnInit {
+export class ModelErrorReport implements OnInit, OnDestroy {
 
   // ==========================================================================
   // Dependencies
@@ -296,8 +306,13 @@ export class ModelErrorReport implements OnInit {
   readonly processesLoading = signal(false);
 
   readonly performance = signal<readonly ModelProviderBenchmark[]>([]);
+  readonly benchmarkPairs = signal<readonly ModelBenchmarkPair[]>([]);
+  readonly benchmarkRuns = signal<readonly ModelBenchmarkRun[]>([]);
   readonly performanceLoading = signal(false);
   readonly performanceError = signal(false);
+  readonly benchmarkStartingPairId = signal<number | null>(null);
+  readonly benchmarkStartError = signal<string | null>(null);
+  private performancePollTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ==========================================================================
   // Tabs
@@ -456,6 +471,13 @@ export class ModelErrorReport implements OnInit {
     await this.fetchModel(id);
   }
 
+  ngOnDestroy(): void {
+    this.clearPerformancePoll();
+    if (this.logCopiedResetTimer !== null) {
+      clearTimeout(this.logCopiedResetTimer);
+    }
+  }
+
 
   // ==========================================================================
   // Initial Data Loading
@@ -537,22 +559,96 @@ export class ModelErrorReport implements OnInit {
     }
   }
 
-  async loadPerformance(modelId = this.modelId()): Promise<void> {
+  async loadPerformance(modelId = this.modelId(), silent = false): Promise<void> {
     if (modelId == null) {
       return;
     }
 
-    this.performanceLoading.set(true);
+    if (!silent) {
+      this.performanceLoading.set(true);
+    }
     this.performanceError.set(false);
 
     try {
       const response = await this.modelService.getBenchmarks(modelId);
       this.performance.set(response.benchmarks);
+      this.benchmarkPairs.set(response.pairs ?? []);
+      this.benchmarkRuns.set(response.runs ?? []);
     } catch {
-      this.performance.set([]);
-      this.performanceError.set(true);
+      if (!silent) {
+        this.performance.set([]);
+        this.benchmarkPairs.set([]);
+        this.benchmarkRuns.set([]);
+        this.performanceError.set(true);
+      }
     } finally {
-      this.performanceLoading.set(false);
+      if (!silent) {
+        this.performanceLoading.set(false);
+      }
+      this.schedulePerformancePoll();
+    }
+  }
+
+  async startBenchmark(pair: ModelBenchmarkPair): Promise<void> {
+    if (this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
+      return;
+    }
+    this.benchmarkStartingPairId.set(pair.model_provider_id);
+    this.benchmarkStartError.set(null);
+    try {
+      await this.modelService.startBenchmark(pair.model_provider_id);
+      await this.loadPerformance(this.modelId(), true);
+    } catch (error) {
+      const response = error instanceof HttpErrorResponse ? error.error : null;
+      const nestedError = response?.error;
+      const message = response?.detail
+        ?? (typeof nestedError === 'string' ? nestedError : nestedError?.message);
+      this.benchmarkStartError.set(
+        typeof message === 'string' ? message : 'Could not start the benchmark.',
+      );
+      await this.loadPerformance(this.modelId(), true);
+    } finally {
+      this.benchmarkStartingPairId.set(null);
+    }
+  }
+
+  latestBenchmarkRun(modelProviderId: number): ModelBenchmarkRun | null {
+    return this.benchmarkRuns().find(
+      run => run.request.model_provider_id === modelProviderId,
+    ) ?? null;
+  }
+
+  providerHasActiveBenchmark(providerId: number): boolean {
+    return this.benchmarkRuns().some(
+      run => run.request.provider_id === providerId && this.isBenchmarkActive(run),
+    );
+  }
+
+  isBenchmarkActive(run: ModelBenchmarkRun): boolean {
+    return run.status === 'pending' || run.status === 'running';
+  }
+
+  benchmarkStatusLabel(run: ModelBenchmarkRun): string {
+    if (run.status === 'pending') return `Queued for ${run.request.provider_name}`;
+    if (run.status === 'running') return `Running on ${run.request.provider_name}`;
+    if (run.status === 'success') return `Completed ${this.formatBenchmarkTimestamp(run.updated_at)}`;
+    return `Failed ${this.formatBenchmarkTimestamp(run.updated_at)}`;
+  }
+
+  private schedulePerformancePoll(): void {
+    this.clearPerformancePoll();
+    if (!this.benchmarkRuns().some(run => this.isBenchmarkActive(run))) {
+      return;
+    }
+    this.performancePollTimer = setTimeout(() => {
+      void this.loadPerformance(this.modelId(), true);
+    }, 2500);
+  }
+
+  private clearPerformancePoll(): void {
+    if (this.performancePollTimer !== null) {
+      clearTimeout(this.performancePollTimer);
+      this.performancePollTimer = null;
     }
   }
 
@@ -575,11 +671,23 @@ export class ModelErrorReport implements OnInit {
 
   formatBenchmarkDuration(
     metric: GuideLlmStatusDistributionSummary | undefined,
-    percentile: 'p50' | 'p95' | 'p99',
+    percentile: 'p50' | 'p95' | 'p99' | 'p100',
     unit: 'milliseconds' | 'seconds' = 'milliseconds',
   ): string {
-    const value = metric?.successful.percentiles[percentile] ?? null;
+    const value = percentile === 'p100'
+      ? metric?.successful.max ?? null
+      : metric?.successful.percentiles[percentile] ?? null;
     return this.formatDuration(value === null || unit === 'milliseconds' ? value : value * 1000);
+  }
+
+  formatBenchmarkRate(
+    metric: GuideLlmStatusDistributionSummary | undefined,
+    statistic: 'mean' | 'p50' | 'p95',
+  ): string {
+    const value = statistic === 'mean'
+      ? metric?.successful.mean
+      : metric?.successful.percentiles[statistic];
+    return value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(1)} tok/s`;
   }
 
   formatBenchmarkTimestamp(timestamp: string): string {
@@ -607,6 +715,14 @@ export class ModelErrorReport implements OnInit {
     }
 
     return 'GuideLLM';
+  }
+
+  configurationRows(benchmark: ModelProviderBenchmark) {
+    return benchmarkConfigurationRows(benchmark);
+  }
+
+  servingCommand(benchmark: ModelProviderBenchmark): string | null {
+    return servingCommand(benchmark);
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

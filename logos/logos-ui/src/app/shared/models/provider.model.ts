@@ -55,6 +55,8 @@ export interface GuideLlmPercentiles {
 }
 
 export interface GuideLlmDistributionSummary {
+  mean?: number;
+  max?: number;
   percentiles: GuideLlmPercentiles;
 }
 
@@ -72,6 +74,7 @@ export interface GuideLlmMetrics {
   request_latency?: GuideLlmStatusDistributionSummary;
   time_to_first_token_ms?: GuideLlmStatusDistributionSummary;
   time_per_output_token_ms?: GuideLlmStatusDistributionSummary;
+  output_tokens_per_second?: GuideLlmStatusDistributionSummary;
 }
 
 export interface ModelProviderBenchmark {
@@ -88,8 +91,56 @@ export interface ModelProviderBenchmark {
   recorded_at: string;
 }
 
+export interface ModelBenchmarkPair {
+  model_provider_id: number;
+  provider_id: number;
+  provider_name: string;
+  provider_type: ProviderType;
+  model_id: number;
+  model_name: string;
+  endpoint_configured: boolean;
+  authentication_configured: boolean;
+}
+
+export type ModelBenchmarkRunStatus = 'pending' | 'running' | 'success' | 'failed';
+
+export interface ModelBenchmarkRun {
+  id: number;
+  status: ModelBenchmarkRunStatus;
+  request: {
+    model_provider_id: number;
+    provider_id: number;
+    provider_name: string;
+    model_id: number;
+    model_name: string;
+    dataset: string;
+    subset: string;
+    split: string;
+    samples: number;
+    max_output_tokens: number;
+  };
+  result: {
+    stage?: string;
+    benchmark_id?: number;
+  };
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StartModelBenchmarkResponse {
+  job_id: number;
+  status: ModelBenchmarkRunStatus;
+  provider_id: number;
+  provider_name: string;
+  model_provider_id: number;
+  model_name: string;
+}
+
 export interface ModelBenchmarkResponse {
   benchmarks: ModelProviderBenchmark[];
+  pairs: ModelBenchmarkPair[];
+  runs: ModelBenchmarkRun[];
 }
 
 export interface AddProviderPayload {

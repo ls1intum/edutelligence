@@ -17,6 +17,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProvid
 import de.tum.cit.aet.logos.logoswebservice.operations.dto.ProviderPerformanceRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.operations.dto.StoreModelBenchmarkRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelBenchmarkJobProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelBenchmarkTargetProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelProviderBenchmarkProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderPerformanceProjection;
 
@@ -71,7 +73,21 @@ public class ProviderPerformanceService {
             .map(this::benchmarkToMap)
             .toList();
 
-        return Map.of("benchmarks", benchmarks);
+        List<Map<String, Object>> pairs = modelProviderRepository.findBenchmarkTargetsForModel(modelId)
+            .stream()
+            .map(ProviderPerformanceService::benchmarkTargetToMap)
+            .toList();
+
+        List<Map<String, Object>> runs = modelProviderRepository.findBenchmarkJobsForModel(modelId)
+            .stream()
+            .map(this::benchmarkJobToMap)
+            .toList();
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("benchmarks", benchmarks);
+        response.put("pairs", pairs);
+        response.put("runs", runs);
+        return response;
     }
 
     public Map<String, Object> storeModelBenchmark(StoreModelBenchmarkRequestDTO request) {
@@ -141,6 +157,31 @@ public class ProviderPerformanceService {
         result.put("sample_size", benchmark.getSampleSize());
         result.put("metrics", parseJson(benchmark.getMetricsJson()));
         result.put("recorded_at", benchmark.getRecordedAt());
+        return result;
+    }
+
+    private static Map<String, Object> benchmarkTargetToMap(ModelBenchmarkTargetProjection target) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("model_provider_id", target.getModelProviderId());
+        result.put("provider_id", target.getProviderId());
+        result.put("provider_name", target.getProviderName());
+        result.put("provider_type", target.getProviderType());
+        result.put("model_id", target.getModelId());
+        result.put("model_name", target.getModelName());
+        result.put("endpoint_configured", Boolean.TRUE.equals(target.getEndpointConfigured()));
+        result.put("authentication_configured", Boolean.TRUE.equals(target.getAuthenticationConfigured()));
+        return result;
+    }
+
+    private Map<String, Object> benchmarkJobToMap(ModelBenchmarkJobProjection job) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", job.getId());
+        result.put("status", job.getStatus());
+        result.put("request", parseJson(job.getRequestPayloadJson()));
+        result.put("result", job.getResultPayloadJson() == null ? Map.of() : parseJson(job.getResultPayloadJson()));
+        result.put("error_message", job.getErrorMessage());
+        result.put("created_at", job.getCreatedAt());
+        result.put("updated_at", job.getUpdatedAt());
         return result;
     }
 

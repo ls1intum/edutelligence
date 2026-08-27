@@ -22,11 +22,14 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
+from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
+from logos.benchmarks.guidellm_runner import extract_serving_configuration, run_benchmark_job
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
@@ -2013,6 +2016,111 @@ class _InternalDeleteLaneRequest(BaseModel):
 class _InternalAddLaneRequest(BaseModel):
     provider_id: int
     lane: dict[str, Any]
+
+
+class _InternalBenchmarkRequest(BaseModel):
+    model_provider_id: int = Field(gt=0)
+    samples: int = Field(default=5, gt=0, le=100)
+    max_output_tokens: int = Field(default=512, gt=0, le=4096)
+
+
+def _require_internal_secret(request: Request) -> None:
+    """Authenticate a Spring-to-orchestrator administration call."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+
+@app.post("/internal/model_benchmarks/run", tags=["admin"])
+async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request: Request):
+    """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
+    _require_internal_secret(request)
+
+    with DBManager() as db:
+        target = db.get_model_provider_benchmark_target(data.model_provider_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Provider-model pair not found")
+        endpoint = str(target.get("target") or "").strip()
+        if not endpoint.startswith(("http://", "https://")):
+            raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
+
+        provider_id = int(target["provider_id"])
+        active = db.find_active_model_benchmark_job(provider_id)
+        if active is not None:
+            return JSONResponse(
+                status_code=409,
+                content=jsonable_encoder(
+                    {
+                        "error": f"A benchmark is already running on {target['provider_name']}",
+                        "job_id": active["id"],
+                        "status": active["status"],
+                    }
+                ),
+            )
+
+        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        if runtime_snapshot is None or not _logosnode_snapshot_is_connected(runtime_snapshot):
+            raise HTTPException(status_code=503, detail=f"Provider {target['provider_name']} is offline")
+        if not runtime_snapshot.get("first_status_received"):
+            raise HTTPException(status_code=503, detail="Provider has not sent its first status yet")
+
+        model_name = str(target["model_name"])
+        serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
+        job_payload = {
+            "model_provider_id": data.model_provider_id,
+            "provider_id": provider_id,
+            "provider_name": target["provider_name"],
+            "model_id": target["model_id"],
+            "model_name": model_name,
+            "dataset": BENCHMARK_DATASET,
+            "subset": "main",
+            "split": "test",
+            "samples": data.samples,
+            "max_output_tokens": data.max_output_tokens,
+        }
+        job_id = db.create_job_record(
+            payload=job_payload,
+            api_key_id=None,
+            team_id=None,
+            user_id=None,
+            environment="model-provider-benchmark",
+        )
+
+    task = asyncio.create_task(
+        run_benchmark_job(
+            job_id=job_id,
+            model_provider_id=data.model_provider_id,
+            target=endpoint,
+            model=model_name,
+            api_key=str(target.get("api_key") or "") or None,
+            samples=data.samples,
+            max_output_tokens=data.max_output_tokens,
+            serving_configuration=serving_configuration,
+            serving_configuration_getter=lambda: extract_serving_configuration(
+                _logosnode_registry.peek_runtime_snapshot(provider_id), model_name
+            ),
+        )
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": "pending",
+            "provider_id": provider_id,
+            "provider_name": target["provider_name"],
+            "model_provider_id": data.model_provider_id,
+            "model_name": model_name,
+        },
+    )
 
 
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])

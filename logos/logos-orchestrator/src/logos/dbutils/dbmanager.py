@@ -396,7 +396,7 @@ class DBManager:
     def create_job_record(
         self,
         payload: dict,
-        api_key_id: int,
+        api_key_id: Optional[int],
         team_id: Optional[int],
         user_id: Optional[int],
         environment: Optional[str],
@@ -426,6 +426,80 @@ class DBManager:
         ).fetchone()
         self.session.commit()
         return row.id
+
+    def get_model_provider_benchmark_target(self, model_provider_id: int) -> Optional[Dict[str, Any]]:
+        """Resolve the endpoint and credential for one exact provider-model pair."""
+        row = self.session.execute(
+            text(
+                """
+                SELECT mp.id AS model_provider_id,
+                       m.id AS model_id,
+                       m.name AS model_name,
+                       p.id AS provider_id,
+                       p.name AS provider_name,
+                       COALESCE(NULLIF(mp.endpoint, ''), NULLIF(p.base_url, '')) AS target,
+                       COALESCE(NULLIF(mp.api_key, ''), NULLIF(p.api_key, '')) AS api_key
+                FROM model_provider mp
+                JOIN models m ON m.id = mp.model_id
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE mp.id = :model_provider_id
+                """
+            ),
+            {"model_provider_id": int(model_provider_id)},
+        ).mappings().first()
+        return dict(row) if row else None
+
+    def find_active_model_benchmark_job(self, provider_id: int) -> Optional[Dict[str, Any]]:
+        """Return the newest queued/running benchmark for a provider, if any."""
+        row = self.session.execute(
+            text(
+                """
+                SELECT id, status, request_payload, created_at, updated_at
+                FROM jobs
+                WHERE environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                  AND (request_payload ->> 'provider_id')::integer = :provider_id
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"provider_id": int(provider_id)},
+        ).mappings().first()
+        return dict(row) if row else None
+
+    def insert_model_provider_benchmark(
+        self,
+        *,
+        model_provider_id: int,
+        configuration: Dict[str, Any],
+        dataset: str,
+        sample_size: int,
+        metrics: Dict[str, Any],
+        recorded_at: datetime.datetime,
+    ) -> int:
+        """Persist one complete benchmark summary and return its id."""
+        row = self.session.execute(
+            text(
+                """
+                INSERT INTO model_provider_benchmarks
+                    (model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
+                VALUES
+                    (:model_provider_id, :configuration::jsonb, :dataset, :sample_size,
+                     :metrics::jsonb, :recorded_at)
+                RETURNING id
+                """
+            ),
+            {
+                "model_provider_id": int(model_provider_id),
+                "configuration": _json_for_jsonb(configuration),
+                "dataset": dataset,
+                "sample_size": int(sample_size),
+                "metrics": _json_for_jsonb(metrics),
+                "recorded_at": recorded_at,
+            },
+        ).fetchone()
+        self.session.commit()
+        return int(row.id)
 
     def update_job_status(
         self,

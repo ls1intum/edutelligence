@@ -1,10 +1,13 @@
 package de.tum.cit.aet.logos.logoswebservice.operations;
 
+import java.util.Map;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -14,9 +17,11 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.mockito.Mockito.when;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -36,6 +41,7 @@ class ProviderPerformanceControllerTest {
 
     @Autowired MockMvc mvc;
     @MockitoBean JwtDecoder jwtDecoder;
+    @MockitoBean OrchestratorWorkerAdminClient orchestratorWorkerAdminClient;
 
     @Test
     void providerPerformance_returnsMetricsPerProviderModelPair() throws Exception {
@@ -114,7 +120,11 @@ class ProviderPerformanceControllerTest {
            .andExpect(jsonPath("$.benchmarks[0].sample_size").value(100))
            .andExpect(jsonPath("$.benchmarks[0].metrics.request_rate").value(2.5))
            .andExpect(jsonPath("$.benchmarks[0].metrics.request_latency_ms.p95").value(690.0))
-           .andExpect(jsonPath("$.benchmarks[0].recorded_at").value("2026-08-24T12:00:00Z"));
+           .andExpect(jsonPath("$.benchmarks[0].recorded_at").value("2026-08-24T12:00:00Z"))
+           .andExpect(jsonPath("$.pairs.length()").value(1))
+           .andExpect(jsonPath("$.pairs[0].model_provider_id").value(7001))
+           .andExpect(jsonPath("$.pairs[0].endpoint_configured").value(true))
+           .andExpect(jsonPath("$.runs").isEmpty());
     }
 
     @Test
@@ -177,5 +187,23 @@ class ProviderPerformanceControllerTest {
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error")
                .value("Only successful GuideLLM benchmark summaries are stored"));
+    }
+
+    @Test
+    void runModelBenchmark_forwardsFixedSmallRunToOrchestrator() throws Exception {
+        when(orchestratorWorkerAdminClient.startModelBenchmark(7001, 5, 512))
+            .thenReturn(ResponseEntity.accepted().body(Map.of(
+                "job_id", 42,
+                "status", "pending",
+                "model_provider_id", 7001
+            )));
+
+        mvc.perform(post("/logosdb/model_benchmarks/run")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_provider_id\":7001,\"sample_size\":5,\"max_output_tokens\":512}"))
+           .andExpect(status().isAccepted())
+           .andExpect(jsonPath("$.job_id").value(42))
+           .andExpect(jsonPath("$.status").value("pending"));
     }
 }
