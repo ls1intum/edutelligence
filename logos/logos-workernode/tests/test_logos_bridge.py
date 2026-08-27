@@ -385,7 +385,7 @@ async def test_handle_message_runs_stream_command_in_background():
     assert len(client._command_tasks) == 1  # noqa: SLF001
     assert not finished.is_set()
 
-    background_tasks = tuple(client._command_tasks)  # noqa: SLF001
+    background_tasks = tuple(client._command_tasks.values())  # noqa: SLF001
     release.set()
     await asyncio.gather(*background_tasks)
 
@@ -439,7 +439,7 @@ async def test_handle_message_runs_infer_command_in_background():
     assert len(client._command_tasks) == 1  # noqa: SLF001
     assert sent_payloads == []
 
-    background_tasks = tuple(client._command_tasks)  # noqa: SLF001
+    background_tasks = tuple(client._command_tasks.values())  # noqa: SLF001
     release.set()
     await asyncio.gather(*background_tasks)
 
@@ -1593,3 +1593,230 @@ async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
     assert stored["org/model-a"]["disk_size_bytes"] == 42
     assert stored["org/model-a"]["sleep_mode_disabled"] is True
     assert stored["org/untouched"]["base_residency_mb"] == 22545.0, "other models must be untouched"
+
+
+# ---------------------------------------------------------------------------
+# Cancelling an abandoned request (#735)
+#
+# Every request to a worker is multiplexed over one WebSocket, so there is no
+# per-request connection whose close tells vLLM to stop. When the client
+# behind a request goes away, the server sends `cancel_command`; cancelling
+# the task is what closes the httpx stream to the lane, and that closed
+# connection is what makes vLLM abort the sequence and free its KV blocks.
+# ---------------------------------------------------------------------------
+
+
+class _BlockingUpstream:
+    """An upstream that yields one chunk and then never produces another."""
+
+    def __init__(self) -> None:
+        self.status_code = 200
+        self.headers = {"content-type": "text/event-stream"}
+        self.closed = False
+        self.first_chunk_sent = asyncio.Event()
+
+    async def aiter_bytes(self):
+        yield b"tok1"
+        self.first_chunk_sent.set()
+        await asyncio.Event().wait()  # generate forever
+        yield b"unreachable"
+
+    async def aread(self) -> bytes:
+        return b""
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _stream_client_fixture(monkeypatch, upstream):
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _FakeStreamClient(upstream),
+    )
+    return client, lane_manager
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_stream_closes_the_upstream_and_frees_the_lane(monkeypatch):
+    """The point of the whole feature: aborting the relay must close the
+    connection to vLLM (which aborts generation) and release the in-flight
+    count that would otherwise keep the lane from ever sleeping."""
+    upstream = _BlockingUpstream()
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+
+    task = asyncio.create_task(
+        client._execute_stream_command(ws, "cmd-1", {"lane_id": "lane-a", "payload": {}})  # noqa: SLF001
+    )
+    await upstream.first_chunk_sent.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert upstream.closed is True, "vLLM never sees the abort unless the stream is closed"
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_sends_no_terminal_frame(monkeypatch):
+    """Nobody is reading: the server already dropped the queue for this
+    cmd_id. Emitting a stream_end failure would only be noise."""
+    upstream = _BlockingUpstream()
+    client, _lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+
+    task = asyncio.create_task(
+        client._execute_stream_command(ws, "cmd-1", {"lane_id": "lane-a", "payload": {}})  # noqa: SLF001
+    )
+    await upstream.first_chunk_sent.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [f["type"] for f in ws.frames] == ["stream_start", "stream_chunk"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_aborts_the_named_stream(monkeypatch):
+    """End-to-end through the message dispatcher, the way the server drives it."""
+    upstream = _BlockingUpstream()
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-stream",
+                "action": "infer_stream",
+                "params": {"lane_id": "lane-a", "payload": {}},
+            }
+        ),
+    )
+    await upstream.first_chunk_sent.wait()
+    assert "cmd-stream" in client._command_tasks  # noqa: SLF001
+    stream_task = client._command_tasks["cmd-stream"]  # noqa: SLF001
+
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-cancel",
+                "action": "cancel_command",
+                "params": {"target_cmd_id": "cmd-stream"},
+            }
+        ),
+    )
+
+    result = [f for f in ws.frames if f["type"] == "command_result"][-1]
+    assert result["result"] == {"cancelled": True, "target_cmd_id": "cmd-stream"}
+
+    with pytest.raises(asyncio.CancelledError):
+        await stream_task
+    await asyncio.sleep(0)  # let the done-callback deregister the task
+    assert upstream.closed is True
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+    assert "cmd-stream" not in client._command_tasks  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_for_an_unknown_id_is_not_an_error():
+    """A cancel racing a stream that just finished is normal traffic, not a
+    failure the server should have to special-case."""
+    app = _DummyApp()
+    app.state.lane_manager = object()
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    ws = _CollectWS()
+
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-cancel",
+                "action": "cancel_command",
+                "params": {"target_cmd_id": "long-gone"},
+            }
+        ),
+    )
+
+    assert ws.frames[-1]["success"] is True
+    assert ws.frames[-1]["result"]["cancelled"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_only_touches_its_target(monkeypatch):
+    """Two concurrent requests on one worker: cancelling one must not
+    disturb the other. This is what keying the task map by cmd_id buys."""
+    upstream_a = _BlockingUpstream()
+    upstream_b = _BlockingUpstream()
+    upstreams = iter([upstream_a, upstream_b])
+
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _FakeStreamClient(next(upstreams)),
+    )
+    ws = _CollectWS()
+
+    for cmd_id in ("cmd-a", "cmd-b"):
+        await client._handle_message(  # noqa: SLF001
+            ws,
+            json.dumps(
+                {
+                    "type": "command",
+                    "cmd_id": cmd_id,
+                    "action": "infer_stream",
+                    "params": {"lane_id": "lane-a", "payload": {}},
+                }
+            ),
+        )
+    await upstream_a.first_chunk_sent.wait()
+    await upstream_b.first_chunk_sent.wait()
+
+    assert client.cancel_command("cmd-a") is True
+    await asyncio.sleep(0)
+
+    assert upstream_a.closed is True
+    assert upstream_b.closed is False
+    assert "cmd-b" in client._command_tasks  # noqa: SLF001
+
+    # Clean up the survivor so the test does not leak a task.
+    client.cancel_command("cmd-b")
+    await asyncio.gather(*client._command_tasks.values(), return_exceptions=True)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_hello_advertises_the_cancel_action():
+    """The server feature-gates on this list; without it, no cancellation is
+    ever sent to this worker."""
+    client = LogosBridgeClient(
+        _DummyApp(),
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    ws = _CollectWS()
+    await client._send_hello(ws)  # noqa: SLF001
+    assert "cancel_command" in ws.frames[0]["actions"]

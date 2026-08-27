@@ -271,6 +271,17 @@ TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished",
 # materialises must not latch the provider out of lane placement forever.
 CALIBRATION_START_GRACE = timedelta(seconds=60)
 
+# Worker bridge action that aborts one in-flight command (infer or
+# infer_stream). Workers that predate it do not list it in their hello and
+# are left alone, keeping the previous behaviour.
+CANCEL_COMMAND_ACTION = "cancel_command"
+
+# How long to wait for a worker to acknowledge a cancellation. Short on
+# purpose: the answer only tells us whether the stream was still running, and
+# nothing downstream waits on it. The abort itself happens worker-side the
+# moment the command is handled.
+CANCEL_COMMAND_TIMEOUT_SECONDS = 10
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -306,6 +317,10 @@ class ProviderSession:
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
     max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
+    # Bridge actions the worker advertised in its hello. Used to feature-gate
+    # commands a worker may not know yet — an unrecognised action comes back
+    # as "Unsupported bridge command", so it is cheaper to ask first.
+    actions: set[str] = field(default_factory=set)
     # True while the worker is running a calibration session, seeded from its
     # hello and then reconciled against every status it sends. A calibrating
     # worker has freed all VRAM for its probes, so its idle lanes and free
@@ -344,6 +359,9 @@ class LogosNodeRuntimeRegistry:
         # orchestrator uses this to react to terminal session events
         # without polling. Signature: (provider_id, event_dict) -> None
         self._event_subscribers: list[Callable[[int, dict[str, Any]], None]] = []
+        # In-flight stream cancellations. Held only so the loop keeps a strong
+        # reference to fire-and-forget tasks until they complete.
+        self._cancellation_tasks: set[asyncio.Task] = set()
 
     def _fire_capabilities_changed(self, provider_id: int, model_names: list[str]) -> None:
         if self._on_capabilities_changed is not None:
@@ -603,6 +621,7 @@ class LogosNodeRuntimeRegistry:
         max_lanes: int = 0,
         configured_models: list[str] | None = None,
         calibrating: bool | None = None,
+        actions: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -610,6 +629,8 @@ class LogosNodeRuntimeRegistry:
         session.worker_id = worker_id or session.worker_id
         session.last_heartbeat = _utc_now()
         session.max_lanes = max_lanes
+        if actions is not None:
+            session.actions = {a for a in actions if isinstance(a, str) and a.strip()}
         # Hello arrives before the first status, so this settles `calibrating`
         # before `_is_plannable` can ever say yes for this session. Without it
         # a reconnect mid-session would open a placement window: the fresh
@@ -1017,6 +1038,16 @@ class LogosNodeRuntimeRegistry:
 
         try:
             result = await asyncio.wait_for(fut, timeout=max(1, timeout_seconds))
+        except asyncio.CancelledError:
+            # The caller went away — typically a client that disconnected
+            # mid-request. Dropping the future only stops us from reading the
+            # answer; the worker is still producing it, so tell it to stop.
+            # Guarded against recursion: a cancel command cancelling itself
+            # would loop.
+            session.pending_commands.pop(cmd_id, None)
+            if action != CANCEL_COMMAND_ACTION:
+                self._request_command_cancellation(session, cmd_id)
+            raise
         except asyncio.TimeoutError as exc:
             session.pending_commands.pop(cmd_id, None)
             self._emit_session_diagnostic(
@@ -1079,6 +1110,10 @@ class LogosNodeRuntimeRegistry:
             session.pending_streams.pop(cmd_id, None)
             raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
 
+        # Whether the worker told us the stream is over. False means we are
+        # unwinding early — the consumer went away — and the worker is still
+        # generating unless we say otherwise.
+        stream_finished = False
         try:
             while True:
                 try:
@@ -1096,11 +1131,80 @@ class LogosNodeRuntimeRegistry:
                         yield chunk.encode("utf-8")
                     continue
                 if event_type == "stream_end":
+                    stream_finished = True
                     if not bool(event.get("success", False)):
                         raise LogosNodeCommandError(str(event.get("error", "unknown worker stream error")))
                     break
         finally:
             session.pending_streams.pop(cmd_id, None)
+            if not stream_finished:
+                self._request_command_cancellation(session, cmd_id)
+
+    def _request_command_cancellation(self, session: ProviderSession, cmd_id: str) -> None:
+        """Tell the worker to abort the in-flight command behind ``cmd_id``.
+
+        Dropping the local queue or future only stops *us* from reading.
+        Unlike the HTTP path — where closing the httpx context closes the
+        connection and vLLM aborts the sequence by itself — every request to a
+        worker shares one WebSocket, so there is no per-request connection
+        whose close carries the signal. Without this the lane keeps generating
+        a response nobody will read, holding a KV slot for the full length of
+        the generation. Under a retry storm that is self-reinforcing: each
+        abandoned attempt keeps consuming the capacity its own retry needs.
+
+        Fire-and-forget on purpose: this runs while a cancelled caller unwinds,
+        and that unwind must not block on the worker answering.
+        """
+        if CANCEL_COMMAND_ACTION not in session.actions:
+            logger.debug(
+                "Worker %s does not support %s; abandoned command %s runs to completion",
+                session.worker_id,
+                CANCEL_COMMAND_ACTION,
+                cmd_id[:8],
+            )
+            return
+
+        async def _send() -> None:
+            try:
+                result = await self.send_command(
+                    provider_id=session.provider_id,
+                    action=CANCEL_COMMAND_ACTION,
+                    params={"target_cmd_id": cmd_id},
+                    timeout_seconds=CANCEL_COMMAND_TIMEOUT_SECONDS,
+                )
+                if isinstance(result, dict) and result.get("cancelled"):
+                    logger.info(
+                        "Aborted abandoned request %s on worker %s",
+                        cmd_id[:8],
+                        session.worker_id,
+                    )
+                else:
+                    # It had already finished — the cancel simply raced it.
+                    logger.debug(
+                        "Nothing to abort for %s on worker %s",
+                        cmd_id[:8],
+                        session.worker_id,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                # A worker that has gone away drops its lanes anyway; nothing
+                # here is worth escalating past debug.
+                logger.debug(
+                    "Could not abort request %s on worker %s: %s",
+                    cmd_id[:8],
+                    session.worker_id,
+                    exc,
+                )
+
+        try:
+            task = asyncio.get_running_loop().create_task(
+                _send(),
+                name=f"cancel-command-{cmd_id[:8]}",
+            )
+        except RuntimeError:  # pragma: no cover — no running loop during teardown
+            return
+        # Hold a reference so the task is not garbage-collected mid-flight.
+        self._cancellation_tasks.add(task)
+        task.add_done_callback(self._cancellation_tasks.discard)
 
     async def get_runtime_snapshot(self, provider_id: int, stale_after_seconds: int = 30) -> dict[str, Any]:
         session = await self._get_active_session(provider_id, stale_after_seconds)

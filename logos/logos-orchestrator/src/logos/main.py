@@ -12,7 +12,7 @@ import re
 import secrets
 import threading
 import time
-from contextlib import asynccontextmanager, suppress
+from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
@@ -1519,6 +1519,28 @@ class _StreamingCostEnricher:
         return frame
 
 
+ORPHANED_REQUEST_ERROR = "Orchestrator restarted while the request was in flight; outcome unknown."
+
+
+def _close_orphaned_request_logs() -> None:
+    """Finalise log rows a previous orchestrator process left open.
+
+    Without this a deploy or crash strands every in-flight request in the
+    "running" state permanently — nothing else ever revisits those rows, so
+    the live-request views keep counting requests that ended when the process
+    did. Failing here must not keep the orchestrator from starting: stale rows
+    are a reporting defect, an orchestrator that will not boot is an outage.
+    """
+    try:
+        with DBManager() as db:
+            closed = db.close_orphaned_request_logs(ORPHANED_REQUEST_ERROR)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not close orphaned request logs at startup", exc_info=True)
+        return
+    if closed:
+        logger.info("Closed %d request log(s) left in-flight by a previous orchestrator process", closed)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -1556,6 +1578,11 @@ async def lifespan(app: FastAPI):
     # orchestrator no longer bootstraps a `root` user, initialises the schema,
     # or runs migrations — it expects an already-provisioned database and goes
     # straight to start_pipeline(), which queries that schema.
+
+    # Any request still marked in-flight belongs to the process that just
+    # went away — close it before accepting new traffic, while "no terminal
+    # state" unambiguously means "orphaned by a restart".
+    _close_orphaned_request_logs()
 
     # Start Pipeline
     await start_pipeline()
@@ -2960,16 +2987,25 @@ async def _streaming_response(
                 for attempt in range(attempts):
                     produced = False
                     try:
-                        async for chunk in _new_logosnode_chunk_iter():
-                            produced = True
-                            yield chunk
-                            if chunk and not ttft_recorded:
-                                if log_id:
-                                    with DBManager() as db:
-                                        db.set_time_at_first_token(log_id)
-                                ttft_recorded = True
-                            stream_log.feed(chunk)
-                            _live_streams.update(request_id, stream_log.streamed_tokens())
+                        # `aclosing` is what makes an abandoned request reach
+                        # the worker promptly. When this generator is closed
+                        # mid-stream — a client that walked away — a bare
+                        # `async for` would leave the inner generator to the
+                        # async-generator GC hook, so its cleanup (which is
+                        # what sends the cancellation) would run at some
+                        # unspecified later point. Closing it here runs that
+                        # cleanup while the disconnect is being handled.
+                        async with aclosing(_new_logosnode_chunk_iter()) as chunk_iter:
+                            async for chunk in chunk_iter:
+                                produced = True
+                                yield chunk
+                                if chunk and not ttft_recorded:
+                                    if log_id:
+                                        with DBManager() as db:
+                                            db.set_time_at_first_token(log_id)
+                                    ttft_recorded = True
+                                stream_log.feed(chunk)
+                                _live_streams.update(request_id, stream_log.streamed_tokens())
                     except Exception as e:
                         # Retry ONLY if nothing has been streamed to the client yet:
                         # a pre-token failure (e.g. a just-woken level-1 lane whose
@@ -4630,6 +4666,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     calibrating=(
                         bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
                     ),
+                    actions=(payload.get("actions") if isinstance(payload.get("actions"), list) else None),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}

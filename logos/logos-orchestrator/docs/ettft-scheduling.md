@@ -224,6 +224,33 @@ Two call sites use it:
 
 The release path (slot transfer on completion) is deliberately *not* gated: a completing request hands its slot straight to the next waiter, which is the mechanism that keeps the engine busy while admission holds new arrivals back.
 
+### Cancelling what was already forwarded
+
+Holding requests back shrinks the window but does not close it: a request that *was* forwarded and whose client then goes away still occupies a lane. On the HTTP path that resolves itself — closing the httpx context closes the connection and vLLM aborts the sequence. Worker requests have no such connection: every request to a worker is multiplexed over one WebSocket, so dropping the local queue only stops the orchestrator from reading. The lane kept generating a response nobody would read, for the full length of the generation.
+
+The bridge therefore carries a `cancel_command` action:
+
+```
+orchestrator                              worker
+     │  infer_stream (cmd_id=X)              │
+     │─────────────────────────────────────▶ │  relay task X ──▶ lane (httpx stream)
+     │  ◀──── stream_chunk … ─────────────── │
+     ▽  client disconnects                   │
+     │  cancel_command (target_cmd_id=X)     │
+     │─────────────────────────────────────▶ │  task X cancelled
+     │                                       │    └─ httpx stream closed ──▶ vLLM aborts,
+     │  ◀──── command_result {cancelled}──── │       KV blocks freed, in-flight count released
+```
+
+Cancelling the relay task is what closes the stream to the lane, and that closed connection is what makes vLLM abort. Details that matter:
+
+- **Both paths.** `infer` (non-streaming) is cancelled the same way; worker command tasks are keyed by `cmd_id` so one request can be targeted without touching its neighbours.
+- **Feature-gated.** Only workers that list `cancel_command` in their hello are sent one; an older worker keeps the previous behaviour rather than answering "Unsupported bridge command".
+- **Fire-and-forget.** The cancellation is dispatched while a cancelled caller unwinds, so it must not block on the worker answering. The reply only reports whether anything was still running — a cancel racing a completing stream is normal.
+- **Deterministic close.** The response generator wraps the worker stream in `contextlib.aclosing`; a bare `async for` would defer the cleanup that sends the cancellation to the async-generator GC hook.
+
+This also keeps the admission signals honest: a ghost generation inflates `requests_running` and KV usage, so without it the gate above would throttle traffic on load that no longer exists.
+
 ## 11. Prefix-Cache-Aware Placement
 
 With the same model deployed on several workers, two warm workers tie on corrected score and the tie-break is random. For a coding agent that is the worst possible placement: every turn re-sends a prompt the *previous* worker already has in its KV cache, and a random landing throws that cache away.
