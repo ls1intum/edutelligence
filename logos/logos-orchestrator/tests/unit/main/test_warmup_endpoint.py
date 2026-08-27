@@ -79,10 +79,11 @@ async def test_records_latent_demand_and_wakes_the_planner(wired):
     body = json.loads(response.body)
     assert body["model"] == "qwen-27b"
     assert body["hint_accepted"] is True
-    # Latent demand, not a real request: strong enough for the planner to act on
-    # over a few cycles, weak enough that it cannot outrank live traffic.
+    # Latent demand, not a real request: weak enough that it cannot outrank live
+    # traffic. The score alone cannot start a load, though — it is decayed before
+    # the planner reads it — so the announcement is what the planner acts on.
     demand.record_latent_demand.assert_called_once_with("qwen-27b")
-    planner.hint_capacity_needed.assert_called_once_with("qwen-27b")
+    planner.announce_upcoming_use.assert_called_once_with("qwen-27b")
 
 
 @pytest.mark.asyncio
@@ -115,7 +116,7 @@ async def test_hints_again_for_an_already_serving_model(monkeypatch, wired):
     await _warmup("qwen-27b")
 
     demand.record_latent_demand.assert_called_once_with("qwen-27b")
-    planner.hint_capacity_needed.assert_called_once_with("qwen-27b")
+    planner.announce_upcoming_use.assert_called_once_with("qwen-27b")
 
 
 @pytest.mark.asyncio
@@ -132,7 +133,7 @@ async def test_refuses_a_model_the_key_cannot_use(wired):
 
     assert exc.value.status_code == 404
     demand.record_latent_demand.assert_not_called()
-    planner.hint_capacity_needed.assert_not_called()
+    planner.announce_upcoming_use.assert_not_called()
 
 
 @pytest.mark.asyncio

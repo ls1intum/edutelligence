@@ -16,5 +16,6 @@
     <include file="liquibase/changelog/010_add_model_capabilities.xml"/>
     <include file="liquibase/changelog/011_add_fk_model_capabilities_cascade.xml"/>
     <include file="liquibase/changelog/012_log_entry_timestamp_index.xml"/>
+    <include file="liquibase/changelog/013_drop_models_parallel.xml"/>
 
 </databaseChangeLog>

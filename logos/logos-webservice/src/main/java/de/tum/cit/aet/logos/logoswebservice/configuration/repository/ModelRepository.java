@@ -12,7 +12,7 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
 
     @Query(value = """
         SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
-               m.weight_quality, m.tags, m.parallel, m.description,
+               m.weight_quality, m.tags, m.description,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
@@ -47,7 +47,7 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
             WHERE ak.user_id = :userId AND ak.is_active = true AND ak.use_custom_permissions = true
         )
         SELECT DISTINCT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
-               m.weight_quality, m.tags, m.parallel, m.description,
+               m.weight_quality, m.tags, m.description,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)

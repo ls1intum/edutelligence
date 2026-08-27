@@ -310,6 +310,11 @@ engines:
     #   extra_args: list           — arbitrary extra CLI flags passed verbatim to
     #     "vllm serve". Use for features not yet exposed as first-class fields.
 
+    # Profile-level keys (min_context_fraction, base_residency_mb, kv_budget_mb,
+    # ...) do NOT belong in model_overrides: they are not vLLM engine settings.
+    # If one slips in here it is auto-routed to the model profile registry with
+    # a warning; the documented home is an inline entry under
+    # logos.capabilities_models (see above).
     model_overrides:
       Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
         quantization: awq

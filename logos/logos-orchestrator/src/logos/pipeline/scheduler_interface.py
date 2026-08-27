@@ -75,7 +75,7 @@ class SchedulingRequest:
     request_id: str
     payload: Dict[str, Any]
     deployments: list[Deployment]
-    classified_models: Optional[List[Tuple[int, float, int, int]]] = None  # (model_id, weight, priority, parallel)
+    classified_models: Optional[List[Tuple[int, float, int]]] = None  # (model_id, weight, priority)
     timeout_s: Optional[float] = None
 
 

@@ -287,6 +287,21 @@ export class AiTools implements OnInit, OnDestroy {
   );
 
   /**
+   * Whether the three figures above rest on anything Logos reported.
+   *
+   * Two separate questions, because they stop being true at different times.
+   * The current_* pair describes lanes that are up right now, so it is empty
+   * whenever the model is not loaded — which is most of the time for a model
+   * nobody is using. context_window_overall comes from the model's own profile
+   * and survives that: the orchestrator keeps reporting it with no lane in
+   * sight. Tying the maximum to hasCurrentWindow would throw away the one
+   * number that is still known and print a fallback instead, which is how a
+   * 262,144-token model came to be shown as 32,768.
+   */
+  hasCurrentWindow = computed(() => this.contextCurrentMin() > 0);
+  hasOverallWindow = computed(() => this.contextOverall() > 0);
+
+  /**
    * The window to write into a config file that is only read at startup: the
    * widest this model is ever served with, or a conservative stand-in when
    * Logos reports nothing for it.
@@ -302,8 +317,6 @@ export class AiTools implements OnInit, OnDestroy {
 
   /** The stand-in above, for display when nothing is reported. */
   contextFallback = computed(() => (this.selected()?.provider_type !== 'cloud' ? 32768 : 128000));
-
-  hasReportedWindow = computed(() => this.contextCurrentMin() > 0);
 
   windowUnenforced = computed(() => {
     const name = (this.selected()?.model_name ?? '').toLowerCase();

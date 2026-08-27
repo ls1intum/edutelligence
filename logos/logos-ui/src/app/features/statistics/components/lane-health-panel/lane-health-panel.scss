@@ -125,6 +125,18 @@
   text-overflow: ellipsis;
 }
 
+// Sits at the end of the model line. Dimmer than the name, because it answers a
+// question asked second: which model, then how much room it has here.
+.lane-context {
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-300));
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  border-radius: 6px;
+}
+
 .lane-stats {
   display: flex;
   flex-direction: column;

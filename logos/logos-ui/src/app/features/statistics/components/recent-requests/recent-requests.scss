@@ -18,49 +18,15 @@
 
 // ── Toolbar (filters + pager, above the list) ────────────────────────────────
 
+// Only the pager lives here now — the team/requester filter moved up to the
+// page header, where it scopes every panel rather than this list alone.
 .rr-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px 12px;
   padding: 0 2px 10px;
-}
-
-.rr-filters {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.rr-filter {
-  min-width: 0;
-  max-width: 200px;
-}
-
-.rr-filter-clear {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  padding: 3px 8px;
-  font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-500));
-  background: transparent;
-  border: 1px solid rgb(var(--glass-stroke) / 0.2);
-  border-radius: 8px;
-  cursor: pointer;
-
-  .pi {
-    font-size: var(--font-size-2xs);
-  }
-
-  &:hover {
-    color: rgb(var(--color-typography-100));
-    background: rgb(var(--glass-fill) / var(--opacity-faint));
-  }
 }
 
 .rr-pager {
@@ -266,6 +232,19 @@
   .pi {
     font-size: var(--font-size-xs);
   }
+}
+
+// A running request's counts come from the orchestrator's in-flight view and
+// move between pushes. Marked so a number that is still climbing does not read
+// as the request's final tally.
+.rr-card__tokens--live {
+  color: rgb(var(--color-accent-cyan));
+}
+
+.rr-card__rate {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--color-typography-300));
 }
 
 // ── Badges ───────────────────────────────────────────────────────────────────

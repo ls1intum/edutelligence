@@ -529,9 +529,10 @@ class LogosNodeRuntimeRegistry:
                     accent=GREEN,
                 )
             )
-        # Sync announced capabilities to DB on session attach
-        if session.capabilities_models:
-            self._fire_capabilities_changed(ticket.provider_id, sorted(session.capabilities_models))
+        # Sync announced capabilities to DB on session attach. An empty list
+        # is a real state ("this worker serves nothing right now") — it must
+        # fire so stale model_provider links from earlier sessions get pruned.
+        self._fire_capabilities_changed(ticket.provider_id, sorted(session.capabilities_models))
         return session
 
     async def get_conflicting_session(

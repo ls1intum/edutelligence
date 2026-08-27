@@ -649,10 +649,10 @@
           <div class="context-cell">
             <span class="context-cell-label">Always available</span>
             <span class="context-cell-value">
-              @if (hasReportedWindow()) {
+              @if (hasCurrentWindow()) {
                 {{ contextCurrentMin() | number }}
               } @else {
-                unknown
+                not loaded
               }
             </span>
             <span class="context-cell-note">tokens you get whatever the load</span>
@@ -660,10 +660,10 @@
           <div class="context-cell">
             <span class="context-cell-label">Available now</span>
             <span class="context-cell-value">
-              @if (hasReportedWindow()) {
+              @if (hasCurrentWindow()) {
                 {{ contextCurrentMax() | number }}
               } @else {
-                unknown
+                not loaded
               }
             </span>
             <span class="context-cell-note">tokens Logos can give you at the moment</span>
@@ -671,7 +671,7 @@
           <div class="context-cell context-cell--accent">
             <span class="context-cell-label">Model maximum</span>
             <span class="context-cell-value">
-              @if (hasReportedWindow()) {
+              @if (hasOverallWindow()) {
                 {{ contextOverall() | number }}
               } @else {
                 {{ contextFallback() | number }}
@@ -694,8 +694,13 @@
             states the model maximum. Very long conversations may be turned down when
             capacity is tight; start a new one, or use Claude Code, which adjusts by itself.
           }
-          @if (!hasReportedWindow()) {
-            Logos reports no size for this model right now, so the figure above is a
+          @if (!hasCurrentWindow() && hasOverallWindow()) {
+            <strong>No worker is serving this model at the moment</strong>, which is why the
+            first two figures have no value yet — they only exist while a lane is up. Starting
+            a session tells Logos to bring one up, and it is sized against the maximum on the
+            right.
+          } @else if (!hasOverallWindow()) {
+            Logos reports no size for this model at all, so the figure above is a
             conservative estimate.
           }
         </p>

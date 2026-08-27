@@ -192,3 +192,133 @@ def test_responses_terminal_event_returns_eur_cost(monkeypatch):
 
     assert enriched_event["response"]["usage"]["cost"] == 0.0000025
     assert enriched_event["response"]["usage"]["cost_currency"] == "USD"
+
+
+# ── Anthropic Messages streams ───────────────────────────────────────────────
+# What Claude Code speaks, so every session set up through the AI-tools page
+# arrives in this shape. Usage is split across two events and neither is the
+# last one: message_start opens with the prompt size, message_delta settles the
+# figures, and message_stop closes the stream carrying nothing. Reading the
+# final chunk found message_stop and came away empty, so these requests were
+# logged with no tokens at all.
+
+
+def _anthropic_events(input_tokens: int = 14, output_tokens: int = 2) -> list[dict]:
+    """One real stream, captured from vLLM 0.27 through Logos."""
+    return [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "chatcmpl-8b4942c3bcdac4f3",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "Qwen/Qwen3.8-27B",
+                "usage": {"input_tokens": input_tokens, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "content_block": {"type": "text", "text": ""}, "index": 0},
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "OK"}, "index": 0},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        },
+        {"type": "message_stop"},
+    ]
+
+
+def test_messages_stream_keeps_usage_past_message_stop():
+    acc = _StreamingLogAccumulator()
+    _feed_sse(acc, *_anthropic_events())
+
+    usage = acc.usage()
+    assert usage["input_tokens"] == 14
+    assert usage["output_tokens"] == 2
+
+
+def test_messages_stream_accumulates_text():
+    acc = _StreamingLogAccumulator()
+    _feed_sse(acc, *_anthropic_events())
+
+    assert acc.full_text == "OK"
+
+
+def test_messages_stream_supplies_the_total_anthropic_omits():
+    """Anthropic sends no total — it is the sum, so it says it once. Logos
+    stores one row per token type and the statistics page reads total_tokens,
+    so a stream without it lands as zero tokens used."""
+    acc = _StreamingLogAccumulator()
+    _feed_sse(acc, *_anthropic_events(input_tokens=100, output_tokens=25))
+
+    assert acc.usage()["total_tokens"] == 125
+
+
+def test_messages_stream_usage_reaches_the_token_rows():
+    """End to end through the mapping that writes usage_tokens: Anthropic's
+    field names have to land as the canonical prompt/completion pair."""
+    acc = _StreamingLogAccumulator()
+    _feed_sse(acc, *_anthropic_events(input_tokens=14, output_tokens=2))
+
+    tokens = _usage_tokens_from_payload(acc.response_payload())
+
+    assert tokens["prompt_tokens"] == 14
+    assert tokens["completion_tokens"] == 2
+    assert tokens["total_tokens"] == 16
+
+
+def test_messages_delta_wins_over_message_start():
+    """message_start opens with output_tokens 0; the settled count arrives in
+    message_delta and must not be shadowed by the earlier event."""
+    acc = _StreamingLogAccumulator()
+    _feed_sse(acc, *_anthropic_events(input_tokens=14, output_tokens=99))
+
+    assert acc.usage()["output_tokens"] == 99
+
+
+def test_messages_stream_cut_off_early_keeps_what_it_had():
+    """A client that disconnects mid-stream never sends message_delta. The
+    prompt size from message_start is still real and worth recording."""
+    acc = _StreamingLogAccumulator()
+    events = _anthropic_events()[:3]  # message_start, block_start, one delta
+    for event in events:
+        acc.feed(f"data: {json.dumps(event)}\n\n".encode())
+    acc.finish()
+
+    usage = acc.usage()
+    assert usage["input_tokens"] == 14
+    assert usage["output_tokens"] == 0
+    assert acc.full_text == "OK"
+
+
+def test_messages_stream_survives_split_chunks():
+    """Network boundaries do not respect SSE boundaries — the usage event
+    arriving in two pieces must still be parsed."""
+    acc = _StreamingLogAccumulator()
+    blob = json.dumps(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 7, "output_tokens": 3},
+        }
+    )
+    line = f"data: {blob}\n\n"
+    acc.feed(line[:20].encode())
+    acc.feed(line[20:].encode())
+    acc.finish()
+
+    assert acc.usage()["output_tokens"] == 3
+
+
+def test_chat_completions_stream_is_untouched_by_the_messages_path():
+    """The two shapes share the parser; adding one must not disturb the other."""
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"id": "c1", "choices": [{"delta": {"content": "Hi"}}]},
+        {"id": "c1", "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
+    )
+
+    assert acc.usage() == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    assert acc.full_text == "Hi"

@@ -26,6 +26,7 @@ import de.tum.cit.aet.logos.logoswebservice.operations.service.EnqueueEventServi
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.VramService;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorLiveStreamClient;
 import jakarta.annotation.PreDestroy;
 
 @Component
@@ -34,6 +35,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(StatsV2WebSocketHandler.class);
     private static final int DEFAULT_TARGET_BUCKETS = 120;
     private static final int DEFAULT_WINDOW_DAYS = 30;
+    // The live push sends the newest page of the feed. Same size the unscoped
+    // convenience overload used, kept explicit now that the scoped call spells
+    // out every argument.
+    private static final int LATEST_REQUESTS_PUSH_SIZE = RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
 
 
     private static class SessionState {
@@ -53,6 +58,15 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile boolean deltaEnabled = true;
         volatile String cursorTs = null;
         volatile String cursorId = "";
+
+        // Who the page is looking at. Null means the whole platform, which is
+        // where every session starts. Applies to everything derived from
+        // requests — aggregates, the volume chart's events, the request feed —
+        // and to nothing else: VRAM, lanes and GPUs are properties of the
+        // hardware and belong to no team, so narrowing them would be meaningless
+        // rather than merely useless.
+        volatile Integer scopeUserId = null;
+        volatile Integer scopeTeamId = null;
 
         volatile String prevReqSig = "";
         volatile String prevVramMetaSig = "";
@@ -94,6 +108,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private final RequestLogService requestLogService;
     private final RequestLogStatsService statsService;
     private final EnqueueEventService enqueueService;
+    private final OrchestratorLiveStreamClient liveStreamClient;
     private final ObjectMapper objectMapper;
 
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
@@ -104,11 +119,13 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                                    RequestLogService requestLogService,
                                    RequestLogStatsService statsService,
                                    EnqueueEventService enqueueService,
+                                   OrchestratorLiveStreamClient liveStreamClient,
                                    ObjectMapper objectMapper) {
         this.vramService = vramService;
         this.requestLogService = requestLogService;
         this.statsService = statsService;
         this.enqueueService = enqueueService;
+        this.liveStreamClient = liveStreamClient;
         this.objectMapper = objectMapper;
         this.scheduler = Executors.newSingleThreadScheduledExecutor();
         this.scheduler.scheduleAtFixedRate(this::tick, 1, 1, TimeUnit.SECONDS);
@@ -148,6 +165,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             case "init" -> handleInit(session, state, msg);
             case "set_vram_day" -> handleSetVramDay(session, state, msg);
             case "set_timeline_range" -> handleSetTimelineRange(session, state, msg);
+            case "set_scope" -> handleSetScope(session, state, msg);
             case "ping" -> send(session, Map.of("type", "pong"));
         }
     }
@@ -162,6 +180,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
         Object tdObj = msg.get("timeline_deltas");
         state.deltaEnabled = tdObj == null || coerceBool(tdObj, true);
+
+        // Carried on init as well as through set_scope, so a reconnect restores
+        // the filter the page is showing instead of silently widening back to
+        // the whole platform under an unchanged pair of dropdowns.
+        applyScope(state, msg);
 
         Map<String, Object> tl = msg.get("timeline") instanceof Map<?,?> m
             ? (Map<String, Object>) m : Map.of();
@@ -180,6 +203,29 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         pushVramInit(session, state);
         pushRequests(session, state, true);
         state.initialized = true;
+    }
+
+    /**
+     * Narrow every request-derived push to one team and/or one requester.
+     *
+     * Both ids are cleared by sending null (or omitting them), which is the
+     * unfiltered view the session starts in. The reply is a full re-push rather
+     * than a delta: the client's event list and aggregates describe the old
+     * scope and there is no delta that turns them into the new one.
+     */
+    private void handleSetScope(WebSocketSession session, SessionState state, Map<String, Object> msg) {
+        applyScope(state, msg);
+        // The cursor points into the old scope's event stream; deltas resumed
+        // from it would skip everything the new scope should have seen.
+        state.cursorTs = state.timelineEnd;
+        state.cursorId = "";
+        pushTimelineInit(session, state);
+        pushRequests(session, state, true);
+    }
+
+    private static void applyScope(SessionState state, Map<String, Object> msg) {
+        state.scopeUserId = msg.get("user_id") instanceof Number n ? n.intValue() : null;
+        state.scopeTeamId = msg.get("team_id") instanceof Number n ? n.intValue() : null;
     }
 
     private void handleSetVramDay(WebSocketSession session, SessionState state, Map<String, Object> msg) {
@@ -304,11 +350,13 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private void pushTimelineInit(WebSocketSession session, SessionState state) {
         try {
             Map<String, Object> stats = statsService.getRequestLogStats(
-                state.timelineStart, state.timelineEnd, state.targetBuckets);
+                state.timelineStart, state.timelineEnd, state.targetBuckets,
+                state.scopeUserId, state.scopeTeamId);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n ? n.intValue() : 60;
 
             Map<String, Object> events = enqueueService.getInRange(
-                state.timelineStart, state.timelineEnd, 200_000);
+                state.timelineStart, state.timelineEnd, 200_000,
+                state.scopeUserId, state.scopeTeamId);
 
             Map<String, Object> payload = new LinkedHashMap<>(stats);
             payload.put("cursor",  Map.of("enqueue_ts", state.cursorTs != null ? state.cursorTs : "",
@@ -336,7 +384,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             if (state.timelineLive) state.timelineEnd = Instant.now().toString();
 
             Map<String, Object> stats = statsService.getRequestLogStats(
-                state.timelineStart, state.timelineEnd, state.targetBuckets);
+                state.timelineStart, state.timelineEnd, state.targetBuckets,
+                state.scopeUserId, state.scopeTeamId);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n
                 ? n.intValue() : state.bucketSeconds;
             send(session, Map.of("type", "stats", "payload", stats));
@@ -349,7 +398,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         try {
             String untilIso = Instant.now().toString();
             Map<String, Object> result = enqueueService.getDeltas(
-                state.cursorTs, state.cursorId, untilIso, 5000);
+                state.cursorTs, state.cursorId, untilIso, 5000,
+                state.scopeUserId, state.scopeTeamId);
 
             @SuppressWarnings("unchecked")
             var events = (java.util.List<?>) result.get("events");
@@ -388,7 +438,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             // would pin the list to the instant the range was set and no request
             // enqueued after page load would ever show up.
             String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
-            Map<String, Object> payload = requestLogService.getLatestRequests(state.timelineStart, end);
+            Map<String, Object> payload = requestLogService.getLatestRequests(
+                state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                null, null, LATEST_REQUESTS_PUSH_SIZE, false);
+            mergeLiveStreams(payload);
             String sig = requestsSig(payload);
             if (!sig.equals(state.prevReqSig)) {
                 // A request arrived, finished, or grew its usage — whatever the
@@ -401,6 +454,47 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             }
         } catch (Exception e) {
             log.warn("[ws/stats/v2] requests push error: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Fill in the token counts of the requests that are still streaming.
+     *
+     * Usage is written to the database once, when the request completes. Until
+     * then its row carries nothing, so a generation that runs for a minute sat
+     * in the feed as a blank line and then produced all its numbers at once.
+     * The orchestrator is the only process that sees the chunks go past, so the
+     * in-flight figures come from there.
+     *
+     * Only rows the database has nothing for are touched: a completed request's
+     * settled usage always wins over the live estimate behind it.
+     */
+    @SuppressWarnings("unchecked")
+    private void mergeLiveStreams(Map<String, Object> payload) {
+        var requests = (java.util.List<Map<String, Object>>) payload.get("requests");
+        if (requests == null || requests.isEmpty()) return;
+        // Only ask when something on this page could still be running. A feed of
+        // finished requests — the common case for any range but "now" — must not
+        // cost a call per push.
+        boolean anyUnfinished = requests.stream()
+            .anyMatch(r -> r.get("request_complete_ts") == null || r.get("total_tokens") == null);
+        if (!anyUnfinished) return;
+
+        Map<String, OrchestratorLiveStreamClient.LiveStream> live = liveStreamClient.getLiveStreams();
+        if (live.isEmpty()) return;
+
+        for (Map<String, Object> request : requests) {
+            if (!(request.get("request_id") instanceof String requestId)) continue;
+            var stream = live.get(requestId);
+            if (stream == null) continue;
+            if (request.get("total_tokens") != null) continue;  // already settled
+            request.put("prompt_tokens", stream.promptTokens());
+            request.put("completion_tokens", stream.completionTokens());
+            request.put("total_tokens", stream.promptTokens() + stream.completionTokens());
+            request.put("tokens_per_second", stream.tokensPerSecond());
+            // Says outright that these are the in-flight figures, so the page can
+            // present them as moving rather than final.
+            request.put("streaming", true);
         }
     }
 

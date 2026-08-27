@@ -92,7 +92,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         if not self._decision_log_path:
             return
 
-        cls_weights = {mid: w for mid, w, _, _ in original_candidates}
+        cls_weights = {mid: w for mid, w, _ in original_candidates}
         cls_top = max(original_candidates, key=lambda x: x[1])[0] if original_candidates else None
 
         candidates_log = []
@@ -215,7 +215,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
     def _compute_candidate_scores(
         self,
-        candidates: List[Tuple[int, float, int, int]],
+        candidates: List[Tuple[int, float, int]],
         deployments: list,
     ) -> list:
         """Build scored list with ETTFT annotations.
@@ -232,13 +232,13 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         # Apply weight overrides for controlled ablation experiments
         if self._weight_overrides:
-            candidates = [(mid, self._weight_overrides.get(mid, w), pint, par) for mid, w, pint, par in candidates]
+            candidates = [(mid, self._weight_overrides.get(mid, w), pint) for mid, w, pint in candidates]
 
         # Compute weight span across all (possibly overridden) weights
-        all_weights = [weight for _, weight, _, _ in candidates]
+        all_weights = [weight for _, weight, _ in candidates]
         weight_span = compute_weight_span(all_weights)
 
-        for model_id, weight, priority_int, parallel in candidates:
+        for model_id, weight, priority_int in candidates:
             # Multi-provider expansion: find ALL deployments for this model
             matching_deployments = [d for d in deployments if d["model_id"] == model_id]
             if not matching_deployments:
