@@ -515,6 +515,10 @@ class RequestPipeline:
             cold_start=cold_start,
         )
 
+    def discard_request(self, request_id: str, result_status: str) -> None:
+        """Close out a request whose terminal log row was written elsewhere."""
+        self._monitoring.discard(request_id, result_status)
+
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider statistics (e.g. rate limits) from response headers.

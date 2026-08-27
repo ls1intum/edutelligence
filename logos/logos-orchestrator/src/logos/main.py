@@ -1015,6 +1015,21 @@ def _build_live_local_provider_vram_payload(
     return payload
 
 
+def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
+    """Stop counting a request that ended without reaching ``record_complete``.
+
+    Metrics only — the caller persists the log row itself. Safe to call for a
+    request that was already settled, or one that never got as far as being
+    enqueued.
+    """
+    if not request_id or _pipeline is None:
+        return
+    try:
+        _pipeline.discard_request(request_id, result_status)
+    except Exception:  # noqa: BLE001 — monitoring must never break a request
+        logger.debug("Failed to discard in-flight state for %s", request_id, exc_info=True)
+
+
 def _record_log_failure(
     log_id: Optional[int],
     request_id: Optional[str],
@@ -1026,6 +1041,14 @@ def _record_log_failure(
     classification_stats: Optional[Dict[str, Any]] = None,
     scheduling_stats: Optional[Dict[str, Any]] = None,
 ) -> None:
+    # Close out the in-flight accounting first, and unconditionally: this is
+    # the common funnel for terminal failures that write the log row
+    # themselves (client disconnect, rate-limit and budget rejects), and
+    # none of them used to tell the recorder the request had ended. It also
+    # has to happen for requests without a log row — the `not log_id` return
+    # below is about persistence, not about whether the request finished.
+    _discard_in_flight(request_id, result_status)
+
     if not log_id:
         return
 

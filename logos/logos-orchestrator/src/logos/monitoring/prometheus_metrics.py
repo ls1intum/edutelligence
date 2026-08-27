@@ -22,7 +22,31 @@ REQUEST_DURATION_SECONDS = Histogram(
     "logos_request_duration_seconds",
     "End-to-end request duration from enqueue to completion",
     ["model", "provider", "status"],
-    buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
+    # `histogram_quantile` cannot report above the highest *finite* bucket:
+    # everything beyond it lands in +Inf and the quantile is pinned to that
+    # boundary. Topping out at 120s therefore reported every high percentile
+    # as exactly "2 minutes" — with 5% of production requests over 120s, p95
+    # sat on the edge and p99 (really ~300s) was clamped to 120s outright.
+    # The upper buckets now cover what a request can legitimately take: the
+    # queue wait alone is bounded at 1200s (LOGOS_TIMEOUT_S), and cold-load
+    # plus generation can add to that.
+    buckets=(
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0,
+        1200.0,
+        1800.0,
+        3600.0,
+    ),
     registry=registry,
 )
 

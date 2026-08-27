@@ -26,6 +26,58 @@ logger = logging.getLogger(__name__)
 # "unknown" is only the pre-selection fallback.
 _request_states: Dict[str, tuple[float, str, str]] = {}
 
+# Age past which a tracked request is assumed to be a bookkeeping leak rather
+# than a slow request. Deliberately far beyond anything legitimate: the queue
+# wait alone is bounded at 1200s and a cold load plus generation can add to
+# that, so an hour of headroom keeps the sweep from ever touching a live
+# request. Without a bound, one missed terminal path grows the map — and the
+# gauge derived from it — without limit.
+_STALE_REQUEST_AGE_S = 2 * 60 * 60
+
+# How often the opportunistic sweep may run. The recorder has no background
+# loop of its own, so it piggybacks on request arrivals.
+_STALE_SWEEP_INTERVAL_S = 60.0
+_last_stale_sweep = 0.0
+
+
+def _publish_in_flight() -> None:
+    """Publish the in-flight gauge from the tracked set.
+
+    The gauge used to be hand-maintained with paired ``inc()``/``dec()``
+    calls, which drifted in both directions: terminal paths that never
+    reached ``record_complete`` (a client disconnect, a rate-limit or budget
+    reject) left an increment behind forever, while a request that failed
+    classification completed without ever having been enqueued and
+    decremented one it never added. Deriving the value from the map it is
+    supposed to describe makes both impossible.
+    """
+    prom.REQUESTS_IN_FLIGHT.set(len(_request_states))
+
+
+def _sweep_stale_requests(now: float) -> None:
+    """Drop tracked requests too old to still be running.
+
+    A safety net, not the mechanism: terminal paths are expected to finalise
+    their own request. This only keeps a future missed path from growing the
+    map without bound and pinning the gauge to a number that never comes
+    down again.
+    """
+    global _last_stale_sweep
+    if now - _last_stale_sweep < _STALE_SWEEP_INTERVAL_S:
+        return
+    _last_stale_sweep = now
+
+    cutoff = now - _STALE_REQUEST_AGE_S
+    stale = [request_id for request_id, (start, _m, _p) in _request_states.items() if start < cutoff]
+    for request_id in stale:
+        _request_states.pop(request_id, None)
+    if stale:
+        logger.warning(
+            "Dropped %d request(s) tracked for more than %ds — a terminal path did not finalise them",
+            len(stale),
+            _STALE_REQUEST_AGE_S,
+        )
+
 
 def _resolve_label_names(model_id: Optional[int], provider_id: Optional[int]) -> tuple[str, str]:
     """Resolve the model/provider label values for completion metrics.
@@ -57,11 +109,13 @@ class MonitoringRecorder:
         timeout_s: Optional[int] = None,
     ) -> None:
         prom.REQUESTS_TOTAL.labels(status="enqueued").inc()
-        prom.REQUESTS_IN_FLIGHT.inc()
         if queue_depth is not None:
             prom.QUEUE_DEPTH.set(queue_depth)
         model, provider = _resolve_label_names(model_id, provider_id)
-        _request_states[request_id] = (time.monotonic(), model, provider)
+        now = time.monotonic()
+        _sweep_stale_requests(now)
+        _request_states[request_id] = (now, model, provider)
+        _publish_in_flight()
 
         payload = {
             "model_id": model_id,
@@ -121,6 +175,49 @@ class MonitoringRecorder:
                     payload[key] = value
         self._write(request_id, **payload)
 
+    def _settle(
+        self,
+        request_id: str,
+        result_status: ResultStatus | str,
+        cold_start: Optional[bool] = None,
+    ) -> str:
+        """Close out a request's metrics and return the status string.
+
+        Idempotent: a request that was already settled, or one that never
+        reached ``record_enqueue`` (a classification failure completes before
+        it is ever enqueued), contributes no duration observation and cannot
+        move the in-flight gauge.
+        """
+        status_value = result_status.value if isinstance(result_status, ResultStatus) else str(result_status)
+        prom.REQUESTS_TOTAL.labels(status=status_value).inc()
+
+        state = _request_states.pop(request_id, None)
+        _publish_in_flight()
+        if state is None:
+            return status_value
+
+        start, model, provider = state
+        prom.REQUEST_DURATION_SECONDS.labels(
+            model=model,
+            provider=provider,
+            status=status_value,
+        ).observe(time.monotonic() - start)
+
+        if cold_start:
+            prom.COLD_STARTS_TOTAL.labels(model=model, provider=provider).inc()
+        return status_value
+
+    def discard(self, request_id: str, result_status: ResultStatus | str) -> None:
+        """Finalise a request whose terminal state was persisted elsewhere.
+
+        Used by the failure paths that write the log row themselves — a
+        client disconnect, a rate-limit or budget reject. They used to leave
+        the request counted as in-flight forever; production was leaking
+        ~470 of them a day, which is what made the gauge climb without ever
+        coming back down.
+        """
+        self._settle(request_id, result_status)
+
     def record_complete(
         self,
         request_id: str,
@@ -128,30 +225,7 @@ class MonitoringRecorder:
         cold_start: Optional[bool] = None,
         error_message: Optional[str] = None,
     ) -> None:
-        status_value = result_status.value if isinstance(result_status, ResultStatus) else str(result_status)
-
-        prom.REQUESTS_TOTAL.labels(status=status_value).inc()
-        prom.REQUESTS_IN_FLIGHT.dec()
-
-        state = _request_states.pop(request_id, None)
-        if state is not None:
-            start, model, provider = state
-        else:
-            start, model, provider = None, "unknown", "unknown"
-
-        if start is not None:
-            duration = time.monotonic() - start
-            prom.REQUEST_DURATION_SECONDS.labels(
-                model=model,
-                provider=provider,
-                status=status_value,
-            ).observe(duration)
-
-        if cold_start:
-            prom.COLD_STARTS_TOTAL.labels(
-                model=model,
-                provider=provider,
-            ).inc()
+        status_value = self._settle(request_id, result_status, cold_start)
 
         payload = {
             "request_complete_ts": datetime.datetime.now(datetime.timezone.utc),

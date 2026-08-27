@@ -72,3 +72,80 @@ def test_the_closed_count_is_reported_verbatim(monkeypatch, rowcount):
     monkeypatch.setattr(main, "DBManager", lambda: db)
     main._close_orphaned_request_logs()
     assert db.calls == [main.ORPHANED_REQUEST_ERROR]
+
+
+# ---------------------------------------------------------------------------
+# `logos_requests_in_flight` (#790, first comment)
+#
+# The terminal failure paths that write their own log row — a client
+# disconnect, a rate-limit or budget reject — never told the recorder the
+# request had ended. `_record_log_failure` is the funnel they all pass
+# through, so that is where the in-flight accounting is closed out.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingPipeline:
+    def __init__(self):
+        self.discarded: list[tuple[str, str]] = []
+
+    def discard_request(self, request_id, result_status):
+        self.discarded.append((request_id, result_status))
+
+
+def test_a_failure_path_stops_counting_the_request_as_in_flight(monkeypatch):
+    pipeline = _RecordingPipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+    monkeypatch.setattr(main, "DBManager", lambda: _DB())
+
+    main._record_log_failure(None, "req-disconnected", "Client disconnected", result_status="error")
+
+    assert pipeline.discarded == [("req-disconnected", "error")]
+
+
+def test_the_request_is_released_even_without_a_log_row(monkeypatch):
+    """`log_id` is None whenever logging is off for the key. That decides
+    whether the row is persisted, not whether the request finished."""
+    pipeline = _RecordingPipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    main._record_log_failure(None, "req-unlogged", "boom")
+
+    assert pipeline.discarded == [("req-unlogged", "error")]
+
+
+def test_the_recorded_status_is_carried_through(monkeypatch):
+    pipeline = _RecordingPipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    main._record_log_failure(None, "req-slow", "Queue wait timeout", result_status="timeout")
+
+    assert pipeline.discarded == [("req-slow", "timeout")]
+
+
+def test_nothing_is_released_without_a_request_id(monkeypatch):
+    pipeline = _RecordingPipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    main._record_log_failure(None, None, "failed before a request id existed")
+
+    assert pipeline.discarded == []
+
+
+def test_a_recorder_failure_never_breaks_the_failure_path(monkeypatch):
+    """This runs while a request is already failing; it must not add a
+    second exception on top of the first."""
+
+    class _Broken:
+        def discard_request(self, request_id, result_status):
+            raise RuntimeError("monitoring is down")
+
+    monkeypatch.setattr(main, "_pipeline", _Broken(), raising=False)
+
+    main._record_log_failure(None, "req-1", "boom")  # must not raise
+
+
+def test_no_pipeline_yet_is_not_an_error(monkeypatch):
+    """Requests can fail before the pipeline is constructed at startup."""
+    monkeypatch.setattr(main, "_pipeline", None, raising=False)
+
+    main._record_log_failure(None, "req-1", "boom")  # must not raise
