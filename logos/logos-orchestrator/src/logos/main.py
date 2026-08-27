@@ -3799,6 +3799,7 @@ async def _execute_resource_mode(
         deployments=deployments,
         skip_laura=skip_laura,
         request_path=request_path,
+        api_key_id=auth.api_key_id,
     )
 
     # Process through classification and scheduling
@@ -4918,6 +4919,9 @@ async def scheduler_state(request: Request):
         "queue_total": _pipeline.scheduler.get_total_queue_depth(),
         "logosnode": _logosnode_facade.debug_state(),
     }
+    prefix_router = getattr(_pipeline.scheduler, "_prefix_router", None)
+    if prefix_router is not None:
+        payload["prefix_affinity"] = prefix_router.debug_state()
     return JSONResponse(content=payload, status_code=200)
 
 

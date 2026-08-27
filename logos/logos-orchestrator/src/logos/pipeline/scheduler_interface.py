@@ -77,6 +77,10 @@ class SchedulingRequest:
     deployments: list[Deployment]
     classified_models: Optional[List[Tuple[int, float, int]]] = None  # (model_id, weight, priority)
     timeout_s: Optional[float] = None
+    # Chained prefix-block hashes identifying the request's "stream"
+    # (api key + actual prompt prefix), deepest block first. Used for
+    # prefix-cache-aware placement; empty/None means "route as before".
+    affinity_keys: Optional[List[str]] = None
 
 
 class SchedulerInterface(ABC):

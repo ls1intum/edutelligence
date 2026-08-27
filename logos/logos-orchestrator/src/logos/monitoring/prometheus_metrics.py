@@ -74,6 +74,21 @@ SCHEDULING_DECISIONS_TOTAL = Counter(
     registry=registry,
 )
 
+ADMISSION_HOLDS_TOTAL = Counter(
+    "logos_admission_holds_total",
+    "Requests held at orchestrator level instead of being forwarded to a worker",
+    # worker_capacity, backend_queue, kv_cache_pressure, engine_at_capacity
+    ["reason"],
+    registry=registry,
+)
+
+PREFIX_AFFINITY_TOTAL = Counter(
+    "logos_prefix_affinity_total",
+    "Prefix-cache affinity lookups and how the scheduler acted on them",
+    ["result"],  # hit, miss, honored, diverted
+    registry=registry,
+)
+
 # ---------------------------------------------------------------------------
 # Demand tracker
 # ---------------------------------------------------------------------------

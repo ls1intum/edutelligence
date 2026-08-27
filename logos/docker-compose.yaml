@@ -82,6 +82,16 @@ services:
       # model to load (can exceed 120s), so it timed out before being served.
       LOGOSNODE_INFER_TIMEOUT_SECONDS: "${LOGOSNODE_INFER_TIMEOUT_SECONDS:-600}"
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "${LOGOSNODE_STREAM_TIMEOUT_SECONDS:-600}"
+      # Forwarding gate: how much engine-side backlog / KV pressure the
+      # orchestrator tolerates before it keeps a request in its own queue
+      # instead of committing it to a worker. Empty = code defaults (0 / 90%).
+      LOGOS_BACKEND_QUEUE_THRESHOLD: "${LOGOS_BACKEND_QUEUE_THRESHOLD:-}"
+      LOGOS_KV_CACHE_PRESSURE_PERCENT: "${LOGOS_KV_CACHE_PRESSURE_PERCENT:-}"
+      # Prefix-cache-aware placement: keep one stream (api key + prompt prefix)
+      # on the worker that already holds its KV blocks.
+      LOGOS_PREFIX_AFFINITY_ENABLED: "${LOGOS_PREFIX_AFFINITY_ENABLED:-true}"
+      LOGOS_PREFIX_AFFINITY_BONUS_FRACTION: "${LOGOS_PREFIX_AFFINITY_BONUS_FRACTION:-}"
+      LOGOS_PREFIX_AFFINITY_TTL_S: "${LOGOS_PREFIX_AFFINITY_TTL_S:-}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"

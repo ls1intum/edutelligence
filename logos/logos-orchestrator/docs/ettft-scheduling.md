@@ -192,7 +192,66 @@ Request → Classification Layer → ECCS Scheduler → Provider
 
 4. **Queue Manager** (`priority_queue.py`): Per-(model_id, provider_id) priority queues with starvation prevention (priority aging: LOW→NORMAL after 10s, NORMAL→HIGH after 30s).
 
-## 10. Configuration
+## 10. Orchestrator-Level Admission Control
+
+Scoring decides *where* a request should go; admission decides *whether it should leave the orchestrator at all*. The two are separate on purpose.
+
+A request that has been forwarded to a worker is committed. It sits in the engine's own queue, where the orchestrator can no longer:
+
+1. **hand it back** — a worker asked to drain for a restart must first finish everything already forwarded, so wait-mode takes longer the deeper the engine queue is;
+2. **reorder it** — a high-priority request arriving later cannot jump ahead of what is already inside the engine;
+3. **re-route it** — a peer worker that frees a slot first cannot take over;
+4. **place it well** — the prefix-affinity decision below is fixed at forward time and cannot be revisited.
+
+None of that is lost while the request waits in the orchestrator queue. So the orchestrator forwards only what a worker can *start*, and keeps the rest.
+
+### Signals
+
+Admission reads the live lane signals the worker reports (the same ones §4 uses for tier estimation):
+
+| Signal | Source | Gate |
+|--------|--------|------|
+| `queue_waiting` | vLLM `num_requests_waiting` | Anything already waiting inside the engine → hold (`LOGOS_BACKEND_QUEUE_THRESHOLD`) |
+| `gpu_cache_usage_percent` | vLLM `gpu_cache_usage_perc` | ≥ 90% → hold: vLLM starts preempting and recomputing, which also evicts the prefix-cache blocks §11 depends on |
+| `requests_running` vs `num_parallel` | vLLM `num_requests_running` vs the worker-reported KV-budget concurrency | Lane full → hold |
+
+The unit of the decision is `AdmissionDecision(can_admit, headroom, reason)`. `headroom` is the number of requests the engine could begin right now, summed over the model's routable lanes; a busy lane never masks an idle sibling. When a worker reports nothing usable (older worker, lane still starting), `headroom` is `None` and the decision falls back to the parallel-capacity gate alone — admission is never stricter than the signals justify.
+
+Two call sites use it:
+
+- **`try_reserve_capacity`** — the arrival path. A refusal sends the request to the orchestrator queue instead of the worker.
+- **`reevaluate_model_queues`** — the batch dispatcher that runs after a lane loads or wakes. Its batch size is `min(parallel_capacity − active, headroom)`, so a wake event cannot drain the whole queue onto one worker in a single pass.
+
+The release path (slot transfer on completion) is deliberately *not* gated: a completing request hands its slot straight to the next waiter, which is the mechanism that keeps the engine busy while admission holds new arrivals back.
+
+## 11. Prefix-Cache-Aware Placement
+
+With the same model deployed on several workers, two warm workers tie on corrected score and the tie-break is random. For a coding agent that is the worst possible placement: every turn re-sends a prompt the *previous* worker already has in its KV cache, and a random landing throws that cache away.
+
+### Stream identity
+
+A stream is neither a user nor an API key — one key can drive many agent loops at once. Identity is `(api_key_id, actual request prefix)`, hashed into a chain of fixed-size blocks the way an engine hashes its own prefix-cache blocks:
+
+```
+block₁ = H(api_key_id ‖ text[0:B])
+blockᵢ = H(blockᵢ₋₁  ‖ text[(i−1)B : iB])
+```
+
+The prompt is serialized append-only (preamble fields, then one record per message), so turn *n+1* extends turn *n*'s string rather than rewriting it and the leading block hashes survive. Only whole blocks are hashed — the trailing partial block is dropped, exactly as an engine drops its own. Lookup walks the blocks deepest-first, so the longest shared prefix wins: two conversations under one key that share only a system prompt match on the early blocks and separate as soon as their first user turns differ.
+
+The map (`PrefixAffinityRouter`) is soft state — an in-memory TTL/LRU table. Losing it costs one round of cache misses.
+
+### Scoring
+
+A hit does not pin the request. It adds a bounded bonus to the corrected score:
+
+```
+bonus = weight_span × CORRECTION_STRENGTH × PREFIX_AFFINITY_BONUS_FRACTION
+```
+
+At the default `0.25` that is worth roughly 15s of expected wait (penalty saturates at 60s). The stream stays on the familiar worker unless a peer is *meaningfully* faster — the "if cheaply possible" the routing is meant to honour. The bonus applies only to `WARM` candidates, so affinity never wakes a sleeping worker or triggers a cold load just to stay put, and only logosnode placements are recorded: cloud upstreams route internally.
+
+## 12. Configuration
 
 | Parameter | Default | Location | Effect |
 |-----------|---------|----------|--------|
@@ -202,4 +261,19 @@ Request → Classification Layer → ECCS Scheduler → Provider
 | `OVERHEAD_COLD_S` | `45.0` | `ettft_estimator.py` | Cold load time estimate |
 | `OVERHEAD_SLEEPING_S` | `2.5` | `ettft_estimator.py` | Sleep→wake transition estimate |
 | `OVERHEAD_RECLAIM_S` | `8.0` | `ettft_estimator.py` | VRAM eviction overhead |
+| `LOGOS_BACKEND_QUEUE_THRESHOLD` | `0` | env | Engine-side `queue_waiting` tolerated before holding at orchestrator level |
+| `LOGOS_KV_CACHE_PRESSURE_PERCENT` | `90` | env | KV-cache utilisation at which a vLLM lane stops being a forwarding target |
+| `LOGOS_PREFIX_AFFINITY_ENABLED` | `true` | env | Master switch; off restores random tie-break placement |
+| `LOGOS_PREFIX_AFFINITY_BONUS_FRACTION` | `0.25` | env | Affinity bonus as a fraction of the maximum ETTFT penalty |
+| `LOGOS_PREFIX_AFFINITY_TTL_S` | `900` | env | How long a (stream → worker) mapping stays valid |
+| `LOGOS_PREFIX_AFFINITY_BLOCK_CHARS` | `1024` | env | Prefix block granularity (~256 tokens) |
+| `LOGOS_PREFIX_AFFINITY_MAX_BLOCKS` | `32` | env | Blocks tracked per stream |
+| `LOGOS_PREFIX_AFFINITY_MAX_ENTRIES` | `20000` | env | LRU cap on the affinity table |
+
+### Metrics
+
+| Metric | Labels | Meaning |
+|--------|--------|---------|
+| `logos_admission_holds_total` | `reason` = `worker_capacity` \| `backend_queue` \| `kv_cache_pressure` \| `engine_at_capacity` | Requests kept at orchestrator level instead of forwarded |
+| `logos_prefix_affinity_total` | `result` = `hit` \| `miss` \| `honored` \| `diverted` | Affinity lookups and whether the scheduler followed them |
 | `DEFAULT_GENERATION_TIME_S` | `3.0` | `ettft_estimator.py` | Per-request generation time for queue wait estimation |

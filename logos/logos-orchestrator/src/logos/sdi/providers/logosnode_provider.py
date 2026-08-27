@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -16,8 +17,16 @@ from logos.logosnode_registry import (
     _lane_metric_float,
     _lane_ttft_p95_seconds,
 )
+from logos.monitoring import prometheus_metrics as prom
 
-from ..models import LaneSchedulerSignals, ModelProfile, ModelSchedulerView, ModelStatus, OllamaCapacity
+from ..models import (
+    AdmissionDecision,
+    LaneSchedulerSignals,
+    ModelProfile,
+    ModelSchedulerView,
+    ModelStatus,
+    OllamaCapacity,
+)
 
 try:
     from logos.queue import PriorityQueueManager
@@ -25,6 +34,13 @@ except ImportError:  # pragma: no cover
     PriorityQueueManager = None
 
 logger = logging.getLogger(__name__)
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
 
 
 class LogosNodeDataProvider:
@@ -790,12 +806,108 @@ class LogosNodeDataProvider:
             current_active = self._model_active.get(model_id, 0)
             self._model_active[model_id] = max(0, current_active - 1)
 
-    # Maximum backend queue_waiting before we refuse new reservations.
-    # Prevents piling requests on an already-backlogged vLLM process.
-    # Raised from 2→8: vLLM's internal scheduler (PagedAttention) handles
-    # queuing efficiently; we only need to back off when the engine is
-    # genuinely saturated.
-    BACKEND_QUEUE_PRESSURE_THRESHOLD = 8
+    # Maximum backend queue_waiting tolerated before we refuse to forward.
+    # A request that only lands in the engine's own waiting queue is worse
+    # off there than in the orchestrator queue: it cannot be re-prioritised,
+    # re-scheduled onto a peer worker, or cancelled when the worker wants to
+    # drain for a restart — and it defeats prefix-aware routing, because the
+    # placement is already fixed.  Default 0 means "only forward what the
+    # engine can start now"; raise it via LOGOS_BACKEND_QUEUE_THRESHOLD to
+    # trade those properties back for a deeper engine-side pipeline.
+    BACKEND_QUEUE_PRESSURE_THRESHOLD = _env_float("LOGOS_BACKEND_QUEUE_THRESHOLD", 0.0)
+
+    # KV-cache utilisation (percent) at which a vLLM lane stops being a good
+    # forwarding target.  Past this point vLLM preempts and recomputes
+    # running sequences, which both stalls them and evicts the prefix-cache
+    # blocks that make sticky routing worthwhile.
+    KV_CACHE_PRESSURE_PERCENT = _env_float("LOGOS_KV_CACHE_PRESSURE_PERCENT", 90.0)
+
+    def evaluate_admission(self, model_id: int) -> AdmissionDecision:
+        """Can this worker *start* another request for ``model_id`` right now?
+
+        Walks the model's routable lanes in the latest runtime snapshot and
+        applies the live vLLM signals: ``queue_waiting`` (engine backlog),
+        ``gpu_cache_usage_percent`` (KV pressure) and ``requests_running``
+        against the lane's worker-reported ``num_parallel``.
+
+        A model is admissible as soon as *one* lane can take the request —
+        a busy lane must not mask an idle sibling.  When the worker reports
+        no usable lane signals the decision is ``can_admit=True`` with
+        ``headroom=None`` so the caller falls back to the capacity gate.
+        """
+        lanes = self._routable_lanes(model_id)
+        if lanes is None:
+            return AdmissionDecision(can_admit=True, headroom=None, reason=None)
+
+        headroom = 0
+        reasons: List[str] = []
+        for lane in lanes:
+            lane_headroom, reason = self._lane_admission(lane)
+            if reason is not None:
+                reasons.append(reason)
+                continue
+            headroom += lane_headroom
+
+        if headroom > 0:
+            return AdmissionDecision(can_admit=True, headroom=headroom, reason=None)
+        if reasons:
+            return AdmissionDecision(can_admit=False, headroom=0, reason=reasons[0])
+        # Lanes exist but none reported a usable limit — no opinion.
+        return AdmissionDecision(can_admit=True, headroom=None, reason=None)
+
+    def _routable_lanes(self, model_id: int) -> Optional[List[Dict[str, Any]]]:
+        """Lanes serving ``model_id`` that are not stopped/errored.
+
+        Returns ``None`` when there is nothing to judge on (no registry, no
+        snapshot, unknown model), which callers read as "no opinion".
+        """
+        if self._runtime_registry is None:
+            return None
+        model_name = self._model_id_to_name.get(model_id)
+        if not model_name:
+            return None
+        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        if not snap:
+            return None
+        raw_lanes = (snap.get("runtime") or {}).get("lanes") or []
+        if not isinstance(raw_lanes, list):
+            return None
+        lanes = [
+            lane
+            for lane in raw_lanes
+            if isinstance(lane, dict)
+            and lane.get("model") == model_name
+            and lane.get("runtime_state") not in {"stopped", "error"}
+        ]
+        return lanes or None
+
+    def _lane_admission(self, lane: Dict[str, Any]) -> tuple[int, Optional[str]]:
+        """Free execution slots on one lane, or the reason it is unusable."""
+        backend = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+
+        if _lane_metric_float(backend.get("queue_waiting")) > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
+            return 0, "backend_queue"
+
+        if bool(lane.get("vllm")):
+            cache_usage = backend.get("gpu_cache_usage_percent")
+            if cache_usage is None:
+                cache_usage = backend.get("gpu_cache_usage_perc")
+            if cache_usage is not None and _lane_metric_float(cache_usage) >= self.KV_CACHE_PRESSURE_PERCENT:
+                return 0, "kv_cache_pressure"
+
+        try:
+            limit = int(lane.get("num_parallel") or 0)
+        except (TypeError, ValueError):
+            limit = 0
+        if limit <= 0:
+            # Lane has not reported its concurrency yet — no per-lane opinion.
+            return 0, None
+
+        running = int(_lane_metric_float(backend.get("requests_running")))
+        free = limit - running
+        if free <= 0:
+            return 0, "engine_at_capacity"
+        return free, None
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
         with self._lock:
@@ -809,20 +921,25 @@ class LogosNodeDataProvider:
                 return False
             current_active = self._model_active.get(model_id, 0)
             max_capacity, _source = self.get_parallel_capacity(model_id)
-            if current_active < max_capacity:
-                # Check backend queue pressure before accepting
-                if self._backend_queue_exceeds_threshold(model_id):
-                    logger.debug(
-                        "Refusing reservation for model %d: backend queue pressure exceeds threshold",
-                        model_id,
-                    )
-                    return False
-                if request_id in self._active_request_ids:
-                    return True
-                self._active_request_ids[request_id] = model_id
-                self._model_active[model_id] = current_active + 1
+            if current_active >= max_capacity:
+                prom.ADMISSION_HOLDS_TOTAL.labels(reason="worker_capacity").inc()
+                return False
+
+            admission = self.evaluate_admission(model_id)
+            if not admission.can_admit:
+                logger.debug(
+                    "Refusing reservation for model %d: %s — holding at orchestrator level",
+                    model_id,
+                    admission.reason,
+                )
+                prom.ADMISSION_HOLDS_TOTAL.labels(reason=admission.reason or "unknown").inc()
+                return False
+
+            if request_id in self._active_request_ids:
                 return True
-            return False
+            self._active_request_ids[request_id] = model_id
+            self._model_active[model_id] = current_active + 1
+            return True
 
     def _is_model_lane_ready(self, model_id: int) -> bool:
         """Check if at least one lane for this model is in a ready state (loaded/running)."""
@@ -855,31 +972,6 @@ class LogosNodeDataProvider:
                 return True
         return False
 
-    def _backend_queue_exceeds_threshold(self, model_id: int) -> bool:
-        """Check if the backend (vLLM) queue_waiting exceeds the threshold."""
-        if self._runtime_registry is None:
-            return False
-        model_name = self._model_id_to_name.get(model_id)
-        if not model_name:
-            return False
-        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
-        if not snap:
-            return False
-        lanes = (snap.get("runtime") or {}).get("lanes") or []
-        for lane in lanes:
-            if not isinstance(lane, dict):
-                continue
-            if lane.get("model") != model_name:
-                continue
-            if lane.get("runtime_state") in {"stopped", "error"}:
-                continue
-            backend = lane.get("backend_metrics")
-            if isinstance(backend, dict):
-                queue_waiting = float(backend.get("queue_waiting") or 0)
-                if queue_waiting > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
-                    return True
-        return False
-
     def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:
         with self._lock:
             if request_id in self._active_request_ids:
@@ -907,6 +999,7 @@ class LogosNodeDataProvider:
                     "queue_depth": queue_state.total,
                     "loaded": model_name in self._loaded_models,
                     "scheduler_signals": recent_signals,
+                    "admission": self.evaluate_admission(model_id).to_dict(),
                 }
             return models
 

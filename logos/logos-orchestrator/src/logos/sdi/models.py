@@ -208,6 +208,34 @@ class LaneSchedulerSignals:
         }
 
 
+@dataclass(frozen=True)
+class AdmissionDecision:
+    """Whether a worker can *start* another request for a model right now.
+
+    Distinct from :meth:`get_parallel_capacity`, which answers "how many
+    requests may this worker hold in total". Admission answers the narrower
+    question the forwarding gate actually needs: is there a lane that would
+    begin generating immediately, or would the request only land in the
+    engine's own waiting queue?
+
+    ``headroom`` is the number of requests the engine could start at once,
+    summed over the model's routable lanes. ``None`` means the worker has
+    not reported enough to tell (no runtime snapshot, no lane signals) — in
+    that case callers fall back to the capacity gate alone.
+    """
+
+    can_admit: bool
+    headroom: Optional[int] = None
+    reason: Optional[str] = None  # backend_queue | kv_cache_pressure | engine_at_capacity
+
+    def to_dict(self) -> dict:
+        return {
+            "can_admit": self.can_admit,
+            "headroom": self.headroom,
+            "reason": self.reason,
+        }
+
+
 # Warmth ordering for runtime_state — lower index = warmer.
 _STATE_WARMTH_ORDER = [
     "running",
