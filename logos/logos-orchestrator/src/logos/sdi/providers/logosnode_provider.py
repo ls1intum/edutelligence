@@ -65,6 +65,14 @@ class LogosNodeDataProvider:
         self._last_refresh = 0.0
         self._model_active: Dict[int, int] = {}
         self._active_request_ids: Dict[str, int] = {}
+        # Requests forwarded for a model since the current runtime snapshot
+        # was taken, and the marker identifying that snapshot. The engine
+        # signals are sampled, so without this every arrival inside one
+        # sampling window reads the same "nothing waiting" and a burst goes
+        # through the gate untouched — measured on dev: 60 concurrent
+        # requests, zero holds. Counting our own sends closes that window.
+        self._forwarded_since_snapshot: Dict[int, int] = {}
+        self._snapshot_marker: Optional[str] = None
         self._lock = threading.RLock()
         self._provider_config = self._load_provider_config()
 
@@ -842,9 +850,12 @@ class LogosNodeDataProvider:
         no usable lane signals the decision is ``can_admit=True`` with
         ``batch_limit=None`` so the caller falls back to the capacity gate.
         """
-        lanes = self._routable_lanes(model_id)
+        snapshot = self._peek_snapshot()
+        lanes = self._routable_lanes(model_id, snapshot)
         if lanes is None:
             return AdmissionDecision(can_admit=True, batch_limit=None, reason=None)
+
+        self._reset_forward_budget_on_new_snapshot(snapshot)
 
         batch_limit = 0
         reasons: List[str] = []
@@ -856,13 +867,38 @@ class LogosNodeDataProvider:
             batch_limit += lane_batch
 
         if batch_limit > 0:
-            return AdmissionDecision(can_admit=True, batch_limit=batch_limit, reason=None)
+            # Spend the step down by what we have already sent against this
+            # snapshot. Until a fresher one arrives we have no evidence those
+            # requests were absorbed, so they count against the budget.
+            remaining = batch_limit - self._forwarded_since_snapshot.get(model_id, 0)
+            if remaining > 0:
+                return AdmissionDecision(can_admit=True, batch_limit=remaining, reason=None)
+            return AdmissionDecision(can_admit=False, batch_limit=0, reason="awaiting_signal")
         if reasons:
             return AdmissionDecision(can_admit=False, batch_limit=0, reason=reasons[0])
         # Lanes exist but none reported anything usable — no opinion.
         return AdmissionDecision(can_admit=True, batch_limit=None, reason=None)
 
-    def _routable_lanes(self, model_id: int) -> Optional[List[Dict[str, Any]]]:
+    def _peek_snapshot(self) -> Optional[Dict[str, Any]]:
+        if self._runtime_registry is None:
+            return None
+        return self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+
+    def _reset_forward_budget_on_new_snapshot(self, snapshot: Optional[Dict[str, Any]]) -> None:
+        """Forget what we sent once the worker has reported back.
+
+        The new snapshot already accounts for those requests — in
+        ``requests_running`` if the engine started them, in ``queue_waiting``
+        if it did not. Either way the measurement supersedes our estimate.
+        """
+        marker = str((snapshot or {}).get("last_heartbeat") or "")
+        if marker != self._snapshot_marker:
+            self._snapshot_marker = marker
+            self._forwarded_since_snapshot.clear()
+
+    def _routable_lanes(
+        self, model_id: int, snapshot: Optional[Dict[str, Any]] = None
+    ) -> Optional[List[Dict[str, Any]]]:
         """Lanes serving ``model_id`` that are not stopped/errored.
 
         Returns ``None`` when there is nothing to judge on (no registry, no
@@ -873,7 +909,7 @@ class LogosNodeDataProvider:
         model_name = self._model_id_to_name.get(model_id)
         if not model_name:
             return None
-        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+        snap = snapshot if snapshot is not None else self._peek_snapshot()
         if not snap:
             return None
         raw_lanes = (snap.get("runtime") or {}).get("lanes") or []
@@ -968,6 +1004,7 @@ class LogosNodeDataProvider:
                 return True
             self._active_request_ids[request_id] = model_id
             self._model_active[model_id] = current_active + 1
+            self._forwarded_since_snapshot[model_id] = self._forwarded_since_snapshot.get(model_id, 0) + 1
             return True
 
     def _is_model_lane_ready(self, model_id: int) -> bool:

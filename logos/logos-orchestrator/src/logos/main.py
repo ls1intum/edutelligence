@@ -2511,6 +2511,9 @@ async def start_pipeline():
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
     )
+    # Every worker report restores the forwarding gate's budget, so it is
+    # also the moment to reconsider requests being held for it.
+    _logosnode_registry.set_on_runtime_updated(scheduler.on_worker_report)
     _context_resolver = ContextResolver(
         logosnode_registry=_logosnode_registry,
         lane_preparer=_capacity_planner,

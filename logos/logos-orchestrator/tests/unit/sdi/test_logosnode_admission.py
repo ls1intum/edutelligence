@@ -46,15 +46,25 @@ def _lane(
     }
 
 
-def _provider(monkeypatch, lanes, *, with_registry=True, provider_id=13, model_name="m", config=None):
-    class _FakeRegistry:
-        @staticmethod
-        def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
-            return {"runtime": {"lanes": lanes}}
+class _FakeRegistry:
+    """A worker report the test can advance, the way a heartbeat would."""
 
-        @staticmethod
-        def is_provider_online(provider_id: int) -> bool:  # noqa: ARG004
-            return True
+    def __init__(self, lanes):
+        self.lanes = lanes
+        self.heartbeat = 0
+
+    def new_report(self):
+        """Stand in for the next status message arriving from the worker."""
+        self.heartbeat += 1
+
+    def peek_runtime_snapshot(self, provider_id: int):  # noqa: ARG002
+        return {"runtime": {"lanes": self.lanes}, "last_heartbeat": str(self.heartbeat)}
+
+    def is_provider_online(self, provider_id: int) -> bool:  # noqa: ARG002
+        return True
+
+
+def _provider(monkeypatch, lanes, *, with_registry=True, provider_id=13, model_name="m", config=None, model_names=None):
 
     monkeypatch.setattr(
         "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
@@ -66,9 +76,10 @@ def _provider(monkeypatch, lanes, *, with_registry=True, provider_id=13, model_n
     )
 
     facade = LogosNodeSchedulingDataFacade(
-        PriorityQueueManager(), runtime_registry=_FakeRegistry() if with_registry else None
+        PriorityQueueManager(), runtime_registry=_FakeRegistry(lanes) if with_registry else None
     )
-    facade.register_model(1, "logosnode", "http://fake", model_name, 65536, provider_id=provider_id)
+    for model_id, name in (model_names or {1: model_name}).items():
+        facade.register_model(model_id, "logosnode", "http://fake", name, 65536, provider_id=provider_id)
     return facade._providers[provider_id]
 
 
@@ -289,3 +300,73 @@ def test_the_local_ledger_bounds_what_the_sampled_gate_lets_through(monkeypatch)
     # The snapshot never changes — every call sees an idle-looking engine.
     assert [provider.try_reserve_capacity(1, f"r{i}") for i in range(5)] == [True, True, True, False, False]
     assert provider.get_active_count(1) == 3
+
+
+# ---------------------------------------------------------------------------
+# The between-snapshot forward budget
+#
+# The engine signals are sampled. Every request arriving inside one sampling
+# window reads the same "nothing waiting", so a burst passes the gate
+# untouched — measured on logos-dev: 60 concurrent requests, zero holds. The
+# orchestrator therefore counts what it has sent since the last report and
+# spends the step down by it, restoring the budget when the worker reports
+# back. Measured feedback latency on dev: 0.21-1.11s, median ~0.9s.
+# ---------------------------------------------------------------------------
+
+
+def _registry_of(provider):
+    return provider._runtime_registry
+
+
+def test_a_burst_cannot_outrun_the_signal(monkeypatch):
+    """Without the budget all of these pass: they all read the same snapshot."""
+    provider = _provider(monkeypatch, [_lane(num_parallel=4)])
+    granted = [provider.try_reserve_capacity(1, f"r{i}") for i in range(10)]
+    assert granted == [True] * 4 + [False] * 6
+
+
+def test_the_hold_says_it_is_waiting_for_the_signal(monkeypatch):
+    provider = _provider(monkeypatch, [_lane(num_parallel=1)])
+    provider.try_reserve_capacity(1, "r0")
+    decision = provider.evaluate_admission(1)
+    assert decision.can_admit is False
+    assert decision.reason == "awaiting_signal"
+
+
+def test_the_next_worker_report_restores_the_budget(monkeypatch):
+    """This is what keeps the ramp moving: each report is worth another step,
+    and reports arrive within about a second of a request being taken up."""
+    provider = _provider(monkeypatch, [_lane(num_parallel=2)])
+    assert [provider.try_reserve_capacity(1, f"a{i}") for i in range(3)] == [True, True, False]
+
+    _registry_of(provider).new_report()
+    assert [provider.try_reserve_capacity(1, f"b{i}") for i in range(3)] == [True, True, False]
+    assert provider.get_active_count(1) == 4
+
+
+def test_the_budget_shrinks_as_the_cache_fills(monkeypatch):
+    """Approaching saturation, each round admits fewer — the step is the
+    guaranteed concurrency scaled by the free KV fraction."""
+    roomy = _provider(monkeypatch, [_lane(num_parallel=8, gpu_cache_usage_percent=0.0)])
+    tight = _provider(monkeypatch, [_lane(num_parallel=8, gpu_cache_usage_percent=75.0)])
+    assert roomy.evaluate_admission(1).batch_limit == 8
+    assert tight.evaluate_admission(1).batch_limit == 2
+
+
+def test_a_worker_reporting_nothing_usable_is_not_budgeted(monkeypatch):
+    """No signals means no evidence to spend — fall back to the ledger
+    rather than inventing a limit."""
+    provider = _provider(monkeypatch, [], with_registry=False)
+    assert [provider.try_reserve_capacity(1, f"r{i}") for i in range(5)] == [True] * 5
+
+
+def test_the_budget_is_tracked_per_model(monkeypatch):
+    """Two models on one worker must not spend each other's step."""
+    provider = _provider(
+        monkeypatch,
+        [_lane("m", num_parallel=1, lane_id="a"), _lane("other", num_parallel=1, lane_id="b")],
+        model_names={1: "m", 2: "other"},
+    )
+    assert provider.try_reserve_capacity(1, "r1") is True
+    assert provider.try_reserve_capacity(1, "r2") is False
+    assert provider.try_reserve_capacity(2, "r3") is True

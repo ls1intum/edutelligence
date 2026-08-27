@@ -140,11 +140,16 @@ def test_reserve_capacity_enforces_the_configured_ledger_limit(monkeypatch):
     assert provider.get_active_count(1) == 2
 
 
-def test_a_vllm_lane_is_not_serialised_by_a_low_reported_concurrency(monkeypatch):
+def test_the_ledger_ceiling_does_not_follow_a_low_reported_concurrency(monkeypatch):
     """Regression for the 5-8x throttle: the exact production shape, where
-    the lane reports 1 and the engine happily runs many."""
+    the lane reports 1 and the engine happily runs 8.
+
+    Concerns the ledger only. What paces those 8 out is the between-snapshot
+    forward budget, which releases on each worker report — see
+    `test_logosnode_admission.py`.
+    """
     provider = _provider(monkeypatch, [_lane("m", 1)])
-    assert [provider.try_reserve_capacity(1, f"r{i}") for i in range(8)] == [True] * 8
+    assert provider.get_parallel_capacity(1)[0] >= 8
 
 
 def test_reserve_capacity_refuses_on_backend_queue_pressure(monkeypatch):

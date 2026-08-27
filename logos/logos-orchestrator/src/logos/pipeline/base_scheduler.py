@@ -282,6 +282,19 @@ class BaseScheduler(SchedulerInterface):
                     exc_info=False,
                 )
 
+    def on_worker_report(self, provider_id: int) -> None:
+        """A worker's status landed — reconsider anything held against the old one.
+
+        The forwarding gate spends a per-report budget (see
+        ``AdmissionDecision``), so a fresh report is what restores it. Without
+        this the budget would only be re-tested when something completes, and
+        on a ramp from idle nothing has completed yet — the held requests
+        would sit in the queue while the lane had room. Measured on dev, a
+        report follows a forwarded request within ~0.9s, so this paces the
+        ramp rather than stalling it.
+        """
+        self.reevaluate_model_queues(f"provider-{provider_id}")
+
     def reevaluate_model_queues(self, model_name: str) -> None:
         """Reevaluate queued requests for a model after state change (load/wake).
 

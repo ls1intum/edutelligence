@@ -360,9 +360,27 @@ class LogosNodeRuntimeRegistry:
         # orchestrator uses this to react to terminal session events
         # without polling. Signature: (provider_id, event_dict) -> None
         self._event_subscribers: list[Callable[[int, dict[str, Any]], None]] = []
+        # Called after every worker status is absorbed. The scheduler uses it
+        # to reconsider requests it is holding: the forwarding gate spends a
+        # per-snapshot budget, so a fresh report is what restores it, and
+        # without a wake-up here a held request would wait for the next
+        # completion instead — which on a ramp from idle has not happened yet.
+        self._on_runtime_updated: Callable[[int], None] | None = None
         # In-flight stream cancellations. Held only so the loop keeps a strong
         # reference to fire-and-forget tasks until they complete.
         self._cancellation_tasks: set[asyncio.Task] = set()
+
+    def set_on_runtime_updated(self, callback: Callable[[int], None] | None) -> None:
+        """Register the post-status hook. See ``_on_runtime_updated``."""
+        self._on_runtime_updated = callback
+
+    def _fire_runtime_updated(self, provider_id: int) -> None:
+        if self._on_runtime_updated is None:
+            return
+        try:
+            self._on_runtime_updated(provider_id)
+        except Exception:  # noqa: BLE001 — a status must never fail on this
+            logger.exception("on_runtime_updated callback failed for provider=%s", provider_id)
 
     def _fire_capabilities_changed(self, provider_id: int, model_names: list[str]) -> None:
         if self._on_capabilities_changed is not None:
@@ -760,6 +778,10 @@ class LogosNodeRuntimeRegistry:
                     accent=CYAN,
                 )
             )
+
+        # Fresh measurements are in: whatever the scheduler was holding back
+        # against the previous ones can be reconsidered now.
+        self._fire_runtime_updated(provider_id)
 
     async def record_runtime_sample(self, provider_id: int, sample: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)

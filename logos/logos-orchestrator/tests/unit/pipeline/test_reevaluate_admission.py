@@ -115,3 +115,59 @@ def test_facade_that_cannot_answer_is_not_treated_as_a_block():
     facade, done = _dispatch(4, None, queued=10)
     assert facade.admission_calls == 1
     assert sum(done) == 4
+
+
+# ---------------------------------------------------------------------------
+# A worker report is what un-holds a paced request
+#
+# The forwarding gate spends a per-report budget, so a fresh report restores
+# it. Nothing else would: the only other trigger is a completion, and on a
+# ramp from idle nothing has completed yet.
+# ---------------------------------------------------------------------------
+
+
+def test_a_worker_report_releases_what_the_budget_was_holding():
+    facade = _Facade(256, AdmissionDecision(can_admit=True, batch_limit=2))
+    scheduler = ClassificationCorrectingScheduler(
+        queue_manager=PriorityQueueManager(),
+        logosnode_facade=facade,
+        azure_facade=MagicMock(),
+    )
+    scheduler.update_model_registry({(MODEL_ID, PROVIDER_ID): "logosnode"})
+
+    loop = asyncio.new_event_loop()
+    try:
+        futures = [loop.create_future() for _ in range(6)]
+        for future in futures:
+            scheduler._queue_mgr.enqueue(future, MODEL_ID, PROVIDER_ID, Priority.NORMAL)
+
+        scheduler.on_worker_report(PROVIDER_ID)
+        loop.run_until_complete(asyncio.sleep(0))
+        assert sum(f.done() for f in futures) == 2, "one report is worth one step"
+
+        scheduler.on_worker_report(PROVIDER_ID)
+        loop.run_until_complete(asyncio.sleep(0))
+        assert sum(f.done() for f in futures) == 4, "the next report is worth another"
+    finally:
+        loop.close()
+
+
+def test_a_report_from_a_backlogged_worker_releases_nothing():
+    facade = _Facade(256, AdmissionDecision(can_admit=False, batch_limit=0, reason="backend_queue"))
+    scheduler = ClassificationCorrectingScheduler(
+        queue_manager=PriorityQueueManager(),
+        logosnode_facade=facade,
+        azure_facade=MagicMock(),
+    )
+    scheduler.update_model_registry({(MODEL_ID, PROVIDER_ID): "logosnode"})
+
+    loop = asyncio.new_event_loop()
+    try:
+        futures = [loop.create_future() for _ in range(3)]
+        for future in futures:
+            scheduler._queue_mgr.enqueue(future, MODEL_ID, PROVIDER_ID, Priority.NORMAL)
+        scheduler.on_worker_report(PROVIDER_ID)
+        loop.run_until_complete(asyncio.sleep(0))
+        assert not any(f.done() for f in futures)
+    finally:
+        loop.close()
