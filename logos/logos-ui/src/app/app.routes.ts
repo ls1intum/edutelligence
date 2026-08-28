@@ -27,6 +27,7 @@ export const routes: Routes = [
       { path: 'team-management', title: 'Teams · Logos',           data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/team-management/team-management').then(m => m.TeamManagement) },
       { path: 'teams/:id',       title: 'Team · Logos',            data: { roles: ['logos_admin', 'app_admin'] },   canActivate: [roleGuard], loadComponent: () => import('./features/team-detail/team-detail').then(m => m.TeamDetail) },
       { path: 'my-workspace',    title: 'My Workspace · Logos',    canActivate: [hasKeysGuard], loadComponent: () => import('./features/my-workspace/my-workspace').then(m => m.MyWorkspace) },
+      { path: 'passkeys',        title: 'Passkeys · Logos',        loadComponent: () => import('./features/passkeys/passkeys').then(m => m.Passkeys) },
       { path: 'ai-tools',        title: 'AI Tools · Logos',         canActivate: [hasKeysGuard], loadComponent: () => import('./features/ai-tools/ai-tools').then(m => m.AiTools) },
       { path: 'open-code',       redirectTo: 'ai-tools', pathMatch: 'full' },
       { path: 'claude-code',     redirectTo: 'ai-tools', pathMatch: 'full' },

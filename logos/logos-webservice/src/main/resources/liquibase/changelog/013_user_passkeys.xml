@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- WebAuthn credentials (passkeys) managed by the webservice (#694):
+         a user may register several passkeys, each stored as the base64url
+         credential id plus the COSE public key taken from the registration
+         attestation. One credential id per user (the authenticator generates
+         it), deleted with the user. -->
+    <changeSet id="013-user-passkeys" author="tobiaswasner">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="user_passkeys"/></not>
+        </preConditions>
+        <createTable tableName="user_passkeys">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="user_id" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="credential_id" type="VARCHAR(512)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="public_key" type="BYTEA">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sign_count" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="label" type="VARCHAR(255)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addForeignKeyConstraint baseTableName="user_passkeys" baseColumnNames="user_id"
+                                 referencedTableName="users" referencedColumnNames="id"
+                                 constraintName="fk_user_passkeys_user" onDelete="CASCADE"/>
+        <addUniqueConstraint tableName="user_passkeys" columnNames="user_id, credential_id"
+                             constraintName="uq_user_passkeys_user_credential"/>
+        <createIndex tableName="user_passkeys" indexName="idx_user_passkeys_user_id">
+            <column name="user_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

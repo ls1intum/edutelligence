@@ -41,6 +41,43 @@ These live on the Keycloak side, not in this repo:
   UI through `/info`); the compose default is `aet.cit.tum.de` for prod. When
   blank (dev), `passkey.ts` falls back to the current hostname (e.g. `localhost`).
 
+## Managing passkeys (#694)
+
+Beyond the in-page login above, users can **manage their passkeys** — list,
+add multiple, delete — from the **Passkeys** page (`/passkeys`, Personal
+section) in the Logos UI. Passkey storage and verification live in the
+webservice, which acts as a WebAuthn relying party for registration:
+
+- `GET /me/passkeys` — list the caller's passkeys (label, credential id,
+  creation date; the public key is never exposed).
+- `POST /me/passkeys/options` — server-issued WebAuthn registration options:
+  a single-use 5-minute challenge bound to the user, the relying party
+  (id from `logos.auth.passkey.rp-id`, falling back to the request host; name
+  from `logos.auth.passkey.rp-name`, default "Logos"), the user entity,
+  `residentKey` + `userVerification` required, and the existing credentials
+  as `excludeCredentials` (so adding is always a *new* passkey).
+- `POST /me/passkeys` — submit the ceremony result (`credentialId`,
+  `clientDataJSON`, `attestationObject`, the issued `challenge`, a label). The
+  webservice verifies the registration per WebAuthn Level 2 §7.1: challenge
+  match (and that it was issued to the caller), `clientDataJSON.origin` equal
+  to the request `Origin`, `rpIdHash`, UP/UV flags, credential id match, a
+  supported COSE key (ES256 or RS256) and the attestation statement
+  (`none`, `packed` incl. self-attestation and x5c, `fido-u2f`). Duplicate
+  credentials are rejected with 409.
+- `DELETE /me/passkeys/{id}` — delete one of the caller's passkeys (404 if
+  unknown, 403 if it belongs to someone else).
+
+Passkeys are stored in the `user_passkeys` table (one row per credential,
+deleted with the user).
+
+**Division of labour with the Keycloak provider:** the in-page *login* above
+still goes through the Keycloak custom passkey provider, which is external to
+this repo. Passkeys registered via the Logos UI are stored and verified by the
+webservice instead; wiring those credentials into the *login* ceremony
+(requirement for signing in with a webservice-registered passkey) needs the
+Keycloak-side provider to be able to verify assertions against
+webservice-held public keys — a follow-up.
+
 ## Notes / status
 
 - WebAuthn needs a secure context. `localhost` counts as secure for dev; all

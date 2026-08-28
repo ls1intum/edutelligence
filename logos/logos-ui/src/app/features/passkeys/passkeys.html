@@ -1,0 +1,74 @@
+<div class="passkeys">
+
+  <h1 class="page-title">Passkeys</h1>
+  <p class="page-subtitle">Manage the passkeys you use to sign in to Logos.</p>
+
+  <div class="toolbar">
+    @if (supported()) {
+      <button type="button" class="btn-primary" [disabled]="adding()" (click)="addPasskey()">
+        @if (adding()) {
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        } @else {
+          <i class="pi pi-plus" aria-hidden="true"></i>
+        }
+        Add passkey
+      </button>
+    }
+  </div>
+
+  @if (!supported()) {
+    <app-error-message variant="banner"
+      message="This browser does not support passkeys. Use a recent version of Chrome, Edge, Safari or Firefox on a secure (HTTPS) connection." />
+  }
+
+  @if (addError(); as msg) {
+    <app-error-message variant="banner" [message]="msg" />
+  }
+
+  @if (loadError()) {
+    <app-error-message variant="banner" message="Failed to load your passkeys, please refresh." />
+  }
+
+  @if (loading()) {
+    <div class="loading-state">
+      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+    </div>
+  }
+
+  @if (!loading() && !loadError() && passkeys().length === 0) {
+    <p class="empty-state">No passkeys yet. Add one to sign in without a password.</p>
+  }
+
+  @if (!loading() && !loadError() && passkeys().length > 0) {
+    <div class="passkey-list">
+      @for (passkey of passkeys(); track passkey.id) {
+        <div class="passkey-row">
+          <app-icon-tile label="P" [size]="36" />
+          <div class="passkey-info">
+            <span class="passkey-label">{{ passkey.label || 'Unnamed device' }}</span>
+            <span class="passkey-meta">Added {{ formatCreatedAt(passkey.created_at) }}</span>
+          </div>
+          <button class="btn-remove" type="button" [attr.aria-label]="'Remove ' + (passkey.label || 'passkey')" (click)="requestDelete(passkey)">
+            <i class="pi pi-trash" aria-hidden="true"></i> Remove
+          </button>
+        </div>
+      }
+    </div>
+  }
+
+</div>
+
+<app-modal-confirm
+  [visible]="deleteTarget() !== null"
+  (visibleChange)="$event || closeDeleteModal()"
+  [title]="'Remove passkey \'' + (deleteTarget()?.label ?? 'Unnamed device') + '\'?'"
+  message="You will no longer be able to sign in with this passkey. Other passkeys of yours are not affected."
+  icon="pi-trash"
+  confirmLabel="Remove"
+  [loading]="deleteLoading()"
+  (confirmed)="confirmDelete()"
+>
+  @if (deleteError()) {
+    <app-error-message modal-error message="Failed to remove the passkey, please try again." />
+  }
+</app-modal-confirm>

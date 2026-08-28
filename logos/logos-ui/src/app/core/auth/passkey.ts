@@ -8,12 +8,14 @@
 const CEREMONY_TIMEOUT_MS = 60_000;
 
 export function isPasskeySupported(): boolean {
-  return (
+  // isSecureContext is a boolean in browsers but `undefined` in some test
+  // environments, so coerce to keep the declared return type true.
+  return Boolean(
     typeof window !== 'undefined' &&
     window.isSecureContext &&
     typeof window.PublicKeyCredential !== 'undefined' &&
     typeof navigator !== 'undefined' &&
-    typeof navigator.credentials !== 'undefined'
+    typeof navigator.credentials !== 'undefined',
   );
 }
 
@@ -72,16 +74,6 @@ export function getDeviceName(): string {
     : /Chrome/.test(ua) ? 'Chrome'
     : /Safari/.test(ua) ? 'Safari' : 'Browser';
   return `${platform} - ${browser}`;
-}
-
-function jwtSubject(accessToken: string): string | undefined {
-  try {
-    const payload = accessToken.split('.')[1];
-    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-    return (JSON.parse(json) as { sub?: string }).sub;
-  } catch {
-    return undefined;
-  }
 }
 
 async function requestChallenge(issuer: string, clientId: string): Promise<string> {
@@ -242,27 +234,58 @@ function codeFromSilentIframe(authUrl: string, redirectUri: string, state: strin
   });
 }
 
-/** Registers a new passkey for the currently logged-in user. */
-export async function registerPasskey(
-  issuer: string, clientId: string, accessToken: string,
-  rpId: string = defaultRpId(), rpName = 'Logos',
-): Promise<void> {
+/**
+ * PublicKeyCredentialCreationOptions as served by the webservice
+ * (`POST /me/passkeys/options`, #694) — the server picks the RP, user id and
+ * challenge, so the ceremony below stays free of local configuration.
+ */
+export interface PasskeyCreationOptions {
+  challenge: string;
+  rp: { id?: string; name: string };
+  user: { id: string; name: string; displayName: string };
+  pubKeyCredParams: { type: 'public-key'; alg: number }[];
+  authenticatorSelection?: {
+    residentKey?: 'discouraged' | 'preferred' | 'required';
+    userVerification?: 'discouraged' | 'preferred' | 'required';
+  };
+  timeout?: number;
+  attestation?: 'none' | 'indirect' | 'direct';
+  excludeCredentials?: { type: 'public-key'; id: string }[];
+}
+
+/** Raw registration response parts (base64url, unpadded) the webservice expects. */
+export interface PasskeyRegistrationResponse {
+  credentialId: string;
+  clientDataJSON: string;
+  attestationObject: string;
+}
+
+/**
+ * Runs the WebAuthn registration ceremony for server-provided options and
+ * returns the raw response parts. The caller sends them (plus the challenge)
+ * to the webservice, which verifies and stores the credential.
+ */
+export async function createPasskeyCredential(
+  options: PasskeyCreationOptions,
+): Promise<PasskeyRegistrationResponse> {
   if (!isPasskeySupported()) throw new Error('This browser does not support passkeys.');
-  const sub = jwtSubject(accessToken);
-  if (!sub) throw new Error('Cannot register a passkey: access token has no subject.');
-  const challenge = await requestChallenge(issuer, clientId);
   const credential = await navigator.credentials.create({
     publicKey: {
-      challenge: fromBase64Url(challenge) as BufferSource,
-      rp: { name: rpName, id: rpId },
+      challenge: fromBase64Url(options.challenge) as BufferSource,
+      rp: { name: options.rp?.name ?? 'Logos', id: options.rp?.id || defaultRpId() },
       user: {
-        id: new TextEncoder().encode(sub) as BufferSource,
-        name: getDeviceName(),
-        displayName: getDeviceName(),
+        id: fromBase64Url(options.user.id) as BufferSource,
+        name: options.user.name,
+        displayName: options.user.displayName,
       },
-      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
-      timeout: CEREMONY_TIMEOUT_MS,
+      pubKeyCredParams: options.pubKeyCredParams,
+      authenticatorSelection: options.authenticatorSelection,
+      timeout: options.timeout ?? CEREMONY_TIMEOUT_MS,
+      attestation: options.attestation,
+      excludeCredentials: options.excludeCredentials?.map((c) => ({
+        type: c.type,
+        id: fromBase64Url(c.id) as BufferSource,
+      })),
     },
   });
   if (!(credential instanceof PublicKeyCredential)) throw new Error('No passkey credential was returned.');
@@ -270,16 +293,9 @@ export async function registerPasskey(
   if (!(response instanceof AuthenticatorAttestationResponse)) {
     throw new Error('Unexpected passkey registration response.');
   }
-  const saveRes = await fetch(passkeyEndpoint(issuer, clientId, 'save'), {
-    method: 'POST', credentials: 'include',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({
-      credentialId: toBase64Url(credential.rawId),
-      clientDataJSON: toBase64Url(response.clientDataJSON),
-      attestationObject: toBase64Url(response.attestationObject),
-      challenge,
-      label: getDeviceName(),
-    }),
-  });
-  if (!saveRes.ok) throw new Error(`Passkey registration rejected (${saveRes.status})`);
+  return {
+    credentialId: toBase64Url(credential.rawId),
+    clientDataJSON: toBase64Url(response.clientDataJSON),
+    attestationObject: toBase64Url(response.attestationObject),
+  };
 }

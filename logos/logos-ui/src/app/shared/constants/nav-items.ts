@@ -17,6 +17,7 @@ export const MENU_ITEMS: MenuItem[] = [
   { label: 'Teams',      path: '/team-management', piIcon: 'sitemap',        group: 'management', roles: ADMIN_AND_ABOVE },
   // Personal (all roles)
   { label: 'My Workspace', path: '/my-workspace',  piIcon: 'objects-column', group: 'personal',   roles: ALL_ROLES },
+  { label: 'Passkeys',    path: '/passkeys',       piIcon: 'key',            group: 'personal',   roles: ALL_ROLES },
   { label: 'AI Tools',    path: '/ai-tools',       piIcon: 'code',           group: 'personal',   roles: ALL_ROLES },
 ];
 
