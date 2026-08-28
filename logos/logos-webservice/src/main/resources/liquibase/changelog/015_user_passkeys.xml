@@ -10,7 +10,7 @@
          credential id plus the COSE public key taken from the registration
          attestation. One credential id per user (the authenticator generates
          it), deleted with the user. -->
-    <changeSet id="013-user-passkeys" author="tobiaswasner">
+    <changeSet id="015-user-passkeys" author="tobiaswasner">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="user_passkeys"/></not>
         </preConditions>
