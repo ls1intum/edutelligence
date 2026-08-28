@@ -15,14 +15,16 @@ import logging
 import os
 import random
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
+from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
 from logos.timeouts import global_timeout_s
 
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
+    CORRECTION_STRENGTH,
     DEFAULT_GENERATION_TIME_S,
     OVERHEAD_COLD_S,
     EttftEstimate,
@@ -33,9 +35,18 @@ from .ettft_estimator import (
     estimate_ettft_cloud,
     estimate_ettft_local,
 )
+from .prefix_affinity import PrefixAffinityRouter
 from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
+
+# How much a prefix-cache hit is worth, as a fraction of the maximum ETTFT
+# penalty (weight_span × CORRECTION_STRENGTH).  0.25 makes stickiness worth
+# roughly 15s of expected wait: the familiar worker keeps the stream unless
+# a peer is meaningfully faster, which is the "if cheaply possible" the
+# routing is supposed to honour.  A policy weight in the same family as
+# CORRECTION_STRENGTH, and treated the same way — a constant, not a knob.
+PREFIX_AFFINITY_BONUS_FRACTION = 0.25
 
 
 class ClassificationCorrectingScheduler(BaseScheduler):
@@ -56,6 +67,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         model_registry=None,
         ettft_enabled: bool = True,
         on_capacity_needed=None,
+        prefix_router: Optional[PrefixAffinityRouter] = None,
     ):
         super().__init__(
             queue_manager,
@@ -65,6 +77,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             on_capacity_needed,
         )
         self._ettft_enabled = ettft_enabled
+        self._prefix_router = prefix_router if prefix_router is not None else PrefixAffinityRouter()
 
         # Decision logging (JSON-lines): set ECCS_DECISION_LOG=/path/to/log.jsonl
         self._decision_log_path = os.environ.get("ECCS_DECISION_LOG")
@@ -145,6 +158,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         5. Azure candidates: accept if not UNAVAILABLE
         6. If none immediately available: queue on best logosnode candidate
         """
+        affinity = self._resolve_affinity(request)
         deployments = request.deployments
         if request.required_provider_id is not None:
             deployments = [
@@ -154,12 +168,14 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         scored = self._compute_candidate_scores(
             request.classified_models or [],
             deployments,
+            affinity,
         )
 
         # Try immediate selection
         best = self._try_immediate_select(scored, request.request_id)
         if best is not None:
             model_id, provider_id, provider_type, score, priority_int, ettft = best
+            self._record_affinity(request, model_id, provider_id, provider_type, affinity)
             self._log_decision(request.request_id, scored, request.classified_models or [], best, False)
             result = self._create_result(
                 model_id,
@@ -217,17 +233,80 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             logosnode_candidate,
             True,
         )
-        return await self._queue_and_wait(logosnode_candidate, request)
+        result = await self._queue_and_wait(logosnode_candidate, request)
+        if result is not None:
+            self._record_affinity(request, result.model_id, result.provider_id, result.provider_type, affinity)
+        return result
+
+    # ------------------------------------------------------------------
+    # Prefix-cache-aware placement
+    # ------------------------------------------------------------------
+
+    def _resolve_affinity(self, request: SchedulingRequest) -> Dict[int, int]:
+        """Map each candidate model to the worker that last served this stream.
+
+        One lookup per candidate model, keyed on the request's prefix blocks.
+        An empty map means the request is either unrecognised or affinity is
+        disabled — scoring then behaves exactly as before.
+        """
+        keys = request.affinity_keys
+        if not keys or not self._prefix_router.enabled:
+            return {}
+
+        affinity: Dict[int, int] = {}
+        for model_id in {mid for mid, _w, _p in request.classified_models or []}:
+            provider_id = self._prefix_router.lookup(model_id, keys)
+            if provider_id is not None:
+                affinity[model_id] = provider_id
+
+        prom.PREFIX_AFFINITY_TOTAL.labels(result="hit" if affinity else "miss").inc()
+        return affinity
+
+    def _record_affinity(
+        self,
+        request: SchedulingRequest,
+        model_id: Optional[int],
+        provider_id: Optional[int],
+        provider_type: Optional[str],
+        affinity: Dict[int, int],
+    ) -> None:
+        """Remember where this stream was served so the next turn can follow.
+
+        Only logosnode placements are recorded: cloud upstreams do their own
+        routing, so pinning them buys nothing.
+        """
+        keys = request.affinity_keys
+        if not keys or provider_type != "logosnode" or model_id is None or provider_id is None:
+            return
+
+        previous = affinity.get(model_id)
+        if previous is not None:
+            prom.PREFIX_AFFINITY_TOTAL.labels(result="honored" if previous == provider_id else "diverted").inc()
+            if previous != provider_id:
+                logger.info(
+                    "Prefix affinity diverted for request %s: stream was on worker=%s, "
+                    "served by worker=%s (peer scored better even with the affinity bonus)",
+                    request.request_id,
+                    self._logosnode.get_provider_name(previous) or previous,
+                    self._logosnode.get_provider_name(provider_id) or provider_id,
+                )
+        self._prefix_router.record(model_id, keys, provider_id)
 
     def _compute_candidate_scores(
         self,
         candidates: List[Tuple[int, float, int]],
         deployments: list,
+        affinity: Optional[Dict[int, int]] = None,
     ) -> list:
         """Build scored list with ETTFT annotations.
 
         Expands each (model_id, weight) across ALL matching deployments,
         producing one scored entry per (model_id, provider_id) pair.
+
+        ``affinity`` maps model_id → the worker that last served this
+        request's prefix. A warm candidate on that worker gets a bounded
+        bonus so the stream stays put; the bonus is small enough that a
+        meaningfully faster peer still wins.
 
         Returns list of (model_id, provider_id, provider_type,
                          corrected_score, priority_int, ettft)
@@ -235,6 +314,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         """
         scored = []
         unavailable_fallbacks = []
+        affinity = affinity or {}
 
         # Apply weight overrides for controlled ablation experiments
         if self._weight_overrides:
@@ -243,6 +323,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         # Compute weight span across all (possibly overridden) weights
         all_weights = [weight for _, weight, _ in candidates]
         weight_span = compute_weight_span(all_weights)
+        affinity_bonus = weight_span * CORRECTION_STRENGTH * PREFIX_AFFINITY_BONUS_FRACTION
 
         for model_id, weight, priority_int in candidates:
             # Multi-provider expansion: find ALL deployments for this model
@@ -310,6 +391,19 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     ettft.expected_wait_s if self._ettft_enabled else 0.0,
                     weight_span,
                 )
+
+                # Prefix-cache stickiness: only for a warm lane on the worker
+                # that already holds this stream's KV blocks. Restricting it
+                # to WARM keeps affinity from waking a sleeping worker or
+                # forcing a cold load just to stay on the familiar one.
+                if affinity.get(model_id) == provider_id and ettft.tier == ReadinessTier.WARM:
+                    corrected += affinity_bonus
+                    logger.debug(
+                        "Prefix affinity bonus %.2f for model=%s worker=%s",
+                        affinity_bonus,
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                    )
 
                 scored.append(
                     (
@@ -412,7 +506,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             # All lanes on this provider for reclaim context
             all_provider_lanes = None
             try:
-                all_provider_lanes = self._logosnode.get_all_lane_signals(provider_id)
+                all_provider_lanes = self._logosnode.get_all_provider_lane_signals(provider_id)
             except (KeyError, Exception):
                 pass
 
@@ -733,13 +827,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                             provider_id=dispatched_pid,
                             priority=priority.name.lower(),
                         )
-                    # slot_transferred=True means a completing request kept its
-                    # slot for us (release path) — don't double-count.
-                    # slot_transferred=False means fresh dispatch from
-                    # reevaluate_model_queues — must increment active count.
+                    # Every dispatch out of the queue is a fresh one now that
+                    # a completing request no longer hands its slot to a
+                    # specific waiter, so the active count always grows here.
                     self._logosnode.on_request_begin_processing(
                         request.request_id,
-                        increment_active=not result.slot_transferred,
+                        increment_active=True,
                         provider_id=dispatched_pid,
                     )
                 except KeyError:

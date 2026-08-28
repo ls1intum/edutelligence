@@ -109,7 +109,7 @@ class MockLogosNodeFacade:
     def get_provider_name(self, provider_id):
         return f"worker-{provider_id}"
 
-    def get_all_lane_signals(self, provider_id):
+    def get_all_provider_lane_signals(self, provider_id):
         # No sibling-lane visibility needed for these tests.
         raise KeyError(provider_id)
 

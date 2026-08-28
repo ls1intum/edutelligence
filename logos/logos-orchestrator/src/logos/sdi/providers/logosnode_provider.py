@@ -16,8 +16,16 @@ from logos.logosnode_registry import (
     _lane_metric_float,
     _lane_ttft_p95_seconds,
 )
+from logos.monitoring import prometheus_metrics as prom
 
-from ..models import LaneSchedulerSignals, ModelProfile, ModelSchedulerView, ModelStatus, OllamaCapacity
+from ..models import (
+    AdmissionDecision,
+    LaneSchedulerSignals,
+    ModelProfile,
+    ModelSchedulerView,
+    ModelStatus,
+    OllamaCapacity,
+)
 
 try:
     from logos.queue import PriorityQueueManager
@@ -57,6 +65,14 @@ class LogosNodeDataProvider:
         self._last_refresh = 0.0
         self._model_active: Dict[int, int] = {}
         self._active_request_ids: Dict[str, int] = {}
+        # Requests forwarded for a model since the current runtime snapshot
+        # was taken, and the marker identifying that snapshot. The engine
+        # signals are sampled, so without this every arrival inside one
+        # sampling window reads the same "nothing waiting" and a burst goes
+        # through the gate untouched — measured on dev: 60 concurrent
+        # requests, zero holds. Counting our own sends closes that window.
+        self._forwarded_since_snapshot: Dict[int, int] = {}
+        self._snapshot_marker: Optional[str] = None
         self._lock = threading.RLock()
         self._provider_config = self._load_provider_config()
 
@@ -350,15 +366,22 @@ class LogosNodeDataProvider:
 
             matched_lanes += 1
             is_vllm = bool(lane.get("vllm"))
-            capacity_hint = lane.get("num_parallel")
-            if is_vllm and not capacity_hint:
-                # vLLM uses continuous batching.  The worker reports the
-                # engine's own max concurrency (KV-budget-derived, parsed
-                # from vLLM's startup log); 0 means it has not reported one
-                # yet (older worker or lane still starting).  Default to 256
-                # so the scheduler doesn't artificially serialize requests —
-                # vLLM's own scheduler then admits what the KV cache holds.
-                capacity_hint = 256
+            if is_vllm:
+                # vLLM's `num_parallel` is the concurrency the engine
+                # guarantees at *full context*, so it is a lower bound on
+                # capacity, not a ceiling — measured on dev, a lane
+                # reporting 4 served 23 concurrent requests at 47% KV, and a
+                # production lane reporting 1 served 8. Using it here would
+                # have the local ledger throttle by 5-8x exactly where the
+                # admission gate was changed to stop doing so.  What the
+                # engine can really hold is bounded by the KV cache, which
+                # `evaluate_admission` reads live; this ledger only needs a
+                # ceiling loose enough not to bind before that does.
+                capacity_hint = self.DEFAULT_PARALLEL_CAPACITY
+            else:
+                # Ollama's num_parallel is an explicit `--parallel` slot
+                # count — a real ceiling, and the only one available.
+                capacity_hint = lane.get("num_parallel")
 
             try:
                 capacity = int(capacity_hint) if capacity_hint is not None else 0
@@ -790,14 +813,175 @@ class LogosNodeDataProvider:
             current_active = self._model_active.get(model_id, 0)
             self._model_active[model_id] = max(0, current_active - 1)
 
-    # Maximum backend queue_waiting before we refuse new reservations.
-    # Prevents piling requests on an already-backlogged vLLM process.
-    # Raised from 2→8: vLLM's internal scheduler (PagedAttention) handles
-    # queuing efficiently; we only need to back off when the engine is
-    # genuinely saturated.
-    BACKEND_QUEUE_PRESSURE_THRESHOLD = 8
+    # Engine-side queue_waiting tolerated before we stop forwarding.
+    #
+    # Zero is derived, not tuned. A request that only lands in the engine's
+    # own waiting queue is strictly worse off there than in the orchestrator
+    # queue: it cannot be re-prioritised, re-scheduled onto a peer, or
+    # cancelled when the worker wants to drain — and its placement is fixed,
+    # which defeats prefix-aware routing. Any value above zero re-introduces
+    # exactly the engine-side queueing this gate exists to remove, so there
+    # is no deployment for which a different number is right.
+    BACKEND_QUEUE_PRESSURE_THRESHOLD = 0.0
+
+    # KV-cache utilisation (percent) at which a vLLM lane stops being a good
+    # forwarding target. Past this point vLLM preempts and recomputes running
+    # sequences, which both stalls them and evicts the prefix-cache blocks
+    # that make sticky routing worthwhile. A property of how vLLM behaves,
+    # not of any one deployment.
+    KV_CACHE_PRESSURE_PERCENT = 90.0
+
+    def evaluate_admission(self, model_id: int) -> AdmissionDecision:
+        """Should this worker be given another request for ``model_id`` now?
+
+        Walks the model's routable lanes in the latest runtime snapshot and
+        applies the live vLLM signals: ``queue_waiting`` (the engine is
+        already parking work) and ``gpu_cache_usage_percent`` (it is about
+        to start preempting).
+
+        Deliberately *not* gated on ``requests_running`` against the lane's
+        ``num_parallel``: that number is the concurrency vLLM guarantees at
+        full context, which real traffic exceeds by a wide margin — a
+        production lane runs 8 concurrent requests with ``num_parallel=1``.
+        Read as a ceiling it would throttle such a lane eightfold.
+
+        A model is admissible as soon as *one* lane can take the request —
+        a busy lane must not mask an idle sibling.  When the worker reports
+        no usable lane signals the decision is ``can_admit=True`` with
+        ``batch_limit=None`` so the caller falls back to the capacity gate.
+        """
+        snapshot = self._peek_snapshot()
+        lanes = self._routable_lanes(model_id, snapshot)
+        if lanes is None:
+            return AdmissionDecision(can_admit=True, batch_limit=None, reason=None)
+
+        self._reset_forward_budget_on_new_snapshot(snapshot)
+
+        batch_limit = 0
+        reasons: List[str] = []
+        for lane in lanes:
+            lane_batch, reason = self._lane_admission(lane)
+            if reason is not None:
+                reasons.append(reason)
+                continue
+            batch_limit += lane_batch
+
+        if batch_limit > 0:
+            # Spend the step down by what we have already sent against this
+            # snapshot. Until a fresher one arrives we have no evidence those
+            # requests were absorbed, so they count against the budget.
+            remaining = batch_limit - self._forwarded_since_snapshot.get(model_id, 0)
+            if remaining > 0:
+                return AdmissionDecision(can_admit=True, batch_limit=remaining, reason=None)
+            return AdmissionDecision(can_admit=False, batch_limit=0, reason="awaiting_signal")
+        if reasons:
+            return AdmissionDecision(can_admit=False, batch_limit=0, reason=reasons[0])
+        # Lanes exist but none reported anything usable — no opinion.
+        return AdmissionDecision(can_admit=True, batch_limit=None, reason=None)
+
+    def _peek_snapshot(self) -> Optional[Dict[str, Any]]:
+        if self._runtime_registry is None:
+            return None
+        return self._runtime_registry.peek_runtime_snapshot(self.provider_id)
+
+    def _reset_forward_budget_on_new_snapshot(self, snapshot: Optional[Dict[str, Any]]) -> None:
+        """Forget what we sent once the worker has reported back.
+
+        The new snapshot already accounts for those requests — in
+        ``requests_running`` if the engine started them, in ``queue_waiting``
+        if it did not. Either way the measurement supersedes our estimate.
+
+        Keyed on ``runtime_revision``, which the registry bumps once per
+        absorbed status. ``last_heartbeat`` would be wrong here: stream
+        chunks and command results bump it too, so under streaming load it
+        changes on every chunk and the budget would reset without any new
+        measurement behind it — leaving the gate a no-op under exactly the
+        load it exists for.
+        """
+        marker = str((snapshot or {}).get("runtime_revision") or "")
+        if marker != self._snapshot_marker:
+            self._snapshot_marker = marker
+            self._forwarded_since_snapshot.clear()
+
+    def _routable_lanes(
+        self, model_id: int, snapshot: Optional[Dict[str, Any]] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Lanes serving ``model_id`` that are not stopped/errored.
+
+        Returns ``None`` when there is nothing to judge on (no registry, no
+        snapshot, unknown model), which callers read as "no opinion".
+        """
+        if self._runtime_registry is None:
+            return None
+        model_name = self._model_id_to_name.get(model_id)
+        if not model_name:
+            return None
+        snap = snapshot if snapshot is not None else self._peek_snapshot()
+        if not snap:
+            return None
+        raw_lanes = (snap.get("runtime") or {}).get("lanes") or []
+        if not isinstance(raw_lanes, list):
+            return None
+        lanes = [
+            lane
+            for lane in raw_lanes
+            if isinstance(lane, dict)
+            and lane.get("model") == model_name
+            and lane.get("runtime_state") not in {"stopped", "error"}
+        ]
+        return lanes or None
+
+    def _lane_admission(self, lane: Dict[str, Any]) -> tuple[int, Optional[str]]:
+        """One lane's dispatch step size, or the reason it should be skipped."""
+        backend = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+
+        # The engine is already parking work: anything sent now waits behind
+        # it. Holding here is what keeps the engine-side queue at ~1.
+        if _lane_metric_float(backend.get("queue_waiting")) > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
+            return 0, "backend_queue"
+
+        cache_usage = None
+        if bool(lane.get("vllm")):
+            cache_usage = backend.get("gpu_cache_usage_percent")
+            if cache_usage is None:
+                cache_usage = backend.get("gpu_cache_usage_perc")
+            if cache_usage is not None and _lane_metric_float(cache_usage) >= self.KV_CACHE_PRESSURE_PERCENT:
+                return 0, "kv_cache_pressure"
+
+        try:
+            guaranteed = int(lane.get("num_parallel") or 0)
+        except (TypeError, ValueError):
+            guaranteed = 0
+
+        # Scale the guaranteed full-context concurrency by the free KV
+        # fraction — the same figure the lane-health panel shows as the
+        # floating capacity. Always at least one: a lane that is admissible
+        # at all can take a request, and the release path keeps the pipeline
+        # moving from there.
+        free_fraction = 1.0
+        if cache_usage is not None:
+            free_fraction = max(0.0, 1.0 - _lane_metric_float(cache_usage) / 100.0)
+        return max(1, int(guaranteed * free_fraction)), None
 
     def try_reserve_capacity(self, model_id: int, request_id: str) -> bool:
+        """Book a slot for one request, or refuse and leave it queued here.
+
+        Two gates, in order, and they answer different questions.
+
+        ``_model_active`` against the parallel capacity is the *local ledger*:
+        it counts what this orchestrator has forwarded and not yet seen
+        complete, so it is exact and updates on every reservation.
+
+        ``evaluate_admission`` is the *engine's* view, and it is sampled — it
+        reads the last runtime snapshot, so several arrivals within one
+        heartbeat all see the same "nothing waiting". That gap is inherent:
+        vLLM only reveals that it could not start a request after the fact
+        (see :class:`AdmissionDecision`). The local ledger is what bounds the
+        overshoot; the sampled gate is what keeps the engine-side queue near
+        zero in steady state. Tightening the gap further — refusing until a
+        fresher snapshot arrives — would cap throughput at one request per
+        heartbeat, which costs far more than the overshoot it prevents.
+        """
         with self._lock:
             # Reject if no lane is ready (loaded/running) — requests for sleeping
             # or unloaded models should go to the scheduler queue instead.
@@ -809,20 +993,26 @@ class LogosNodeDataProvider:
                 return False
             current_active = self._model_active.get(model_id, 0)
             max_capacity, _source = self.get_parallel_capacity(model_id)
-            if current_active < max_capacity:
-                # Check backend queue pressure before accepting
-                if self._backend_queue_exceeds_threshold(model_id):
-                    logger.debug(
-                        "Refusing reservation for model %d: backend queue pressure exceeds threshold",
-                        model_id,
-                    )
-                    return False
-                if request_id in self._active_request_ids:
-                    return True
-                self._active_request_ids[request_id] = model_id
-                self._model_active[model_id] = current_active + 1
+            if current_active >= max_capacity:
+                prom.ADMISSION_HOLDS_TOTAL.labels(reason="worker_capacity").inc()
+                return False
+
+            admission = self.evaluate_admission(model_id)
+            if not admission.can_admit:
+                logger.debug(
+                    "Refusing reservation for model %d: %s — holding at orchestrator level",
+                    model_id,
+                    admission.reason,
+                )
+                prom.ADMISSION_HOLDS_TOTAL.labels(reason=admission.reason or "unknown").inc()
+                return False
+
+            if request_id in self._active_request_ids:
                 return True
-            return False
+            self._active_request_ids[request_id] = model_id
+            self._model_active[model_id] = current_active + 1
+            self._forwarded_since_snapshot[model_id] = self._forwarded_since_snapshot.get(model_id, 0) + 1
+            return True
 
     def _is_model_lane_ready(self, model_id: int) -> bool:
         """Check if at least one lane for this model is in a ready state (loaded/running)."""
@@ -855,31 +1045,6 @@ class LogosNodeDataProvider:
                 return True
         return False
 
-    def _backend_queue_exceeds_threshold(self, model_id: int) -> bool:
-        """Check if the backend (vLLM) queue_waiting exceeds the threshold."""
-        if self._runtime_registry is None:
-            return False
-        model_name = self._model_id_to_name.get(model_id)
-        if not model_name:
-            return False
-        snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
-        if not snap:
-            return False
-        lanes = (snap.get("runtime") or {}).get("lanes") or []
-        for lane in lanes:
-            if not isinstance(lane, dict):
-                continue
-            if lane.get("model") != model_name:
-                continue
-            if lane.get("runtime_state") in {"stopped", "error"}:
-                continue
-            backend = lane.get("backend_metrics")
-            if isinstance(backend, dict):
-                queue_waiting = float(backend.get("queue_waiting") or 0)
-                if queue_waiting > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
-                    return True
-        return False
-
     def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:
         with self._lock:
             if request_id in self._active_request_ids:
@@ -907,6 +1072,7 @@ class LogosNodeDataProvider:
                     "queue_depth": queue_state.total,
                     "loaded": model_name in self._loaded_models,
                     "scheduler_signals": recent_signals,
+                    "admission": self.evaluate_admission(model_id).to_dict(),
                 }
             return models
 

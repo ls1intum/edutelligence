@@ -376,6 +376,35 @@ class DBManager:
         """
         self.update_log_entry_metrics(log_id=log_id, request_id=request_id, **fields)
 
+    def close_orphaned_request_logs(self, error_message: str) -> int:
+        """Finalise log rows left open by a previous orchestrator process.
+
+        A request is written on arrival and completed in-process. If the
+        orchestrator is restarted (deploy, crash) while requests are in
+        flight, nobody ever writes their terminal state: the rows keep a NULL
+        `result_status` and no `timestamp_response`, and every "running
+        requests" view derived from them shows them forever.
+
+        Only rows that predate this process can be orphans, so this must run
+        at startup before the first request is accepted — after that a NULL
+        status is a request that is genuinely still running.
+
+        Returns the number of rows closed.
+        """
+        sql = text(
+            """
+            UPDATE log_entry
+               SET result_status = 'error',
+                   timestamp_response = NOW(),
+                   error_message = COALESCE(error_message, :error_message)
+             WHERE result_status IS NULL
+               AND timestamp_response IS NULL
+            """
+        )
+        result = self.session.execute(sql, {"error_message": error_message})
+        self.session.commit()
+        return int(result.rowcount or 0)
+
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
         update_stmt = table.update().where(table.c.id == record_id).values(**data)

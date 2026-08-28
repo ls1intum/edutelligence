@@ -20,6 +20,7 @@ from logos.timeouts import global_timeout_s
 
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
+from .prefix_affinity import affinity_keys
 from .scheduler_interface import QueueTimeoutError, SchedulerInterface, SchedulingRequest
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,9 @@ class PipelineRequest:
     # Trusted internal benchmark affinity. Public callers cannot populate
     # this directly; the HTTP boundary validates a signed, active job first.
     required_provider_id: Optional[int] = None
+    # Calling API key. Seeds the prefix-affinity hash so two keys never share
+    # a stream identity, and so one key's parallel agent loops stay separate.
+    api_key_id: Optional[int] = None
 
 
 @dataclass
@@ -171,6 +175,7 @@ class RequestPipeline:
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
             required_provider_id=request.required_provider_id,
+            affinity_keys=affinity_keys(request.api_key_id, request.payload),
         )
 
         # Record enqueue
@@ -549,6 +554,10 @@ class RequestPipeline:
             cold_start=cold_start,
         )
 
+    def discard_request(self, request_id: str, result_status: str) -> None:
+        """Close out a request whose terminal log row was written elsewhere."""
+        self._monitoring.discard(request_id, result_status)
+
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider statistics (e.g. rate limits) from response headers.
@@ -595,5 +604,5 @@ class RequestPipeline:
 
 @dataclass
 class _ClassificationResult:
-    candidates: List[Tuple[int, float, int, int]]
+    candidates: List[Tuple[int, float, int]]  # (model_id, weight, priority)
     stats: Dict[str, Any]
