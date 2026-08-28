@@ -1339,7 +1339,16 @@ class LaneManager:
         """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
 
         Policy:
-        - TP=1 is the safe default when the model fits on one GPU.
+        - A calibrated profile's tensor_parallel_size is the single source of
+          truth — the profile's residency and KV data were measured under that
+          TP, so the lane must run at it. It wins over whatever TP the
+          incoming config carries, and even a calibrated TP=1 suppresses the
+          size heuristic below: a calibrated base_residency is the full awake
+          footprint (weights + KV, often most of a GPU), which the heuristic
+          misreads as "does not fit one GPU" and escalates to a higher TP,
+          silently overwriting the calibrated verdict with a split-brain
+          profile (see issue #616).
+        - Otherwise: TP=1 is the safe default when the model fits on one GPU.
         - If TP is explicitly set > 1, respect the operator's choice.
         - If TP is at default (1) and the model **provably** does not fit on
           a single GPU (based on model profile vs actual per-GPU VRAM), auto-
@@ -1351,6 +1360,38 @@ class LaneManager:
             return lane_config
         vc = lane_config.vllm_config
         gpu_count = self._gpu_device_count()
+
+        # Calibrated profile: the calibrator did a real probe and recorded the
+        # TP the model actually loaded at — use it as-is (capped at the
+        # available GPU count), overriding the incoming TP.
+        if self._model_profiles is not None:
+            profile = self._model_profiles.get_profile(lane_config.model)
+            if (
+                profile is not None
+                and profile.residency_source == "calibrated"
+                and profile.tensor_parallel_size is not None
+                and profile.tensor_parallel_size > 0
+            ):
+                needed_tp = min(int(profile.tensor_parallel_size), gpu_count)
+                if needed_tp < 1:
+                    # No GPU detected — nothing to cap to; leave the incoming
+                    # config alone (vLLM cannot start without a GPU anyway).
+                    return lane_config
+                if needed_tp != vc.tensor_parallel_size:
+                    new_vc = vc.model_copy(update={"tensor_parallel_size": needed_tp})
+                    new_config = lane_config.model_copy(update={"vllm_config": new_vc})
+                    logger.info(
+                        "\033[36mAuto-TP\033[0m lane '%s' model=%s: "
+                        "using calibrated tensor_parallel_size=%d (capped at %d GPU(s) available), "
+                        "incoming was %d",
+                        lane_config.model,
+                        lane_config.model,
+                        needed_tp,
+                        gpu_count,
+                        vc.tensor_parallel_size,
+                    )
+                    return new_config
+                return lane_config
 
         # Explicit TP > 1: respect the operator's choice, just validate
         if vc.tensor_parallel_size > 1:
@@ -1383,9 +1424,9 @@ class LaneManager:
         if profile is None:
             return lane_config
 
-        # Prefer the calibrated tp when present — the calibrator did a real
-        # probe (bin-search up to max GPUs) and recorded the minimum tp that
-        # actually loaded the model. That's a stronger signal than the
+        # Prefer the profile's known tp when present (calibrated profiles are
+        # handled above; this is a tp the runtime recorded for a measured
+        # profile) — a real load at that tp is a stronger signal than the
         # base_residency / per-GPU-VRAM ratio below, which is an estimate
         # that can pick a tp vLLM rejects (e.g. tp=3 fails the attention-
         # head divisibility check on many architectures, where the
@@ -2589,10 +2630,19 @@ class LaneManager:
                 tensor_parallel_size=tensor_parallel_size,
                 kv_cache_sent_mb=kv_cache_sent_mb,
             )
+            # A GMU min recorded at a different TP than the calibrated one
+            # could let a later calibrated-TP lane start below its real
+            # minimum and OOM — same conflict record_loaded_vram guards
+            # against above.
+            _profile = self._model_profiles.get_profile(model)
+            _tp_conflicts = _profile is not None and ModelProfileRegistry._calibrated_tp_conflicts(
+                _profile, tensor_parallel_size
+            )
             if (
                 status.vllm
                 and observed_gpu_memory_utilization is not None
                 and previous_state not in {"loaded", "running", "sleeping"}
+                and not _tp_conflicts
             ):
                 self._model_profiles.record_successful_load_util(
                     model,

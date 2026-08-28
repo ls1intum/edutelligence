@@ -313,6 +313,26 @@ class ModelProfileRegistry:
                 )
         self._load_persisted()
 
+    @staticmethod
+    def _calibrated_tp_conflicts(profile: ModelProfileRecord, tensor_parallel_size: int | None) -> bool:
+        """True when a runtime lane ran at a TP the calibrated profile did not record.
+
+        A calibrated profile's tensor_parallel_size is the single source of
+        truth: its base_residency, KV envelope, and max_model_len pairs were
+        all measured under that TP. A lane that ran at a different TP
+        (re-inferred at spawn time, a stale value from upstream) produces
+        measurements that describe a different configuration — recording
+        them, or letting the runtime TP overwrite the calibrated one, would
+        leave a split-brain profile (see issue #616).
+        """
+        return (
+            tensor_parallel_size is not None
+            and tensor_parallel_size > 0
+            and profile.residency_source == "calibrated"
+            and profile.tensor_parallel_size is not None
+            and profile.tensor_parallel_size != tensor_parallel_size
+        )
+
     def _update_metadata(
         self,
         profile: ModelProfileRecord,
@@ -537,12 +557,26 @@ class ModelProfileRegistry:
 
         Without kv_cache_sent_mb, only loaded_vram_mb is updated.
         base_residency_mb is never touched if it already has a calibrated/override value.
+        A lane that ran at a TP different from the calibrated profile's TP
+        records nothing: the calibrated TP is authoritative, and the
+        measurement would describe a different configuration.
         """
         if effective_vram_mb <= 0:
             return
 
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            if self._calibrated_tp_conflicts(profile, tensor_parallel_size):
+                logger.warning(
+                    "Model profile [%s] %s — discarding loaded-VRAM measurement: "
+                    "lane ran at tensor_parallel_size=%d but the calibrated profile says %d. "
+                    "The calibrated TP is the source of truth; the profile is left untouched.",
+                    (profile.residency_source or "unknown").upper(),
+                    model_name,
+                    tensor_parallel_size,
+                    profile.tensor_parallel_size,
+                )
+                return
             tp_changed = self._update_metadata(
                 profile,
                 engine=engine,
@@ -622,12 +656,29 @@ class ModelProfileRegistry:
         observed_gpu_memory_utilization: float | None = None,
         tensor_parallel_size: int | None = None,
     ) -> None:
-        """Called after successful sleep with the lane's measured residual VRAM."""
+        """Called after successful sleep with the lane's measured residual VRAM.
+
+        Like record_loaded_vram, a lane that ran at a TP different from the
+        calibrated profile's TP records nothing — the calibrated TP is
+        authoritative and the measurement would describe a different
+        configuration.
+        """
         if residual_vram_mb < 0:
             return
 
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            if self._calibrated_tp_conflicts(profile, tensor_parallel_size):
+                logger.warning(
+                    "Model profile [%s] %s — discarding sleeping-VRAM measurement: "
+                    "lane ran at tensor_parallel_size=%d but the calibrated profile says %d. "
+                    "The calibrated TP is the source of truth; the profile is left untouched.",
+                    (profile.residency_source or "unknown").upper(),
+                    model_name,
+                    tensor_parallel_size,
+                    profile.tensor_parallel_size,
+                )
+                return
             tp_changed = self._update_metadata(
                 profile,
                 engine=engine,
