@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.operations.dto.DeleteModelBenchmarkRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.operations.dto.ModelBenchmarkRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.operations.dto.ProviderPerformanceRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.operations.dto.RunModelBenchmarkRequestDTO;
@@ -65,6 +66,17 @@ public class ProviderPerformanceController {
             return ResponseEntity.ok(providerPerformanceService.storeModelBenchmark(request));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/model_benchmarks/delete")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> deleteModelBenchmark(@RequestBody DeleteModelBenchmarkRequestDTO request) {
+        try {
+            return ResponseEntity.ok(providerPerformanceService.deleteModelBenchmark(request.id()));
+        } catch (IllegalArgumentException e) {
+            int status = request.id() == null || request.id() <= 0 ? 400 : 404;
+            return ResponseEntity.status(status).body(Map.of("error", e.getMessage()));
         }
     }
 

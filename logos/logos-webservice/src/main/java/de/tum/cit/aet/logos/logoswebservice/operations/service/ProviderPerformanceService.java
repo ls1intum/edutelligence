@@ -119,6 +119,16 @@ public class ProviderPerformanceService {
         return Map.of("stored", inserted == 1);
     }
 
+    public Map<String, Object> deleteModelBenchmark(Integer benchmarkId) {
+        if (benchmarkId == null || benchmarkId <= 0) {
+            throw new IllegalArgumentException("id must be a positive integer");
+        }
+        if (modelProviderRepository.deleteBenchmark(benchmarkId) != 1) {
+            throw new IllegalArgumentException("Benchmark run not found");
+        }
+        return Map.of("deleted", true, "id", benchmarkId);
+    }
+
     private static Map<String, Object> toMap(ProviderPerformanceProjection p) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("provider_id", p.getProviderId());

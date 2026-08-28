@@ -138,6 +138,43 @@ class ProviderPerformanceControllerTest {
     }
 
     @Test
+    void deleteModelBenchmark_removesOnlySelectedRun() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/delete")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"id\":8001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.deleted").value(true))
+           .andExpect(jsonPath("$.id").value(8001));
+
+        mvc.perform(post("/logosdb/model_benchmarks")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.benchmarks").isEmpty());
+    }
+
+    @Test
+    void deleteModelBenchmark_rejectsUnknownRun() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/delete")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"id\":999999}"))
+           .andExpect(status().isNotFound())
+           .andExpect(jsonPath("$.error").value("Benchmark run not found"));
+    }
+
+    @Test
+    void deleteModelBenchmark_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/delete")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"id\":8001}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
     void importModelBenchmark_storesSuccessfulGuideLlmSummary() throws Exception {
         mvc.perform(post("/logosdb/model_benchmarks/import")
                 .with(TestJwt.logosAdmin())

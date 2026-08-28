@@ -29,7 +29,18 @@ from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
 from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
-from logos.benchmarks.guidellm_runner import extract_serving_configuration, resolve_benchmark_target, run_benchmark_job
+from logos.benchmarks.guidellm_runner import (
+    BENCHMARK_JOB_HEADER,
+    BENCHMARK_PHASE_HEADER,
+    BENCHMARK_PROVIDER_HEADER,
+    BENCHMARK_TOKEN_HEADER,
+    benchmark_affinity_headers,
+    benchmark_affinity_token,
+    extract_serving_configuration,
+    is_logos_benchmark_target,
+    resolve_benchmark_target,
+    run_benchmark_job,
+)
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
@@ -2093,11 +2104,28 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             environment="model-provider-benchmark",
         )
 
+    benchmark_target = resolve_benchmark_target(endpoint)
+    request_headers = (
+        benchmark_affinity_headers(
+            secret=_INTERNAL_SECRET,
+            job_id=job_id,
+            provider_id=provider_id,
+            model=model_name,
+        )
+        if is_logos_benchmark_target(endpoint)
+        else None
+    )
+    worker_preparer = (
+        (lambda: _capacity_planner.prepare_benchmark_lane(provider_id, model_name))
+        if request_headers is not None and _capacity_planner is not None
+        else None
+    )
+
     task = asyncio.create_task(
         run_benchmark_job(
             job_id=job_id,
             model_provider_id=data.model_provider_id,
-            target=resolve_benchmark_target(endpoint),
+            target=benchmark_target,
             model=model_name,
             api_key=str(target.get("api_key") or "") or None,
             samples=data.samples,
@@ -2106,6 +2134,8 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             serving_configuration_getter=lambda: extract_serving_configuration(
                 _logosnode_registry.peek_runtime_snapshot(provider_id), model_name
             ),
+            request_headers=request_headers,
+            worker_preparer=worker_preparer,
         )
     )
     _background_tasks.add(task)
@@ -3756,6 +3786,7 @@ async def _execute_proxy_mode(
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
     priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -3817,6 +3848,7 @@ async def _execute_proxy_mode(
         request_path=request_path,
         skip_laura=True,
         priority=priority,
+        required_provider_id=required_provider_id,
     )
 
 
@@ -3832,6 +3864,7 @@ async def _execute_resource_mode(
     request_path: Optional[str] = None,
     skip_laura: bool = False,
     priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -3885,6 +3918,7 @@ async def _execute_resource_mode(
         deployments=deployments,
         skip_laura=skip_laura,
         request_path=request_path,
+        required_provider_id=required_provider_id,
     )
 
     # Process through classification and scheduling
@@ -4065,6 +4099,7 @@ async def route_and_execute(
     is_async_job: bool = False,
     request_id: Optional[str] = None,
     priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -4141,6 +4176,7 @@ async def route_and_execute(
                 request_id=request_id,
                 request_path=path,
                 priority=priority,
+                required_provider_id=required_provider_id,
             )
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
@@ -4154,6 +4190,7 @@ async def route_and_execute(
             request_id=request_id,
             request_path=path,
             priority=priority,
+            required_provider_id=required_provider_id,
         )
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
@@ -4249,6 +4286,89 @@ async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
     return JSONResponse(status_code=499, content={"detail": "Client closed request"})
 
 
+def _benchmark_provider_affinity(
+    headers: Dict[str, str],
+    body: Dict[str, Any],
+    deployments: list[Deployment],
+) -> Optional[int]:
+    """Validate a signed active benchmark job and return its required worker."""
+
+    normalized_headers = {str(name).lower(): str(value) for name, value in headers.items()}
+    job_value = normalized_headers.get(BENCHMARK_JOB_HEADER)
+    provider_value = normalized_headers.get(BENCHMARK_PROVIDER_HEADER)
+    token = normalized_headers.get(BENCHMARK_TOKEN_HEADER)
+    phase = normalized_headers.get(BENCHMARK_PHASE_HEADER, "measurement")
+    affinity_values = (job_value, provider_value, token)
+
+    if not any(affinity_values):
+        return None
+    if not all(affinity_values) or not _INTERNAL_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    if phase not in {"warmup", "measurement"}:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    try:
+        job_id = int(job_value)
+        provider_id = int(provider_value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if job_id <= 0 or provider_id <= 0:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    model_name = str(body.get("model") or "").strip()
+    expected_token = benchmark_affinity_token(
+        secret=_INTERNAL_SECRET,
+        job_id=job_id,
+        provider_id=provider_id,
+        model=model_name,
+    )
+    if not hmac.compare_digest(token, expected_token):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    with DBManager() as db:
+        job = db.get_job(job_id)
+    if not job or job.get("environment") != "model-provider-benchmark":
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    job_status = job.get("status")
+    if hasattr(job_status, "value"):
+        job_status = job_status.value
+    if job_status != JobStatus.RUNNING.value:
+        raise HTTPException(status_code=409, detail="Benchmark job is no longer running")
+
+    payload = job.get("request_payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    try:
+        payload_provider_id = int(payload.get("provider_id"))
+        payload_model_id = int(payload.get("model_id"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if payload_provider_id != provider_id or str(payload.get("model_name") or "") != model_name:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    if not any(
+        deployment["provider_id"] == provider_id and deployment["model_id"] == payload_model_id
+        for deployment in deployments
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Benchmark API key cannot access the required provider-model pair",
+        )
+
+    if phase == "measurement":
+        with DBManager() as db:
+            db.record_benchmark_request_started(job_id)
+
+    return provider_id
+
+
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
@@ -4269,6 +4389,11 @@ async def handle_sync_request(path: str, request: Request):
                 )
             deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
         deployments = await _filter_logosnode_deployments(deployments, payload=body)
+        required_provider_id = _benchmark_provider_affinity(headers, body, deployments)
+        if required_provider_id is not None:
+            deployments = [
+                deployment for deployment in deployments if deployment["provider_id"] == required_provider_id
+            ]
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         raise HTTPException(status_code=401, detail=str(e))
@@ -4290,6 +4415,7 @@ async def handle_sync_request(path: str, request: Request):
         path=path,
         log_id=log_id,
         request_id=request_id,
+        required_provider_id=required_provider_id,
     )
     return await _execute_cancelling_on_disconnect(request, **execute_kwargs)
 

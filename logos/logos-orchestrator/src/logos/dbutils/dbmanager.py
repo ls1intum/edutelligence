@@ -536,6 +536,31 @@ class DBManager:
             )
         self.update("jobs", job_id, update_data)
 
+    def record_benchmark_request_started(self, job_id: int) -> None:
+        """Atomically advance an active benchmark's visible sample progress."""
+        self.session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET result_payload = jsonb_set(
+                        COALESCE(result_payload, '{}'::jsonb),
+                        '{started_samples}',
+                        to_jsonb(LEAST(
+                            COALESCE((result_payload->>'started_samples')::integer, 0) + 1,
+                            COALESCE((result_payload->>'total_samples')::integer, 0)
+                        )),
+                        true
+                    ),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND status = 'running'
+                  AND result_payload->>'stage' = 'benchmarking'
+                """
+            ),
+            {"job_id": int(job_id)},
+        )
+        self.session.commit()
+
     def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
         """
         Fetch job state by id.

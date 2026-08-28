@@ -91,6 +91,11 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
                         @Param("metricsJson") String metricsJson,
                         @Param("recordedAt") Instant recordedAt);
 
+    @Modifying
+    @Transactional
+    @Query(value = "DELETE FROM model_provider_benchmarks WHERE id = :benchmarkId", nativeQuery = true)
+    int deleteBenchmark(@Param("benchmarkId") int benchmarkId);
+
     @Query(value = """
         SELECT m.id AS model_id, m.name AS model_name, mp.endpoint, mp.api_key
         FROM model_provider mp JOIN models m ON m.id = mp.model_id

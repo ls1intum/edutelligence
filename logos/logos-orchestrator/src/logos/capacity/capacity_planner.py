@@ -1046,6 +1046,33 @@ class CapacityPlanner:
         self.hint_capacity_needed(model_name, provider_id=provider_id)
         return None
 
+    async def prepare_benchmark_lane(
+        self,
+        provider_id: int,
+        model_name: str,
+        timeout_seconds: float = 600.0,
+    ) -> bool:
+        """Make one exact worker/model pair ready before an internal benchmark."""
+        if self._registry and not self._registry.has_received_first_status(provider_id):
+            return False
+
+        target = self._pick_request_target_lane(provider_id, model_name)
+        if target is not None and target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping":
+            return True
+
+        if target is not None and target.runtime_state == "sleeping":
+            return (
+                await self._prepare_existing_lane(
+                    provider_id,
+                    model_name,
+                    target,
+                    timeout_seconds,
+                )
+                is not None
+            )
+
+        return await self._cold_load_for_request(provider_id, model_name, timeout_seconds) is not None
+
     async def _prepare_existing_lane(
         self,
         provider_id: int,

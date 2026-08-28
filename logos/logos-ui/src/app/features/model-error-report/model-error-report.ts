@@ -125,6 +125,12 @@ interface BackendCalibrationLog {
   readonly updated_at: string;
 }
 
+interface BenchmarkGroup {
+  readonly modelProviderId: number;
+  readonly benchmarks: readonly ModelProviderBenchmark[];
+  readonly selected: ModelProviderBenchmark;
+}
+
 
 // ==========================================================================
 // Process Definitions
@@ -312,6 +318,31 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly performanceError = signal(false);
   readonly benchmarkStartingPairId = signal<number | null>(null);
   readonly benchmarkStartError = signal<string | null>(null);
+  readonly benchmarkSampleSize = signal(5);
+  readonly benchmarkSampleLabel = computed(
+    () => this.formatSampleCount(this.benchmarkSampleSize()),
+  );
+  readonly benchmarkSampleTicks = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] as const;
+  readonly benchmarkSampleProgress = computed(
+    () => `${((this.benchmarkSampleSize() - 1) / 99) * 100}%`,
+  );
+  private readonly selectedBenchmarkIds = signal<ReadonlyMap<number, number>>(new Map());
+  readonly benchmarkDeletingId = signal<number | null>(null);
+  readonly benchmarkDeleteError = signal<string | null>(null);
+  readonly benchmarkGroups = computed<readonly BenchmarkGroup[]>(() => {
+    const grouped = new Map<number, ModelProviderBenchmark[]>();
+    for (const benchmark of this.performance()) {
+      const benchmarks = grouped.get(benchmark.model_provider_id) ?? [];
+      benchmarks.push(benchmark);
+      grouped.set(benchmark.model_provider_id, benchmarks);
+    }
+    const selectedIds = this.selectedBenchmarkIds();
+    return [...grouped.entries()].map(([modelProviderId, benchmarks]) => ({
+      modelProviderId,
+      benchmarks,
+      selected: benchmarks.find(benchmark => benchmark.id === selectedIds.get(modelProviderId)) ?? benchmarks[0]!,
+    }));
+  });
   private performancePollTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ==========================================================================
@@ -596,7 +627,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     this.benchmarkStartingPairId.set(pair.model_provider_id);
     this.benchmarkStartError.set(null);
     try {
-      await this.modelService.startBenchmark(pair.model_provider_id);
+      await this.modelService.startBenchmark(pair.model_provider_id, this.benchmarkSampleSize());
       await this.loadPerformance(this.modelId(), true);
     } catch (error) {
       const response = error instanceof HttpErrorResponse ? error.error : null;
@@ -630,19 +661,71 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   benchmarkStatusLabel(run: ModelBenchmarkRun): string {
     if (run.status === 'pending') return `Queued for ${run.request.provider_name}`;
-    if (run.status === 'running') return `Running on ${run.request.provider_name}`;
+    if (run.status === 'running') {
+      if (run.result.stage === 'preparing_worker') return `Preparing ${run.request.provider_name}`;
+      if (run.result.stage === 'warming_up') return `Warming up ${run.request.provider_name}`;
+      if (run.result.stage === 'benchmarking') {
+        const started = run.result.started_samples ?? 0;
+        const total = run.result.total_samples ?? run.request.samples;
+        return `Running on ${run.request.provider_name} · request ${started}/${total}`;
+      }
+      return `Running on ${run.request.provider_name}`;
+    }
     if (run.status === 'success') return `Completed ${this.formatBenchmarkTimestamp(run.updated_at)}`;
     return `Failed ${this.formatBenchmarkTimestamp(run.updated_at)}`;
   }
 
+  setBenchmarkSampleSize(value: string): void {
+    const parsed = Number(value);
+    this.benchmarkSampleSize.set(Number.isFinite(parsed) ? Math.min(100, Math.max(1, Math.round(parsed))) : 5);
+  }
+
+  formatSampleCount(count: number): string {
+    return `${count} ${count === 1 ? 'sample' : 'samples'}`;
+  }
+
+  selectBenchmark(modelProviderId: number, value: string): void {
+    const benchmarkId = Number(value);
+    if (!Number.isInteger(benchmarkId)) return;
+    this.selectedBenchmarkIds.update(current => {
+      const next = new Map(current);
+      next.set(modelProviderId, benchmarkId);
+      return next;
+    });
+  }
+
+  async deleteBenchmark(benchmark: ModelProviderBenchmark): Promise<void> {
+    const confirmed = window.confirm(
+      `Delete the benchmark run from ${this.formatBenchmarkTimestamp(benchmark.recorded_at)}? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    this.benchmarkDeletingId.set(benchmark.id);
+    this.benchmarkDeleteError.set(null);
+    try {
+      await this.modelService.deleteBenchmark(benchmark.id);
+      this.selectedBenchmarkIds.update(current => {
+        const next = new Map(current);
+        next.delete(benchmark.model_provider_id);
+        return next;
+      });
+      await this.loadPerformance(this.modelId(), true);
+    } catch {
+      this.benchmarkDeleteError.set('Could not delete the selected benchmark run.');
+    } finally {
+      this.benchmarkDeletingId.set(null);
+    }
+  }
+
   private schedulePerformancePoll(): void {
     this.clearPerformancePoll();
-    if (!this.benchmarkRuns().some(run => this.isBenchmarkActive(run))) {
+    const hasActiveRun = this.benchmarkRuns().some(run => this.isBenchmarkActive(run));
+    if (!hasActiveRun && this.activeTab() !== 'performance') {
       return;
     }
     this.performancePollTimer = setTimeout(() => {
       void this.loadPerformance(this.modelId(), true);
-    }, 2500);
+    }, hasActiveRun ? 2500 : 15000);
   }
 
   private clearPerformancePoll(): void {
@@ -659,6 +742,11 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   setTab(tab: ModelErrorTab): void {
     this.activeTab.set(tab);
+    if (tab === 'performance') {
+      void this.loadPerformance(this.modelId(), true);
+    } else {
+      this.schedulePerformancePoll();
+    }
   }
 
   formatDuration(milliseconds: number | null): string {
@@ -691,7 +779,15 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   formatBenchmarkTimestamp(timestamp: string): string {
-    return new Date(timestamp).toLocaleString();
+    return new Date(timestamp).toLocaleString(undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZoneName: 'short',
+    });
   }
 
   benchmarkProfile(benchmark: ModelProviderBenchmark): string {

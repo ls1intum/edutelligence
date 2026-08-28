@@ -122,6 +122,8 @@ export interface ModelBenchmarkRun {
   result: {
     stage?: string;
     benchmark_id?: number;
+    started_samples?: number;
+    total_samples?: number;
   };
   error_message: string | null;
   created_at: string;

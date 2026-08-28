@@ -177,24 +177,17 @@
   }
 }
 
-.performance-refresh {
+.performance-live {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 12px;
-  border: 1px solid rgb(var(--color-outline-200));
-  border-radius: 8px;
-  background: rgb(var(--color-surface-0));
-  color: rgb(var(--color-typography-100));
-  cursor: pointer;
-  font-family: inherit;
+  color: rgb(var(--color-typography-500));
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  line-height: var(--line-height-normal);
 
-  &:disabled {
-    cursor: wait;
-    opacity: 0.6;
+  i {
+    color: rgb(var(--color-success));
+    font-size: 7px;
   }
 }
 

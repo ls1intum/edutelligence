@@ -417,21 +417,10 @@
               <h2>Provider Performance</h2>
               <p>Statistics for this model grouped by provider configuration.</p>
             </div>
-
-            <button
-              class="performance-refresh"
-              type="button"
-              (click)="loadPerformance()"
-              [disabled]="performanceLoading()"
-              aria-label="Refresh model performance"
-            >
-              <i
-                class="pi pi-refresh"
-                [class.pi-spin]="performanceLoading()"
-                aria-hidden="true"
-              ></i>
-              Refresh
-            </button>
+            <span class="performance-live">
+              <i class="pi pi-circle-fill" aria-hidden="true"></i>
+              Updates automatically
+            </span>
           </div>
 
           <details class="performance-glossary">
@@ -478,10 +467,41 @@
               <header class="benchmark-runner__header">
                 <div>
                   <h3>Run benchmark</h3>
-                  <p>GSM8K main/test · 5 samples · 512 max output tokens</p>
+                  <p>GSM8K main/test · 512 max output tokens · includes one unmeasured warm-up request</p>
                 </div>
                 <span>One active run per provider</span>
               </header>
+
+              <div class="benchmark-sample-control">
+                <div class="benchmark-sample-control__heading">
+                  <label class="benchmark-sample-control__label" for="benchmark-sample-size">Sample size</label>
+                  <output class="benchmark-sample-control__value" for="benchmark-sample-size">
+                    {{ benchmarkSampleSize() }}
+                  </output>
+                </div>
+                <input
+                  #sampleSize
+                  id="benchmark-sample-size"
+                  type="range"
+                  min="1"
+                  max="100"
+                  step="1"
+                  [value]="benchmarkSampleSize()"
+                  [style.--sample-progress]="benchmarkSampleProgress()"
+                  (input)="setBenchmarkSampleSize(sampleSize.value)"
+                />
+                <div class="benchmark-sample-control__ticks" aria-hidden="true">
+                  @for (tick of benchmarkSampleTicks; track tick) {
+                    <span
+                      class="benchmark-sample-control__tick"
+                      [style.left.%]="((tick - 1) / 99) * 100"
+                    >
+                      <i></i>
+                      <small>{{ tick }}</small>
+                    </span>
+                  }
+                </div>
+              </div>
 
               <div class="benchmark-runner__pairs">
                 @for (pair of benchmarkPairs(); track pair.model_provider_id) {
@@ -489,6 +509,11 @@
                     <div class="benchmark-pair__identity">
                       <strong>{{ pair.provider_name }}</strong>
                       <span>{{ pair.model_name }}</span>
+                      <div class="benchmark-order-summary" aria-label="Benchmark configuration">
+                        <small>GSM8K</small>
+                        <small>{{ benchmarkSampleLabel() }}</small>
+                        <small>512 max tokens</small>
+                      </div>
                     </div>
 
                     <div class="benchmark-pair__state">
@@ -515,7 +540,9 @@
                       type="button"
                       (click)="startBenchmark(pair)"
                       [disabled]="benchmarkStartingPairId() === pair.model_provider_id || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
-                      [attr.title]="!pair.endpoint_configured ? 'Configure the provider endpoint first' : null"
+                      [attr.title]="!pair.endpoint_configured
+                        ? 'Configure the provider endpoint first'
+                        : 'Run benchmark on ' + pair.provider_name + ' · ' + pair.model_name + ' · ' + benchmarkSampleLabel()"
                     >
                       @if (benchmarkStartingPairId() === pair.model_provider_id) {
                         <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
@@ -557,21 +584,55 @@
 
           } @else {
 
+            @if (benchmarkDeleteError(); as error) {
+              <app-error-message variant="banner" [message]="error" />
+            }
+
             <div class="performance-list">
 
-              @for (benchmark of performance(); track benchmark.id) {
+              @for (group of benchmarkGroups(); track group.modelProviderId) {
+
+                @if (group.selected; as benchmark) {
 
                 <article class="performance-card">
 
                   <header class="performance-card__header">
                     <div>
                       <h3>{{ benchmark.provider_name }}</h3>
-                      <p>{{ benchmark.model_name }} · {{ benchmark.sample_size }} samples</p>
+                      <p>{{ benchmark.model_name }} · {{ formatSampleCount(benchmark.sample_size) }}</p>
                     </div>
 
-                    <span class="benchmark-tool">
-                      GuideLLM
-                    </span>
+                    <div class="performance-card__actions">
+                      <label class="benchmark-run-selector">
+                        <span>Show run from:</span>
+                        <select
+                          #runSelector
+                          [value]="benchmark.id"
+                          (change)="selectBenchmark(group.modelProviderId, runSelector.value)"
+                        >
+                          @for (run of group.benchmarks; track run.id) {
+                            <option [value]="run.id">{{ formatBenchmarkTimestamp(run.recorded_at) }}</option>
+                          }
+                        </select>
+                      </label>
+
+                      <button
+                        class="benchmark-delete-button"
+                        type="button"
+                        (click)="deleteBenchmark(benchmark)"
+                        [disabled]="benchmarkDeletingId() === benchmark.id"
+                        [attr.aria-label]="'Delete benchmark run from ' + formatBenchmarkTimestamp(benchmark.recorded_at)"
+                        title="Delete selected run"
+                      >
+                        <i
+                          class="pi"
+                          [class.pi-spin]="benchmarkDeletingId() === benchmark.id"
+                          [class.pi-spinner]="benchmarkDeletingId() === benchmark.id"
+                          [class.pi-trash]="benchmarkDeletingId() !== benchmark.id"
+                          aria-hidden="true"
+                        ></i>
+                      </button>
+                    </div>
                   </header>
 
                   <div class="metric-grid">
@@ -660,6 +721,8 @@
                   </footer>
 
                 </article>
+
+                }
 
               }
 

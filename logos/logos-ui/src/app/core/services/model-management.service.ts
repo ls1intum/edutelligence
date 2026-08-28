@@ -21,15 +21,24 @@ export class ModelManagementService {
     );
   }
 
-  startBenchmark(modelProviderId: number): Promise<StartModelBenchmarkResponse> {
+  startBenchmark(modelProviderId: number, sampleSize: number): Promise<StartModelBenchmarkResponse> {
     return firstValueFrom(
       this.http.post<StartModelBenchmarkResponse>(
         '/api/logosdb/model_benchmarks/run',
         {
           model_provider_id: modelProviderId,
-          sample_size: 5,
+          sample_size: sampleSize,
           max_output_tokens: 512,
         },
+      ),
+    );
+  }
+
+  deleteBenchmark(benchmarkId: number): Promise<{ deleted: boolean; id: number }> {
+    return firstValueFrom(
+      this.http.post<{ deleted: boolean; id: number }>(
+        '/api/logosdb/model_benchmarks/delete',
+        { id: benchmarkId },
       ),
     );
   }

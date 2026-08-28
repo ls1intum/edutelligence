@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
+
+import httpx
 
 DATASET = "openai/gsm8k"
 _SECRET_KEYS = {"api_key", "apikey", "authorization", "password", "secret", "token"}
@@ -31,6 +35,70 @@ _SERVING_KEYS = {
     "hf_overrides",
 }
 
+BENCHMARK_JOB_HEADER = "x-logos-benchmark-job-id"
+BENCHMARK_PROVIDER_HEADER = "x-logos-benchmark-provider-id"
+BENCHMARK_TOKEN_HEADER = "x-logos-benchmark-token"
+BENCHMARK_PHASE_HEADER = "x-logos-benchmark-phase"
+
+
+def benchmark_affinity_token(*, secret: str, job_id: int, provider_id: int, model: str) -> str:
+    """Sign the worker affinity carried by one internal benchmark job."""
+    message = f"{int(job_id)}:{int(provider_id)}:{model}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def benchmark_affinity_headers(*, secret: str, job_id: int, provider_id: int, model: str) -> dict[str, str]:
+    """Build the short-lived, signed routing headers used by GuideLLM."""
+    return {
+        BENCHMARK_JOB_HEADER: str(int(job_id)),
+        BENCHMARK_PROVIDER_HEADER: str(int(provider_id)),
+        BENCHMARK_TOKEN_HEADER: benchmark_affinity_token(
+            secret=secret,
+            job_id=job_id,
+            provider_id=provider_id,
+            model=model,
+        ),
+        BENCHMARK_PHASE_HEADER: "measurement",
+    }
+
+
+async def send_warmup_request(
+    *,
+    target: str,
+    model: str,
+    api_key: str | None,
+    request_headers: dict[str, str] | None,
+) -> None:
+    """Send one unmeasured completion through the benchmark's exact route."""
+    headers = dict(request_headers or {})
+    headers[BENCHMARK_PHASE_HEADER] = "warmup"
+    if api_key:
+        headers["authorization"] = f"Bearer {api_key}"
+
+    normalized_target = target.rstrip("/")
+    warmup_url = (
+        f"{normalized_target}/chat/completions"
+        if urlsplit(normalized_target).path.rstrip("/").endswith("/v1")
+        else f"{normalized_target}/v1/chat/completions"
+    )
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
+        response = await client.post(
+            warmup_url,
+            headers=headers,
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": "Reply with OK."}],
+                "max_tokens": 1,
+                "stream": False,
+            },
+        )
+    if response.is_error:
+        detail = response.text[:500]
+        if api_key:
+            detail = detail.replace(api_key, "[redacted]")
+        raise RuntimeError(f"Benchmark warm-up failed with HTTP {response.status_code}: {detail}")
+
 
 def resolve_benchmark_target(
     target: str,
@@ -41,11 +109,7 @@ def resolve_benchmark_target(
     """Use the container-local API when benchmarking this Logos instance."""
     normalized = target.rstrip("/")
     configured_domain = (logos_domain if logos_domain is not None else os.getenv("LOGOS_DOMAIN", "")).strip()
-    if not configured_domain:
-        return normalized
-
-    domain_url = configured_domain if "://" in configured_domain else f"//{configured_domain}"
-    if urlsplit(normalized).hostname != urlsplit(domain_url).hostname:
+    if not is_logos_benchmark_target(normalized, logos_domain=configured_domain):
         return normalized
 
     internal = (
@@ -57,10 +121,26 @@ def resolve_benchmark_target(
     return f"{internal}{path}"
 
 
+def is_logos_benchmark_target(target: str, *, logos_domain: str | None = None) -> bool:
+    """Return whether ``target`` addresses this configured Logos instance."""
+    configured_domain = (logos_domain if logos_domain is not None else os.getenv("LOGOS_DOMAIN", "")).strip()
+    if not configured_domain:
+        return False
+    domain_url = configured_domain if "://" in configured_domain else f"//{configured_domain}"
+    return urlsplit(target).hostname == urlsplit(domain_url).hostname
+
+
 def redact_secrets(value: Any) -> Any:
     """Remove credential-like fields recursively before persistence."""
     if isinstance(value, dict):
-        return {key: redact_secrets(item) for key, item in value.items() if str(key).lower() not in _SECRET_KEYS}
+
+        def is_secret_key(key: object) -> bool:
+            normalized = str(key).lower()
+            return normalized in _SECRET_KEYS or normalized.endswith(
+                ("-api-key", "_api_key", "-authorization", "_authorization", "-secret", "_secret", "-token", "_token")
+            )
+
+        return {key: redact_secrets(item) for key, item in value.items() if not is_secret_key(key)}
     if isinstance(value, list):
         return [redact_secrets(item) for item in value]
     return value
@@ -74,6 +154,7 @@ def build_scenario(
     samples: int,
     max_output_tokens: int,
     report_path: Path,
+    request_headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the fixed, reproducible GSM8K scenario used by Logos."""
     backend: dict[str, Any] = {
@@ -85,6 +166,8 @@ def build_scenario(
     }
     if api_key:
         backend["api_key"] = api_key
+    if request_headers:
+        backend["extras"]["headers"] = dict(request_headers)
 
     return {
         "metadata": {"labels": {"dataset": DATASET, "purpose": "logos-model-provider-performance"}},
@@ -197,18 +280,47 @@ async def run_benchmark_job(
     max_output_tokens: int,
     serving_configuration: dict[str, Any],
     serving_configuration_getter: Callable[[], dict[str, Any]] | None = None,
+    request_headers: dict[str, str] | None = None,
+    worker_preparer: Callable[[], Awaitable[bool]] | None = None,
 ) -> None:
     """Execute GuideLLM outside the event loop and update the shared job row."""
     from logos.dbutils.dbmanager import DBManager
     from logos.dbutils.dbmodules import JobStatus
 
     with DBManager() as db:
-        db.update_job_status(job_id, JobStatus.RUNNING.value, result_payload={"stage": "benchmarking"})
+        db.update_job_status(
+            job_id,
+            JobStatus.RUNNING.value,
+            result_payload={"stage": "preparing_worker", "started_samples": 0, "total_samples": samples},
+        )
 
     try:
         guidellm_bin = shutil.which("guidellm")
         if guidellm_bin is None:
             raise RuntimeError("GuideLLM executable is not installed in the orchestrator")
+
+        if worker_preparer is not None and not await worker_preparer():
+            raise RuntimeError("The selected worker could not prepare the benchmark model")
+
+        with DBManager() as db:
+            db.update_job_status(
+                job_id,
+                JobStatus.RUNNING.value,
+                result_payload={"stage": "warming_up", "started_samples": 0, "total_samples": samples},
+            )
+        await send_warmup_request(
+            target=target,
+            model=model,
+            api_key=api_key,
+            request_headers=request_headers,
+        )
+
+        with DBManager() as db:
+            db.update_job_status(
+                job_id,
+                JobStatus.RUNNING.value,
+                result_payload={"stage": "benchmarking", "started_samples": 0, "total_samples": samples},
+            )
 
         with tempfile.TemporaryDirectory(prefix="logos-guidellm-") as directory:
             workdir = Path(directory)
@@ -221,6 +333,7 @@ async def run_benchmark_job(
                 samples=samples,
                 max_output_tokens=max_output_tokens,
                 report_path=report_path,
+                request_headers=request_headers,
             )
             scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
             scenario_path.chmod(0o600)

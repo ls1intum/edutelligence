@@ -182,6 +182,7 @@ class BaseScheduler(SchedulerInterface):
                         provider_id,
                         waiter_priority,
                         is_cold_at_queue=(bool(entry.is_cold_at_queue) if entry else False),
+                        provider_affinity=(entry.provider_affinity if entry else None),
                     )
                 next_task = None
                 has_waiters = False
