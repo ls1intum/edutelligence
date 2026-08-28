@@ -26,6 +26,35 @@ from .scheduler_interface import QueueTimeoutError, SchedulerInterface, Scheduli
 logger = logging.getLogger(__name__)
 
 
+def resolve_queue_priority(default_priority: Optional[int], policy_priority: Optional[int]) -> int:
+    """
+    Resolve the effective queue priority for a request.
+
+    The API key's ``default_priority`` (set per key, editable in the admin UI)
+    takes precedence over the policy-level ``priority``: a key that has a
+    priority set (non-zero) queues its requests at that priority regardless of
+    the policy, so a key owner's explicit choice is always honoured. A key
+    without a priority set (0, the default for newly created keys) falls back
+    to the policy's priority, preserving the historical policy-only behaviour.
+
+    Both values use the same 1/5/10 scale consumed by ``Priority.from_int``
+    (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL).
+
+    Args:
+        default_priority: The requesting API key's default_priority, or 0/None
+            when the key has none set.
+        policy_priority: The policy's ``priority`` value (may be 0/None).
+
+    Returns:
+        The effective integer priority for the request's queue entry.
+    """
+    if default_priority:
+        return int(default_priority)
+    if policy_priority:
+        return int(policy_priority)
+    return 0
+
+
 @dataclass
 class PipelineRequest:
     """Input to the pipeline."""
@@ -44,6 +73,10 @@ class PipelineRequest:
     # context resolver to build the forward URL for cloud upstream providers,
     # which serve the same OpenAI-shaped surface as our /v1 routes.
     request_path: Optional[str] = None
+    # The requesting API key's default_priority (see auth.AuthContext). The key
+    # owner's queue-priority choice for their traffic. 0 means "not set": the
+    # policy-level priority applies instead (see resolve_queue_priority).
+    default_priority: int = 0
     # Calling API key. Seeds the prefix-affinity hash so two keys never share
     # a stream identity, and so one key's parallel agent loops stay separate.
     api_key_id: Optional[int] = None
@@ -440,6 +473,14 @@ class RequestPipeline:
             system=system_prompt,
             skip_laura=request.skip_laura,
         )
+
+        # The classifier bakes the policy's priority into every candidate, but
+        # the key owner's default_priority takes precedence: resolve the
+        # effective priority here so all downstream consumers (schedulers,
+        # queueing, monitoring, log stats) agree on it.
+        effective_priority = resolve_queue_priority(request.default_priority, policy.get("priority"))
+        if candidates:
+            candidates = [(model_id, weight, effective_priority) for model_id, weight, _ in candidates]
 
         elapsed = time.time() - start
 

@@ -3753,7 +3753,6 @@ async def _execute_proxy_mode(
     is_async_job: bool,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
-    priority: int = 1,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -3814,7 +3813,6 @@ async def _execute_proxy_mode(
         request_id=request_id,
         request_path=request_path,
         skip_laura=True,
-        priority=priority,
     )
 
 
@@ -3829,7 +3827,6 @@ async def _execute_resource_mode(
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
     skip_laura: bool = False,
-    priority: int = 1,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -3883,6 +3880,9 @@ async def _execute_resource_mode(
         deployments=deployments,
         skip_laura=skip_laura,
         request_path=request_path,
+        # The key owner's queue priority; 0 falls back to the
+        # policy-level priority inside the pipeline.
+        default_priority=auth.default_priority,
         api_key_id=auth.api_key_id,
     )
 
@@ -4063,7 +4063,6 @@ async def route_and_execute(
     log_id: Optional[int],
     is_async_job: bool = False,
     request_id: Optional[str] = None,
-    priority: int = 1,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -4095,7 +4094,6 @@ async def route_and_execute(
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - client waits, raises HTTPException for errors
             - True: Background job - client gets job_id, returns error dict for errors
-        priority: Scheduling priority for the pipeline queue
 
     Returns:
         - For direct endpoints (is_async_job=False):
@@ -4139,7 +4137,6 @@ async def route_and_execute(
                 is_async_job=is_async_job,
                 request_id=request_id,
                 request_path=path,
-                priority=priority,
             )
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
@@ -4152,7 +4149,6 @@ async def route_and_execute(
             is_async_job=is_async_job,
             request_id=request_id,
             request_path=path,
-            priority=priority,
         )
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
@@ -4341,8 +4337,9 @@ async def _wait_for_worker_connect(
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
-    Performs authentication, model setup, and routing/execution with
-    hierarchical priority resolution.
+    Performs authentication, model setup, and routing/execution. Queue
+    priority is derived from the authenticated API key's default_priority
+    (falling back to the policy-level priority inside the pipeline).
     """
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
