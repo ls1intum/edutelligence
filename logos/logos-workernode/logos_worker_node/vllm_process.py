@@ -1450,6 +1450,13 @@ class VllmProcessHandle:
             cmd.extend(["--attention-config.backend", attn_backend])
         if vc.enable_prefix_caching:
             cmd.append("--enable-prefix-caching")
+        # vLLM only reports usage.prompt_tokens_details (cached_tokens) when
+        # this server flag is set — its default is off, so without it local
+        # lanes omit the prefix-cache hit count that cloud providers include
+        # in usage natively, and consumers can't optimise cached-token usage
+        # per request (#813).
+        if vc.enable_prompt_tokens_details:
+            cmd.append("--enable-prompt-tokens-details")
         if vc.disable_custom_all_reduce:
             cmd.append("--disable-custom-all-reduce")
         if vc.enable_sleep_mode:
