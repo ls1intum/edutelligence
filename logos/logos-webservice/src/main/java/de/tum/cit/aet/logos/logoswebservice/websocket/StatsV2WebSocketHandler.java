@@ -501,13 +501,26 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     // Content-only signature: the live window slide advances the range on
     // every delta, which must not force a push — user-driven range changes
     // are already pushed explicitly (force=true) in handleSetTimelineRange.
+    //
+    // Every field the row renders has to be in here: the push is skipped
+    // whenever the signature repeats, so a change to a field that is left out
+    // never reaches the page. The provider in particular moves after the first
+    // push — the row carries the deployment the request was made for from
+    // enqueue time, and the provider that actually serves it is only written
+    // once the request is scheduled (and can be re-resolved once the execution
+    // context lands). Without it in the signature, a re-routed request kept
+    // showing its queued-time provider while the badge next to it moved on.
     @SuppressWarnings("unchecked")
-    private String requestsSig(Map<String, Object> payload) {
+    static String requestsSig(Map<String, Object> payload) {
         var reqs = (java.util.List<Map<String, Object>>) payload.getOrDefault("requests", java.util.List.of());
         StringBuilder sb = new StringBuilder();
         for (var r : reqs) {
             sb.append(r.getOrDefault("request_id", "")).append(':')
               .append(r.getOrDefault("status", "")).append(':')
+              .append(r.getOrDefault("provider_name", "")).append(':')
+              // Rendered as the Cloud/Local badge, so the same rule as the
+              // name applies: a change to it must not be deduplicated away.
+              .append(r.getOrDefault("is_cloud", "")).append(':')
               .append(r.getOrDefault("scheduled_ts", "")).append(':')
               .append(r.getOrDefault("request_complete_ts", "")).append(':')
               // Usage and cost grow while a request streams, without any of the

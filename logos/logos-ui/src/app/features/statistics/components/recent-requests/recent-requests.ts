@@ -23,6 +23,7 @@ import {
   getRequestBorderColor,
   formatTimeAgo,
   formatElapsed,
+  providerLabel,
   RequestStage,
 } from '../../statistics.utils';
 
@@ -284,6 +285,11 @@ export class RecentRequests implements OnChanges, OnDestroy {
 
   stageOf(item: RequestItem): RequestStage {
     return deriveStage(item);
+  }
+
+  /** 'none' while the request is still queued — see `providerLabel`. */
+  providerLabelOf(item: RequestItem): string {
+    return providerLabel(item);
   }
 
   borderColorOf(item: RequestItem): string {
