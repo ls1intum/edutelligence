@@ -14,8 +14,9 @@ Sleep capability is verified, not assumed: after the sleep measurement the
 model is woken again (``/wake_up``) and must answer a second test request.
 A model that cannot sleep or wake safely does not fail the run — it gets a
 profile with ``sleep_mode_disabled`` recorded, so it is still served (awake)
-while the capacity planner never puts it to sleep. Only a failure before the
-awake measurement (VRAM sampling, KV search) fails the run.
+while the capacity planner never puts it to sleep. Failures that leave the
+measurement itself incomplete (GPU VRAM sampling in any phase, the KV-cache
+search, the model never starting) still fail the run.
 
 VRAM decomposition (exact, no guessing)::
 
@@ -1194,8 +1195,11 @@ class CalibrationResult:
     # the value is genuinely unknowable there, and the profile records it as
     # null rather than as a measurement. Also None when the sleep phases ran
     # but failed verification (see sleep_mode_disabled): a residual measured
-    # for a sleep that cannot be reversed must not reach the planner.
-    sleeping_residual_mb: float | None = 0.0
+    # for a sleep that cannot be reversed must not reach the planner. The
+    # default is None, deliberately not 0.0: a missing value must never
+    # encode itself as "sleep frees the whole footprint" if a constructor
+    # forgets the field.
+    sleeping_residual_mb: float | None = None
     # Measured verdict on this model's sleep capability, persisted into the
     # profile as ``sleep_mode_disabled``. True when the sleep phases ran and
     # proved the model unsafe to sleep on this worker (``/sleep`` or
@@ -2553,14 +2557,17 @@ def calibrate_model(
                         sleep_phase_failed = True
                         sleep_failure_reason = "post-wake test request failed — model does not serve after sleep/wake"
                     elif not post_wake_ok:
-                        # Did not serve one before sleep either — this model
-                        # does not support the request type (embedding-only
-                        # lanes expose no /v1/completions). The wake itself is
-                        # verified by /is_sleeping above, so accept it.
+                        # Did not serve one before sleep either, so this
+                        # failure carries no evidence of a wake regression —
+                        # whatever the cause (embedding-only lanes expose no
+                        # /v1/completions, a transient 5xx, ...), it predates
+                        # the sleep. The wake itself is verified by
+                        # /is_sleeping above, so accept it.
                         logger.warning(
                             "        post-wake test request failed, but the pre-sleep warmup "
-                            "did not serve either — request type unsupported by this model "
-                            "(e.g. embedding lane); accepting wake on /is_sleeping evidence"
+                            "did not serve either — no evidence of a wake regression (the "
+                            "request type may simply be unsupported by this model, e.g. an "
+                            "embedding lane); accepting wake on /is_sleeping evidence"
                         )
             if sleep_phase_failed:
                 # A residual measured for a sleep that cannot be reversed must

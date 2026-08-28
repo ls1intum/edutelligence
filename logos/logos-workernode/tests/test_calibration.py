@@ -2511,7 +2511,9 @@ def test_calibrate_sleep_level_zero_skips_wake():
     result, _ = _run_calibrate(patches, sleep_level=0)
 
     assert result.success, result.error
-    assert not any(u.endswith("/sleep") or u.endswith("/wake_up") for u in urls)
+    # Substring, not endswith: the sleep URL carries a query string
+    # (/sleep?level=1), which an endswith("/sleep") check would miss.
+    assert not any("/sleep" in u or "/wake_up" in u for u in urls)
     assert sum(1 for u in urls if u.endswith("/v1/completions")) == 1
     assert result.sleeping_residual_mb is None
     # The probe has no verdict when it skips the sleep phases — the stored
