@@ -71,7 +71,10 @@ public class OrchestratorModelHealthClient {
                 cached = entries != null ? entries : List.of();
             } catch (HttpStatusCodeException e) {
                 if (e.getStatusCode().value() != 503) {
-                    // No usable breakdown in this error response.
+                    // No usable breakdown in this error response. Refresh the
+                    // window so a failing orchestrator is only retried on the
+                    // cache cadence, not on every request.
+                    cachedAtMs = now;
                     return cached;
                 }
                 // 503 = every local worker is down; the body still carries
@@ -90,10 +93,11 @@ public class OrchestratorModelHealthClient {
 
     /**
      * Extracts the model entries from a /health body, or null when the body
-     * has no "models" list (older orchestrator or unusable payload) so the
-     * caller can tell "no breakdown" apart from "no models". Each entry is
-     * reduced to exactly the two public fields — extra keys the orchestrator
-     * might add later never reach the API.
+     * carries no usable breakdown (older orchestrator without the models key,
+     * or a non-empty list without a single valid entry) so the caller can
+     * tell that apart from an explicit empty list. Each entry is reduced to
+     * exactly the two public fields — extra keys the orchestrator might add
+     * later never reach the API.
      */
     private static List<Map<String, Object>> toModelEntries(Object body) {
         Object rawModels = body instanceof Map<?, ?> map ? map.get("models") : null;
@@ -111,6 +115,9 @@ public class OrchestratorModelHealthClient {
                 continue;
             }
             typed.add(Map.of("name", name, "status", status));
+        }
+        if (typed.isEmpty() && !models.isEmpty()) {
+            return null;
         }
         return List.copyOf(typed);
     }

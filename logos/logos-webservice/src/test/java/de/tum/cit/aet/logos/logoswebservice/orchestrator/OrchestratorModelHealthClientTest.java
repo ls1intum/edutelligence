@@ -20,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -153,6 +155,68 @@ class OrchestratorModelHealthClientTest {
         assertThat(client.getModelHealth()).hasSize(1);
         ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
         assertThat(client.getModelHealth()).hasSize(1);
+    }
+
+    @Test
+    void non503ErrorKeepsCacheWindow() {
+        Map<String, Object> withModels = Map.of("models", List.of(Map.of("name", "gpt-4", "status", "UP")));
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn(ok(withModels))
+            .thenThrow(new HttpServerErrorException(
+                HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error", new HttpHeaders(),
+                new byte[0], StandardCharsets.UTF_8));
+        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
+        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+
+        assertThat(client.getModelHealth()).hasSize(1);
+        ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
+        assertThat(client.getModelHealth()).hasSize(1); // 500, cache kept
+        assertThat(client.getModelHealth()).hasSize(1); // still inside the cache window
+
+        // The 500 refreshed the cache window: two round trips, not one per call.
+        verify(restTemplate, times(2)).exchange(
+            any(String.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+    }
+
+    @Test
+    void unusable503ModelListPreservesCachedHealth() {
+        // A 503 whose models list carries no valid entry is unusable garbage —
+        // it must not wipe the last known state.
+        Map<String, Object> withModels = Map.of("models", List.of(Map.of("name", "gpt-4", "status", "UP")));
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn(ok(withModels))
+            .thenThrow(new HttpClientErrorException(
+                HttpStatusCode.valueOf(503), "Service Unavailable", new HttpHeaders(),
+                "{\"status\":\"DOWN\",\"models\":[\"not-a-map\"],\"detail\":\"No local provider with a capable model is online.\"}"
+                    .getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8));
+        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
+        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+
+        assertThat(client.getModelHealth()).hasSize(1);
+        ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
+        assertThat(client.getModelHealth()).hasSize(1);
+    }
+
+    @Test
+    void empty503ModelListClearsCachedHealth() {
+        // In contrast, an explicit models: [] is a valid (empty) breakdown.
+        Map<String, Object> withModels = Map.of("models", List.of(Map.of("name", "gpt-4", "status", "UP")));
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn(ok(withModels))
+            .thenThrow(new HttpClientErrorException(
+                HttpStatusCode.valueOf(503), "Service Unavailable", new HttpHeaders(),
+                "{\"status\":\"DOWN\",\"models\":[]}".getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8));
+        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
+        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+
+        assertThat(client.getModelHealth()).hasSize(1);
+        ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
+        assertThat(client.getModelHealth()).isEmpty();
     }
 
     @Test
