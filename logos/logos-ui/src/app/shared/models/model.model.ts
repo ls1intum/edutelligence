@@ -7,6 +7,8 @@ export interface Model {
   weight_accuracy: number | null;
   weight_cost: number | null;
   weight_quality: number | null;
+  /** Only present for logos_admin (the endpoint is open to all roles). */
+  last_used_at?: string | null;
 }
 
 export interface AddModelPayload {

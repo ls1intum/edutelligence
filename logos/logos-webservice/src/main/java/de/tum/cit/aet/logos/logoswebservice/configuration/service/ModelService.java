@@ -39,10 +39,13 @@ public class ModelService {
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
-        List<ModelWithPriceProjection> projections = isLogosAdmin(auth)
+        // last_used_at is a platform-wide usage figure, so it is only exposed to
+        // Logos admins; everyone else gets the same list without that field.
+        boolean includeLastUsed = isLogosAdmin(auth);
+        List<ModelWithPriceProjection> projections = includeLastUsed
             ? modelRepository.findAllWithPricing()
             : modelRepository.findAllWithPricingForUser(auth.userId());
-        return projections.stream().map(ModelService::toModelMap).toList();
+        return projections.stream().map(p -> toModelMap(p, includeLastUsed)).toList();
     }
 
     @Transactional
@@ -123,7 +126,7 @@ public class ModelService {
         return Role.LOGOS_ADMIN.matches(auth.role());
     }
 
-    private static Map<String, Object> toModelMap(ModelWithPriceProjection p) {
+    private static Map<String, Object> toModelMap(ModelWithPriceProjection p, boolean includeLastUsed) {
         Map<String, Object> m = new LinkedHashMap<>();
         int id = p.getId();
         String name = p.getName();
@@ -137,6 +140,9 @@ public class ModelService {
         m.put("description", p.getDescription());
         m.put("input_usd_per_million", p.getInputUsdPerMillion());
         m.put("output_usd_per_million", p.getOutputUsdPerMillion());
+        if (includeLastUsed) {
+            m.put("last_used_at", p.getLastUsedAt() != null ? p.getLastUsedAt().toString() : null);
+        }
         return m;
     }
 
