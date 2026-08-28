@@ -1089,12 +1089,15 @@ class CapacityPlanner:
         """Wait for an already-starting lane instead of issuing a duplicate load."""
         deadline = time.monotonic() + timeout_seconds
         while True:
-            target = self._pick_request_target_lane(provider_id, model_name)
+            matching_lanes = [lane for lane in self._safe_get_lanes(provider_id) if lane.model_name == model_name]
+            target = best_lane([lane for lane in matching_lanes if lane.runtime_state not in {"stopped", "error"}])
             if target is not None:
                 if target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping":
                     return True
-                if target.runtime_state in {"stopped", "error", "cold", "sleeping"}:
+                if target.runtime_state in {"cold", "sleeping"}:
                     return False
+            elif any(lane.runtime_state in {"stopped", "error"} for lane in matching_lanes):
+                return False
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:

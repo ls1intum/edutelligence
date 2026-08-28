@@ -3,6 +3,8 @@
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 _IMPORTER_PATH = Path(__file__).resolve().parent.parent / "import_guidellm_results.py"
 _spec = importlib.util.spec_from_file_location("guidellm_importer_under_test", _IMPORTER_PATH)
@@ -93,3 +95,18 @@ def test_import_credentials_require_https_except_on_loopback():
     assert importer.credential_transport_is_secure("http://localhost:18082/import")
     assert importer.credential_transport_is_secure("http://127.0.0.1:18082/import")
     assert not importer.credential_transport_is_secure("http://logos.example/import")
+
+
+def test_loopback_import_disables_proxies_and_redirects(monkeypatch):
+    response = MagicMock()
+    response.__enter__.return_value = SimpleNamespace(status=200)
+    opener = MagicMock()
+    opener.open.return_value = response
+    build_opener = MagicMock(return_value=opener)
+    monkeypatch.setattr(importer.urllib.request, "build_opener", build_opener)
+
+    importer.post_payload("http://localhost:18082/import", "token", {"sample_size": 1})
+
+    handlers = build_opener.call_args.args
+    assert any(isinstance(handler, importer.urllib.request.ProxyHandler) for handler in handlers)
+    assert any(isinstance(handler, importer._RejectRedirects) for handler in handlers)

@@ -7,6 +7,7 @@ import argparse
 import ipaddress
 import json
 import os
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,12 @@ def credential_transport_is_secure(url: str) -> bool:
     parsed = urlsplit(url)
     if parsed.scheme == "https" and parsed.hostname:
         return True
+    return loopback_http_url(url)
+
+
+def loopback_http_url(url: str) -> bool:
+    """Return whether a URL uses plain HTTP on the local loopback."""
+    parsed = urlsplit(url)
     if parsed.scheme != "http" or not parsed.hostname:
         return False
     hostname = parsed.hostname.rstrip(".").lower()
@@ -37,6 +44,13 @@ def credential_transport_is_secure(url: str) -> bool:
         return ipaddress.ip_address(hostname).is_loopback
     except ValueError:
         return False
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Keep administrative credentials bound to their validated origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "Redirects are disabled", headers, fp)
 
 
 def _request_total(value: Any) -> int | None:
@@ -106,7 +120,11 @@ def post_payload(api_url: str, token: str, payload: dict[str, Any]) -> None:
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
+    handlers: list[Any] = [_RejectRedirects()]
+    if loopback_http_url(api_url):
+        handlers.insert(0, urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(*handlers)
+    with opener.open(request, timeout=30) as response:
         if response.status != 200:
             raise RuntimeError(f"Logos import failed with HTTP {response.status}")
 
