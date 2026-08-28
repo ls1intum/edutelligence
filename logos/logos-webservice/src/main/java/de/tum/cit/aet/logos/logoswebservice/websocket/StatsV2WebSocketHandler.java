@@ -129,6 +129,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         this.objectMapper = objectMapper;
         this.scheduler = Executors.newSingleThreadScheduledExecutor();
         this.scheduler.scheduleAtFixedRate(this::tick, 1, 1, TimeUnit.SECONDS);
+        // The orchestrator pushes a fresh live snapshot as it happens; forward
+        // it to the viewers without waiting for the next tick, which is what
+        // makes the token numbers move in real time instead of in steps.
+        liveStreamClient.setOnLiveUpdate(this::onLiveUpdate);
     }
 
     @Override
@@ -457,6 +461,38 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    // How often a live update may cost a DB read and a push per session. The
+    // orchestrator emits one per token delta, so without a gate the feed would
+    // requery the database at the model's token rate; with it, the numbers
+    // still move several times a second, which is what "live" needs.
+    private static final long LIVE_PUSH_MIN_INTERVAL_MS = 250;
+    private volatile long lastLivePushAtMs = 0;
+
+    /**
+     * A fresh live snapshot arrived from the orchestrator.
+     *
+     * Runs on the client's SSE thread, not the tick thread, and fires once per
+     * token delta — so it coalesces to at most one push per interval, and the
+     * push itself is the usual change-detected one: a session whose page shows
+     * nothing that moved pays a database read and sends nothing.
+     */
+    private void onLiveUpdate(Map<String, OrchestratorLiveStreamClient.LiveStream> streams) {
+        if (streams.isEmpty()) return;  // nothing running; the tick settles the feed
+        long now = System.currentTimeMillis();
+        if (now - lastLivePushAtMs < LIVE_PUSH_MIN_INTERVAL_MS) return;
+        lastLivePushAtMs = now;
+        for (Map.Entry<String, WebSocketSession> entry : sessions.entrySet()) {
+            WebSocketSession session = entry.getValue();
+            SessionState state = states.get(entry.getKey());
+            if (state == null || !state.initialized || !session.isOpen()) continue;
+            try {
+                pushRequests(session, state, false);
+            } catch (Exception e) {
+                log.warn("[ws/stats/v2] live requests push error for session {}: {}", entry.getKey(), e.getMessage());
+            }
+        }
+    }
+
     /**
      * Fill in the token counts of the requests that are still streaming.
      *
@@ -492,6 +528,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             request.put("completion_tokens", stream.completionTokens());
             request.put("total_tokens", stream.promptTokens() + stream.completionTokens());
             request.put("tokens_per_second", stream.tokensPerSecond());
+            // While the request still queues, the prompt figure is the
+            // estimate computed from the body, not something the upstream
+            // stated — the page shows it as such instead of as fact.
+            request.put("prompt_estimated", stream.promptEstimated());
             // Says outright that these are the in-flight figures, so the page can
             // present them as moving rather than final.
             request.put("streaming", true);
@@ -533,6 +573,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
               // fields above changing — leaving them out of the signature pins
               // the token and cost line of a running request to its first push.
               .append(r.getOrDefault("prompt_tokens", "")).append(':')
+              .append(r.getOrDefault("prompt_estimated", "")).append(':')
               .append(r.getOrDefault("completion_tokens", "")).append(':')
               .append(r.getOrDefault("total_tokens", "")).append(':')
               .append(r.getOrDefault("cost_microcents", "")).append(',');
