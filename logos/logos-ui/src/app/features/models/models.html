@@ -10,94 +10,236 @@
       placeholder="Search models..."
       (valueChange)="search.set($event)"
     />
-    <button type="button" class="btn-primary" (click)="openAddDialog()">
-      <i class="pi pi-plus" aria-hidden="true"></i> Add Model
-    </button>
+    @if (role() === 'logos_admin') {
+      <button type="button" class="btn-primary" (click)="openAddDialog()">
+        <i class="pi pi-plus" aria-hidden="true"></i> Add Model
+      </button>
+    }
   </div>
 
   @if (loadError()) {
     <app-error-message variant="banner" message="Failed to load models, please refresh." />
   }
 
-  <!-- ── Table ──────────────────────────────────────────────────────────── -->
-  <app-data-table
-    [columns]="['MODEL NAME', 'DESCRIPTION', 'TAGS', 'WEIGHTS', '']"
-    gridCols="220fr 260fr 160fr 180fr 72px"
-    [loading]="loading()"
-    [empty]="filteredModels().length === 0"
-    emptyMessage="No models match your search."
-  >
-    @for (model of filteredModels(); track model.id) {
-      <div class="table-row" role="row">
-        <div class="col-name name-cell" role="cell">
+<!-- ── Table ──────────────────────────────────────────────────────────── -->
+<app-data-table
+  [columns]="[
+    'MODEL NAME',
+    'DESCRIPTION',
+    ...(role() === 'logos_admin' ? ['TAGS'] : []),
+    'CAPABILITIES',
+    ...(role() === 'logos_admin' ? ['WEIGHTS', ''] : [])
+  ]"
+  [gridCols]="
+    role() === 'logos_admin'
+      ? '220fr 260fr 160fr 220fr 180fr 72px'
+      : '220fr 260fr 220fr'
+  "
+  [loading]="loading()"
+  [empty]="filteredModels().length === 0"
+  emptyMessage="No models match your search."
+>
+  @for (model of filteredModels(); track model.id) {
+    <div class="table-row">
+
+      <!-- Model Name -->
+      <div class="col-name name-cell" role="cell">
+        @if (role() === 'logos_admin') {
+          <button
+            type="button"
+            class="model-name"
+            (click)="openReport(model)"
+          >
+            {{ model.name }}
+          </button>
+        } @else {
           <span class="model-name">{{ model.name }}</span>
+        }
+
+        @if (role() === 'logos_admin') {
           <div class="name-mobile-actions">
             <button
               class="btn-icon"
               type="button"
               [attr.aria-label]="'Edit model ' + model.name"
-              (click)="openEditDialog(model)"
+              (click)="openEditDialog(model); $event.stopPropagation()"
             >
               <i class="pi pi-pencil" aria-hidden="true"></i>
             </button>
+
             <button
               class="btn-icon btn-icon--danger"
               type="button"
               [attr.aria-label]="'Delete model ' + model.name"
-              (click)="openDeleteDialog(model)"
+              (click)="openDeleteDialog(model); $event.stopPropagation()"
             >
               <i class="pi pi-trash" aria-hidden="true"></i>
             </button>
           </div>
-        </div>
+        }
+      </div>
 
-        <div class="col-desc desc-cell" role="cell" data-label="Description">
-          <span class="desc-text">{{ model.description || '-' }}</span>
-        </div>
+      <!-- Description -->
+      <div
+        class="col-desc desc-cell"
+        role="cell"
+        data-label="Description"
+      >
+        <span class="desc-text">
+          {{ model.description || '-' }}
+        </span>
+      </div>
 
-        <div class="col-tags tags-cell" role="cell" data-label="Tags">
-          <span class="tags-text">{{ model.tags || '-' }}</span>
+      <!-- Tags: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-tags tags-cell"
+          role="cell"
+          data-label="Tags"
+        >
+          <span class="tags-text">
+            {{ model.tags || '-' }}
+          </span>
         </div>
+      }
 
-        <div class="col-weights weights-cell" role="cell" data-label="Weights">
+      <!-- Capabilities -->
+      <div
+        class="col-capabilities capabilities-cell"
+        role="cell"
+        data-label="Capabilities"
+      >
+        @if (getCapabilities(model.id); as capabilities) {
+          <div class="capability-chips">
+
+            @if (capabilities.supports_function_calling) {
+              <span
+                class="capability-chip capability-chip--supported"
+                role="img"
+                aria-label="Supports function calling"
+                title="Function Calling"
+              >
+                <i class="pi pi-code" aria-hidden="true"></i>
+              </span>
+            }
+
+            @if (capabilities.supports_vision) {
+              <span
+                class="capability-chip capability-chip--supported"
+                role="img"
+                aria-label="Supports vision"
+                title="Vision"
+              >
+                <i class="pi pi-eye" aria-hidden="true"></i>
+              </span>
+            }
+
+            @if (capabilities.supports_reasoning) {
+              <span
+                class="capability-chip capability-chip--supported"
+                role="img"
+                aria-label="Supports reasoning"
+                title="Reasoning"
+              >
+                <i class="pi pi-lightbulb" aria-hidden="true"></i>
+              </span>
+            }
+
+            @if (
+              !capabilities.supports_function_calling &&
+              !capabilities.supports_vision &&
+              !capabilities.supports_reasoning
+            ) {
+              <span>-</span>
+            }
+
+          </div>
+        } @else {
+          <span>-</span>
+        }
+      </div>
+
+      <!-- Weights: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-weights weights-cell"
+          role="cell"
+          data-label="Weights"
+        >
           <div class="weights-chips">
-            <span class="wchip wchip--latency" [class.wchip--null]="model.weight_latency == null" title="Latency"
-              >L <span class="wchip-val">{{ model.weight_latency ?? '-' }}</span></span
+
+            <span
+              class="wchip wchip--latency"
+              [class.wchip--null]="model.weight_latency == null"
+              title="Latency"
             >
-            <span class="wchip wchip--accuracy" [class.wchip--null]="model.weight_accuracy == null" title="Accuracy"
-              >A <span class="wchip-val">{{ model.weight_accuracy ?? '-' }}</span></span
+              L
+              <span class="wchip-val">
+                {{ model.weight_latency ?? '-' }}
+              </span>
+            </span>
+
+            <span
+              class="wchip wchip--accuracy"
+              [class.wchip--null]="model.weight_accuracy == null"
+              title="Accuracy"
             >
-            <span class="wchip wchip--cost" [class.wchip--null]="model.weight_cost == null" title="Cost"
-              >C <span class="wchip-val">{{ model.weight_cost ?? '-' }}</span></span
+              A
+              <span class="wchip-val">
+                {{ model.weight_accuracy ?? '-' }}
+              </span>
+            </span>
+
+            <span
+              class="wchip wchip--cost"
+              [class.wchip--null]="model.weight_cost == null"
+              title="Cost"
             >
-            <span class="wchip wchip--quality" [class.wchip--null]="model.weight_quality == null" title="Quality"
-              >Q <span class="wchip-val">{{ model.weight_quality ?? '-' }}</span></span
+              C
+              <span class="wchip-val">
+                {{ model.weight_cost ?? '-' }}
+              </span>
+            </span>
+
+            <span
+              class="wchip wchip--quality"
+              [class.wchip--null]="model.weight_quality == null"
+              title="Quality"
             >
+              Q
+              <span class="wchip-val">
+                {{ model.weight_quality ?? '-' }}
+              </span>
+            </span>
+
           </div>
         </div>
 
+        <!-- Actions: logos_admin only -->
         <div class="col-actions actions-cell" role="cell">
           <button
             class="btn-icon"
             type="button"
             [attr.aria-label]="'Edit model ' + model.name"
-            (click)="openEditDialog(model)"
+            (click)="openEditDialog(model); $event.stopPropagation()"
           >
             <i class="pi pi-pencil" aria-hidden="true"></i>
           </button>
+
           <button
             class="btn-icon btn-icon--danger"
             type="button"
             [attr.aria-label]="'Delete model ' + model.name"
-            (click)="openDeleteDialog(model)"
+            (click)="openDeleteDialog(model); $event.stopPropagation()"
           >
             <i class="pi pi-trash" aria-hidden="true"></i>
           </button>
         </div>
-      </div>
-    }
-  </app-data-table>
-</div>
+      }
+
+    </div>
+  }
+</app-data-table>
 
 <!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
 <app-modal-confirm
@@ -158,20 +300,6 @@
         (input)="addTags.set($any($event.target).value)"
         [disabled]="addLoading()"
         autocomplete="off"
-      />
-    </div>
-
-    <p class="form-section-label form-section-label--mt">Routing</p>
-    <div class="form-field">
-      <label class="field-label" for="add-parallel">Parallelism</label>
-      <input
-        id="add-parallel"
-        class="field-input field-input--short"
-        type="number"
-        min="1"
-        [value]="addParallel()"
-        (input)="addParallel.set($any($event.target).value)"
-        [disabled]="addLoading()"
       />
     </div>
 
@@ -298,20 +426,6 @@
         (input)="editTags.set($any($event.target).value)"
         [disabled]="editLoading()"
         autocomplete="off"
-      />
-    </div>
-
-    <p class="form-section-label form-section-label--mt">Routing</p>
-    <div class="form-field">
-      <label class="field-label" for="edit-parallel">Parallelism</label>
-      <input
-        id="edit-parallel"
-        class="field-input field-input--short"
-        type="number"
-        min="1"
-        [value]="editParallel()"
-        (input)="editParallel.set($any($event.target).value)"
-        [disabled]="editLoading()"
       />
     </div>
 

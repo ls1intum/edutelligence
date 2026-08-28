@@ -20,6 +20,7 @@ from logos.timeouts import global_timeout_s
 
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
+from .prefix_affinity import affinity_keys
 from .scheduler_interface import QueueTimeoutError, SchedulerInterface, SchedulingRequest
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,9 @@ class PipelineRequest:
     # context resolver to build the forward URL for cloud upstream providers,
     # which serve the same OpenAI-shaped surface as our /v1 routes.
     request_path: Optional[str] = None
+    # Calling API key. Seeds the prefix-affinity hash so two keys never share
+    # a stream identity, and so one key's parallel agent loops stay separate.
+    api_key_id: Optional[int] = None
 
 
 @dataclass
@@ -143,7 +147,7 @@ class RequestPipeline:
             )
 
         sorted_candidates = sorted(classification_result.candidates, key=lambda x: x[1], reverse=True)
-        target_model_id, _, priority_int, _ = sorted_candidates[0]
+        target_model_id, _, priority_int = sorted_candidates[0]
         target_deployment = next(
             (d for d in request.deployments if d["model_id"] == target_model_id),
             None,
@@ -167,6 +171,7 @@ class RequestPipeline:
             deployments=request.deployments,
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
+            affinity_keys=affinity_keys(request.api_key_id, request.payload),
         )
 
         # Record enqueue
@@ -446,7 +451,7 @@ class RequestPipeline:
             "classification_time": elapsed,
             "candidate_count": len(candidates),
             "candidates": [
-                {"model_id": m, "weight": w, "priority": p} for m, w, p, _ in candidates[:5]  # Top 5 for logging
+                {"model_id": m, "weight": w, "priority": p} for m, w, p in candidates[:5]  # Top 5 for logging
             ],
         }
 
@@ -510,6 +515,10 @@ class RequestPipeline:
             cold_start=cold_start,
         )
 
+    def discard_request(self, request_id: str, result_status: str) -> None:
+        """Close out a request whose terminal log row was written elsewhere."""
+        self._monitoring.discard(request_id, result_status)
+
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider statistics (e.g. rate limits) from response headers.
@@ -556,5 +565,5 @@ class RequestPipeline:
 
 @dataclass
 class _ClassificationResult:
-    candidates: List[Tuple[int, float, int, int]]
+    candidates: List[Tuple[int, float, int]]  # (model_id, weight, priority)
     stats: Dict[str, Any]

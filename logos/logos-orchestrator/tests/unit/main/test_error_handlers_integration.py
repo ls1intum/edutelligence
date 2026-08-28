@@ -105,7 +105,7 @@ def _stub_db(monkeypatch):
             return [(1, "test-model")]
 
         def get_model(self, model_id):
-            return {"id": model_id, "name": "test-model", "parallel": 1}
+            return {"id": model_id, "name": "test-model"}
 
         def get_provider_deployment_info(self, mid, pid):
             return {
@@ -125,7 +125,7 @@ def _stub_request_setup(monkeypatch):
     monkeypatch.setattr(
         main,
         "request_setup",
-        lambda headers, api_key_id: (
+        lambda headers, api_key_id, db=None: (
             [{"model_id": 1, "provider_id": 1, "type": "openai"}],
             [1],
         ),

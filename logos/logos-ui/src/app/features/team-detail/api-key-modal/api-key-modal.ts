@@ -96,10 +96,17 @@ export class ApiKeyModalComponent implements OnChanges {
     );
   });
 
-  // ── save / copy ───────────────────────────────────────────────────────────
+  // ── save / copy / rotate ─────────────────────────────────────────────────
   saveLoading = signal(false);
   saveError = signal('');
   copied = signal(false);
+  rotateConfirm = signal(false);
+  rotateLoading = signal(false);
+  rotateError = signal('');
+
+  effectiveKeyValue(): string | null {
+    return this.key?.key_value ?? null;
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['visible']?.currentValue && this.key) {
@@ -121,6 +128,8 @@ export class ApiKeyModalComponent implements OnChanges {
     this.fCustom.set(!!key.use_custom_permissions);
     this.saveError.set('');
     this.copied.set(false);
+    this.rotateConfirm.set(false);
+    this.rotateError.set('');
   }
 
   private async loadPermissions(keyId: number): Promise<void> {
@@ -193,7 +202,7 @@ export class ApiKeyModalComponent implements OnChanges {
   }
 
   async copyKey(): Promise<void> {
-    const v = this.key?.key_value;
+    const v = this.effectiveKeyValue();
     if (!v) return;
     await navigator.clipboard.writeText(v);
     this.copied.set(true);
@@ -201,9 +210,40 @@ export class ApiKeyModalComponent implements OnChanges {
   }
 
   maskedKey(): string {
-    const v = this.key?.key_value;
+    const v = this.effectiveKeyValue();
     if (!v) return '••••••••••••••••••••';
     return `${v.substring(0, 14)}••••••••••••••`;
+  }
+
+  requestRotate(): void {
+    this.rotateError.set('');
+    this.rotateConfirm.set(true);
+  }
+
+  cancelRotate(): void {
+    this.rotateConfirm.set(false);
+    this.rotateError.set('');
+  }
+
+  async confirmRotate(): Promise<void> {
+    const key = this.key;
+    if (!key || this.rotateLoading()) return;
+    this.rotateLoading.set(true);
+    this.rotateError.set('');
+    try {
+      const res = await this.svc.rotateApiKey(key.id);
+      // Update the shared key object in place so a reopened modal shows the
+      // rotated value instead of the pre-rotation one from the parent's
+      // cached list. The object is the same reference held by the team-detail
+      // apiKeys signal and the tab that opened this modal (no refetch happens
+      // in between), so both keep displaying the new key.
+      key.key_value = res.api_key;
+      this.rotateConfirm.set(false);
+    } catch {
+      this.rotateError.set('Failed to rotate key, please try again.');
+    } finally {
+      this.rotateLoading.set(false);
+    }
   }
 
   formatDollars(mc: number | null | undefined): string {

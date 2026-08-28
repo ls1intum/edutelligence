@@ -103,6 +103,22 @@ logos:
   #   base_residency_mb: int       — manual VRAM weight footprint (MB), excluding
   #     KV cache. Only set this if auto-calibration fails or gives wrong values.
   #     Normal workflow: leave this unset and let calibration measure it.
+  #
+  #   min_context_fraction: float  — smallest share of this model's own context
+  #     length a lane here may serve, 0.0-1.0. The server refuses to place the
+  #     model on this node unless a calibrated KV point reaches that window.
+  #
+  #     Why it exists: a lane's context window comes from whatever KV cache fits
+  #     at load time, so the same model can serve its full context on an idle
+  #     node and a fraction of it on a busy one. The API can only promise the
+  #     smallest window across the cluster, so one narrow lane is what every
+  #     client is told the model can do. Set this for models where a fraction of
+  #     the window is not worth serving — coding assistants especially.
+  #
+  #     1.0 = full context or nothing. Unset (or 0) = place at any width, which
+  #     is the behaviour from before this field existed. Watch the server log
+  #     for "no calibrated KV point serves the required minimum" if a model
+  #     stops being placed here after setting it.
 
   capabilities_models:
     # Minimal form — no placement overrides needed (KV budget set by server or default)
@@ -123,6 +139,11 @@ logos:
       tensor_parallel_size: 2
       kv_cache_memory_bytes: 12G
       base_residency_mb: 42000
+
+    # Coding-assistant model: only worth serving at its full context, so the
+    # server places it here or not at all rather than at whatever fits.
+    - model: Qwen/Qwen3.8-27B
+      min_context_fraction: 1.0
 
   # How often (seconds) the worker sends a status heartbeat to Logos.
   # Lower = server sees fresher lane state; higher = less network chatter.
@@ -289,6 +310,11 @@ engines:
     #   extra_args: list           — arbitrary extra CLI flags passed verbatim to
     #     "vllm serve". Use for features not yet exposed as first-class fields.
 
+    # Profile-level keys (min_context_fraction, base_residency_mb, kv_budget_mb,
+    # ...) do NOT belong in model_overrides: they are not vLLM engine settings.
+    # If one slips in here it is auto-routed to the model profile registry with
+    # a warning; the documented home is an inline entry under
+    # logos.capabilities_models (see above).
     model_overrides:
       Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
         quantization: awq

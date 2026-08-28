@@ -73,6 +73,21 @@ async def test_execute_resource_mode_failure_records_error(monkeypatch):
 async def test_execute_resource_mode_uses_sync_response_for_resolved_whisper_alias(monkeypatch):
     """A client alias resolving to Whisper must not be framed as SSE."""
 
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_team(self, team_id):
+            return None
+
+        def get_api_key_budget_limit(self, api_key_id):
+            return None
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+
     class Result:
         success = True
         error = None
@@ -227,7 +242,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
 
     class FakeClassifier:
         def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
-            return [(27, 1.0, 1, 1)]
+            return [(27, 1.0, 1)]
 
     class FakeScheduler:
         def __init__(self):
@@ -287,7 +302,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_raises():
 
     class FakeClassifier:
         def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
-            return [(27, 1.0, 1, 1)]
+            return [(27, 1.0, 1)]
 
     class FakeScheduler:
         def __init__(self):

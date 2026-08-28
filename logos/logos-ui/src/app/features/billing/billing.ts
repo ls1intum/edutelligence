@@ -21,8 +21,7 @@ import {
 } from '../../shared/utils/time-range';
 import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
 import { isInteractiveClick } from '../../shared/utils/interactive-click';
-
-const MICRO_CENTS_PER_DOLLAR = 100_000_000;
+import { MICRO_CENTS_PER_UNIT as MICRO_CENTS_PER_DOLLAR } from '../../shared/utils/currency';
 
 // Each team is hashed by name onto the active theme's own primary ramp
 // (light to dark) so a given team keeps the same colour regardless of sort
@@ -96,6 +95,7 @@ function formatBucketLabel(iso: string, preset: TimePreset): string {
       return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     case 'week':
     case 'month':
+    case '30d':
     case '6m':
       return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     case 'year':
@@ -184,6 +184,7 @@ export class Billing {
       case 'week':
         return 7;
       case 'month':
+      case '30d':
         return Math.round((currEnd.getTime() - currStart.getTime()) / 86_400_000);
       case '6m':
         return 6;

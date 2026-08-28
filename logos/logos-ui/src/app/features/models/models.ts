@@ -9,11 +9,13 @@ import {
 import { FormsModule } from '@angular/forms';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
-import { ModelManagementService } from '../../core/services/model-management.service';
+import { ModelManagementService, ModelCapability } from '../../core/services/model-management.service';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { AuthService } from '../../core/auth/services/auth.service';
+import { Router } from '@angular/router';
 
 @Component({
   selector: 'app-models',
@@ -32,9 +34,12 @@ import { ErrorMessageComponent } from '../../shared/components/error-message/err
 })
 export class Models implements OnInit {
   private modelService = inject(ModelManagementService);
+  readonly role = inject(AuthService).role;
+  private router = inject(Router);
 
   // ── List state ──────────────────────────────────────────────────────────
   models = signal<Model[]>([]);
+  capabilities = signal<Record<number, ModelCapability>>({});
   loading = signal(true);
   search = signal('');
   loadError = signal(false);
@@ -49,7 +54,6 @@ export class Models implements OnInit {
   addName = signal('');
   addDesc = signal('');
   addTags = signal('');
-  addParallel = signal('');
   addWtLatency = signal('');
   addWtAccuracy = signal('');
   addWtCost = signal('');
@@ -62,7 +66,6 @@ export class Models implements OnInit {
   editName = signal('');
   editDesc = signal('');
   editTags = signal('');
-  editParallel = signal('');
   editWtLatency = signal('');
   editWtAccuracy = signal('');
   editWtCost = signal('');
@@ -89,16 +92,31 @@ export class Models implements OnInit {
   }
 
   async fetchModels(): Promise<void> {
-    this.loading.set(true);
-    this.loadError.set(false);
-    try {
-      const models = await this.modelService.getModels();
-      this.models.set(models);
-    } catch {
-      this.loadError.set(true);
-    } finally {
-      this.loading.set(false);
-    }
+  this.loading.set(true);
+  this.loadError.set(false);
+
+  try {
+    const models = await this.modelService.getModels();
+    this.models.set(models);
+
+    const capabilities = await this.modelService.getModelCapabilities(
+      models.map((model) => model.id),
+    );
+
+    this.capabilities.set(capabilities);
+  } catch {
+    this.loadError.set(true);
+  } finally {
+    this.loading.set(false);
+  }
+}
+      
+  getCapabilities(modelId: number): ModelCapability | undefined {
+    return this.capabilities()[modelId];
+  }
+  
+  openReport(model: Model): void {
+    this.router.navigate(['/models', model.id, 'errors']);
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────
@@ -133,7 +151,6 @@ export class Models implements OnInit {
     this.addName.set('');
     this.addDesc.set('');
     this.addTags.set('');
-    this.addParallel.set('');
     this.addWtLatency.set('');
     this.addWtAccuracy.set('');
     this.addWtCost.set('');
@@ -156,7 +173,6 @@ export class Models implements OnInit {
       name: this.addName().trim(),
       description: this.addDesc().trim() || undefined,
       tags: this.addTags().trim() || undefined,
-      parallel: this.addParallel() ? Number(this.addParallel()) : undefined,
     };
 
     const wtLatency = this.addWtLatency() ? Number(this.addWtLatency()) : undefined;
@@ -192,7 +208,6 @@ export class Models implements OnInit {
     this.editName.set(model.name ?? '');
     this.editDesc.set(model.description ?? '');
     this.editTags.set(model.tags ?? '');
-    this.editParallel.set(model.parallel != null ? String(model.parallel) : '');
     this.editWtLatency.set(model.weight_latency != null ? String(model.weight_latency) : '');
     this.editWtAccuracy.set(model.weight_accuracy != null ? String(model.weight_accuracy) : '');
     this.editWtCost.set(model.weight_cost != null ? String(model.weight_cost) : '');
@@ -215,7 +230,6 @@ export class Models implements OnInit {
       name: this.editName().trim() || undefined,
       description: this.editDesc().trim() || undefined,
       tags: this.editTags().trim() || undefined,
-      parallel: this.editParallel() ? Number(this.editParallel()) : undefined,
       weight_latency: this.editWtLatency() ? Number(this.editWtLatency()) : undefined,
       weight_accuracy: this.editWtAccuracy() ? Number(this.editWtAccuracy()) : undefined,
       weight_cost: this.editWtCost() ? Number(this.editWtCost()) : undefined,
@@ -231,7 +245,6 @@ export class Models implements OnInit {
                 name: payload.name ?? m.name,
                 description: payload.description ?? m.description,
                 tags: payload.tags ?? m.tags,
-                parallel: payload.parallel ?? m.parallel,
                 weight_latency: payload.weight_latency ?? m.weight_latency,
                 weight_accuracy: payload.weight_accuracy ?? m.weight_accuracy,
                 weight_cost: payload.weight_cost ?? m.weight_cost,

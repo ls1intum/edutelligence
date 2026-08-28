@@ -4,14 +4,19 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ModelCapabilitiesDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelWithPriceProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
@@ -23,16 +28,18 @@ public class ModelService {
     private final ModelRepository modelRepository;
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
+    private final ModelCapabilitiesRepository modelCapabilitiesRepository;
 
     public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
-                        OrchestratorNotificationService orchestratorNotificationService) {
+                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository) {
         this.modelRepository = modelRepository;
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
+        this.modelCapabilitiesRepository = modelCapabilitiesRepository;
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
-        List<ModelWithPriceProjection> projections = isAdmin(auth)
+        List<ModelWithPriceProjection> projections = isLogosAdmin(auth)
             ? modelRepository.findAllWithPricing()
             : modelRepository.findAllWithPricingForUser(auth.userId());
         return projections.stream().map(ModelService::toModelMap).toList();
@@ -43,7 +50,6 @@ public class ModelService {
         Model model = new Model();
         model.setName(req.name());
         model.setTags(req.tags() != null ? req.tags() : "");
-        model.setParallel(req.parallel() != null ? req.parallel() : 1);
         model.setDescription(req.description() != null ? req.description() : "");
         model.setWeightLatency(0);
         model.setWeightAccuracy(0);
@@ -66,7 +72,6 @@ public class ModelService {
         if (req.name() != null) model.setName(req.name());
         if (req.description() != null) model.setDescription(req.description());
         if (req.tags() != null) model.setTags(req.tags());
-        if (req.parallel() != null) model.setParallel(req.parallel());
         if (req.weightLatency() != null) model.setWeightLatency(req.weightLatency());
         if (req.weightAccuracy() != null) model.setWeightAccuracy(req.weightAccuracy());
         if (req.weightCost() != null) model.setWeightCost(req.weightCost());
@@ -96,7 +101,6 @@ public class ModelService {
             map.put("weight_cost", m.getWeightCost());
             map.put("weight_quality", m.getWeightQuality());
             map.put("tags", m.getTags());
-            map.put("parallel", m.getParallel());
             map.put("description", m.getDescription());
             return map;
         });
@@ -115,8 +119,8 @@ public class ModelService {
         return Map.of("totalModels", modelRepository.count());
     }
 
-    private static boolean isAdmin(AuthContext auth) {
-        return Role.LOGOS_ADMIN.matches(auth.role()) || Role.APP_ADMIN.matches(auth.role());
+    private static boolean isLogosAdmin(AuthContext auth) {
+        return Role.LOGOS_ADMIN.matches(auth.role());
     }
 
     private static Map<String, Object> toModelMap(ModelWithPriceProjection p) {
@@ -130,10 +134,33 @@ public class ModelService {
         m.put("weight_cost", p.getWeightCost());
         m.put("weight_quality", p.getWeightQuality());
         m.put("tags", p.getTags());
-        m.put("parallel", p.getParallel());
         m.put("description", p.getDescription());
         m.put("input_usd_per_million", p.getInputUsdPerMillion());
         m.put("output_usd_per_million", p.getOutputUsdPerMillion());
         return m;
+    }
+
+    public Optional<ModelCapabilitiesDTO> getModelCapabilities(Integer modelId) {
+        return modelCapabilitiesRepository.findByModelId(modelId)
+            .map(ModelService::toModelCapabilitiesDTO);
+    }
+
+    public Map<Integer, ModelCapabilitiesDTO> getModelCapabilities(List<Integer> modelIds) {
+        return modelCapabilitiesRepository.findByModelIdIn(modelIds)
+            .stream()
+            .map(ModelService::toModelCapabilitiesDTO)
+            .collect(Collectors.toMap(
+                ModelCapabilitiesDTO::modelId,
+                Function.identity()
+            ));
+    }
+
+    private static ModelCapabilitiesDTO toModelCapabilitiesDTO(ModelCapabilities capabilities) {
+        return new ModelCapabilitiesDTO(
+            capabilities.getModelId(),
+            capabilities.getSupportsFunctionCalling(),
+            capabilities.getSupportsVision(),
+            capabilities.getSupportsReasoning()
+        );
     }
 }

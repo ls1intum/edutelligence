@@ -14,6 +14,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.mockito.Mockito.verify;
+
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
@@ -35,6 +38,9 @@ class ProviderControllerTest {
 
     @Autowired MockMvc mvc;
     @MockitoBean JwtDecoder jwtDecoder;
+    // Mocked so the price refresh triggered by connect_model_provider does not
+    // reach the live litellm catalog during tests.
+    @MockitoBean PriceUpdaterService priceUpdaterService;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
@@ -110,6 +116,19 @@ class ProviderControllerTest {
     }
 
     @Test
+    void connectModelProvider_refreshesPricesForTheLinkedModel() throws Exception {
+        mvc.perform(post("/logosdb/connect_model_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"model_id\":5002}"))
+           .andExpect(status().isOk());
+
+        // Without this refresh a freshly linked cloud model kept reporting a
+        // cost of zero until the next daily full refresh.
+        verify(priceUpdaterService).updatePricesForModelAsync(5002);
+    }
+
+    @Test
     void disconnectModelProvider_removesLink() throws Exception {
         mvc.perform(post("/logosdb/disconnect_model_provider")
                 .with(TestJwt.logosAdmin())
@@ -138,5 +157,31 @@ class ProviderControllerTest {
                 .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.totalProviders").isNumber());
+    }
+
+    @Test
+    void addLane_rejectsNonAdmin() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/add")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane\":{\"model\":\"llama3\"}}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void addLane_requiresProviderAndLane() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/add")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane are required"));
+
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/add")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"lane\":{\"model\":\"llama3\"}}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane are required"));
     }
 }

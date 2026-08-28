@@ -33,13 +33,16 @@ import {
 import {
   TimePreset, calendarRange, periodLabel as periodLabelFn,
 } from '../../shared/utils/time-range';
+import { formatUsd } from '../../shared/utils/currency';
 import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
 
 import type {
   DeviceInfo,
+  FeedFilterOption,
   LaneSignalData,
   RequestItem,
   RequestLogStats,
+  TimelineDeltaPayload,
   TimelineEnqueueEvent,
   TimelineInitPayload,
   VramProviderMeta,
@@ -54,6 +57,7 @@ import { LaneHealthPanel } from './components/lane-health-panel/lane-health-pane
 import { LaneVramPieComponent } from './components/lane-vram-pie/lane-vram-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 import { RecentRequests } from './components/recent-requests/recent-requests';
+import { StatisticsService } from './services/statistics.service';
 import { RequestVolumeChartComponent, ChartTooltip } from './components/request-volume-chart/request-volume-chart';
 import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
@@ -65,6 +69,13 @@ import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
 const RAW_VRAM_SAMPLE_CAP = 720;
+
+/**
+ * Ceiling on the accumulated enqueue events the volume chart re-buckets. Matches
+ * the server's own cap on the initial load, so a session that has been open for
+ * hours holds no more than a fresh one would.
+ */
+const TIMELINE_EVENT_CAP = 200_000;
 
 @Component({
   selector: 'app-statistics',
@@ -93,6 +104,82 @@ const RAW_VRAM_SAMPLE_CAP = 720;
 })
 export class Statistics implements OnInit, OnDestroy {
   private statsWs = inject(StatsWebsocketService);
+  private statisticsService = inject(StatisticsService);
+
+  /** Filter options, loaded once on init. */
+  readonly feedUsers = signal<FeedFilterOption[]>([]);
+  readonly feedTeams = signal<FeedFilterOption[]>([]);
+
+  // ── Scope ─────────────────────────────────────────────────────────────────
+  // Null on either side means "everyone". The filter lives on the page rather
+  // than inside the request feed, because it applies to the page: narrowing the
+  // list while the KPI cards and charts above it kept counting the whole
+  // platform left the two halves of the screen describing different things.
+  //
+  // Deliberately not applied to VRAM, lanes or GPUs. Those are properties of
+  // the hardware and are not attributable to a team, so filtering them would
+  // not be a narrower truth — it would be no data at all.
+  readonly filterUserId = signal<number | null>(null);
+  readonly filterTeamId = signal<number | null>(null);
+
+  readonly filterActive = computed(
+    () => this.filterUserId() !== null || this.filterTeamId() !== null,
+  );
+
+  // Both lists carry their request count, so the dropdown says which entries
+  // are worth opening instead of being an alphabet of names. Ordered busiest
+  // first by the server, which only reads as deliberate once the numbers show.
+  readonly userFilterOptions = computed<AppSelectOption[]>(() => [
+    {
+      value: '',
+      label: this.filterTeamId() === null ? 'All requesters' : 'Everyone in this team',
+    },
+    ...this.feedUsers().map((u) => ({
+      value: String(u.id),
+      label: `${u.label} (${u.requestCount.toLocaleString()})`,
+    })),
+  ]);
+
+  readonly teamFilterOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'All teams' },
+    ...this.feedTeams().map((t) => ({
+      value: String(t.id),
+      label: `${t.label} (${t.requestCount.toLocaleString()})`,
+    })),
+  ]);
+
+  /**
+   * Nobody in the selected team sent anything in this range, so the requester
+   * dropdown has nothing but its "everyone" entry. Worth saying outright — an
+   * empty picker otherwise reads as a page that failed to load its options.
+   */
+  readonly noRequestersInScope = computed(
+    () => this.feedUsers().length === 0 && this.feedTeams().length > 0,
+  );
+
+  readonly selectedUserValue = computed(() => {
+    const id = this.filterUserId();
+    return id === null ? '' : String(id);
+  });
+
+  readonly selectedTeamValue = computed(() => {
+    const id = this.filterTeamId();
+    return id === null ? '' : String(id);
+  });
+
+  /** What the active filter narrows to, for the label above the KPI strip. */
+  readonly filterLabel = computed(() => {
+    const parts: string[] = [];
+    const teamId = this.filterTeamId();
+    if (teamId !== null) {
+      parts.push(this.feedTeams().find((t) => t.id === teamId)?.label ?? `team ${teamId}`);
+    }
+    const userId = this.filterUserId();
+    if (userId !== null) {
+      parts.push(this.feedUsers().find((u) => u.id === userId)?.label ?? `user ${userId}`);
+    }
+    return parts.join(' · ');
+  });
 
   // ── Raw WS signals ────────────────────────────────────────────────────────────
   readonly stats = signal<RequestLogStats | null>(null);
@@ -102,7 +189,6 @@ export class Statistics implements OnInit, OnDestroy {
   readonly latestRequests = signal<RequestItem[]>([]);
   readonly timelineEvents = signal<TimelineEnqueueEvent[]>([]);
   readonly selectedVramProvider = signal<string | null>(null);
-  readonly vramDayOffset = signal(0);
   readonly customRange = signal<{ start: Date; end: Date } | null>(null);
   readonly error = signal<string | null>(null);
   readonly vramError = signal<string | null>(null);
@@ -114,7 +200,7 @@ export class Statistics implements OnInit, OnDestroy {
   private readonly chartTooltipEl = viewChild<ElementRef<HTMLElement>>('chartTooltipEl');
 
   // ── Preset / time-range-bar state ─────────────────────────────────────────────
-  readonly preset = signal<TimePreset>('month');
+  readonly preset = signal<TimePreset>('30d');
   readonly offset = signal(0);
   readonly presetRange = computed(() => calendarRange(this.preset(), this.offset()));
   readonly periodLabel = computed(() =>
@@ -124,6 +210,16 @@ export class Statistics implements OnInit, OnDestroy {
   // Internal: stored timeline range for derived series
   private timelineRangeMs: { startMs: number; endMs: number; bucketMs: number } | null = null;
   private hasResolvedStats = false;
+
+  /**
+   * A range change is in flight — every number on the page still describes the
+   * *previous* range until the next `timeline_init` / `requests` push lands.
+   * Without these flags the cards keep their old values while the header
+   * already says the new period, which reads as data for a range it isn't.
+   */
+  readonly statsPending = signal(false);
+  /** Starts true: the first push has not landed, so there is nothing to show yet. */
+  readonly requestsPending = signal(true);
 
   // ── Ticker ────────────────────────────────────────────────────────────────────
   private nowInterval: ReturnType<typeof setInterval> | null = null;
@@ -295,6 +391,20 @@ export class Statistics implements OnInit, OnDestroy {
     const prov = this.selectedVramProvider();
     if (!prov) return 0;
     return extractProviderVramMb(this.latestSampleByProvider()[prov]).freeMb;
+  });
+
+  /**
+   * Badge text for the selected provider's free VRAM, or null when there is no
+   * sample to report. A provider whose memory is exhausted legitimately reports
+   * 0 MB free, so absence has to be the missing sample rather than the value —
+   * gating the badge on `> 0` hid exactly the state worth seeing.
+   */
+  readonly selectedProviderFreeVramLabel = computed<string | null>(() => {
+    const prov = this.selectedVramProvider();
+    if (!prov) return null;
+    const sample = this.latestSampleByProvider()[prov];
+    if (!sample) return null;
+    return `${(extractProviderVramMb(sample).freeMb / 1024).toFixed(1)} GB free`;
   });
 
   readonly vramPieData = computed(() => {
@@ -558,6 +668,23 @@ export class Statistics implements OnInit, OnDestroy {
   readonly cloudRequests = computed(() => this.stats()?.totals.cloudRequests ?? 0);
   readonly localRequests = computed(() => this.stats()?.totals.localRequests ?? 0);
 
+  // Historic totals over the selected range (items 6): tokens processed and
+  // accumulated cloud cost in microcents.
+  readonly totalTokens = computed(() => this.stats()?.totals.totalTokens ?? 0);
+  readonly cloudCostMicroCents = computed(() => this.stats()?.totals.cloudCostMicroCents ?? 0);
+
+  /** Format a token count for the KPI card (1.2M / 340k / 12). */
+  formatTokenCount(v: number): string {
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+    if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
+    return String(Math.round(v));
+  }
+
+  /** Format cloud cost in microcents as USD (the unit litellm prices in). */
+  formatCloudCost(microCents: number): string {
+    return formatUsd(microCents);
+  }
+
   readonly cloudPct = computed(() => {
     const total = this.totalRequests();
     const cloud = this.cloudRequests();
@@ -588,13 +715,20 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Readiness flags ───────────────────────────────────────────────────────────
 
-  readonly statsReady = computed(() => this.stats() !== null);
+  /** Statistics have arrived at least once — enough to mount a chart. */
+  readonly statsLoaded = computed(() => this.stats() !== null);
+
+  /** …and they describe the range the page currently claims to show. */
+  readonly statsReady = computed(() => this.statsLoaded() && !this.statsPending());
 
   readonly vramReady = computed(() =>
     Object.values(this.vramRawDataByProvider()).some((arr) => arr && arr.length > 0),
   );
 
-  readonly showFatalError = computed(() => this.error() !== null && !this.statsReady());
+  // Deliberately not `!statsReady()`: that is also false while a range change is
+  // in flight, so an error arriving then would replace a page full of usable
+  // data with the fatal-error screen. Only never having had data is fatal.
+  readonly showFatalError = computed(() => this.error() !== null && this.stats() === null);
 
   // ── Lane KPI helpers ──────────────────────────────────────────────────────────
 
@@ -698,17 +832,103 @@ export class Statistics implements OnInit, OnDestroy {
     this.statsWs.connect({
       vramDayOffset: -1, // web path → vram_day = 'all'
       timeline: cfg,
-      timelineDeltas: false,
+      // Enabled: without the deltas the volume chart is drawn once from the
+      // events of the initial load and then never moves again.
+      timelineDeltas: true,
+      scope: { userId: this.filterUserId(), teamId: this.filterTeamId() },
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
         onVramDelta: (p) => this.handleVramWsDeltaV2(p),
         onTimelineInit: (p) => this.handleTimelineInitV2(p),
-        onTimelineDelta: () => {},
+        onTimelineDelta: (p) => this.handleTimelineDeltaV2(p),
+        onStats: (p) => this.handleStatsRefreshV2(p),
         onRequestsData: (p) => this.handleRequestsWsData(p),
       },
     });
 
     this.nowInterval = setInterval(() => this.nowMs.set(Date.now()), 30_000);
+    void this.loadScopeOptions();
+  }
+
+  // ── Scope handlers ────────────────────────────────────────────────────────
+
+  setUserFilter(value: string | null): void {
+    const id = value ? Number(value) : null;
+    const next = Number.isFinite(id as number) ? id : null;
+    if (next === this.filterUserId()) return;
+    this.filterUserId.set(next);
+    this.applyScope();
+  }
+
+  /**
+   * Pick a team, and the requester list becomes that team's requesters.
+   *
+   * Not a precondition, though: a handful of people send requests under more
+   * than one team, and making the team mandatory would make "everything user X
+   * did" unaskable. It is a way to shorten the list, not a gate in front of it.
+   */
+  setTeamFilter(value: string | null): void {
+    const id = value ? Number(value) : null;
+    const next = Number.isFinite(id as number) ? id : null;
+    if (next === this.filterTeamId()) return;
+    this.filterTeamId.set(next);
+    this.applyScope();
+    void this.loadScopeOptions();
+  }
+
+  clearFilter(): void {
+    if (!this.filterActive()) return;
+    this.filterUserId.set(null);
+    this.filterTeamId.set(null);
+    this.applyScope();
+    void this.loadScopeOptions();
+  }
+
+  /**
+   * Hand the new scope to the server and blank every range-scoped panel until
+   * it answers. Same treatment a range change gets: the numbers on screen
+   * describe the previous scope, and leaving them up while the new ones are in
+   * flight is how a filter appears not to have worked.
+   */
+  private applyScope(): void {
+    this.markRangeChanged();
+    this.statsWs.setScope({ userId: this.filterUserId(), teamId: this.filterTeamId() });
+  }
+
+  /**
+   * Refill the filter dropdowns for the current range and team.
+   *
+   * These used to be the platform's user and team inventory, read once. That is
+   * a different list from a useful one: it held every account ever created,
+   * including the majority that have never sent a request, and a native select
+   * has no search box to dig through it with. Now the server answers with what
+   * the range actually contains — and, once a team is picked, only that team's
+   * requesters.
+   *
+   * Re-run on a range change as well as a team change, since a narrower window
+   * holds fewer of both.
+   */
+  private async loadScopeOptions(): Promise<void> {
+    const cfg = this.wsTimelineConfig();
+    const teamId = this.filterTeamId();
+    try {
+      const options = await this.statisticsService.getScopeOptions(cfg.start, cfg.end, teamId);
+      this.feedTeams.set(options.teams ?? []);
+      this.feedUsers.set(options.requesters ?? []);
+
+      // The selected requester may not be in the new list — a different team, or
+      // a range they were quiet in. Leaving them selected would hold the page on
+      // a scope with no data and no visible cause, since the dropdown cannot
+      // show a value it has no option for.
+      const userId = this.filterUserId();
+      if (userId !== null && !this.feedUsers().some((u) => u.id === userId)) {
+        this.filterUserId.set(null);
+        this.applyScope();
+      }
+    } catch {
+      // A failure leaves the dropdowns as they are, which still describes the
+      // scope in force. No reason to bother the operator about it.
+    }
   }
 
   ngOnDestroy(): void {
@@ -723,28 +943,94 @@ export class Statistics implements OnInit, OnDestroy {
 
   onRefresh(): void {
     this.refreshing.set(true);
+    this.markRangeChanged();
     this.statsWs.reconnect();
+  }
+
+  /** Mark every range-scoped panel as loading until the next push resolves it. */
+  private markRangeChanged(): void {
+    this.statsPending.set(true);
+    this.requestsPending.set(true);
   }
 
   setSelectedVramProvider(name: string | null): void {
     this.selectedVramProvider.set(name);
   }
 
-  setVramDayOffset(offset: number): void {
-    // Client-side only: re-windows the VRAM-remaining chart over the always-live
-    // 'all' dataset. The websocket vram_day is never re-scoped, so the provider
-    // panels (lanes, VRAM, GPUs) keep receiving live data.
-    this.vramDayOffset.set(offset);
+  /**
+   * The user-selected time range in epoch ms — the VRAM-remaining chart
+   * windows its (always-live 'all') samples over this global range instead of
+   * maintaining its own day offset.
+   */
+  readonly selectedTimeRangeMs = computed(() => {
+    const cfg = this.wsTimelineConfig();
+    const cfgEndMs = new Date(cfg.end).getTime();
+    // Follow the ticker while the selection is live. wsTimelineConfig only
+    // recomputes when the preset, offset or zoom changes, so its end is the
+    // instant the range was picked — and the chart drops every sample past its
+    // window end, which would leave the curve standing still on an open page.
+    const nowMs = this.nowMs();
+    return {
+      startMs: new Date(cfg.start).getTime(),
+      endMs: this.isLiveEnd(cfgEndMs, nowMs) ? Math.max(cfgEndMs, nowMs) : cfgEndMs,
+    };
+  });
+
+  /**
+   * Whether a range end means "up to now" rather than a fixed past instant.
+   * Same 120 s tolerance the websocket applies, so the client and the server
+   * agree on which selections keep growing.
+   */
+  private isLiveEnd(endMs: number, nowMs: number): boolean {
+    return nowMs - endMs <= 120_000;
   }
+
+  /**
+   * The range the request feed pages through.
+   *
+   * A live selection keeps growing, and the websocket queries it up to its own
+   * "now" on every push. So the open end is left empty here for the server to
+   * resolve the same way — pinning it to the instant the range was picked would
+   * offset the history pages against the live rows above them.
+   */
+  readonly requestFeedRange = computed(() => {
+    const cfg = this.wsTimelineConfig();
+    const endMs = new Date(cfg.end).getTime();
+    return {
+      startIso: cfg.start,
+      endIso: this.isLiveEnd(endMs, Date.now()) ? '' : cfg.end,
+    };
+  });
+
+  /**
+   * VRAM samples of the selected provider only. The remaining-VRAM chart sits
+   * in the provider-scoped section, so it shows that provider's curve — every
+   * other panel in that section is scoped the same way.
+   */
+  readonly selectedProviderVramData = computed<Record<string, VramV2Sample[]>>(() => {
+    const prov = this.selectedVramProvider();
+    if (!prov) return {};
+    const samples = this.vramRawDataByProvider()[prov];
+    return samples ? { [prov]: samples } : {};
+  });
+
+  /** True while the selected provider's worker is running a calibration session. */
+  readonly selectedProviderCalibrating = computed(() => {
+    const prov = this.selectedVramProvider();
+    if (!prov) return false;
+    return this.vramProviderMetaByName()[prov]?.calibrating === true;
+  });
 
   setCustomRange(range: { start: Date; end: Date }): void {
     this.customRange.set(range);
+    this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
   }
 
   clearCustomRange(): void {
     this.customRange.set(null);
     this.resetZoomCounter.update((c) => c + 1);
+    this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
   }
 
@@ -753,12 +1039,16 @@ export class Statistics implements OnInit, OnDestroy {
     this.offset.set(0);
     this.clearCustomRange();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    // The dropdowns list what the range holds, so a different range is a
+    // different list — and possibly one the current selection is not in.
+    void this.loadScopeOptions();
   }
 
   setOffset(o: number): void {
     this.offset.set(o);
     this.clearCustomRange();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    void this.loadScopeOptions();
   }
 
   formatChartValue(v: number): string {
@@ -772,6 +1062,7 @@ export class Statistics implements OnInit, OnDestroy {
   private handleRequestsWsData(payload: { requests?: RequestItem[] }): void {
     if (payload.requests) {
       this.latestRequests.set(payload.requests);
+      this.requestsPending.set(false);
     }
   }
 
@@ -802,12 +1093,14 @@ export class Statistics implements OnInit, OnDestroy {
     if (payload.error) {
       this.error.set(payload.error);
       this.refreshing.set(false);
+      this.statsPending.set(false);
       this.hasResolvedStats = true;
       return;
     }
     if (!payload.stats) {
       this.error.set('No statistics data available.');
       this.refreshing.set(false);
+      this.statsPending.set(false);
       this.hasResolvedStats = true;
       return;
     }
@@ -829,7 +1122,60 @@ export class Statistics implements OnInit, OnDestroy {
     this.stats.set({ ...payload.stats, timeSeries: labeled });
     this.error.set(null);
     this.refreshing.set(false);
+    this.statsPending.set(false);
     this.hasResolvedStats = true;
+  }
+
+  /**
+   * Recomputed aggregates for the range the page already shows.
+   *
+   * Same payload as `timeline_init` without the event list, so it replaces the
+   * totals, the status counts and the server-side buckets without touching the
+   * events the volume chart is drawn from — those arrive as deltas.
+   */
+  private handleStatsRefreshV2(payload: TimelineInitPayload): void {
+    if (payload.error || !payload.stats) return;
+    // A range change is in flight. The server pushes aggregates from its own
+    // timer, so one computed for the range we just left can still be on the
+    // wire — taking it would put the previous range's numbers back on screen
+    // under the new period, which is the exact thing `statsPending` prevents.
+    // `timeline_init` is what answers a range change.
+    if (this.statsPending()) return;
+
+    const cfg = this.wsTimelineConfig();
+    const rangeStart = payload.range?.start ? new Date(payload.range.start) : new Date(cfg.start);
+    const rangeEnd = payload.range?.end ? new Date(payload.range.end) : new Date(cfg.end);
+    // A live range keeps growing, and the server advances the end with it.
+    this.timelineRangeMs = {
+      startMs: rangeStart.getTime(),
+      endMs: rangeEnd.getTime(),
+      bucketMs: (payload.bucketSeconds || 60) * 1000,
+    };
+
+    const labeled = applyTimeSeriesLabels(payload.stats.timeSeries || [], rangeStart, rangeEnd);
+    this.stats.set({ ...payload.stats, timeSeries: labeled });
+  }
+
+  /**
+   * Newly enqueued requests, appended to the event list the volume chart
+   * re-buckets. Without this the chart would sit still while the counters
+   * beside it moved on every aggregate push.
+   */
+  private handleTimelineDeltaV2(payload: TimelineDeltaPayload): void {
+    if (!payload.events?.length) return;
+    // Same race as the aggregate push: a delta still in flight belongs to the
+    // range being left. `timeline_init` replaces the whole event list anyway.
+    if (this.statsPending()) return;
+    // Range first: `timelineRangeMs` is a plain field, so the series only picks
+    // a new end up when a signal it also reads changes. Appending the events is
+    // that signal — do it second or the chart trails the data by one delta.
+    if (payload.range?.end) {
+      const endMs = new Date(payload.range.end).getTime();
+      if (Number.isFinite(endMs) && this.timelineRangeMs) {
+        this.timelineRangeMs = { ...this.timelineRangeMs, endMs };
+      }
+    }
+    this.appendTimelineEvents(payload.events);
   }
 
   // ── Raw-series updaters ───────────────────────────────────────────────────────
@@ -858,6 +1204,7 @@ export class Statistics implements OnInit, OnDestroy {
         runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
         last_heartbeat: provider.last_heartbeat,
+        calibrating: Boolean(provider.calibrating),
       };
       if (Array.isArray(provider.devices) && provider.devices.length) {
         nextDevices[provider.name] = provider.devices;
@@ -884,6 +1231,7 @@ export class Statistics implements OnInit, OnDestroy {
         runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
         last_heartbeat: provider.last_heartbeat,
+        calibrating: Boolean(provider.calibrating),
       };
       const current = prevMeta[provider.name];
       const same =
@@ -893,7 +1241,8 @@ export class Statistics implements OnInit, OnDestroy {
         current?.provider_type === meta.provider_type &&
         JSON.stringify(current?.runtime_modes || []) === JSON.stringify(meta.runtime_modes || []) &&
         current?.transport_connected === meta.transport_connected &&
-        current?.last_heartbeat === meta.last_heartbeat;
+        current?.last_heartbeat === meta.last_heartbeat &&
+        Boolean(current?.calibrating) === meta.calibrating;
       if (!same) {
         if (nextMeta === prevMeta) nextMeta = { ...prevMeta };
         nextMeta[provider.name] = meta;
@@ -939,6 +1288,9 @@ export class Statistics implements OnInit, OnDestroy {
     if (next !== prev) this.vramRawDataByProvider.set(next);
   }
 
+  /** Request ids already in `timelineEvents`, so a delta can dedupe in O(1). */
+  private readonly knownEventIds = new Set<string>();
+
   private replaceTimelineEvents(events: TimelineEnqueueEvent[]): void {
     const nextMap = new Map<string, TimelineEnqueueEvent>();
     for (const event of events || []) {
@@ -946,7 +1298,44 @@ export class Statistics implements OnInit, OnDestroy {
       nextMap.set(event.request_id, event);
     }
     const merged = Array.from(nextMap.values()).sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+    this.knownEventIds.clear();
+    for (const event of merged) this.knownEventIds.add(event.request_id);
     this.timelineEvents.set(merged);
+  }
+
+  /**
+   * Append delta events to the list the volume chart re-buckets.
+   *
+   * Appended rather than merged and re-sorted: the server hands out deltas from
+   * a cursor that only ever moves forward, starting at the end of the initially
+   * loaded range, so every delta event is newer than everything already here.
+   * That matters at this cadence — re-sorting a list that can hold 200k events
+   * every two seconds would be felt on the UI thread.
+   *
+   * Capped, dropping the oldest: a long session on a busy range would otherwise
+   * grow without bound. Losing the oldest thins out the left edge of the chart
+   * rather than its live end, which is the side being watched, and
+   * `stats.timeSeries` — refreshed alongside — still covers the whole range for
+   * anyone reading totals.
+   */
+  private appendTimelineEvents(events: TimelineEnqueueEvent[]): void {
+    const fresh: TimelineEnqueueEvent[] = [];
+    for (const event of events) {
+      if (!event?.request_id || !Number.isFinite(Number(event.timestamp_ms))) continue;
+      if (this.knownEventIds.has(event.request_id)) continue;
+      this.knownEventIds.add(event.request_id);
+      fresh.push(event);
+    }
+    if (fresh.length === 0) return;
+
+    const current = this.timelineEvents();
+    let next = [...current, ...fresh];
+    if (next.length > TIMELINE_EVENT_CAP) {
+      const dropped = next.slice(0, next.length - TIMELINE_EVENT_CAP);
+      for (const event of dropped) this.knownEventIds.delete(event.request_id);
+      next = next.slice(next.length - TIMELINE_EVENT_CAP);
+    }
+    this.timelineEvents.set(next);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────

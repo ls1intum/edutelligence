@@ -10,20 +10,27 @@ def test_request_setup_normalizes_azure_cloud_deployments(monkeypatch):
             return False
 
         def get_deployments_for_api_key(self, api_key_id):  # noqa: ARG002
-            return [{"model_id": 10, "provider_id": 1, "type": "cloud"}]
-
-        def get_provider(self, provider_id):  # noqa: ARG002
-            return {
-                "id": 1,
-                "name": "azure",
-                "base_url": "https://ase-se01.openai.azure.com/openai/deployments/",
-            }
+            return [
+                {
+                    "model_id": 10,
+                    "provider_id": 1,
+                    "type": "cloud",
+                    "base_url": "https://ase-se01.openai.azure.com/openai/deployments/",
+                }
+            ]
 
     monkeypatch.setattr("logos.responses.DBManager", DummyDB)
 
     deployments, _ = request_setup({}, 7)
 
-    assert deployments == [{"model_id": 10, "provider_id": 1, "type": "azure"}]
+    assert deployments == [
+        {
+            "model_id": 10,
+            "provider_id": 1,
+            "type": "azure",
+            "base_url": "https://ase-se01.openai.azure.com/openai/deployments/",
+        }
+    ]
 
 
 def test_request_setup_keeps_openai_deployments_on_generic_cloud_scheduler(monkeypatch):

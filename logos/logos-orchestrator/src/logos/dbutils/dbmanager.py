@@ -136,6 +136,60 @@ def generate_logos_api_key(label: str) -> str:
     return "lg-" + label + "-" + secrets.token_urlsafe(96)
 
 
+def _stringify_error_message(value: Any) -> str:
+    """Render a non-string error into a value the text column can store.
+
+    Upstream failures arrive as OpenAI-shaped dicts (``{"message": ..., "type":
+    ...}``). psycopg2 cannot adapt a dict, so passing one through turned every
+    failed cloud request into an unhandled 500 that masked the real status —
+    an authentication error upstream surfaced to the client as a Logos crash.
+    """
+    if isinstance(value, dict):
+        message = value.get("message")
+        if isinstance(message, str) and message:
+            return message
+        return json.dumps(value, separators=(",", ":"), default=str)
+    if isinstance(value, (list, tuple)):
+        return json.dumps(value, separators=(",", ":"), default=str)
+    return str(value)
+
+
+def _strip_nul(value: Any) -> Any:
+    """Drop NUL characters from every string nested inside ``value``.
+
+    Stripping has to happen on the object, not on serialised JSON: after
+    ``json.dumps`` the escape for a NUL also occurs as a substring of an escaped
+    backslash, so replacing it in the text would leave a dangling backslash
+    behind and corrupt the document.
+
+    Keys that differ only in NULs collapse into one, and the last one wins —
+    a JSON object cannot hold both. That only arises for deliberately crafted
+    payloads, and these values feed audit logs rather than behaviour, so losing
+    one member of such a pair beats rejecting the request.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {_strip_nul(key): _strip_nul(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_strip_nul(item) for item in value]
+    return value
+
+
+def _json_for_jsonb(value: Any) -> str:
+    """Serialise ``value`` for a ``jsonb`` column or cast.
+
+    ``json.dumps`` renders a NUL as the one escape sequence Postgres refuses
+    inside ``jsonb`` — *unsupported Unicode escape sequence ... cannot be
+    converted to text*. A single such byte anywhere in a request body therefore
+    turned the logging insert into an unhandled 500, raised from
+    ``auth_parse_log`` before the request ever reached a worker: a client
+    replaying a conversation that had captured raw binary output got an instant
+    server error on every retry, and nothing was logged either.
+    """
+    return json.dumps(_strip_nul(value))
+
+
 # noinspection PyUnresolvedReferences
 class DBManager:
     def __init__(self):
@@ -277,6 +331,8 @@ class DBManager:
             db_col = field_map.get(key, key)
             if key == "result_status" and isinstance(value, ResultStatus):
                 value = value.value
+            if key == "error_message" and not isinstance(value, str):
+                value = _stringify_error_message(value)
             update_data[db_col] = value
 
         if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
@@ -320,6 +376,35 @@ class DBManager:
         """
         self.update_log_entry_metrics(log_id=log_id, request_id=request_id, **fields)
 
+    def close_orphaned_request_logs(self, error_message: str) -> int:
+        """Finalise log rows left open by a previous orchestrator process.
+
+        A request is written on arrival and completed in-process. If the
+        orchestrator is restarted (deploy, crash) while requests are in
+        flight, nobody ever writes their terminal state: the rows keep a NULL
+        `result_status` and no `timestamp_response`, and every "running
+        requests" view derived from them shows them forever.
+
+        Only rows that predate this process can be orphans, so this must run
+        at startup before the first request is accepted — after that a NULL
+        status is a request that is genuinely still running.
+
+        Returns the number of rows closed.
+        """
+        sql = text(
+            """
+            UPDATE log_entry
+               SET result_status = 'error',
+                   timestamp_response = NOW(),
+                   error_message = COALESCE(error_message, :error_message)
+             WHERE result_status IS NULL
+               AND timestamp_response IS NULL
+            """
+        )
+        result = self.session.execute(sql, {"error_message": error_message})
+        self.session.commit()
+        return int(result.rowcount or 0)
+
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
         update_stmt = table.update().where(table.c.id == record_id).values(**data)
@@ -361,7 +446,7 @@ class DBManager:
             ),
             {
                 "status": status,
-                "payload": json.dumps(payload),
+                "payload": _json_for_jsonb(payload),
                 "aki": api_key_id,
                 "tid": team_id,
                 "uid": user_id,
@@ -386,9 +471,16 @@ class DBManager:
             "updated_at": datetime.datetime.now(datetime.timezone.utc),
         }
         if result_payload is not None:
-            update_data["result_payload"] = result_payload
+            # jobs.result_payload is jsonb and the reflected update binds this
+            # dict directly, so SQLAlchemy serialises it — _json_for_jsonb would
+            # store its string as a JSON scalar instead of an object. A NUL in a
+            # model's answer would otherwise fail the write and leave the job
+            # without its result.
+            update_data["result_payload"] = _strip_nul(result_payload)
         if error_message is not None:
-            update_data["error_message"] = error_message
+            update_data["error_message"] = (
+                error_message if isinstance(error_message, str) else _stringify_error_message(error_message)
+            )
         self.update("jobs", job_id, update_data)
 
     def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
@@ -601,8 +693,8 @@ class DBManager:
                         text(
                             """
                         INSERT INTO models (name, weight_latency, weight_accuracy,
-                                            weight_cost, weight_quality, tags, parallel, description)
-                        VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                            weight_cost, weight_quality, tags, description)
+                        VALUES (:name, 0, 0, 0, 0, '', '')
                         RETURNING id
                     """
                         ),
@@ -711,8 +803,8 @@ class DBManager:
                         text(
                             """
                             INSERT INTO models (name, weight_latency, weight_accuracy,
-                                                weight_cost, weight_quality, tags, parallel, description)
-                            VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                                weight_cost, weight_quality, tags, description)
+                            VALUES (:name, 0, 0, 0, 0, '', '')
                             RETURNING id
                             """
                         ),
@@ -953,10 +1045,10 @@ class DBManager:
                 "total_vram_used_bytes": total_vram_used_bytes,
                 "total_memory_bytes": (int(total_memory_bytes) if total_memory_bytes is not None else None),
                 "free_memory_bytes": (int(free_memory_bytes) if free_memory_bytes is not None else None),
-                "loaded_models": json.dumps(loaded_models),
+                "loaded_models": _json_for_jsonb(loaded_models),
                 "snapshot_source": snapshot_source or "unknown",
-                "runtime_payload": json.dumps(runtime_payload or {}),
-                "scheduler_signals": json.dumps(scheduler_signals or {}),
+                "runtime_payload": _json_for_jsonb(runtime_payload or {}),
+                "scheduler_signals": _json_for_jsonb(scheduler_signals or {}),
                 "poll_success": poll_success,
                 "error_message": error_message,
             },
@@ -1051,6 +1143,96 @@ class DBManager:
             count += 1
         self.session.commit()
         return count
+
+    def upsert_calibration_probe_log(
+        self,
+        provider_id: int,
+        model_name: str,
+        recorded_at: Optional[datetime.datetime],
+        payload: Dict[str, Any],
+        log_text: Optional[str] = None,
+    ) -> None:
+        """Upsert a calibration probe log from a worker's calibration_probe_log event.
+
+        Keeps only the most recent row per (provider_id, model_name) — same
+        ON CONFLICT DO UPDATE pattern as upsert_model_profiles above.
+
+        Args:
+            provider_id: Provider ID (FK to providers.id) — the worker node.
+            model_name: The model the probe attempted to load.
+            recorded_at: Timestamp the worker emitted the event, if known.
+            payload: Structured probe summary (see LogosBridgeClient.
+                _record_calibration_probe_log on the worker side for the
+                exact shape) — must NOT contain "log_text" (caller pops it
+                before calling, so it isn't duplicated into the summary
+                JSONB column below).
+            log_text: Full raw calibration log for this (provider, model),
+                stored separately so it doesn't bloat/duplicate `summary`.
+        """
+        sql = text(
+            """
+            INSERT INTO calibration_probe_logs (
+                provider_id, model_name,
+                success, probe_command, error,
+                unsupported_reason, node_unhealthy_reason,
+                summary, log_text, recorded_at, updated_at
+            ) VALUES (
+                :provider_id, :model_name,
+                :success, :probe_command, :error,
+                :unsupported_reason, :node_unhealthy_reason,
+                :summary, :log_text, :recorded_at, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                success = EXCLUDED.success,
+                probe_command = EXCLUDED.probe_command,
+                error = EXCLUDED.error,
+                unsupported_reason = EXCLUDED.unsupported_reason,
+                node_unhealthy_reason = EXCLUDED.node_unhealthy_reason,
+                summary = EXCLUDED.summary,
+                log_text = EXCLUDED.log_text,
+                recorded_at = EXCLUDED.recorded_at,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE calibration_probe_logs.recorded_at IS NULL
+               OR EXCLUDED.recorded_at IS NULL
+               OR EXCLUDED.recorded_at > calibration_probe_logs.recorded_at
+        """
+        )
+        self.session.execute(
+            sql,
+            {
+                "provider_id": provider_id,
+                "model_name": model_name,
+                "success": bool(payload.get("success", False)),
+                "probe_command": payload.get("probe_command") or None,
+                "error": payload.get("error") or None,
+                "unsupported_reason": payload.get("unsupported_reason"),
+                "node_unhealthy_reason": payload.get("node_unhealthy_reason"),
+                "summary": _json_for_jsonb(payload),
+                "log_text": log_text or None,
+                "recorded_at": recorded_at,
+            },
+        )
+        self.session.commit()
+
+    def get_calibration_probe_logs_by_model(self, model_name: str) -> list[Dict[str, Any]]:
+        """Every node's most recent calibration probe log for one model.
+
+        Used by the webservice's model-error-report page to show real
+        per-node log text instead of mocked fixtures.
+        """
+        sql = text(
+            """
+            SELECT cpl.provider_id, p.name AS provider_name, cpl.success,
+                   cpl.probe_command, cpl.error, cpl.log_text,
+                   cpl.recorded_at, cpl.updated_at
+            FROM calibration_probe_logs cpl
+            JOIN providers p ON p.id = cpl.provider_id
+            WHERE cpl.model_name = :model_name
+            ORDER BY cpl.provider_id
+        """
+        )
+        rows = self.session.execute(sql, {"model_name": model_name}).fetchall()
+        return [dict(row._mapping) for row in rows]
 
     def get_ollama_vram_stats(
         self,
@@ -1471,7 +1653,9 @@ class DBManager:
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
                           p.provider_type    as type,
-                          p.privacy_level as privacy_level
+                          p.privacy_level    as privacy_level,
+                          p.cloud_provider_type as cloud_provider_type,
+                          p.base_url         as base_url
                    FROM models m
                         JOIN model_provider mp ON m.id = mp.model_id
                         JOIN providers p ON mp.provider_id = p.id
@@ -1715,7 +1899,6 @@ class DBManager:
                               m.weight_cost,
                               m.weight_quality,
                               m.tags,
-                              m.parallel,
                               m.description,
                               (
                                   SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -1782,7 +1965,6 @@ class DBManager:
                                 m.weight_cost,
                                 m.weight_quality,
                                 m.tags,
-                                m.parallel,
                                 m.description,
                                 (
                                     SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -1827,7 +2009,6 @@ class DBManager:
                 "weight_cost": r.weight_cost,
                 "weight_quality": r.weight_quality,
                 "tags": r.tags,
-                "parallel": r.parallel,
                 "description": r.description,
                 "input_usd_per_million": r.input_usd_per_million,
                 "output_usd_per_million": r.output_usd_per_million,
@@ -1854,7 +2035,6 @@ class DBManager:
             "weight_cost": result.weight_cost,
             "weight_quality": result.weight_quality,
             "tags": result.tags,
-            "parallel": result.parallel,
             "description": result.description,
         }
 
@@ -1981,8 +2161,8 @@ class DBManager:
         request_id: Optional[str] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        payload_str = json.dumps(input_payload) if log_level == "FULL" and input_payload else None
-        headers_str = json.dumps(dict(headers)) if log_level == "FULL" and headers else None
+        payload_str = _json_for_jsonb(input_payload) if log_level == "FULL" and input_payload else None
+        headers_str = _json_for_jsonb(dict(headers)) if log_level == "FULL" and headers else None
 
         row = self.session.execute(
             text(
@@ -2093,13 +2273,13 @@ class DBManager:
         self.session.execute(
             sql,
             {
-                "payload": json.dumps(payload) if payload else None,
+                "payload": _json_for_jsonb(payload) if payload else None,
                 "provider_id": provider_id,
                 "model_id": model_id,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc),
                 "log_id": log_id,
                 "policy_id": policy_id if policy_id != -1 else None,
-                "classification_statistics": json.dumps(classified),
+                "classification_statistics": _json_for_jsonb(classified),
                 "request_id": kwargs.get("request_id"),
                 "queue_depth": kwargs.get("queue_depth_at_arrival"),
                 "utilization": kwargs.get("utilization_at_arrival"),
@@ -2107,6 +2287,83 @@ class DBManager:
         )
         self.session.commit()
         return {"result": "response_payload set"}, 200
+
+    def get_usage_cost_micro_cents(
+        self,
+        model_id: int,
+        provider_id: int,
+        usage: Dict[str, int],
+        response_at: datetime.datetime,
+    ) -> Optional[int]:
+        """Return the configured cloud cost for one response in micro-cents.
+
+        The lookup mirrors the ``budget_usage`` view: model/provider-specific
+        prices take precedence over generic prices and only prices valid at
+        ``response_at`` are considered. ``None`` identifies a local provider;
+        cloud providers without a matching price retain the existing billing
+        semantics and cost zero.
+        """
+        billable_usage = {
+            token_type: token_count
+            for token_type, token_count in usage.items()
+            if isinstance(token_type, str)
+            and isinstance(token_count, int)
+            and not isinstance(token_count, bool)
+            and token_count >= 0
+        }
+        if not billable_usage:
+            return None
+
+        row = self.session.execute(
+            text(
+                """
+                WITH response_usage AS (
+                    SELECT usage.key AS token_type,
+                           usage.value::BIGINT AS token_count
+                    FROM jsonb_each_text(CAST(:usage AS JSONB)) AS usage
+                ),
+                cloud_provider AS (
+                    SELECT id
+                    FROM providers
+                    WHERE id = :provider_id
+                      AND LOWER(provider_type::text) = 'cloud'
+                )
+                SELECT CASE
+                    WHEN EXISTS (SELECT 1 FROM cloud_provider)
+                    THEN COALESCE(SUM(
+                        CASE WHEN price.price_per_k_token IS NOT NULL
+                             THEN (ru.token_count * price.price_per_k_token / 1000)::BIGINT
+                             ELSE 0
+                        END
+                    ), 0)
+                    ELSE NULL
+                END AS cost_micro_cents
+                FROM response_usage ru
+                LEFT JOIN token_types tt ON tt.name = ru.token_type
+                LEFT JOIN LATERAL (
+                    SELECT tp.price_per_k_token
+                    FROM token_prices tp
+                    WHERE tp.type_id = tt.id
+                      AND (tp.model_id = :model_id OR tp.model_id IS NULL)
+                      AND (tp.provider_id = :provider_id OR tp.provider_id IS NULL)
+                      AND tp.valid_from <= :response_at
+                    ORDER BY (tp.model_id = :model_id) DESC NULLS LAST,
+                             (tp.provider_id = :provider_id) DESC NULLS LAST,
+                             tp.valid_from DESC
+                    LIMIT 1
+                ) price ON true
+                """
+            ),
+            {
+                "usage": _json_for_jsonb(billable_usage),
+                "model_id": int(model_id),
+                "provider_id": int(provider_id),
+                "response_at": response_at,
+            },
+        ).fetchone()
+        if row is None or row.cost_micro_cents is None:
+            return None
+        return int(row.cost_micro_cents)
 
     def check_authorization(self, logos_key: str):
         sql = text(
@@ -2209,9 +2466,9 @@ class DBManager:
                 """
                  SELECT COALESCE(SUM(bu.cost_micro_cents), 0) AS total
                  FROM budget_usage bu
-                          JOIN api_keys ak ON ak.id = bu.api_key_id
-                 WHERE ak.team_id = :tid
-                   AND ak.key_type = 'developer'
+                 WHERE bu.api_key_id = ANY(
+                         ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                       )
                    AND bu.month = :month
                  """
             ),
@@ -2291,7 +2548,7 @@ class DBManager:
                 "uid": user_id,
                 "env": environment,
                 "log": log,
-                "settings": json.dumps(settings) if settings else None,
+                "settings": _json_for_jsonb(settings) if settings else None,
                 "dprio": default_priority,
                 "custom": use_custom_permissions,
             },

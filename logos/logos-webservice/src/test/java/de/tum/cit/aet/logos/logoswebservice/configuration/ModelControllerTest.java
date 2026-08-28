@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration;
 
+import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -9,7 +10,11 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -37,7 +42,7 @@ class ModelControllerTest {
     @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
-    void getModels_adminReturnsAllModels() throws Exception {
+    void getModels_logosAdminReturnsAllModels() throws Exception {
         mvc.perform(post("/logosdb/get_models")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
@@ -46,6 +51,24 @@ class ModelControllerTest {
            .andExpect(jsonPath("$").isArray())
            .andExpect(jsonPath("$[0].id").exists())
            .andExpect(jsonPath("$[0].name").exists());
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "INSERT INTO team_model_permissions (team_id, model_id) VALUES (2001, 5001)",
+        "INSERT INTO team_provider_permissions (team_id, provider_id) VALUES (2001, 6001)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void getModels_appAdminReturnsOnlyTeamAssignedModels() throws Exception {
+        mvc.perform(post("/logosdb/get_models")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$").isArray())
+           .andExpect(jsonPath("$.length()").value(1))
+           .andExpect(jsonPath("$[0].id").value(5001))
+           .andExpect(jsonPath("$[0].name").value("gpt-4"));
     }
 
     @Test
@@ -70,9 +93,37 @@ class ModelControllerTest {
         mvc.perform(post("/logosdb/add_model")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
-                .content("{\"name\":\"test-model\",\"parallel\":1,\"tags\":\"\",\"description\":\"\"}"))
+                .content("{\"name\":\"test-model\",\"tags\":\"\",\"description\":\"\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.model_id").isNumber());
+    }
+
+    @Test
+    void addModel_modelResponseExposesNoParallelField() throws Exception {
+        // models.parallel has been dropped from the schema; parallel capacity
+        // is derived by the orchestrator from the worker's live lane signals.
+        MvcResult addResult = mvc.perform(post("/logosdb/add_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"no-parallel-model\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int modelId = JsonPath.read(addResult.getResponse().getContentAsString(), "$.model_id");
+
+        mvc.perform(post("/logosdb/get_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"id\":" + modelId + "}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.id").value(modelId))
+           .andExpect(jsonPath("$.parallel").doesNotExist());
+
+        mvc.perform(post("/logosdb/get_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[?(@.id == %d)].parallel".formatted(modelId)).doesNotExist());
     }
 
     @Test

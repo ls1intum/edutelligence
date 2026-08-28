@@ -25,7 +25,38 @@
               <i class="pi pi-copy"></i> Copy
             }
           </button>
+          <button
+            class="btn-rotate"
+            type="button"
+            [disabled]="rotateLoading()"
+            (click)="requestRotate()"
+          >
+            <i class="pi pi-refresh"></i> Rotate
+          </button>
         </div>
+
+        @if (rotateConfirm()) {
+          <div class="rotate-confirm-box">
+            <p class="rotate-warn">
+              <i class="pi pi-exclamation-triangle"></i>
+              Rotating will immediately invalidate the current key. Any system using it will stop working until updated.
+            </p>
+            @if (rotateError()) {
+              <p class="rotate-error">{{ rotateError() }}</p>
+            }
+            <div class="rotate-actions">
+              <button class="btn-secondary" type="button" [disabled]="rotateLoading()" (click)="cancelRotate()">
+                Cancel
+              </button>
+              <button class="btn-danger" type="button" [disabled]="rotateLoading()" (click)="confirmRotate()">
+                @if (rotateLoading()) {
+                  <i class="pi pi-spin pi-spinner"></i>
+                }
+                Rotate Key
+              </button>
+            </div>
+          </div>
+        }
       }
 
       <!-- Stats -->
@@ -42,7 +73,7 @@
             }}
           </div>
         </div>
-        <div class="stat-mini">
+        <div class="stat-mini" title="rpm = requests per minute, tpm = tokens per minute">
           <div class="stat-mini-label">Cloud Limits</div>
           <div class="stat-mini-value">
             {{
@@ -61,7 +92,7 @@
             tpm
           </div>
         </div>
-        <div class="stat-mini">
+        <div class="stat-mini" title="rpm = requests per minute, tpm = tokens per minute">
           <div class="stat-mini-label">Local Limits</div>
           <div class="stat-mini-value">
             {{
@@ -101,7 +132,7 @@
 
         <div class="form-row-2">
           <div class="form-field">
-            <label class="field-label" for="km-crpm">Cloud RPM</label>
+            <label class="field-label" for="km-crpm">Cloud RPM (requests per minute)</label>
             <input
               id="km-crpm"
               class="field-input"
@@ -114,7 +145,7 @@
             />
           </div>
           <div class="form-field">
-            <label class="field-label" for="km-ctpm">Cloud TPM</label>
+            <label class="field-label" for="km-ctpm">Cloud TPM (tokens per minute)</label>
             <input
               id="km-ctpm"
               class="field-input"
@@ -130,7 +161,7 @@
 
         <div class="form-row-2">
           <div class="form-field">
-            <label class="field-label" for="km-lrpm">Local RPM</label>
+            <label class="field-label" for="km-lrpm">Local RPM (requests per minute)</label>
             <input
               id="km-lrpm"
               class="field-input"
@@ -143,7 +174,7 @@
             />
           </div>
           <div class="form-field">
-            <label class="field-label" for="km-ltpm">Local TPM</label>
+            <label class="field-label" for="km-ltpm">Local TPM (tokens per minute)</label>
             <input
               id="km-ltpm"
               class="field-input"

@@ -34,6 +34,53 @@
   min-width: 0;
 }
 
+// ── Scope (team / requester) ──────────────────────────────────────────────────
+
+.stats-scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+// Capped, because team and user names run long and two dropdowns sized by their
+// longest entry would push the time range off the row. The select inside stops
+// at the host's width rather than overflowing it (see the select component).
+.stats-scope__select {
+  min-width: 0;
+  max-width: 200px;
+}
+
+.stats-scope__note {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  white-space: nowrap;
+}
+
+.stats-scope__clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  background: transparent;
+  border: 1px solid rgb(var(--glass-stroke) / 0.2);
+  border-radius: 8px;
+  cursor: pointer;
+
+  .pi {
+    font-size: var(--font-size-2xs);
+  }
+
+  &:hover {
+    color: rgb(var(--color-typography-100));
+    background: rgb(var(--glass-fill) / var(--opacity-faint));
+  }
+}
+
 // ── Fatal error ───────────────────────────────────────────────────────────────
 .stats-fatal-error {
   display: flex;
@@ -64,6 +111,17 @@
 }
 
 // ── KPI strip ─────────────────────────────────────────────────────────────────
+.stats-kpi-period {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  margin-bottom: -8px; // the page-level 20px gap is too much for a caption
+
+  strong {
+    color: rgb(var(--color-typography-100));
+    font-weight: var(--font-weight-semibold);
+  }
+}
+
 .stats-kpi-strip {
   display: flex;
   flex-wrap: wrap;
@@ -71,10 +129,10 @@
   align-items: stretch;
   align-content: flex-start;
 
-  // Each KPI card (projected from child) ~25% minus gap
+  // Each KPI card (projected from child) ~1/6 minus gap (six cards per row)
   > * {
-    flex: 1 1 calc(25% - 9px);
-    min-width: 200px;
+    flex: 1 1 calc(16.66% - 10px);
+    min-width: 170px;
   }
 }
 
@@ -146,10 +204,53 @@
   }
 }
 
-// ── Panel badge (lane count) ──────────────────────────────────────────────────
+// ── Panel badge (lane count, "updating…") ─────────────────────────────────────
 .stats-panel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
+  white-space: nowrap;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+}
+
+// ── Provider-row badges (free VRAM / calibrating) ─────────────────────────────
+.stats-provider-vram-badge {
+  @include glass-surface;
+
+  border-radius: 9999px;
+  align-self: center;
+  padding: 3px 12px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-accent-cyan));
+  white-space: nowrap;
+}
+
+.stats-provider-badge {
+  border-radius: 9999px;
+  align-self: center;
+  padding: 3px 12px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+}
+
+.stats-provider-badge--calibrating {
+  color: rgb(var(--color-warning));
+  background: rgb(var(--color-warning) / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
 }
 
 // ── Range badge ───────────────────────────────────────────────────────────────
@@ -264,12 +365,6 @@
   min-width: 280px;
 }
 
-// Row 8/4 weighting
-.stats-row--8-4 {
-  .stats-col--8 { flex-grow: 8; min-width: 360px; }
-  .stats-col--4 { flex-grow: 4; min-width: 280px; }
-}
-
 // Row 1/1/1 (equal columns)
 .stats-row--1-1-1 {
   > .stats-col { flex-grow: 1; min-width: 280px; }
@@ -300,11 +395,8 @@
     flex-basis: 100%;
   }
 
-  .stats-row--8-4,
   .stats-row--1-1-1 {
-    .stats-col,
-    .stats-col--8,
-    .stats-col--4 {
+    .stats-col {
       flex-basis: 100%;
       min-width: 0;
     }

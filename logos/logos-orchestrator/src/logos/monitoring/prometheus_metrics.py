@@ -22,7 +22,31 @@ REQUEST_DURATION_SECONDS = Histogram(
     "logos_request_duration_seconds",
     "End-to-end request duration from enqueue to completion",
     ["model", "provider", "status"],
-    buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
+    # `histogram_quantile` cannot report above the highest *finite* bucket:
+    # everything beyond it lands in +Inf and the quantile is pinned to that
+    # boundary. Topping out at 120s therefore reported every high percentile
+    # as exactly "2 minutes" — with 5% of production requests over 120s, p95
+    # sat on the edge and p99 (really ~300s) was clamped to 120s outright.
+    # The upper buckets now cover what a request can legitimately take: the
+    # queue wait alone is bounded at 1200s (LOGOS_TIMEOUT_S), and cold-load
+    # plus generation can add to that.
+    buckets=(
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+        120.0,
+        300.0,
+        600.0,
+        1200.0,
+        1800.0,
+        3600.0,
+    ),
     registry=registry,
 )
 
@@ -35,7 +59,7 @@ REQUESTS_IN_FLIGHT = Gauge(
 COLD_STARTS_TOTAL = Counter(
     "logos_cold_starts_total",
     "Number of requests served by a cold (freshly loaded) model",
-    ["model"],
+    ["model", "provider"],
     registry=registry,
 )
 
@@ -71,6 +95,32 @@ SCHEDULING_DECISIONS_TOTAL = Counter(
     "logos_scheduling_decisions_total",
     "Scheduling outcomes",
     ["result"],  # scheduled, no_capacity, timeout
+    registry=registry,
+)
+
+ADMISSION_HOLDS_TOTAL = Counter(
+    "logos_admission_holds_total",
+    "Requests held at orchestrator level instead of being forwarded to a worker",
+    # worker_capacity, backend_queue, kv_cache_pressure, engine_at_capacity
+    ["reason"],
+    registry=registry,
+)
+
+PREFIX_AFFINITY_TOTAL = Counter(
+    "logos_prefix_affinity_total",
+    "Prefix-cache affinity lookups and how the scheduler acted on them",
+    ["result"],  # hit, miss, honored, diverted
+    registry=registry,
+)
+
+WORKER_CANCELLATIONS_TOTAL = Counter(
+    "logos_worker_cancellations_total",
+    "Cancellations sent to a worker for a request whose client went away",
+    # aborted    — the worker stopped a generation that was still running
+    # already_done — the cancel raced a stream that had just finished
+    # unsupported  — worker predates the cancel action; the request runs on
+    # failed       — the cancel could not be delivered
+    ["result"],
     registry=registry,
 )
 

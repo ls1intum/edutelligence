@@ -25,6 +25,12 @@
 }
 
 .model-name {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-0));
@@ -34,6 +40,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   overflow-wrap: anywhere;
+
+  &:hover,
+  &:focus-visible {
+    text-decoration: underline;
+  }
 }
 
 .desc-text, .tags-text {
@@ -50,6 +61,12 @@
   align-items: center;
   gap: 5px;
   flex-wrap: wrap;
+}
+
+.capability-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .wchip {

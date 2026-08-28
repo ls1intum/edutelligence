@@ -11,7 +11,7 @@ class _RecordingClassifier:
 
     def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
         self.calls.append({"skip_laura": skip_laura, "allowed": list(allowed or [])})
-        return [(allowed[0], 1.0, 1, 1)] if allowed else []
+        return [(allowed[0], 1.0, 1)] if allowed else []
 
 
 class _FakeScheduler:
