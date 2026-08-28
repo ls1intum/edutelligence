@@ -1,1 +1,2 @@
+DELETE FROM api_keys WHERE id = 3009;
 DELETE FROM log_entry WHERE id IN (9003, 9004);

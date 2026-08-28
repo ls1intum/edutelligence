@@ -17,7 +17,7 @@ VALUES
    false, 1, 1001, 2001, NULL);
 
 -- Billing-only row in the same team and window: no content was stored for it,
--- so it must stay out of the export.
+-- but it is still part of the export — with the content columns empty.
 INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
                        timestamp_request, timestamp_forwarding, timestamp_response,
                        privacy_level, user_id, team_id)
@@ -25,3 +25,9 @@ VALUES
   (9004, 'req-ddd-444', 3001, 5001, 6001, 'success',
    NOW() - INTERVAL '3 minutes', NOW() - INTERVAL '2 minutes', NOW() - INTERVAL '1 minute',
    'BILLING', 1001, 2001);
+
+-- A second key of team 2001, opted into full logging: the shared seed keys
+-- are all at the BILLING default, and the view needs one team where
+-- full_logging_enabled is true.
+INSERT INTO api_keys (id, key_value, name, key_type, user_id, team_id, is_active, log)
+VALUES (3009, 'full-key-9', 'full key', 'developer', 1001, 2001, true, 'FULL');

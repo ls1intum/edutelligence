@@ -67,13 +67,15 @@ public class TeamActivityController {
     }
 
     /**
-     * Download of the team's consent-based traces (issue #667).
+     * Download of the team's request traces (issue #667).
      *
-     * Only the FULL-privacy requests come back — the ones whose requester
-     * agreed to full logging in the first place, and the only ones that carry
-     * request and response content. Same gate as the activity view, same
-     * window and narrowing rules, so the export never reaches further than
-     * the page it is started from.
+     * Every request of the window comes back, the same slice the activity
+     * view shows. The consented ones (recorded at FULL privacy) carry their
+     * request and response content; for the billing-only rows the content
+     * columns are empty, and the envelope says whether the team has full
+     * logging activated at all. Same gate as the activity view, same window
+     * and narrowing rules, so the export never reaches further than the page
+     * it is started from.
      */
     @PostMapping("/logosdb/teams/{teamId}/activity/export")
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")

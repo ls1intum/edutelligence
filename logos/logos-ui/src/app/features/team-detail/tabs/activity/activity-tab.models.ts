@@ -48,6 +48,12 @@ export interface TeamActivityPayload {
   team_id: number;
   days: number;
   since: string;
+  /**
+   * Whether any key of the team is opted into FULL logging — the only switch
+   * under which request and response content is stored at all, so the view
+   * can hint at an empty export before the download is started (issue #667).
+   */
+  full_logging_enabled: boolean;
   live: TeamLiveCounts;
   keys: TeamKeyUsage[];
   total_tokens: number;
@@ -62,9 +68,10 @@ export interface TeamActivityPayload {
 // ── Trace export (issue #667) ────────────────────────────────────────────────
 
 /**
- * One consent-based request trace: a request the orchestrator recorded at
- * FULL privacy, so it carries the request and response content on top of the
- * usual lifecycle metadata.
+ * One request trace of the team export. Every row carries the lifecycle
+ * metadata; only the rows the orchestrator recorded at FULL privacy (the ones
+ * the requester consented to) also carry the request and response content —
+ * for the billing-only rows the payload fields are absent.
  *
  * The payload fields are `unknown` on purpose — their shape is whatever the
  * caller sent to the model, and the export must not pretend to know it.
@@ -77,9 +84,7 @@ export interface TraceExportItem {
   time_at_first_token: string | null;
   privacy_level: string;
   model_name: string | null;
-  provider_name: string | null;
   provider_type: string | null;
-  policy_id: number | null;
   environment: string | null;
   api_key_id: number | null;
   api_key_name: string | null;
@@ -101,8 +106,6 @@ export interface TraceExportItem {
   was_cold_start: boolean | null;
   load_duration_ms: number | null;
   available_vram_mb: number | null;
-  azure_rate_remaining_requests: number | null;
-  azure_rate_remaining_tokens: number | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
   total_tokens: number | null;
@@ -120,6 +123,13 @@ export interface TraceExport {
   days: number;
   since: string;
   count: number;
+  /** Whether any key of the team has full (consent) logging activated. */
+  full_logging_enabled: boolean;
+  /**
+   * Present only when not a single row of the export carries content — the
+   * file explaining itself why the payload columns are all empty.
+   */
+  note?: string;
   /** True when the window held more traces than one export may carry. */
   truncated: boolean;
   traces: TraceExportItem[];

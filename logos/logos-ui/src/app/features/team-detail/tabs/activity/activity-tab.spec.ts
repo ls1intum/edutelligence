@@ -49,6 +49,7 @@ const makePayload = (overrides: Partial<TeamActivityPayload> = {}): TeamActivity
   team_id: 2001,
   days: 7,
   since: '2026-08-19T12:00:00Z',
+  full_logging_enabled: true,
   live: { queued: 0, running: 0, finished: 0, failed: 0 },
   keys: [],
   total_tokens: 0,
@@ -335,6 +336,26 @@ describe('ActivityTabComponent', () => {
       expect(component.requesterOf(makeRequest({ full_name: '   ' }))).toBe('test.user');
     });
   });
+
+  describe('export hint', () => {
+    it('says so before the click while no key of the team has full logging', () => {
+      // The download would hold metadata without content; the hint is the
+      // difference between "nothing to export" and "no consent was given".
+      component.activity.set(makePayload({ full_logging_enabled: false }));
+      expect(component.fullLoggingHint()).toBe(
+        'Full logging is not activated for this team — the export will not contain request or response content.',
+      );
+    });
+
+    it('stays away once full logging is activated', () => {
+      component.activity.set(makePayload({ full_logging_enabled: true }));
+      expect(component.fullLoggingHint()).toBeNull();
+    });
+
+    it('has nothing to say before the first payload arrives', () => {
+      expect(component.fullLoggingHint()).toBeNull();
+    });
+  });
 });
 
 /** One unanswered service call, resolvable by the test in the order it wants. */
@@ -417,6 +438,7 @@ describe('ActivityTabComponent pagination', () => {
       team_id: 28,
       days: 7,
       since: '2026-08-19T00:00:00Z',
+      full_logging_enabled: true,
       live: { queued: 0, running: 0, finished: TOTAL, failed: 0 },
       keys: [],
       total_tokens: 0,
@@ -685,9 +707,7 @@ describe('tracesToCsv', () => {
     time_at_first_token: null,
     privacy_level: 'FULL',
     model_name: null,
-    provider_name: null,
     provider_type: null,
-    policy_id: null,
     environment: null,
     api_key_id: null,
     api_key_name: null,
@@ -709,8 +729,6 @@ describe('tracesToCsv', () => {
     was_cold_start: null,
     load_duration_ms: null,
     available_vram_mb: null,
-    azure_rate_remaining_requests: null,
-    azure_rate_remaining_tokens: null,
     prompt_tokens: null,
     completion_tokens: null,
     total_tokens: null,
@@ -727,6 +745,7 @@ describe('tracesToCsv', () => {
     days: 7,
     since: '2026-08-20T00:00:00Z',
     count: 1,
+    full_logging_enabled: true,
     truncated: false,
     traces: [trace],
   };
@@ -771,6 +790,7 @@ describe('ActivityTabComponent trace export', () => {
     days: 7,
     since: '2026-08-20T00:00:00Z',
     count: 0,
+    full_logging_enabled: true,
     truncated: false,
     traces: [],
   };

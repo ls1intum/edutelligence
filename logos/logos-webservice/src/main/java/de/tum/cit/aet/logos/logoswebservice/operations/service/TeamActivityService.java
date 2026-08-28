@@ -10,7 +10,9 @@ import java.util.Map;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogExportProjection;
@@ -60,15 +62,18 @@ public class TeamActivityService {
     private final LogEntryRepository logEntryRepository;
     private final RequestLogService requestLogService;
     private final TeamRepository teamRepository;
+    private final ApiKeyRepository apiKeyRepository;
     private final ObjectMapper objectMapper;
 
     public TeamActivityService(LogEntryRepository logEntryRepository,
                                RequestLogService requestLogService,
                                TeamRepository teamRepository,
+                               ApiKeyRepository apiKeyRepository,
                                ObjectMapper objectMapper) {
         this.logEntryRepository = logEntryRepository;
         this.requestLogService = requestLogService;
         this.teamRepository = teamRepository;
+        this.apiKeyRepository = apiKeyRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -117,6 +122,10 @@ public class TeamActivityService {
         payload.put("team_id", teamId);
         payload.put("days", days);
         payload.put("since", since.toInstant().toString());
+        // Whether any key of the team is opted into FULL logging, so the view
+        // can say before an export is started that the download will hold no
+        // request or response content (issue #667).
+        payload.put("full_logging_enabled", hasFullLoggingKey(teamId));
         payload.put("live", live);
         payload.put("keys", keys);
         payload.put("total_tokens", totalTokens);
@@ -136,17 +145,20 @@ public class TeamActivityService {
     }
 
     /**
-     * The consent-based traces of one team: every request the orchestrator
-     * recorded at FULL privacy within the window, payloads included (issue
-     * #667). That is the whole point of the opt-in — the requester agreed to
-     * exactly this data being stored, and an administrator of the team is
-     * entitled to take it back out.
+     * The request traces of one team for the export (issue #667).
      *
-     * <p>The window and the narrowing rules are the ones of the activity view
-     * above, so an export and the list it was started from describe the same
-     * slice of traffic. Billing-only rows are not part of the result — the
-     * query does not even read their payloads, and there is no content to
-     * hand over for them anyway.
+     * <p>Every request of the window comes out — the same slice the activity
+     * list shows, so an export is never a mystery of which rows it skipped.
+     * The rows the requester consented to (recorded at FULL privacy) carry
+     * their request and response content; the billing-only rows come out
+     * with the content columns empty, because that is all the platform
+     * stored for them.
+     *
+     * <p>The envelope says how to read that: {@code full_logging_enabled}
+     * reports whether any key of the team is currently opted into FULL
+     * logging, and a {@code note} accompanies the file whenever not a single
+     * row of the export carries content — a download without an explanation
+     * reads as a bug.
      *
      * @param teamId         the team to export; the caller established access
      * @param requestedDays  window, clamped like {@link #getTeamActivity}
@@ -162,7 +174,7 @@ public class TeamActivityService {
         // One row beyond the cap, the same trick the feed uses for has_more:
         // the extra row is the answer to "was anything left behind", and it
         // is dropped before the file goes out.
-        List<LogExportProjection> fetched = logEntryRepository.findFullTracesForExport(
+        List<LogExportProjection> fetched = logEntryRepository.findTracesForExport(
             teamId, since, Timestamp.from(now), userId, EXPORT_MAX_ROWS + 1);
         boolean truncated = fetched.size() > EXPORT_MAX_ROWS;
         List<LogExportProjection> rows = truncated
@@ -170,6 +182,10 @@ public class TeamActivityService {
             : fetched;
 
         String teamName = teamRepository.findById(teamId).map(Team::getName).orElse(null);
+        boolean fullLoggingEnabled = hasFullLoggingKey(teamId);
+        long consentedCount = rows.stream()
+            .filter(p -> "FULL".equals(p.getPrivacyLevel()))
+            .count();
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("team_id", teamId);
@@ -177,9 +193,27 @@ public class TeamActivityService {
         result.put("days", days);
         result.put("since", since.toInstant().toString());
         result.put("count", rows.size());
+        result.put("full_logging_enabled", fullLoggingEnabled);
+        if (consentedCount == 0) {
+            // The rows are there but the content is not: name the reason in
+            // the file itself, because an administrator opening it later will
+            // not remember which keys were consented at export time.
+            result.put("note", fullLoggingEnabled
+                ? "No request with full logging in this window: request and response content is empty in every row of this export."
+                : "Full logging is not activated for this team: request and response content was never stored, so it is empty in every row of this export.");
+        }
         result.put("truncated", truncated);
         result.put("traces", rows.stream().map(this::toTrace).toList());
         return result;
+    }
+
+    /**
+     * Whether any active key of the team is opted into FULL logging — the
+     * only switch under which the orchestrator stores request and response
+     * content at all.
+     */
+    private boolean hasFullLoggingKey(int teamId) {
+        return apiKeyRepository.existsByTeamIdAndLogAndIsActive(teamId, LogLevel.FULL, true);
     }
 
     private Map<String, Object> toTrace(LogExportProjection p) {
@@ -191,9 +225,7 @@ public class TeamActivityService {
         m.put("time_at_first_token", ts(p.getTimeAtFirstToken()));
         m.put("privacy_level", p.getPrivacyLevel());
         m.put("model_name", p.getModelName());
-        m.put("provider_name", p.getProviderName());
         m.put("provider_type", p.getProviderType());
-        m.put("policy_id", p.getPolicyId());
         m.put("environment", p.getEnvironment());
         m.put("api_key_id", p.getApiKeyId());
         m.put("api_key_name", p.getKeyName());
@@ -215,8 +247,6 @@ public class TeamActivityService {
         m.put("was_cold_start", p.getWasColdStart());
         m.put("load_duration_ms", p.getLoadDurationMs());
         m.put("available_vram_mb", p.getAvailableVramMb());
-        m.put("azure_rate_remaining_requests", p.getAzureRateRemainingRequests());
-        m.put("azure_rate_remaining_tokens", p.getAzureRateRemainingTokens());
         m.put("prompt_tokens", p.getPromptTokens());
         m.put("completion_tokens", p.getCompletionTokens());
         m.put("total_tokens", p.getTotalTokens());
@@ -232,8 +262,8 @@ public class TeamActivityService {
      * Back to structured data for the download. The database returns JSONB as
      * text, and a trace whose payload is a string that merely contains JSON
      * is one layer harder to read than it should be. A column that is NULL
-     * stays NULL: billing-only rows never reached this method, but a FULL
-     * request whose response was never stored must still read as absent
+     * stays NULL: a billing-only request stored no content at all, and a
+     * FULL request whose response was never stored must read as absent
      * rather than as an empty object.
      */
     private Object json(String text) {

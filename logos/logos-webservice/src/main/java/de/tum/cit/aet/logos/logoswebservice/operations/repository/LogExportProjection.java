@@ -3,7 +3,12 @@ package de.tum.cit.aet.logos.logoswebservice.operations.repository;
 import java.time.Instant;
 
 /**
- * One consent-based (FULL) request trace for the team export (issue #667).
+ * One request trace of the team export (issue #667).
+ *
+ * Every row carries the lifecycle metadata; only the FULL-privacy rows
+ * (the ones the requester consented to) carry non-null content in the
+ * payload columns — a NULL is the answer "no content was stored", and the
+ * envelope makes that explicit.
  *
  * The payload columns are selected as text: the database handshakes JSONB as
  * a string, and the service turns them back into objects before they go out,
@@ -19,9 +24,7 @@ public interface LogExportProjection {
     Instant getTimeAtFirstToken();
     String getPrivacyLevel();
     String getModelName();
-    String getProviderName();
     String getProviderType();
-    Integer getPolicyId();
     String getEnvironment();
     Integer getApiKeyId();
     String getKeyName();
@@ -43,8 +46,6 @@ public interface LogExportProjection {
     Boolean getWasColdStart();
     Float getLoadDurationMs();
     Integer getAvailableVramMb();
-    Integer getAzureRateRemainingRequests();
-    Integer getAzureRateRemainingTokens();
     Long getPromptTokens();
     Long getCompletionTokens();
     Long getTotalTokens();

@@ -10,6 +10,8 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -18,15 +20,21 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 /**
- * The consent-based trace export (issue #667).
+ * The request trace export (issue #667).
  *
- * The export seed adds two rows to the shared operations seed, both in team
- * 2001 within the window: 9003 was recorded at FULL privacy and carries the
- * request and response payloads, 9004 is billing-only. Together with the
- * shared 9001 (also billing-only) they pin down the one rule that makes this
- * endpoint different from the activity view: only consented rows come back.
+ * The export seed adds two rows and one key to the shared operations seed.
+ * Both rows sit in team 2001 within the window: 9003 was recorded at FULL
+ * privacy and carries the request and response payloads, 9004 is
+ * billing-only. Together with the shared 9001 (also billing-only) they pin
+ * down what the export shows: every request of the window, with the content
+ * columns filled only where the requester consented — an export must
+ * describe the same slice of traffic the activity list does, not a silently
+ * smaller one. The added key 3009 turns full logging on for 2001 (the shared
+ * keys are all at the BILLING default), so the "activated" and the "not
+ * activated" sides of the envelope hint are both covered by the seeded
+ * teams: 2002 has no keys and no traffic at all.
  * User 1002 is an app admin owning 2001; team 2002 exists and they do not own
- * it, and it has no traffic at all.
+ * it.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -104,24 +112,61 @@ class TeamActivityExportControllerTest {
     // ── Content ──────────────────────────────────────────────────────────────
 
     @Test
-    void itCarriesTheFullRequestAndResponsePayloads() throws Exception {
-        // The point of the opt-in: what the requester agreed to be stored is
-        // what the download contains, structured rather than as a string that
-        // happens to hold JSON.
+    void itCarriesEveryRequestOfTheWindowNewestFirst() throws Exception {
+        // The export must describe the same slice of traffic the activity
+        // list shows: the two billing rows come back right next to the
+        // consented one, in the same newest-first order the feed reads.
         mvc.perform(post("/logosdb/teams/2001/activity/export")
                 .with(TestJwt.adminUser())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.traces.length()").value(1))
-           .andExpect(jsonPath("$.traces[0].request_id").value("req-ccc-333"))
-           .andExpect(jsonPath("$.traces[0].privacy_level").value("FULL"))
-           .andExpect(jsonPath("$.traces[0].input_payload.model").value("gpt-4"))
-           .andExpect(jsonPath("$.traces[0].input_payload.messages[0].content").value("Hello, Logos"))
-           .andExpect(jsonPath("$.traces[0].response_payload.choices[0].message.content")
+           .andExpect(jsonPath("$.count").value(3))
+           .andExpect(jsonPath("$.truncated").value(false))
+           .andExpect(jsonPath("$.traces.length()").value(3))
+           .andExpect(jsonPath("$.traces[0].request_id").value("req-ddd-444"))
+           .andExpect(jsonPath("$.traces[1].request_id").value("req-ccc-333"))
+           .andExpect(jsonPath("$.traces[2].request_id").value("req-aaa-111"));
+    }
+
+    @Test
+    void billingRowsComeOutWithEmptyContent() throws Exception {
+        // Nothing was stored for a request the requester did not consent to,
+        // and the row says exactly that: present like every other request,
+        // the content columns simply empty.
+        mvc.perform(post("/logosdb/teams/2001/activity/export")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.traces[0].privacy_level").value("BILLING"))
+           .andExpect(jsonPath("$.traces[0].input_payload").value(nullValue()))
+           .andExpect(jsonPath("$.traces[0].response_payload").value(nullValue()))
+           .andExpect(jsonPath("$.traces[0].headers").value(nullValue()))
+           .andExpect(jsonPath("$.traces[0].client_ip").value(nullValue()))
+           .andExpect(jsonPath("$.traces[2].privacy_level").value("BILLING"))
+           .andExpect(jsonPath("$.traces[2].input_payload").value(nullValue()));
+    }
+
+    @Test
+    void itCarriesTheFullRequestAndResponsePayloads() throws Exception {
+        // The point of the opt-in: what the requester agreed to be stored is
+        // what the download contains, structured rather than as a string that
+        // happens to hold JSON. The consented row sits between the two
+        // billing ones, newest first.
+        mvc.perform(post("/logosdb/teams/2001/activity/export")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.traces[1].request_id").value("req-ccc-333"))
+           .andExpect(jsonPath("$.traces[1].privacy_level").value("FULL"))
+           .andExpect(jsonPath("$.traces[1].input_payload.model").value("gpt-4"))
+           .andExpect(jsonPath("$.traces[1].input_payload.messages[0].content").value("Hello, Logos"))
+           .andExpect(jsonPath("$.traces[1].response_payload.choices[0].message.content")
                 .value("Hi there!"))
-           .andExpect(jsonPath("$.traces[0].headers['content-type']").value("application/json"))
-           .andExpect(jsonPath("$.traces[0].client_ip").value("127.0.0.1"));
+           .andExpect(jsonPath("$.traces[1].headers['content-type']").value("application/json"))
+           .andExpect(jsonPath("$.traces[1].client_ip").value("127.0.0.1"));
     }
 
     @Test
@@ -131,33 +176,17 @@ class TeamActivityExportControllerTest {
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.traces[0].username").value("testuser"))
-           .andExpect(jsonPath("$.traces[0].full_name").value("Test User"))
-           .andExpect(jsonPath("$.traces[0].api_key_name").value("dev key"))
-           .andExpect(jsonPath("$.traces[0].model_name").value("gpt-4"))
-           .andExpect(jsonPath("$.traces[0].provider_name").value("openai-provider"))
-           .andExpect(jsonPath("$.traces[0].status").value("success"));
+           .andExpect(jsonPath("$.traces[1].username").value("testuser"))
+           .andExpect(jsonPath("$.traces[1].full_name").value("Test User"))
+           .andExpect(jsonPath("$.traces[1].api_key_name").value("dev key"))
+           .andExpect(jsonPath("$.traces[1].model_name").value("gpt-4"))
+           .andExpect(jsonPath("$.traces[1].status").value("success"));
     }
 
     @Test
-    void billingOnlyRequestsStayOutOfTheExport() throws Exception {
-        // 9004 (billing-only, same window) and the shared 9001 (billing-only
-        // default) both sit in team 2001. The count says the filter worked:
-        // the export holds the single consented row and nothing else.
-        mvc.perform(post("/logosdb/teams/2001/activity/export")
-                .with(TestJwt.adminUser())
-                .contentType("application/json")
-                .content("{}"))
-           .andExpect(status().isOk())
-           .andExpect(jsonPath("$.count").value(1))
-           .andExpect(jsonPath("$.truncated").value(false))
-           .andExpect(jsonPath("$.traces[0].request_id").value("req-ccc-333"));
-    }
-
-    @Test
-    void aTeamWithoutConsentedTrafficExportsAnEmptySet() throws Exception {
+    void aTeamWithoutTrafficExportsAnEmptySet() throws Exception {
         // No rows at all, but the file is still a well-formed empty set — the
-        // download must not fail just because the team never opted in.
+        // download must not fail just because the team never sent anything.
         mvc.perform(post("/logosdb/teams/2002/activity/export")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
@@ -175,17 +204,68 @@ class TeamActivityExportControllerTest {
                 .contentType("application/json")
                 .content("{\"user_id\": 1001}"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.count").value(1));
+           .andExpect(jsonPath("$.count").value(3));
 
-        // A requester who sent no consented traffic in the team narrows to
-        // nothing — the team scope still applies on top, like in the activity
-        // view, so this can only ever cut the set down further.
+        // A requester who sent no traffic in the team narrows to nothing —
+        // the team scope still applies on top, like in the activity view, so
+        // this can only ever cut the set down further.
         mvc.perform(post("/logosdb/teams/2001/activity/export")
                 .with(TestJwt.adminUser())
                 .contentType("application/json")
                 .content("{\"user_id\": 1003}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.count").value(0));
+    }
+
+    // ── The consent hint ─────────────────────────────────────────────────────
+
+    @Test
+    void theEnvelopeSaysWhetherFullLoggingIsActivated() throws Exception {
+        // 2001 has the added full key, so the download can say so — and with
+        // a consented row on board there is nothing to explain, so no note.
+        mvc.perform(post("/logosdb/teams/2001/activity/export")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.full_logging_enabled").value(true))
+           .andExpect(jsonPath("$.note").doesNotExist());
+
+        // 2002 has no keys at all: the note must name the reason the content
+        // of the file is empty.
+        mvc.perform(post("/logosdb/teams/2002/activity/export")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.full_logging_enabled").value(false))
+           .andExpect(jsonPath("$.note").value(containsString("not activated")));
+    }
+
+    @Test
+    void theNoteExplainsConsentedTrafficWithoutAConsentSwitch() throws Exception {
+        // Full logging is on for 2001, but this requester never sent a
+        // consented request: the note has to say there was no full-logging
+        // traffic in the window, not that nobody consented.
+        mvc.perform(post("/logosdb/teams/2001/activity/export")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"user_id\": 1003}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.full_logging_enabled").value(true))
+           .andExpect(jsonPath("$.note").value(containsString("No request with full logging")));
+    }
+
+    @Test
+    void theActivityViewCarriesTheSameFlag() throws Exception {
+        // The tab shows the hint before the export is even started, so the
+        // flag lives on the activity payload, not only on the envelope.
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.full_logging_enabled").value(true));
     }
 
     // ── Window ───────────────────────────────────────────────────────────────

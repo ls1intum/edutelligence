@@ -99,6 +99,18 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   readonly selectedDaysValue = computed(() => String(this.days()));
 
+  /**
+   * The hint the export control carries (issue #667): a team whose keys all
+   * stay on billing logging never had request or response content stored, so
+   * the download holds metadata without content — say so before the click
+   * instead of letting the empty columns speak for themselves.
+   */
+  readonly fullLoggingHint = computed<string | null>(() => {
+    const activity = this.activity();
+    if (!activity || activity.full_logging_enabled) return null;
+    return 'Full logging is not activated for this team — the export will not contain request or response content.';
+  });
+
   readonly requesterOptions = computed<AppSelectOption[]>(() => [
     { value: '', label: 'Everyone in this team' },
     ...(this.activity()?.requesters ?? []).map((r) => ({
@@ -184,9 +196,10 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   }
 
   /**
-   * Download the team's consent-based traces — the FULL-logging requests with
-   * their stored content — as the picked file format. The server answers the
-   * JSON envelope; the CSV is cut from it here, the same way the import
+   * Download the team's request traces as the picked file format: every
+   * request of the selected window, and for the consented (FULL-logging)
+   * ones the stored request and response content with it. The server answers
+   * the JSON envelope; the CSV is cut from it here, the same way the import
    * credentials file is cut from the upload result.
    */
   async exportTraces(): Promise<void> {
@@ -358,9 +371,7 @@ export const TRACE_CSV_COLUMNS: (keyof TraceExportItem)[] = [
   'time_at_first_token',
   'privacy_level',
   'model_name',
-  'provider_name',
   'provider_type',
-  'policy_id',
   'environment',
   'api_key_id',
   'api_key_name',
@@ -382,8 +393,6 @@ export const TRACE_CSV_COLUMNS: (keyof TraceExportItem)[] = [
   'was_cold_start',
   'load_duration_ms',
   'available_vram_mb',
-  'azure_rate_remaining_requests',
-  'azure_rate_remaining_tokens',
   'prompt_tokens',
   'completion_tokens',
   'total_tokens',

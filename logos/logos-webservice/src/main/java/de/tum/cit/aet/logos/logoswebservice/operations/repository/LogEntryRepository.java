@@ -406,13 +406,14 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("requestIds") List<String> requestIds);
 
     /**
-     * The consent-based traces of one team for the export (issue #667).
+     * The request traces of one team for the export (issue #667).
      *
-     * A trace exists because the requester opted in: only rows the orchestrator
-     * recorded at FULL privacy carry the request and response payloads, and
-     * those are what the export is for. Billing-only rows never reach this
-     * query, so a team that never consented exports an empty file rather than
-     * an anonymous skeleton of its traffic.
+     * Every request of the window comes out — the export must describe the
+     * same slice of traffic the activity list above shows, and a download that
+     * is empty just because the team never consented reads as a bug. Only the
+     * rows the orchestrator recorded at FULL privacy carry the request and
+     * response payloads; for the billing-only ones the content columns come
+     * back NULL, and the envelope says so.
      *
      * The token and cost columns reuse the lateral joins of
      * {@link #findLatestRequests} so an exported number and the same request in
@@ -430,9 +431,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                le.time_at_first_token AS timeAtFirstToken,
                le.privacy_level::text AS privacyLevel,
                COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
-               COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
                p.provider_type::text AS providerType,
-               le.policy_id AS policyId,
                le.environment AS environment,
                k.id AS apiKeyId,
                k.name AS keyName,
@@ -454,8 +453,6 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                le.was_cold_start AS wasColdStart,
                le.load_duration_ms AS loadDurationMs,
                le.available_vram_mb AS availableVramMb,
-               le.azure_rate_remaining_requests AS azureRateRemainingRequests,
-               le.azure_rate_remaining_tokens AS azureRateRemainingTokens,
                tk.prompt_tokens AS promptTokens,
                tk.completion_tokens AS completionTokens,
                tk.total_tokens AS totalTokens,
@@ -500,13 +497,12 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             WHERE ut.log_entry_id = le.id
         ) c ON true
         WHERE le.team_id = :teamId
-          AND le.privacy_level = 'FULL'
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
         ORDER BY le.timestamp_request DESC, le.id DESC
         LIMIT :limitN
         """, nativeQuery = true)
-    List<LogExportProjection> findFullTracesForExport(
+    List<LogExportProjection> findTracesForExport(
         @Param("teamId") int teamId,
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs,

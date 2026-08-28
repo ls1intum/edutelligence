@@ -134,9 +134,10 @@
         >
           <i class="pi pi-angle-right" aria-hidden="true"></i>
         </button>
-        <!-- Consent-based trace export (issue #667): only the FULL-logging
-             requests come back — the ones whose content was stored because the
-             requester opted in. Follows the period and requester filter above. -->
+        <!-- Request trace export (issue #667): every request of the window
+             comes back; the full-logging ones — the ones whose content was
+             stored because the requester opted in — carry it with them.
+             Follows the period and requester filter above. -->
         <span class="ac-export">
           <app-select
             class="ac-control"
@@ -151,8 +152,8 @@
             type="button"
             [disabled]="exporting()"
             (click)="exportTraces()"
-            title="Download this team's consent-based traces (full-logging requests, content included)"
-            aria-label="Export consent-based traces"
+            title="Download this team's requests — the full-logging ones carry their stored content"
+            aria-label="Export request traces"
           >
             <i class="pi pi-download" aria-hidden="true"></i>
           </button>
@@ -162,6 +163,10 @@
 
     @if (exportError()) {
       <p class="ac-error">{{ exportError() }}</p>
+    }
+
+    @if (fullLoggingHint()) {
+      <p class="ac-note ac-note--quiet">{{ fullLoggingHint() }}</p>
     }
 
     @if (requests().length === 0) {
