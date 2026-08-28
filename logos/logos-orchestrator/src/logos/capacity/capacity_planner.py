@@ -5887,8 +5887,20 @@ class CapacityPlanner:
 
         Only infers TP > 1 when the model clearly won't fit on a single GPU.
         Returns None if inference is not possible or TP=1 is sufficient.
+
+        Calibrated profiles are never inferred: their tensor_parallel_size is
+        the single source of truth (the calibrator probed this hardware and
+        the profile's residency/KV data were measured under that TP). The
+        callers already apply profile.tensor_parallel_size when it is > 1, so
+        this only matters for a calibrated TP=1 — inferring off the calibrated
+        base_residency (the full awake footprint, often most of a GPU) would
+        escalate it to a higher TP and overwrite the calibrated verdict with
+        data measured at a different parallelism (issue #616).
         """
         import math
+
+        if profile.residency_source == "calibrated" and profile.tensor_parallel_size is not None:
+            return int(profile.tensor_parallel_size)
 
         base_mb = profile.estimate_base_residency_mb()
         if base_mb is None or base_mb <= 0:
