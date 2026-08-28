@@ -1790,8 +1790,9 @@ def _model_deployment_status(
 ) -> str:
     """Serveability of one model deployment for the /health model breakdown.
 
-    Cloud deployments are UP whenever configured — Logos does not probe cloud
-    providers, which matches the overall /health behaviour. Worker-backed
+    Deployments outside the local provider inventory are cloud — UP whenever
+    configured, because Logos does not probe cloud providers (matching the
+    overall /health behaviour). Worker-backed
     deployments are UP when the worker is online, the model is calibrated, and
     a lane is loaded/running or sleeping (a wake is fast). A model that only
     needs a cold load, or that lives on a worker reporting an unhealthy node,
@@ -1849,8 +1850,6 @@ async def health():
         with DBManager() as db:
             inventory = db.list_local_providers()
             deployments = db.get_all_deployments_with_names()
-        # Cloud is serveable if any non-logosnode deployment is configured.
-        cloud_ok = any(str(d.get("type")) != "logosnode" for d in deployments)
         worker_ids: set[int] = set()
         snapshots: Dict[int, Dict[str, Any]] = {}
         for provider in inventory:
@@ -1865,6 +1864,10 @@ async def health():
             # Local is serveable if an online worker declares at least one capable model.
             if snapshot.get("capabilities_models"):
                 local_ok = True
+        # Cloud is serveable if any deployment lives outside the local provider
+        # inventory — by type alone this would miscount legacy local worker
+        # types (ollama, node, ...) as cloud.
+        cloud_ok = any(int(d.get("provider_id") or 0) not in worker_ids for d in deployments)
         # Model-level breakdown: best deployment status per model.
         for deployment in deployments:
             model_name = str(deployment.get("model_name") or "").strip()

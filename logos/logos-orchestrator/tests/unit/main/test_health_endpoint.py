@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,9 +11,9 @@ import logos as main_mod
 
 
 class _FakeDBManager:
-    deployments: list[dict] = []
-    providers: list[dict] = []
-    raise_on_enter: bool = False
+    deployments: ClassVar[list[dict]] = []
+    providers: ClassVar[list[dict]] = []
+    raise_on_enter: ClassVar[bool] = False
 
     def __enter__(self):
         if type(self).raise_on_enter:
@@ -99,6 +100,32 @@ async def test_local_down_returns_503_and_keeps_cloud_breakdown(monkeypatch):
     assert body["models"] == [
         {"name": "model-a", "status": "DOWN"},
         {"name": "model-d", "status": "UP"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_local_provider_is_not_counted_as_cloud(monkeypatch):
+    # "ollama" is a legacy local worker type: list_local_providers counts it
+    # as local, so its deployment must not flip cloud_models to UP.
+    _FakeDBManager.providers = [
+        {"provider_id": 1, "name": "node-a", "provider_type": "logosnode"},
+        {"provider_id": 2, "name": "ollama-x", "provider_type": "ollama"},
+    ]
+    _FakeDBManager.deployments = [
+        {"model_id": 1, "model_name": "model-a", "provider_id": 1, "provider_name": "node-a", "type": "logosnode"},
+        {"model_id": 2, "model_name": "model-b", "provider_id": 2, "provider_name": "ollama-x", "type": "ollama"},
+    ]
+    registry = MagicMock()
+    registry.peek_runtime_snapshot = lambda pid: None
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    response = await main_mod.health()
+
+    body = _body(response)
+    assert body["cloud_models"] == "DOWN"
+    assert body["models"] == [
+        {"name": "model-a", "status": "DOWN"},
+        {"name": "model-b", "status": "DOWN"},
     ]
 
 

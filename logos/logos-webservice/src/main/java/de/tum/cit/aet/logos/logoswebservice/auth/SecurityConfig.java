@@ -151,8 +151,14 @@ public class SecurityConfig {
             // The model-health endpoint authenticates a Logos API key in the
             // controller. If we resolved the key (or a JWT) here, the
             // resource-server filter would short-circuit the request with a 401
-            // before it ever reached the controller.
-            if ("/logosdb/get_model_health".equals(request.getRequestURI())) {
+            // before it ever reached the controller. getRequestURI() includes
+            // the servlet context path, so compare the path within the app.
+            String path = request.getRequestURI();
+            String contextPath = request.getContextPath();
+            if (contextPath != null && !contextPath.isEmpty() && path.startsWith(contextPath)) {
+                path = path.substring(contextPath.length());
+            }
+            if ("/logosdb/get_model_health".equals(path)) {
                 return null;
             }
             String token = defaultResolver.resolve(request);

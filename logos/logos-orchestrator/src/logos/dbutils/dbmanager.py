@@ -1677,7 +1677,6 @@ class DBManager:
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
-    # ADMIN ONLY
     def get_all_deployments_with_names(self) -> list[Dict[str, Any]]:
         """
         Get all model deployments with model and provider names.
