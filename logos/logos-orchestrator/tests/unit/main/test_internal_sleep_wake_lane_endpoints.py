@@ -81,8 +81,8 @@ async def test_sleep_returns_503_when_worker_not_connected(monkeypatch):
 async def test_sleep_returns_503_before_the_worker_sent_its_first_status(monkeypatch):
     """No status means no lanes, so the guard has nothing to read.
 
-    Dispatching anyway would burn the 30 s command timeout only to fail on the
-    worker — say so up front, the same way calibrate_uncalibrated does.
+    Dispatching anyway would burn the 120 s command timeout only to fail on
+    the worker — say so up front, the same way calibrate_uncalibrated does.
     """
     monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
     monkeypatch.setattr(main_mod, "_logosnode_registry", _registry(snap=_snapshot(first_status=False)))
@@ -107,37 +107,38 @@ async def test_sleep_returns_404_for_a_lane_the_worker_does_not_report(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_sleep_refuses_a_lane_that_is_serving(monkeypatch):
-    """Sleeping a busy lane cuts requests off mid-stream.
-
-    The worker's mode="wait" drain would wait out the 30 s budget and end in a
-    silent no-op; the operator instead gets the reason synchronously, in the
-    shape the panel already displays for refusals.
-    """
+async def test_sleep_does_not_refuse_a_lane_that_is_serving(monkeypatch):
+    """A busy lane is not refused: mode="wait" drains in-flight requests
+    first and sleeps once the lane is idle, so the dispatch must go through
+    even with active traffic — the response just takes longer."""
     monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
-    registry = _registry(snap=_snapshot(lanes=[_lane(active_requests=2, sleep_state="awake")]))
+    registry = _registry(
+        snap=_snapshot(lanes=[_lane(active_requests=2, sleep_state="awake")]),
+        command_result={"lane_id": "lane-1"},
+    )
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    response = await main_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer correct-secret"))
+
+    assert response == {"lane_id": "lane-1"}
+    registry.send_command.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_sleep_refuses_a_lane_that_cannot_sleep(monkeypatch):
+    """The worker reports sleep_state "unsupported" when its model is
+    configured without enable_sleep_mode (or the lane is not a vLLM lane).
+    Refuse synchronously instead of dispatching to fail on the worker."""
+    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    registry = _registry(snap=_snapshot(lanes=[_lane(sleep_state="unsupported")]))
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
     with pytest.raises(HTTPException) as exc_info:
         await main_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer correct-secret"))
 
     assert exc_info.value.status_code == 409
-    assert "2 active request" in exc_info.value.detail
+    assert "enable_sleep_mode" in exc_info.value.detail
     registry.send_command.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_sleep_treats_a_missing_active_requests_count_as_idle(monkeypatch):
-    """Older workers may omit the field; absence is not evidence of traffic."""
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
-    registry = _registry(
-        snap=_snapshot(lanes=[_lane(active_requests=None)]), command_result={"sleep_state": "sleeping"}
-    )
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
-
-    response = await main_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer correct-secret"))
-
-    assert response == {"sleep_state": "sleeping"}
 
 
 @pytest.mark.asyncio
@@ -158,7 +159,7 @@ async def test_sleep_dispatches_level_1_wait(monkeypatch):
         7,
         action="sleep_lane",
         params={"lane_id": "lane-1", "level": 1, "mode": "wait"},
-        timeout_seconds=30,
+        timeout_seconds=120,
     )
 
 

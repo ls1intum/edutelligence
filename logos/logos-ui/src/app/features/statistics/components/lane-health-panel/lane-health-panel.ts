@@ -104,11 +104,12 @@ export type LaneSleepAction = 'sleep' | 'wake' | null;
  *
  * Wake only on a lane that is actually asleep: vLLM's /wake_up on an awake
  * engine is a no-op at best, so the button would promise a transition that is
- * not coming. Sleep only on a lane that is awake and idle: the server refuses
- * a sleep while requests are in flight, so a busy lane gets no button rather
- * than a guaranteed failure. Lanes whose backend has no sleep mode (Ollama
- * reports sleep_state "unsupported", a vLLM lane that never slept reports
- * "unknown") offer neither.
+ * not coming. Sleep only on a lane that is awake and idle: the server first
+ * drains in-flight requests (mode="wait"), so on a busy lane the click would
+ * block for as long as the drain takes — the panel offers the action only
+ * where it takes effect immediately. Lanes whose backend has no sleep mode
+ * (Ollama reports sleep_state "unsupported", a vLLM lane that never slept
+ * reports "unknown") offer neither.
  */
 export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   if (lane.sleep_state === 'sleeping') return 'wake';

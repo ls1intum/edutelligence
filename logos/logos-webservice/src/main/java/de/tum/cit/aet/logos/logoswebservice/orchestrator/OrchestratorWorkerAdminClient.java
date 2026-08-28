@@ -4,6 +4,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -26,7 +27,7 @@ public class OrchestratorWorkerAdminClient {
     @Value("${logos.orchestrator.internal-secret:}")
     private String internalSecret;
 
-    public OrchestratorWorkerAdminClient(RestTemplate restTemplate) {
+    public OrchestratorWorkerAdminClient(@Qualifier("workerAdminRestTemplate") RestTemplate restTemplate) {
         this.restTemplate = restTemplate;
     }
 
@@ -49,7 +50,7 @@ public class OrchestratorWorkerAdminClient {
     /**
      * Requests a lane load. The orchestrator only accepts the request and loads
      * in the background — a model can take minutes — so this returns as quickly
-     * as any other admin call and the shared read timeout is enough.
+     * as any other admin call and this client's read timeout is enough.
      */
     public ResponseEntity<Map> addLane(int providerId, Map<String, Object> lane) {
         return post("/internal/logosnode/lanes/add", Map.of("provider_id", providerId, "lane", lane));

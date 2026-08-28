@@ -2203,6 +2203,13 @@ async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request
     seconds; level 2 would release them and pay for a full reload on the next
     wake — a choice most operators cannot make well, so the button does not
     offer it and neither does this endpoint.
+
+    In-flight requests are not refused: mode="wait" makes the worker drain
+    them first and only sleep once the lane is idle (a request admitted
+    between drain and sleep makes the worker skip the sleep and stay awake).
+    The command therefore takes as long as the drain — the dispatch budget
+    must cover it, which is why sleep_lane gets the same 120 s as the
+    planner's own sleep commands.
     """
     if not _INTERNAL_SECRET:
         raise HTTPException(status_code=403, detail="Internal endpoint disabled")
@@ -2230,15 +2237,15 @@ async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request
     )
     if lane is None:
         return JSONResponse(status_code=404, content={"error": f"Lane '{data.lane_id}' not found on this worker"})
-    # A lane mid-generation cannot sleep without cutting requests off. The
-    # worker's mode="wait" drain would just wait it out (30 s budget) and end
-    # in a no-op, so answer the refusal synchronously with a reason the panel
-    # can display — same shape as manual_load_rejection_reason for loads.
-    active = int(lane.get("active_requests", 0) or 0)
-    if active > 0:
+    # "unsupported" is the worker's resolved answer for "cannot sleep this
+    # lane": enable_sleep_mode off for its model (per-model override or the
+    # node-wide kill switch) or a non-vLLM lane. Dispatching would burn the
+    # command budget to fail on the worker, so refuse synchronously with the
+    # reason the panel can display.
+    if str(lane.get("sleep_state", "")).strip().lower() == "unsupported":
         raise HTTPException(
             status_code=409,
-            detail=f"Lane is serving {active} active request(s); wait for them to finish before sleeping it.",
+            detail="Lane does not support sleep mode; its model is configured without enable_sleep_mode.",
         )
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
@@ -4988,7 +4995,10 @@ async def logosnode_lanes(data: LogosNodeStatusRequest):
 _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
     "apply_lanes": 180,
     "reconfigure_lane": 180,
-    "sleep_lane": 30,
+    # sleep_lane with mode="wait" first drains in-flight requests (the worker
+    # budgets 30 s for that), so a fixed 30 s here would time out exactly when
+    # a busy lane actually drains. The planner uses 120 s for its own sleeps.
+    "sleep_lane": 120,
     "wake_lane": 120,
     "delete_lane": 30,
 }
