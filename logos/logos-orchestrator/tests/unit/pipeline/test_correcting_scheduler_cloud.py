@@ -31,7 +31,7 @@ class _NoopLogosNodeFacade:
     def get_model_profiles(self, provider_id):
         return {}
 
-    def get_all_lane_signals(self, provider_id):
+    def get_all_provider_lane_signals(self, provider_id):
         raise KeyError(provider_id)
 
 
