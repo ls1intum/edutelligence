@@ -10,6 +10,14 @@ per-GPU VRAM in ``_KV_CACHE_MIN_STEP_MB`` steps) and records the
 ``(kv_cache_mb, max_model_len)`` curve. It measures real VRAM in awake and
 sleeping states and persists the results to ``model_profiles.yml``.
 
+Sleep capability is verified, not assumed: after the sleep measurement the
+model is woken again (``/wake_up``) and must answer a second test request.
+A model that cannot sleep or wake safely does not fail the run — it gets a
+profile with ``sleep_mode_disabled`` recorded, so it is still served (awake)
+while the capacity planner never puts it to sleep. Failures that leave the
+measurement itself incomplete (GPU VRAM sampling in any phase, the KV-cache
+search, the model never starting) still fail the run.
+
 VRAM decomposition (exact, no guessing)::
 
     base_residency_mb    = loaded_vram_mb  (weights + KV cache — full footprint)
@@ -1185,8 +1193,24 @@ class CalibrationResult:
     # Measured: total GPU delta while sleeping. None when the run skipped the
     # sleep phases because sleep is disabled for this model on this worker —
     # the value is genuinely unknowable there, and the profile records it as
-    # null rather than as a measurement.
-    sleeping_residual_mb: float | None = 0.0
+    # null rather than as a measurement. Also None when the sleep phases ran
+    # but failed verification (see sleep_mode_disabled): a residual measured
+    # for a sleep that cannot be reversed must not reach the planner. The
+    # default is None, deliberately not 0.0: a missing value must never
+    # encode itself as "sleep frees the whole footprint" if a constructor
+    # forgets the field.
+    sleeping_residual_mb: float | None = None
+    # Measured verdict on this model's sleep capability, persisted into the
+    # profile as ``sleep_mode_disabled``. True when the sleep phases ran and
+    # proved the model unsafe to sleep on this worker (``/sleep`` or
+    # ``/wake_up`` failed, a sleep/awake state never reached, or the model
+    # stopped serving after wake). False when the full sleep → wake → serve
+    # cycle completed. None when the run skipped the sleep phases
+    # (sleep_level 0), where the probe has no verdict and the profile keeps
+    # whatever is already known. The run itself still succeeds in both
+    # True/False cases: base_residency_mb is measured either way, and a
+    # model that cannot sleep is still worth serving — awake, never slept.
+    sleep_mode_disabled: bool | None = None
     base_residency_mb: float = 0.0  # = loaded_vram_mb (weights + KV, full footprint)
     # KV cache envelope discovered during calibration on this hardware. ``min``
     # is the smallest kv_cache_memory_bytes value at which the model loaded and
@@ -1338,6 +1362,36 @@ def calibrate_model(
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
 ) -> CalibrationResult:
+    """Calibrate one model on this worker and return a :class:`CalibrationResult`.
+
+    Runs the full probe sequence for *plan*: baseline VRAM, the KV-cache
+    sweep, the awake measurement (with a 1-token warmup request), and — when
+    ``sleep_level > 0`` — the sleep phases, which end with a wake verification
+    (Phase 5.5): the model must wake and answer a second test request. A
+    model that cannot sleep or wake safely still yields a successful result
+    with ``sleep_mode_disabled=True`` and null sleep measurements — the
+    profile records the verdict instead of the run failing.
+
+    Args:
+        plan: Calibration plan (model name plus vLLM settings), as merged by
+            ``plans_from_config``.
+        vllm_binary: vLLM executable to spawn.
+        port: Port the calibration probe listens on.
+        log_dir: Directory for the per-model vLLM log and the blacklist files.
+        sleep_level: vLLM sleep level to probe; 0 skips the sleep phases.
+        ready_timeout_s: Seconds to wait for a probe to become ready.
+        nccl_p2p_available: True on NVLink topologies (keeps P2P enabled).
+        hf_home: tmpfs HF cache to load from, when provided.
+        model_cache: Optional model cache; the first real spawn copies the
+            model into it.
+        cancel_event: When set, aborts the run at the next checkpoint.
+
+    Returns:
+        A ``CalibrationResult`` with ``success=True`` and the measured
+        footprints, or ``success=False`` with ``error`` (and optionally
+        ``unsupported_reason`` / ``node_unhealthy_reason``) when any phase
+        fails.
+    """
     # Honor the production enforce_eager setting (default False, matching the
     # worker schema). Calibrating in a different mode than production runs
     # produces systematically wrong loaded_vram_mb / sleeping_residual_mb
@@ -2336,22 +2390,36 @@ def calibrate_model(
             kv_cache_sent_mb,
         )
 
-        # Phases 4 and 5 measure sleep, and only sleep. Everything the planner
-        # needs to place a lane — base_residency_mb above — is already known,
-        # so a model that is not allowed to sleep on this worker skips them and
-        # finishes with sleeping_residual_mb unknown rather than being dropped.
-        # Dropping it is what left nosleep models (enable_sleep_mode: false)
-        # permanently uncalibrated: no profile means the worker never reports
-        # them as a capability, and no later session could recover them either.
+        # Phases 4 to 5.5 measure sleep and verify it: put the model to
+        # sleep, measure the sleeping footprint, wake it, and require it to
+        # serve a request again. Everything the planner needs to place a
+        # lane — base_residency_mb above — is already known, so a model that
+        # is not allowed to sleep on this worker skips them and finishes with
+        # sleeping_residual_mb unknown rather than being dropped. Dropping it
+        # is what left nosleep models (enable_sleep_mode: false) permanently
+        # uncalibrated: no profile means the worker never reports them as a
+        # capability, and no later session could recover them either.
         sleeping_residual_mb: float | None = None
         sleep_transient_mb: float | None = None
         host_ram_residual_mb: float | None = None
+        sleep_mode_disabled: bool | None = None
         if sleep_level <= 0:
             logger.info(
-                "  [4/6 + 5/6] Sleep phases skipped (sleep mode disabled for this model) — "
+                "  [4/6 + 5/6 + 5.5/6] Sleep phases skipped (sleep mode disabled for this model) — "
                 "sleeping_residual_mb stays unknown; base_residency is unaffected"
             )
         else:
+            # Phases 4 to 5.5 run the sleep-capability check and record its
+            # verdict in sleep_mode_disabled instead of failing the run: the
+            # planner needs base_residency_mb to serve this model, and a model
+            # that cannot be slept safely is still worth serving — awake. The
+            # sleeping measurements stay null when the verdict is "do not
+            # sleep this model", so the planner never sees a residual for a
+            # sleep that cannot be reversed.
+            sleep_phase_failed = False
+            sleep_failure_reason = ""
+            sleep_baseline_mb = None
+
             # Phase 4 — Sleep the model (with host-RAM transient sampling)
             if cancel_event is not None and cancel_event.is_set():
                 logger.info("  Calibration cancelled before Phase 4.")
@@ -2362,99 +2430,158 @@ def calibrate_model(
             with _track_host_ram_transient() as host_ram_probe:
                 status, _ = _post(sleep_url, timeout_s=_SLEEP_TIMEOUT_S)
                 if status not in (200, 204):
-                    partial.error = f"/sleep returned HTTP {status}"
-                    logger.warning("  ERROR: %s", partial.error)
+                    sleep_phase_failed = True
+                    sleep_failure_reason = f"/sleep returned HTTP {status}"
+                else:
+                    try:
+                        wait_sleep_state(base_url, True, _SLEEP_TIMEOUT_S)
+                    except TimeoutError as exc:
+                        sleep_phase_failed = True
+                        sleep_failure_reason = str(exc)
+
+            if not sleep_phase_failed:
+                sleep_transient_mb = host_ram_probe["transient_mb"]
+                sleep_baseline_mb = host_ram_probe["baseline_mb"]
+                if sleep_transient_mb is not None and sleep_baseline_mb is not None:
+                    logger.info(
+                        "        sleep_l%d transient host RAM: baseline_available=%.0fMB, " "peak_consumption=%.0fMB",
+                        sleep_level,
+                        sleep_baseline_mb,
+                        sleep_transient_mb,
+                    )
+                else:
+                    logger.info(
+                        "        sleep_l%d transient host RAM: /proc/meminfo unavailable — skipped",
+                        sleep_level,
+                    )
+
+                # Phase 5 — Measure sleeping VRAM. Sample twice with a settle
+                # between samples and take the max. CuMemAllocator's release is
+                # asynchronous; a single-shot sample can read mid-release and
+                # underestimate the residual (which leads to wake-time OOM when
+                # the planner trusts an artificially low value). The first
+                # sample is required; the second is a refinement and falls back
+                # silently if it fails.
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info("  Calibration cancelled before Phase 5.")
+                    partial.error = "cancelled"
                     return partial
+                logger.info(
+                    "  [5/6] Measuring sleeping VRAM (settling %.0fs, double-sample)...",
+                    _VRAM_SETTLE_S,
+                )
+                time.sleep(_VRAM_SETTLE_S)
                 try:
-                    wait_sleep_state(base_url, True, _SLEEP_TIMEOUT_S)
-                except TimeoutError as exc:
-                    partial.error = str(exc)
+                    s1 = sample_vram_mb(gpu_indices)
+                except Exception as exc:
+                    partial.error = f"nvidia-smi sleep failed: {exc}"
                     logger.warning("  ERROR: %s", partial.error)
                     return partial
+                time.sleep(3.0)
+                s2: float | None = None
+                try:
+                    s2 = sample_vram_mb(gpu_indices)
+                except Exception as exc:
+                    logger.info("        re-sample skipped (%s) — using single sample", exc)
+                sleeping_total_mb = max(s1, s2) if s2 is not None else s1
+                sleeping_residual_mb = max(sleeping_total_mb - baseline_mb, 0.0)
+                if s2 is not None:
+                    logger.info(
+                        "        sleeping samples = %.0f / %.0f MB  →  max delta = %.0f MB",
+                        s1,
+                        s2,
+                        sleeping_residual_mb,
+                    )
+                else:
+                    logger.info(
+                        "        sleeping sample = %.0f MB  →  delta = %.0f MB",
+                        s1,
+                        sleeping_residual_mb,
+                    )
 
-            sleep_transient_mb = host_ram_probe["transient_mb"]
-            sleep_baseline_mb = host_ram_probe["baseline_mb"]
-            if sleep_transient_mb is not None and sleep_baseline_mb is not None:
-                logger.info(
-                    "        sleep_l%d transient host RAM: baseline_available=%.0fMB, " "peak_consumption=%.0fMB",
-                    sleep_level,
-                    sleep_baseline_mb,
-                    sleep_transient_mb,
+                # Host RAM the lane keeps for as long as it sleeps. sleep_l1
+                # moves the weights to the host rather than dropping them, so a
+                # sleeping lane holds roughly its weight footprint in RAM until
+                # it wakes — tens of GB per model, on a host that is also
+                # lending RAM to the model cache. Only the transient peak was
+                # ever measured, which answers "can this sleep complete" and
+                # says nothing about what it costs afterwards, so the planner
+                # sees sleeping as free on the host axis and keeps choosing it.
+                #
+                # Read after the same settle as the VRAM samples: the release
+                # is asynchronous on both axes, and sampling mid-transfer would
+                # understate it. Taken against the awake baseline, so it is the
+                # delta the sleep caused, not the host's absolute usage.
+                post_sleep_available_mb = _sample_host_ram_available_mb()
+                if sleep_baseline_mb is not None and post_sleep_available_mb is not None:
+                    host_ram_residual_mb = max(sleep_baseline_mb - post_sleep_available_mb, 0.0)
+                    logger.info(
+                        "        sleeping host RAM = %.0f MB  (available %.0f → %.0f MB)",
+                        host_ram_residual_mb,
+                        sleep_baseline_mb,
+                        post_sleep_available_mb,
+                    )
+                else:
+                    logger.info("        sleeping host RAM: /proc/meminfo unavailable — skipped")
+
+            # Phase 5.5 — Wake verification. Phase 4 proved the model can go
+            # to sleep; this proves it can come back. A model whose wake
+            # fails — or that cannot serve a request once awake again — is
+            # recorded as sleep_mode_disabled instead of failing the run: it
+            # is still served awake, and the planner is told to never sleep it
+            # on this worker.
+            if not sleep_phase_failed:
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info("  Calibration cancelled before Phase 5.5.")
+                    partial.error = "cancelled"
+                    return partial
+                logger.info("  [5.5/6] Waking model and verifying it serves again...")
+                wake_status, _ = _post(f"{base_url}/wake_up", timeout_s=_SLEEP_TIMEOUT_S)
+                if wake_status not in (200, 204):
+                    sleep_phase_failed = True
+                    sleep_failure_reason = f"/wake_up returned HTTP {wake_status}"
+                else:
+                    try:
+                        wait_sleep_state(base_url, False, _SLEEP_TIMEOUT_S)
+                    except TimeoutError as exc:
+                        sleep_phase_failed = True
+                        sleep_failure_reason = str(exc)
+                if not sleep_phase_failed:
+                    # Test request 2: a lane that wakes but cannot serve is as
+                    # unusable as one that never wakes. Same call as the Phase
+                    # 2.5 warmup — one 1-token completion.
+                    post_wake_ok = warmup_inference(base_url, model, timeout_s=600.0)
+                    if not post_wake_ok and warmup_ok:
+                        # Served before sleep but not after: the sleep/wake
+                        # cycle broke serving.
+                        sleep_phase_failed = True
+                        sleep_failure_reason = "post-wake test request failed — model does not serve after sleep/wake"
+                    elif not post_wake_ok:
+                        # Did not serve one before sleep either, so this
+                        # failure carries no evidence of a wake regression —
+                        # whatever the cause (embedding-only lanes expose no
+                        # /v1/completions, a transient 5xx, ...), it predates
+                        # the sleep. The wake itself is verified by
+                        # /is_sleeping above, so accept it.
+                        logger.warning(
+                            "        post-wake test request failed, but the pre-sleep warmup "
+                            "did not serve either — no evidence of a wake regression (the "
+                            "request type may simply be unsupported by this model, e.g. an "
+                            "embedding lane); accepting wake on /is_sleeping evidence"
+                        )
+            if sleep_phase_failed:
+                # A residual measured for a sleep that cannot be reversed must
+                # not reach the planner.
+                sleeping_residual_mb = None
+                sleep_mode_disabled = True
+                logger.warning(
+                    "  Sleep/wake verification failed: %s — recording sleep_mode_disabled=True "
+                    "in the profile instead of failing the run (model is still served awake)",
+                    sleep_failure_reason,
                 )
             else:
-                logger.info(
-                    "        sleep_l%d transient host RAM: /proc/meminfo unavailable — skipped",
-                    sleep_level,
-                )
-
-            # Phase 5 — Measure sleeping VRAM. Sample twice with a settle between
-            # samples and take the max. CuMemAllocator's release is asynchronous;
-            # a single-shot sample can read mid-release and underestimate the
-            # residual (which leads to wake-time OOM when the planner trusts an
-            # artificially low value). The first sample is required; the second
-            # is a refinement and falls back silently if it fails.
-            if cancel_event is not None and cancel_event.is_set():
-                logger.info("  Calibration cancelled before Phase 5.")
-                partial.error = "cancelled"
-                return partial
-            logger.info(
-                "  [5/6] Measuring sleeping VRAM (settling %.0fs, double-sample)...",
-                _VRAM_SETTLE_S,
-            )
-            time.sleep(_VRAM_SETTLE_S)
-            try:
-                s1 = sample_vram_mb(gpu_indices)
-            except Exception as exc:
-                partial.error = f"nvidia-smi sleep failed: {exc}"
-                logger.warning("  ERROR: %s", partial.error)
-                return partial
-            time.sleep(3.0)
-            s2: float | None = None
-            try:
-                s2 = sample_vram_mb(gpu_indices)
-            except Exception as exc:
-                logger.info("        re-sample skipped (%s) — using single sample", exc)
-            sleeping_total_mb = max(s1, s2) if s2 is not None else s1
-            sleeping_residual_mb = max(sleeping_total_mb - baseline_mb, 0.0)
-            if s2 is not None:
-                logger.info(
-                    "        sleeping samples = %.0f / %.0f MB  →  max delta = %.0f MB",
-                    s1,
-                    s2,
-                    sleeping_residual_mb,
-                )
-            else:
-                logger.info(
-                    "        sleeping sample = %.0f MB  →  delta = %.0f MB",
-                    s1,
-                    sleeping_residual_mb,
-                )
-
-            # Host RAM the lane keeps for as long as it sleeps. sleep_l1 moves
-            # the weights to the host rather than dropping them, so a sleeping
-            # lane holds roughly its weight footprint in RAM until it wakes —
-            # tens of GB per model, on a host that is also lending RAM to the
-            # model cache. Only the transient peak was ever measured, which
-            # answers "can this sleep complete" and says nothing about what it
-            # costs afterwards, so the planner sees sleeping as free on the
-            # host axis and keeps choosing it.
-            #
-            # Read after the same settle as the VRAM samples: the release is
-            # asynchronous on both axes, and sampling mid-transfer would
-            # understate it. Taken against the awake baseline, so it is the
-            # delta the sleep caused, not the host's absolute usage.
-            host_ram_residual_mb = None
-            post_sleep_available_mb = _sample_host_ram_available_mb()
-            if sleep_baseline_mb is not None and post_sleep_available_mb is not None:
-                host_ram_residual_mb = max(sleep_baseline_mb - post_sleep_available_mb, 0.0)
-                logger.info(
-                    "        sleeping host RAM = %.0f MB  (available %.0f → %.0f MB)",
-                    host_ram_residual_mb,
-                    sleep_baseline_mb,
-                    post_sleep_available_mb,
-                )
-            else:
-                logger.info("        sleeping host RAM: /proc/meminfo unavailable — skipped")
+                sleep_mode_disabled = False
+                logger.info("        wake verified — model serves a request after the sleep/wake cycle")
 
         logger.info("  Results:")
         logger.info(
@@ -2466,12 +2593,18 @@ def calibrate_model(
             kv_cache_sent_mb,
         )
         if sleeping_residual_mb is None:
-            logger.info("    sleeping_residual_mb = n/a  (sleep mode disabled for this model)")
+            logger.info("    sleeping_residual_mb = n/a  (sleep phases skipped or sleep cannot be verified safe)")
         else:
             logger.info(
                 "    sleeping_residual_mb = %.0f MB  (measured independently)",
                 sleeping_residual_mb,
             )
+        if sleep_mode_disabled is None:
+            logger.info("    sleep_mode_disabled  = n/a  (sleep phases skipped)")
+        elif sleep_mode_disabled:
+            logger.info("    sleep_mode_disabled  = True  (sleep/wake verification failed — never sleep this model)")
+        else:
+            logger.info("    sleep_mode_disabled  = False  (sleep/wake cycle verified)")
         if host_ram_residual_mb is None:
             logger.info("    host_ram_residual_mb = n/a  (sleep phases skipped or /proc/meminfo unreadable)")
         else:
@@ -2494,6 +2627,7 @@ def calibrate_model(
             base_residency_mb=base_residency_mb,
             calibrated_at=time.time(),
             enforce_eager=eager_mode,
+            sleep_mode_disabled=sleep_mode_disabled,
             sleep_l1_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 1 else None),
             sleep_l2_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 2 else None),
             host_ram_residual_mb=host_ram_residual_mb,
@@ -2533,6 +2667,12 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
     return {
         "loaded_vram_mb": round(r.loaded_vram_mb, 1),
         "sleeping_residual_mb": (round(r.sleeping_residual_mb, 1) if r.sleeping_residual_mb is not None else None),
+        # Measured sleep verdict (True = cannot be slept safely here,
+        # False = sleep/wake cycle verified, None = the run skipped the sleep
+        # phases and the stored value stands). Non-None values override the
+        # stored one through merge_profile; a successful sleep re-verification
+        # is what clears a stale True after e.g. a vLLM upgrade.
+        "sleep_mode_disabled": r.sleep_mode_disabled,
         "disk_size_bytes": None,
         "base_residency_mb": round(r.base_residency_mb, 1),
         "kv_budget_mb": round(r.kv_cache_sent_mb, 1),
@@ -2635,9 +2775,10 @@ def load_existing_profiles(profiles_path: Path) -> dict[str, Any]:
 # operator override, or a sleep level this run did not exercise — and for
 # those ``None`` must not erase what is already known.
 #
-# ``sleeping_residual_mb`` is on this list because a run has exactly one
-# reason to report it null: the model is not allowed to sleep here, so the
-# sleep phases were skipped. Keeping a stale measurement then hides that. It
+# ``sleeping_residual_mb`` is on this list because a run reports it null
+# exactly when the model must not be slept here: the sleep phases were
+# skipped (sleep disabled) or they ran but failed verification
+# (sleep_mode_disabled=True). Keeping a stale measurement then hides that. It
 # also survives an ``enable_sleep_mode`` flip back to true, where the freshness
 # check sees a value, declines to re-calibrate, and hands the planner a
 # residual measured under a configuration that no longer exists.
