@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from logos.benchmarks.guidellm_runner import (
-    BENCHMARK_PROVIDER_HEADER,
     BENCHMARK_PHASE_HEADER,
+    BENCHMARK_PROVIDER_HEADER,
     BENCHMARK_TOKEN_HEADER,
     benchmark_affinity_headers,
     build_scenario,

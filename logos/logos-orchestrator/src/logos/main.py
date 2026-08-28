@@ -28,12 +28,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import authenticate_api_key
-from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
     BENCHMARK_PHASE_HEADER,
     BENCHMARK_PROVIDER_HEADER,
     BENCHMARK_TOKEN_HEADER,
+)
+from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
+from logos.benchmarks.guidellm_runner import (
     benchmark_affinity_headers,
     benchmark_affinity_token,
     extract_serving_configuration,
