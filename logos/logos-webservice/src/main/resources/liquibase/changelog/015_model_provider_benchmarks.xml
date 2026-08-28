@@ -2,11 +2,17 @@
 <databaseChangeLog
     xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    logicalFilePath="liquibase/changelog/012_model_provider_benchmarks.xml"
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <changeSet id="012-model-provider-benchmarks" author="Tim">
+    <changeSet id="015-model-provider-benchmarks" author="Tim">
+        <!-- Earlier PR deployments may already contain this table under a
+             legacy changeset number. Mark the corrected changeset as applied. -->
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="model_provider_benchmarks"/>
+            </not>
+        </preConditions>
         <createTable tableName="model_provider_benchmarks">
             <column name="id" type="INT" autoIncrement="true">
                 <constraints primaryKey="true" nullable="false"/>
