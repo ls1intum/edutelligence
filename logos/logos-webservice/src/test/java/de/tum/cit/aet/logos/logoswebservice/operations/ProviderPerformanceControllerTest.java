@@ -8,6 +8,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -40,6 +41,7 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdmin
 class ProviderPerformanceControllerTest {
 
     @Autowired MockMvc mvc;
+    @Autowired JdbcTemplate jdbcTemplate;
     @MockitoBean JwtDecoder jwtDecoder;
     @MockitoBean OrchestratorWorkerAdminClient orchestratorWorkerAdminClient;
 
@@ -125,6 +127,23 @@ class ProviderPerformanceControllerTest {
            .andExpect(jsonPath("$.pairs[0].model_provider_id").value(7001))
            .andExpect(jsonPath("$.pairs[0].endpoint_configured").value(true))
            .andExpect(jsonPath("$.runs").isEmpty());
+    }
+
+    @Test
+    void modelBenchmarks_doesNotRequireEndpointOrApiKeyForLogosNode() throws Exception {
+        jdbcTemplate.update("""
+            UPDATE providers
+            SET provider_type = 'logosnode', base_url = NULL, api_key = NULL
+            WHERE id = 6001
+            """);
+
+        mvc.perform(post("/logosdb/model_benchmarks")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.pairs[0].endpoint_configured").value(true))
+           .andExpect(jsonPath("$.pairs[0].authentication_configured").value(true));
     }
 
     @Test

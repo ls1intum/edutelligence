@@ -467,6 +467,10 @@ class DBManager:
                        m.name AS model_name,
                        p.id AS provider_id,
                        p.name AS provider_name,
+                       p.provider_type AS provider_type,
+                       p.privacy_level AS privacy_level,
+                       p.cloud_provider_type AS cloud_provider_type,
+                       p.base_url AS base_url,
                        COALESCE(NULLIF(mp.endpoint, ''), NULLIF(p.base_url, '')) AS target,
                        COALESCE(NULLIF(mp.api_key, ''), NULLIF(p.api_key, '')) AS api_key
                 FROM model_provider mp

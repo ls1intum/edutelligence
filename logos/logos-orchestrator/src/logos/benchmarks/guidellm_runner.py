@@ -62,6 +62,16 @@ def benchmark_affinity_headers(*, secret: str, job_id: int, provider_id: int, mo
     }
 
 
+def internal_benchmark_target(job_id: int, *, internal_base_url: str | None = None) -> str:
+    """Return the private OpenAI-compatible base URL for one benchmark job."""
+    internal = (
+        internal_base_url
+        if internal_base_url is not None
+        else os.getenv("LOGOS_BENCHMARK_INTERNAL_BASE_URL", "http://127.0.0.1:8080")
+    ).rstrip("/")
+    return f"{internal}/internal/model_benchmarks/jobs/{int(job_id)}"
+
+
 async def send_warmup_request(
     *,
     target: str,

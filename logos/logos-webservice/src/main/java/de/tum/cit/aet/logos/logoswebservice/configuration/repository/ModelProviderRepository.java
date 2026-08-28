@@ -49,8 +49,10 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
                p.provider_type AS providerType,
                m.id AS modelId,
                m.name AS modelName,
-               (COALESCE(NULLIF(mp.endpoint, ''), NULLIF(p.base_url, '')) IS NOT NULL) AS endpointConfigured,
-               (COALESCE(NULLIF(mp.api_key, ''), NULLIF(p.api_key, '')) IS NOT NULL) AS authenticationConfigured
+               (p.provider_type = 'logosnode' OR
+                COALESCE(NULLIF(mp.endpoint, ''), NULLIF(p.base_url, '')) IS NOT NULL) AS endpointConfigured,
+               (p.provider_type = 'logosnode' OR
+                COALESCE(NULLIF(mp.api_key, ''), NULLIF(p.api_key, '')) IS NOT NULL) AS authenticationConfigured
         FROM model_provider mp
         JOIN providers p ON p.id = mp.provider_id
         JOIN models m ON m.id = mp.model_id

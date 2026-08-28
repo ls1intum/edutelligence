@@ -11,6 +11,7 @@ from logos.benchmarks.guidellm_runner import (
     benchmark_affinity_headers,
     build_scenario,
     extract_serving_configuration,
+    internal_benchmark_target,
     is_logos_benchmark_target,
     redact_secrets,
     resolve_benchmark_target,
@@ -91,6 +92,13 @@ def test_resolve_benchmark_target_uses_internal_api_for_own_domain() -> None:
             internal_base_url="http://127.0.0.1:8080",
         )
         == "http://127.0.0.1:8080/v1"
+    )
+
+
+def test_internal_benchmark_target_is_job_scoped() -> None:
+    assert (
+        internal_benchmark_target(17, internal_base_url="http://127.0.0.1:8080/")
+        == "http://127.0.0.1:8080/internal/model_benchmarks/jobs/17"
     )
 
 

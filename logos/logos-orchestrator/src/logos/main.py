@@ -27,7 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos.auth import authenticate_api_key
+from logos.auth import AuthContext, authenticate_api_key
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
     BENCHMARK_PHASE_HEADER,
@@ -39,7 +39,7 @@ from logos.benchmarks.guidellm_runner import (
     benchmark_affinity_headers,
     benchmark_affinity_token,
     extract_serving_configuration,
-    is_logos_benchmark_target,
+    internal_benchmark_target,
     resolve_benchmark_target,
     run_benchmark_job,
 )
@@ -2118,11 +2118,12 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
         target = db.get_model_provider_benchmark_target(data.model_provider_id)
         if target is None:
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
+        provider_id = int(target["provider_id"])
+        provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
         endpoint = str(target.get("target") or "").strip()
-        if not endpoint.startswith(("http://", "https://")):
+        if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
 
-        provider_id = int(target["provider_id"])
         active = db.find_active_model_benchmark_job(provider_id)
         if active is not None:
             return JSONResponse(
@@ -2137,10 +2138,11 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             )
 
         runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
-        if runtime_snapshot is None or not _logosnode_snapshot_is_connected(runtime_snapshot):
-            raise HTTPException(status_code=503, detail=f"Provider {target['provider_name']} is offline")
-        if not runtime_snapshot.get("first_status_received"):
-            raise HTTPException(status_code=503, detail="Provider has not sent its first status yet")
+        if provider_type == "logosnode":
+            if runtime_snapshot is None or not _logosnode_snapshot_is_connected(runtime_snapshot):
+                raise HTTPException(status_code=503, detail=f"Provider {target['provider_name']} is offline")
+            if not runtime_snapshot.get("first_status_received"):
+                raise HTTPException(status_code=503, detail="Provider has not sent its first status yet")
 
         model_name = str(target["model_name"])
         serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
@@ -2164,7 +2166,10 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             environment="model-provider-benchmark",
         )
 
-    benchmark_target = resolve_benchmark_target(endpoint)
+    is_internal_worker_benchmark = provider_type == "logosnode"
+    benchmark_target = (
+        internal_benchmark_target(job_id) if is_internal_worker_benchmark else resolve_benchmark_target(endpoint)
+    )
     request_headers = (
         benchmark_affinity_headers(
             secret=_INTERNAL_SECRET,
@@ -2172,7 +2177,7 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             provider_id=provider_id,
             model=model_name,
         )
-        if is_logos_benchmark_target(endpoint)
+        if is_internal_worker_benchmark
         else None
     )
     worker_preparer = (
@@ -2187,7 +2192,7 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             model_provider_id=data.model_provider_id,
             target=benchmark_target,
             model=model_name,
-            api_key=str(target.get("api_key") or "") or None,
+            api_key=None if is_internal_worker_benchmark else str(target.get("api_key") or "") or None,
             samples=data.samples,
             max_output_tokens=data.max_output_tokens,
             serving_configuration=serving_configuration,
@@ -2210,6 +2215,86 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             "model_provider_id": data.model_provider_id,
             "model_name": model_name,
         },
+    )
+
+
+@app.post("/internal/model_benchmarks/jobs/{job_id}/v1/{path:path}", tags=["admin"])
+async def internal_model_benchmark_completion(job_id: int, path: str, request: Request):
+    """Execute one signed benchmark request without a user API key."""
+    if path.strip("/") != "chat/completions":
+        raise HTTPException(status_code=404, detail="Unsupported benchmark operation")
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON payload must be an object")
+
+    headers = dict(request.headers)
+    header_job_id = headers.get(BENCHMARK_JOB_HEADER)
+    if header_job_id != str(job_id):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    with DBManager() as db:
+        job = db.get_job(job_id)
+        payload = job.get("request_payload") if job else None
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+        try:
+            model_provider_id = int(payload["model_provider_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+        target = db.get_model_provider_benchmark_target(model_provider_id)
+
+    if target is None or _normalize_provider_type(str(target.get("provider_type") or "")) != "logosnode":
+        raise HTTPException(status_code=404, detail="Benchmark worker deployment no longer exists")
+
+    raw_deployments: list[Deployment] = [
+        {
+            "model_id": int(target["model_id"]),
+            "provider_id": int(target["provider_id"]),
+            "type": "logosnode",
+            "privacy_level": target.get("privacy_level"),
+            "cloud_provider_type": target.get("cloud_provider_type"),
+            "base_url": target.get("base_url"),
+        }
+    ]
+    required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
+    deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
+    if not deployments:
+        raise HTTPException(status_code=503, detail="Selected benchmark worker is not serving the model")
+
+    # This context is created only after the active job's HMAC and exact
+    # provider-model pair have been validated above. It intentionally has no
+    # user/team limits or billing identity: benchmarks are Logos-internal work.
+    auth = AuthContext(
+        key_value="",
+        api_key_id=-job_id,
+        api_key_name="internal-model-benchmark",
+        key_type="internal",
+        team_id=None,
+        user_id=None,
+        environment="model-provider-benchmark",
+        log_level="NONE",
+        settings={},
+    )
+    request_id = secrets.token_urlsafe(16)
+    return await _execute_cancelling_on_disconnect(
+        request,
+        deployments=deployments,
+        body=body,
+        headers=headers,
+        auth=auth,
+        path=f"v1/{path.strip('/')}",
+        log_id=None,
+        request_id=request_id,
+        required_provider_id=required_provider_id,
     )
 
 
@@ -3906,25 +3991,33 @@ async def _execute_proxy_mode(
     if not requested_model_name:
         raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
 
-    with DBManager() as db:
-        models_info = db.get_models_info(auth.key_value)
+    is_internal_benchmark = auth.environment == "model-provider-benchmark" and required_provider_id is not None
+    if is_internal_benchmark:
+        matching_deployments = [
+            deployment for deployment in deployments if deployment["provider_id"] == required_provider_id
+        ]
+        model_id = matching_deployments[0]["model_id"] if len(matching_deployments) == 1 else None
+        model_name = requested_model_name if model_id is not None else None
+    else:
+        with DBManager() as db:
+            models_info = db.get_models_info(auth.key_value)
 
-    model_name = _resolve_requested_model_name(
-        requested_model_name,
-        [str(row["name"]) for row in models_info if row.get("name")],
-    )
-    if model_name is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Model '{requested_model_name}' not available for this key",
+        model_name = _resolve_requested_model_name(
+            requested_model_name,
+            [str(row["name"]) for row in models_info if row.get("name")],
         )
+        if model_name is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model '{requested_model_name}' not available for this key",
+            )
 
-    model_id = None
-    for row in models_info:
-        mid, name = row["id"], row["name"]
-        if name == model_name:
-            model_id = mid
-            break
+        model_id = None
+        for row in models_info:
+            mid, name = row["id"], row["name"]
+            if name == model_name:
+                model_id = mid
+                break
 
     if model_id is None:
         raise HTTPException(

@@ -11,8 +11,10 @@ provider-model pair → GuideLLM → benchmarks.json → Logos import endpoint �
 For the normal admin flow, open **Models → Model Management → model → Performance**
 and select **Run benchmark** next to the provider-model pair. Logos runs 5 questions
 from GSM8K `main/test` with at most 512 output tokens, shows the live job status, and
-adds the successful summary to the same page automatically. The pair needs a valid
-endpoint under **Providers**; its API key remains server-side.
+adds the successful summary to the same page automatically. Logos worker-node runs
+use a signed, job-scoped internal endpoint and therefore need no benchmark endpoint
+or API key under **Providers**. External provider runs still use their configured
+server-side endpoint and credential.
 
 The commands below remain available for local diagnosis and manual imports.
 

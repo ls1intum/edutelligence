@@ -1,4 +1,6 @@
-from unittest.mock import MagicMock
+import asyncio
+import datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -45,6 +47,65 @@ def _headers(secret="internal-secret", provider_id=20, model="org/model"):
         provider_id=provider_id,
         model=model,
     )
+
+
+@pytest.mark.asyncio
+async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monkeypatch):
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get_model_provider_benchmark_target(self, model_provider_id):
+            assert model_provider_id == 31
+            return {
+                "model_provider_id": 31,
+                "provider_id": 20,
+                "provider_name": "basement-worker",
+                "provider_type": "logosnode",
+                "model_id": 1,
+                "model_name": "org/model",
+                "target": None,
+                "api_key": None,
+            }
+
+        def find_active_model_benchmark_job(self, provider_id):
+            assert provider_id == 20
+            return None
+
+        def create_job_record(self, **kwargs):
+            return 7
+
+    runner = AsyncMock()
+    registry = MagicMock()
+    registry.peek_runtime_snapshot.return_value = {
+        "last_heartbeat": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "first_status_received": True,
+        "runtime": {"lanes": []},
+    }
+    planner = MagicMock()
+    planner.prepare_benchmark_lane = AsyncMock(return_value=True)
+    request = MagicMock()
+    request.headers = {"authorization": "Bearer internal-secret"}
+
+    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    monkeypatch.setattr(main, "_capacity_planner", planner)
+    monkeypatch.setattr(main, "run_benchmark_job", runner)
+
+    response = await main.internal_run_model_benchmark(
+        main._InternalBenchmarkRequest(model_provider_id=31, samples=15),
+        request,
+    )
+    await asyncio.sleep(0)
+
+    assert response.status_code == 202
+    assert runner.await_args.kwargs["target"] == "http://127.0.0.1:8080/internal/model_benchmarks/jobs/7"
+    assert runner.await_args.kwargs["api_key"] is None
+    assert runner.await_args.kwargs["request_headers"][main.BENCHMARK_PROVIDER_HEADER] == "20"
 
 
 def test_valid_running_job_resolves_required_worker(monkeypatch):
@@ -136,3 +197,36 @@ def test_job_cannot_pin_pair_outside_api_key_permissions(monkeypatch):
         )
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_internal_benchmark_proxy_does_not_resolve_a_user_api_key(monkeypatch):
+    monkeypatch.setattr(main, "DBManager", MagicMock(side_effect=AssertionError("user key must not be queried")))
+    execute = AsyncMock(return_value="response")
+    monkeypatch.setattr(main, "_execute_resource_mode", execute)
+    auth = main.AuthContext(
+        key_value="",
+        api_key_id=-7,
+        api_key_name="internal-model-benchmark",
+        key_type="internal",
+        team_id=None,
+        user_id=None,
+        environment="model-provider-benchmark",
+        log_level="NONE",
+        settings={},
+    )
+    deployment = {"model_id": 1, "provider_id": 20, "type": "logosnode"}
+
+    response = await main._execute_proxy_mode(
+        body={"model": "org/model"},
+        headers={},
+        auth=auth,
+        deployments=[deployment],
+        log_id=None,
+        is_async_job=False,
+        required_provider_id=20,
+    )
+
+    assert response == "response"
+    assert execute.await_args.kwargs["deployments"] == [deployment]
+    assert execute.await_args.kwargs["allowed_models_override"] == [1]
