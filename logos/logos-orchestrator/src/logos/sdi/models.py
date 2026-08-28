@@ -208,6 +208,40 @@ class LaneSchedulerSignals:
         }
 
 
+@dataclass(frozen=True)
+class AdmissionDecision:
+    """Whether a worker should be given another request for a model right now.
+
+    Nothing outside the engine can predict whether vLLM will *start* a given
+    request or park it: that depends on whether the new sequence's KV blocks
+    fit against what the running sequences currently occupy, which is neither
+    exposed nor derivable. The engine reports the answer only afterwards, as
+    ``num_requests_waiting``. So admission is retrospective by necessity —
+    forward while nothing is observed waiting, stop as soon as something is.
+    That keeps the engine-side queue at roughly one request: enough to hand
+    the GPU its next piece of work without a round-trip, few enough that
+    almost everything stays re-prioritisable and re-routable.
+
+    ``batch_limit`` bounds how many queued requests a single dispatch pass
+    may release. It is a *step size*, not a capacity: the per-lane
+    ``num_parallel`` it derives from is the concurrency vLLM guarantees at
+    full context — a lower bound (production runs a lane at 8 concurrent
+    with ``num_parallel=1``), which is sound to add in one go and wrong to
+    treat as a ceiling. ``None`` means the worker reported nothing usable.
+    """
+
+    can_admit: bool
+    batch_limit: Optional[int] = None
+    reason: Optional[str] = None  # backend_queue | kv_cache_pressure
+
+    def to_dict(self) -> dict:
+        return {
+            "can_admit": self.can_admit,
+            "batch_limit": self.batch_limit,
+            "reason": self.reason,
+        }
+
+
 # Warmth ordering for runtime_state — lower index = warmer.
 _STATE_WARMTH_ORDER = [
     "running",

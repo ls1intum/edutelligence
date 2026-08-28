@@ -1,10 +1,18 @@
-"""Tests for LogosNodeDataProvider parallel capacity gating.
+"""Tests for LogosNodeDataProvider parallel capacity.
 
-The orchestrator must gate request forwarding on the *worker-reported*
-per-worker limit (vLLM parses its own KV-budget-derived "Maximum
-concurrency" startup line into lane `num_parallel`).  Requests that do not
-fit stay in the orchestrator-level queue instead of piling up in the
-vLLM-side queue, so whichever worker frees a slot first gets the request.
+This is the orchestrator's *local ledger* — how many requests it will hold
+against one (model, worker) at a time. It is not the forwarding gate; that
+lives in `evaluate_admission` and reads the live engine signals (see
+`test_logosnode_admission.py`).
+
+The two differ on `num_parallel`. #781 read it as the worker's real limit,
+but it is the concurrency vLLM guarantees at *full context* — a lower bound.
+Measured: a dev lane reporting `num_parallel=4` served 23 concurrent
+requests at 47% KV; a production lane reporting 1 served 8 at 78%. Used as a
+ceiling it throttles by 5-8x. So for vLLM lanes the ledger now keeps a loose
+ceiling and lets admission do the real gating, while for Ollama lanes
+`num_parallel` stays authoritative — there it is an explicit `--parallel`
+slot count, and a real limit.
 """
 
 from logos.queue import PriorityQueueManager
@@ -51,21 +59,38 @@ def _provider(monkeypatch, lanes, *, config=None, with_registry=True, model_ids=
     return facade._providers[provider_id]
 
 
-def test_runtime_capacity_uses_vllm_reported_concurrency_as_is(monkeypatch):
-    # No ×N oversubscription: the worker's KV-budget-derived limit is the gate.
-    provider = _provider(monkeypatch, [_lane("m", 10)])
-    assert provider.get_parallel_capacity(1) == (10, "runtime")
+def test_a_vllm_lane_does_not_cap_the_ledger_at_its_full_context_guarantee(monkeypatch):
+    """The number the lane reports is what it can guarantee with every
+    request at full context. Real traffic runs far past it, so binding the
+    ledger to it would throttle the lane rather than protect it."""
+    provider = _provider(monkeypatch, [_lane("m", 4)])
+    capacity, source = provider.get_parallel_capacity(1)
+    assert capacity > 4
+    assert source == "runtime"
+
+
+def test_the_vllm_ledger_ceiling_is_the_same_whatever_the_lane_reports(monkeypatch):
+    """Reporting 1 or 500 must not change the ledger — neither is a
+    statement about how many requests the engine can actually hold."""
+    tiny = _provider(monkeypatch, [_lane("m", 1)])
+    huge = _provider(monkeypatch, [_lane("m", 500)])
+    assert tiny.get_parallel_capacity(1) == huge.get_parallel_capacity(1)
 
 
 def test_runtime_capacity_sums_across_matching_lanes(monkeypatch):
-    provider = _provider(monkeypatch, [_lane("m", 10), _lane("m", 10)])
-    assert provider.get_parallel_capacity(1) == (20, "runtime")
+    """Two lanes hold more than one, whatever each reports."""
+    one = _provider(monkeypatch, [_lane("m", 10)])
+    two = _provider(monkeypatch, [_lane("m", 10), _lane("m", 10)])
+    assert two.get_parallel_capacity(1)[0] == 2 * one.get_parallel_capacity(1)[0]
 
 
-def test_runtime_capacity_unreported_vllm_lane_defaults_to_256(monkeypatch):
-    # Older worker or lane still starting: 0 means "not reported yet".
-    provider = _provider(monkeypatch, [_lane("m", 0)])
-    assert provider.get_parallel_capacity(1) == (256, "runtime")
+def test_an_unreported_vllm_lane_is_treated_like_any_other(monkeypatch):
+    """0 means the worker has not parsed its startup line yet. Since the
+    reported value is not used as a ceiling anyway, this is not a special
+    case any more."""
+    unreported = _provider(monkeypatch, [_lane("m", 0)])
+    reported = _provider(monkeypatch, [_lane("m", 8)])
+    assert unreported.get_parallel_capacity(1) == reported.get_parallel_capacity(1)
 
 
 def test_runtime_capacity_ollama_lane_is_explicit(monkeypatch):
@@ -82,11 +107,12 @@ def test_runtime_capacity_skips_stopped_and_error_lanes(monkeypatch):
     assert provider.get_parallel_capacity(1) == (200, "default")
 
 
-def test_parallel_capacity_is_not_capped_below_worker_report(monkeypatch):
-    # The DB `parallel` column used to act as a hard ceiling; it no longer
-    # exists in the orchestrator.  A worker reporting 500 slots must get 500.
-    provider = _provider(monkeypatch, [_lane("m", 500)])
-    assert provider.get_parallel_capacity(1) == (500, "runtime")
+def test_an_ollama_lane_is_still_capped_at_its_slot_count(monkeypatch):
+    """Ollama's num_parallel is an explicit `--parallel` slot count, not a
+    full-context estimate. There it really is the ceiling, and the only one
+    available — Ollama reports no KV signals for admission to read."""
+    provider = _provider(monkeypatch, [_lane("m", 8, vllm=False)])
+    assert provider.get_parallel_capacity(1) == (8, "runtime")
 
 
 def test_parallel_capacity_without_runtime_registry_defaults(monkeypatch):
@@ -99,10 +125,11 @@ def test_explicit_provider_config_parallel_capacity_still_wins(monkeypatch):
     assert provider.get_parallel_capacity(1) == (16, "config")
 
 
-def test_reserve_capacity_enforces_worker_reported_limit(monkeypatch):
-    # The forward gate: requests stop at the worker's true limit and keep
-    # queueing at orchestrator level until a slot frees.
-    provider = _provider(monkeypatch, [_lane("m", 2)])
+def test_reserve_capacity_enforces_the_configured_ledger_limit(monkeypatch):
+    """The ledger still bounds what one worker may hold — it is what caps a
+    burst, since the engine signals are sampled and cannot. It is just no
+    longer sourced from num_parallel for vLLM."""
+    provider = _provider(monkeypatch, [_lane("m", 500)], config={"parallel_capacity": 2})
     assert provider.try_reserve_capacity(1, "r1") is True
     assert provider.try_reserve_capacity(1, "r2") is True
     assert provider.try_reserve_capacity(1, "r3") is False
@@ -111,6 +138,18 @@ def test_reserve_capacity_enforces_worker_reported_limit(monkeypatch):
     provider.decrement_active(1, request_id="r1")
     assert provider.try_reserve_capacity(1, "r3") is True
     assert provider.get_active_count(1) == 2
+
+
+def test_the_ledger_ceiling_does_not_follow_a_low_reported_concurrency(monkeypatch):
+    """Regression for the 5-8x throttle: the exact production shape, where
+    the lane reports 1 and the engine happily runs 8.
+
+    Concerns the ledger only. What paces those 8 out is the between-snapshot
+    forward budget, which releases on each worker report — see
+    `test_logosnode_admission.py`.
+    """
+    provider = _provider(monkeypatch, [_lane("m", 1)])
+    assert provider.get_parallel_capacity(1)[0] >= 8
 
 
 def test_reserve_capacity_refuses_on_backend_queue_pressure(monkeypatch):

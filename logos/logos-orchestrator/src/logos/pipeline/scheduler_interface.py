@@ -57,11 +57,6 @@ class SchedulingResult:
     # Warmth of the chosen deployment at decision time:
     # -1 = cold, 0 = warm but idle, 1+x = running with x queued (None = cloud)
     warmth_state: Optional[int] = None
-    # True when capacity slot was transferred from a completing request
-    # (release path with reuse_slot=True). False when dispatched fresh
-    # (reevaluate_model_queues after load/wake). Controls whether
-    # on_request_begin_processing should increment the active count.
-    slot_transferred: bool = True
 
     def __post_init__(self):
         if self.provider_metrics is None:
@@ -77,6 +72,10 @@ class SchedulingRequest:
     deployments: list[Deployment]
     classified_models: Optional[List[Tuple[int, float, int]]] = None  # (model_id, weight, priority)
     timeout_s: Optional[float] = None
+    # Chained prefix-block hashes identifying the request's "stream"
+    # (api key + actual prompt prefix), deepest block first. Used for
+    # prefix-cache-aware placement; empty/None means "route as before".
+    affinity_keys: Optional[List[str]] = None
 
 
 class SchedulerInterface(ABC):
