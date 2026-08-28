@@ -110,6 +110,11 @@ export type LaneSignalData = {
   sleep_state: string | null;
   gpu_devices: string | null;
   effective_gpu_devices: string | null;
+  /**
+   * Worker-reported concurrency. vLLM lanes: full-context KV budget parsed
+   * from the startup log (guaranteed minimum; 0 until the log is parsed).
+   * Ollama lanes: static slot count (legacy — the UI ignores it).
+   */
   num_parallel: number | null;
   active_requests: number;
   effective_vram_mb: number;

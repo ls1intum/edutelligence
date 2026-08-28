@@ -376,6 +376,35 @@ class DBManager:
         """
         self.update_log_entry_metrics(log_id=log_id, request_id=request_id, **fields)
 
+    def close_orphaned_request_logs(self, error_message: str) -> int:
+        """Finalise log rows left open by a previous orchestrator process.
+
+        A request is written on arrival and completed in-process. If the
+        orchestrator is restarted (deploy, crash) while requests are in
+        flight, nobody ever writes their terminal state: the rows keep a NULL
+        `result_status` and no `timestamp_response`, and every "running
+        requests" view derived from them shows them forever.
+
+        Only rows that predate this process can be orphans, so this must run
+        at startup before the first request is accepted — after that a NULL
+        status is a request that is genuinely still running.
+
+        Returns the number of rows closed.
+        """
+        sql = text(
+            """
+            UPDATE log_entry
+               SET result_status = 'error',
+                   timestamp_response = NOW(),
+                   error_message = COALESCE(error_message, :error_message)
+             WHERE result_status IS NULL
+               AND timestamp_response IS NULL
+            """
+        )
+        result = self.session.execute(sql, {"error_message": error_message})
+        self.session.commit()
+        return int(result.rowcount or 0)
+
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
         update_stmt = table.update().where(table.c.id == record_id).values(**data)
@@ -664,8 +693,8 @@ class DBManager:
                         text(
                             """
                         INSERT INTO models (name, weight_latency, weight_accuracy,
-                                            weight_cost, weight_quality, tags, parallel, description)
-                        VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                            weight_cost, weight_quality, tags, description)
+                        VALUES (:name, 0, 0, 0, 0, '', '')
                         RETURNING id
                     """
                         ),
@@ -774,8 +803,8 @@ class DBManager:
                         text(
                             """
                             INSERT INTO models (name, weight_latency, weight_accuracy,
-                                                weight_cost, weight_quality, tags, parallel, description)
-                            VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                                weight_cost, weight_quality, tags, description)
+                            VALUES (:name, 0, 0, 0, 0, '', '')
                             RETURNING id
                             """
                         ),
@@ -1870,7 +1899,6 @@ class DBManager:
                               m.weight_cost,
                               m.weight_quality,
                               m.tags,
-                              m.parallel,
                               m.description,
                               (
                                   SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -1937,7 +1965,6 @@ class DBManager:
                                 m.weight_cost,
                                 m.weight_quality,
                                 m.tags,
-                                m.parallel,
                                 m.description,
                                 (
                                     SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -1982,7 +2009,6 @@ class DBManager:
                 "weight_cost": r.weight_cost,
                 "weight_quality": r.weight_quality,
                 "tags": r.tags,
-                "parallel": r.parallel,
                 "description": r.description,
                 "input_usd_per_million": r.input_usd_per_million,
                 "output_usd_per_million": r.output_usd_per_million,
@@ -2009,7 +2035,6 @@ class DBManager:
             "weight_cost": result.weight_cost,
             "weight_quality": result.weight_quality,
             "tags": result.tags,
-            "parallel": result.parallel,
             "description": result.description,
         }
 

@@ -90,6 +90,88 @@ def test_falls_back_to_the_widest_when_nothing_fits(two_workers):
     assert [d["provider_id"] for d in result] == [WIDE_PROVIDER]
 
 
+def test_fully_filtered_model_keeps_its_widest_lane(monkeypatch):
+    """Every lane of a model too narrow: keep the roomiest, not none.
+
+    Proxy mode narrows the result to the requested model, so filtering a model
+    out entirely turns the request into a 404 "no deployment found" — even
+    when the model's widest lane would have served it, and even when the
+    estimate (not the request) is what overshoots. The engine is the right
+    place to say "too long": it either serves the request or answers its own
+    honest 400 (#810).
+    """
+    registry = MagicMock()
+    registry.active_provider_ids = lambda: [NARROW_PROVIDER]
+    registry.peek_runtime_snapshot = lambda pid: {
+        "runtime": {
+            "lanes": [
+                {
+                    "model": MODEL_NAME,
+                    "vllm": True,
+                    "backend_metrics": {"max_model_len": 33_000},
+                }
+            ],
+            "model_profiles": {},
+        }
+    }
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    # ~43k prompt tokens: more than the only lane's 33k window.
+    result = _filter(_deployments(NARROW_PROVIDER), _payload(150_000))
+    assert [d["provider_id"] for d in result] == [NARROW_PROVIDER]
+
+
+def test_rescue_survives_alongside_other_models(monkeypatch):
+    """The incident shape: the pinned model is fully filtered while other
+    entitled models (no loaded lane → unknown window) survive.
+
+    Before the fix the result contained only the other models; the pinned
+    model's narrowing came up empty and the request 404'd. Now the pinned
+    model keeps its widest lane, and the invariant the proxy path relies on
+    holds: no model present in the input is missing from the output.
+    """
+    OTHER_MODEL_ID = 43
+    registry = MagicMock()
+    registry.active_provider_ids = lambda: [NARROW_PROVIDER, 2]
+    registry.peek_runtime_snapshot = lambda pid: {
+        "runtime": {
+            "lanes": (
+                [
+                    {
+                        "model": MODEL_NAME,
+                        "vllm": True,
+                        "backend_metrics": {"max_model_len": 33_000},
+                    }
+                ]
+                if pid == NARROW_PROVIDER
+                else []
+            ),
+            "model_profiles": {},
+        }
+    }
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    deployments = _deployments(NARROW_PROVIDER) + [{"provider_id": 2, "model_id": OTHER_MODEL_ID, "type": "logosnode"}]
+    result = main_mod._prefer_deployments_with_context_room(
+        deployments, _payload(150_000), {MODEL_ID: MODEL_NAME, OTHER_MODEL_ID: "embedding-8b"}
+    )
+    assert {(d["model_id"], d["provider_id"]) for d in result} == {
+        (MODEL_ID, NARROW_PROVIDER),
+        (OTHER_MODEL_ID, 2),
+    }
+    assert {d["model_id"] for d in result} == {d["model_id"] for d in deployments}
+
+
+def test_rescue_keeps_only_the_widest_lane_of_a_model(two_workers):
+    """Keeping *every* too-narrow lane would undo the filter.
+
+    The request must land on the roomiest lane of the rescued model — the one
+    most likely to serve it — not on the 33k lane it would definitely reject.
+    """
+    result = _filter(_deployments(NARROW_PROVIDER, WIDE_PROVIDER), _payload(2_000_000))
+    assert [d["provider_id"] for d in result] == [WIDE_PROVIDER]
+
+
 def test_unknown_window_is_never_treated_as_narrow(monkeypatch):
     """A worker that reports no window keeps its place in the candidate list.
 
@@ -121,12 +203,13 @@ def test_output_reservation_counts_against_the_window(two_workers):
     A prompt that fits on its own can still overflow once the reply it asked
     for is reserved — which is the failure this whole path exists to avoid.
     """
-    # ~11000 prompt tokens. Plus a 4k reply and the margin that is 18k, which
-    # fits the 33000 worker; plus a 20k reply it is 34k, which does not.
-    small_reply = _filter(_deployments(NARROW_PROVIDER, WIDE_PROVIDER), _payload(33_000, 4096))
+    # ~15700 prompt tokens. Plus a 4k reply and the margin that is ~22.8k,
+    # which fits the 33000 worker; plus a 20k reply it is ~38.7k, which does
+    # not.
+    small_reply = _filter(_deployments(NARROW_PROVIDER, WIDE_PROVIDER), _payload(55_000, 4096))
     assert NARROW_PROVIDER in [d["provider_id"] for d in small_reply]
 
-    big_reply = _filter(_deployments(NARROW_PROVIDER, WIDE_PROVIDER), _payload(33_000, 20_000))
+    big_reply = _filter(_deployments(NARROW_PROVIDER, WIDE_PROVIDER), _payload(55_000, 20_000))
     assert [d["provider_id"] for d in big_reply] == [WIDE_PROVIDER]
 
 

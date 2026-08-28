@@ -13,6 +13,14 @@
           of <strong>{{ formatCount(totalCount()) }}</strong>
         </span>
       }
+      <!-- Left of the buttons on purpose: the badge and the spinner appear
+           and disappear, and the buttons must stay anchored at the right
+           edge whatever happens to their left. -->
+      @if (loading()) {
+        <i class="pi pi-spin pi-spinner rr-pager__spinner" aria-hidden="true"></i>
+      } @else if (onLivePage()) {
+        <span class="rr-pager__live" title="Page 1 updates as requests arrive">live</span>
+      }
       <button
         class="rr-pager__btn"
         type="button"
@@ -31,11 +39,6 @@
       >
         <i class="pi pi-angle-right" aria-hidden="true"></i>
       </button>
-      @if (loading()) {
-        <i class="pi pi-spin pi-spinner rr-pager__spinner" aria-hidden="true"></i>
-      } @else if (onLivePage()) {
-        <span class="rr-pager__live" title="Page 1 updates as requests arrive">live</span>
-      }
     </div>
 
   </div>

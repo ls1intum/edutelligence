@@ -6,7 +6,6 @@ from sqlalchemy import (
     TIMESTAMP,
     BigInteger,
     Boolean,
-    CheckConstraint,
     Column,
     Enum,
     ForeignKey,
@@ -117,9 +116,7 @@ class Model(Base):
     weight_cost = Column(Integer)
     weight_quality = Column(Integer)
     tags = Column(Text)
-    parallel = Column(Integer, default=1)
     description = Column(Text)
-    __table_args__ = (CheckConstraint("parallel BETWEEN 1 AND 256"),)
 
 
 class Provider(Base):

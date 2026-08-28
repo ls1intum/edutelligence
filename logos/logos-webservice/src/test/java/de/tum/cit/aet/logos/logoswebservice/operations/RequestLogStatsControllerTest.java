@@ -39,7 +39,7 @@ class RequestLogStatsControllerTest {
     @Test
     void requestLogStats_returnsExpectedShape() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -59,6 +59,51 @@ class RequestLogStatsControllerTest {
            .andExpect(status().isUnauthorized());
     }
 
+    // ── Access ───────────────────────────────────────────────────────────────
+    // Unscoped, these endpoints return the whole platform's request data — and
+    // the scope narrows to any team or requester the caller names, so a non
+    // admin calling them with a foreign team id would read exactly what the
+    // team activity endpoint (issue #776) refuses them. The rule must hold
+    // here, not only on the statistics page's router gate.
+
+    @Test
+    void requestLogStats_refusesAnAppAdmin() throws Exception {
+        mvc.perform(post("/logosdb/request_log_stats")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void requestLogStats_refusesAPlainDeveloper() throws Exception {
+        mvc.perform(post("/logosdb/request_log_stats")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void requestLogStats_refusesScopeOptionsForAPlainDeveloper() throws Exception {
+        // The lists name every team and requester with traffic in range — the
+        // inventory of the platform's usage, so they carry the same rule.
+        mvc.perform(post("/logosdb/request_log_scope_options")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void requestLogStats_refusesScopeOptionsForAnAppAdmin() throws Exception {
+        mvc.perform(post("/logosdb/request_log_scope_options")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+    }
+
     // ── Scope ────────────────────────────────────────────────────────────────
     // The seed holds exactly two requests: 9001 carries user 1001 / team 2001,
     // 9002 carries neither (an application key). So an unscoped call must count
@@ -68,7 +113,7 @@ class RequestLogStatsControllerTest {
     @Test
     void requestLogStats_countsEveryTeamWhenUnscoped() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -80,7 +125,7 @@ class RequestLogStatsControllerTest {
     @Test
     void requestLogStats_narrowsEveryAggregateToTheTeam() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"team_id\": 2001}"))
            .andExpect(status().isOk())
@@ -96,7 +141,7 @@ class RequestLogStatsControllerTest {
     @Test
     void requestLogStats_narrowsToTheRequester() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"user_id\": 1001}"))
            .andExpect(status().isOk())
@@ -106,7 +151,7 @@ class RequestLogStatsControllerTest {
     @Test
     void requestLogStats_returnsNothingForATeamWithNoTraffic() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"team_id\": 999999}"))
            .andExpect(status().isOk())
@@ -120,14 +165,14 @@ class RequestLogStatsControllerTest {
         // in team 2001, so pairing them keeps the request, and pairing the user
         // with a different team keeps nothing.
         mvc.perform(post("/logosdb/request_log_stats")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"user_id\": 1001, \"team_id\": 2001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.stats.totals.requests").value(1));
 
         mvc.perform(post("/logosdb/request_log_stats")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"user_id\": 1001, \"team_id\": 999999}"))
            .andExpect(status().isOk())
@@ -142,7 +187,7 @@ class RequestLogStatsControllerTest {
     @Test
     void scopeOptions_listOnlyWhatSentSomething() throws Exception {
         mvc.perform(post("/logosdb/request_log_scope_options")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
@@ -162,7 +207,7 @@ class RequestLogStatsControllerTest {
     @Test
     void scopeOptions_narrowRequestersToTheTeam() throws Exception {
         mvc.perform(post("/logosdb/request_log_scope_options")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"team_id\": 2001}"))
            .andExpect(status().isOk())
@@ -177,7 +222,7 @@ class RequestLogStatsControllerTest {
     @Test
     void scopeOptions_offerNoRequestersForASilentTeam() throws Exception {
         mvc.perform(post("/logosdb/request_log_scope_options")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"team_id\": 999999}"))
            .andExpect(status().isOk())
@@ -187,7 +232,7 @@ class RequestLogStatsControllerTest {
     @Test
     void scopeOptions_excludeARangeWithNoTraffic() throws Exception {
         mvc.perform(post("/logosdb/request_log_scope_options")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"start_date\": \"2020-01-01T00:00:00Z\", \"end_date\": \"2020-01-02T00:00:00Z\"}"))
            .andExpect(status().isOk())
@@ -206,7 +251,7 @@ class RequestLogStatsControllerTest {
     @Test
     void requestLogStats_rejectsInvalidDateRange() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")
-                .with(TestJwt.testUser())
+                .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"start_date\": \"2025-06-01T00:00:00Z\", \"end_date\": \"2025-01-01T00:00:00Z\"}"))
            .andExpect(status().isBadRequest());
