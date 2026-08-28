@@ -44,9 +44,11 @@ public class OrchestratorModelHealthClient {
      * Model health entries (name, status) for every model the orchestrator
      * knows. /health answers 503 while every local worker is down, but its
      * body still carries the model breakdown (cloud models may be serveable),
-     * so that body is read as well. Only when the orchestrator is unreachable
-     * at all is the last cached result (possibly empty) returned instead, so
-     * health serving never fails on the round trip.
+     * so that body is read as well. Any other error (empty 500, 4xx, ...) or
+     * an unusable 503 body keeps the last known state, so a transient failure
+     * never wipes a valid health result. Only when the orchestrator is
+     * unreachable at all is the last cached result (possibly empty) returned
+     * instead, so health serving never fails on the round trip.
      */
     public List<Map<String, Object>> getModelHealth() {
         long now = System.currentTimeMillis();
@@ -57,21 +59,28 @@ public class OrchestratorModelHealthClient {
             return cached;
         }
         try {
-            Object body;
             try {
                 var response = restTemplate.exchange(
                     orchestratorUrl + "/health",
                     HttpMethod.GET,
                     new HttpEntity<Void>(new HttpHeaders()),
                     Map.class);
-                body = response.getBody();
+                // 200 is authoritative: the breakdown may legitimately be
+                // gone (older orchestrator without the models key) -> clear.
+                List<Map<String, Object>> entries = toModelEntries(response.getBody());
+                cached = entries != null ? entries : List.of();
             } catch (HttpStatusCodeException e) {
-                // 503 = every local worker is down; the response body still
-                // carries the model breakdown, so read it instead of
-                // discarding it.
-                body = parseBody(e.getResponseBodyAsString());
+                if (e.getStatusCode().value() != 503) {
+                    // No usable breakdown in this error response.
+                    return cached;
+                }
+                // 503 = every local worker is down; the body still carries
+                // the model breakdown when the orchestrator is new enough.
+                List<Map<String, Object>> entries = toModelEntries(parseBody(e.getResponseBodyAsString()));
+                if (entries != null) {
+                    cached = entries;
+                }
             }
-            cached = toModelEntries(body);
         } catch (Exception e) {
             log.warn("Failed to fetch model health from orchestrator: {}", e.getMessage());
         }
@@ -80,15 +89,16 @@ public class OrchestratorModelHealthClient {
     }
 
     /**
-     * Extracts the model entries from a /health body. A body without a
-     * "models" list (older orchestrator) yields no entries so stale ones are
-     * not served, and each entry is reduced to exactly the two public fields
-     * — extra keys the orchestrator might add later never reach the API.
+     * Extracts the model entries from a /health body, or null when the body
+     * has no "models" list (older orchestrator or unusable payload) so the
+     * caller can tell "no breakdown" apart from "no models". Each entry is
+     * reduced to exactly the two public fields — extra keys the orchestrator
+     * might add later never reach the API.
      */
     private static List<Map<String, Object>> toModelEntries(Object body) {
         Object rawModels = body instanceof Map<?, ?> map ? map.get("models") : null;
         if (!(rawModels instanceof List<?> models)) {
-            return List.of();
+            return null;
         }
         List<Map<String, Object>> typed = new ArrayList<>();
         for (Object item : models) {

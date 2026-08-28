@@ -9,10 +9,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestTemplate;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -117,6 +119,40 @@ class OrchestratorModelHealthClientTest {
         assertThat(client.getModelHealth()).hasSize(1);
         ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
         assertThat(client.getModelHealth()).isEmpty();
+    }
+
+    @Test
+    void empty500ResponsePreservesCachedHealth() {
+        Map<String, Object> withModels = Map.of("models", List.of(Map.of("name", "gpt-4", "status", "UP")));
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn(ok(withModels))
+            .thenThrow(new HttpServerErrorException(
+                HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error", new HttpHeaders(),
+                new byte[0], StandardCharsets.UTF_8));
+        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
+        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+
+        assertThat(client.getModelHealth()).hasSize(1);
+        ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
+        assertThat(client.getModelHealth()).hasSize(1);
+    }
+
+    @Test
+    void malformed503ResponsePreservesCachedHealth() {
+        Map<String, Object> withModels = Map.of("models", List.of(Map.of("name", "gpt-4", "status", "UP")));
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn(ok(withModels))
+            .thenThrow(new HttpClientErrorException(
+                HttpStatusCode.valueOf(503), "Service Unavailable", new HttpHeaders(),
+                "<html>nope</html>".getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8));
+        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
+        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+
+        assertThat(client.getModelHealth()).hasSize(1);
+        ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
+        assertThat(client.getModelHealth()).hasSize(1);
     }
 
     @Test
