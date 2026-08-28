@@ -31,6 +31,7 @@ public class Model {
      * extra parallelism; the capacity planner loads additional replicas up to
      * this count. Defaults to 1 (single lane).
      */
+    @Column(nullable = false)
     private Integer replicas = 1;
 
     public Integer getId() { return id; }

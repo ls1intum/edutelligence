@@ -3269,6 +3269,17 @@ class CapacityPlanner:
                 cross_queue,
             )
 
+            # Awake, live lanes — the model's currently active set. Both
+            # branches below gate on it: the wake path must not raise the
+            # active set past the configured replica count, and the cold-load
+            # path must not add a lane once the set is full.
+            active_lanes = [
+                lane
+                for lane in model_lanes
+                if lane.runtime_state not in {"stopped", "error"}
+                and lane.sleep_state != "sleeping"  # sleeping handled in the wake branch
+            ]
+
             # ── WAKE: sleeping lane exists ────────────────────────────────────
             sleeping_lanes = [
                 lane
@@ -3277,6 +3288,21 @@ class CapacityPlanner:
                 and not self._lane_is_in_wake_failure_cooldown(provider_id, lane.lane_id)
             ]
             if sleeping_lanes:
+                # Replica cap on the wake path: waking a lane raises the
+                # model's active set, so a model that already runs its full
+                # configured count keeps any surplus sleeper asleep — the
+                # operator lowered the count and the planner must not fight
+                # that by reactivating the extra lane. Counts awake lanes only
+                # on purpose: the sleeper being woken is one of the model's
+                # configured set, not a lane beyond it.
+                if len(active_lanes) >= self._desired_replicas(model_name):
+                    logger.info(
+                        "Skipping wake of %s on worker=%s: model already runs its full set of %d lane(s)",
+                        model_name,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        self._desired_replicas(model_name),
+                    )
+                    continue
                 target = best_lane(sleeping_lanes)
                 profile = profiles.get(model_name)
 
@@ -3543,12 +3569,6 @@ class CapacityPlanner:
                 continue  # sleeping lane found; don't also try cold load
 
             # ── COLD LOAD: fewer live lanes than the model wants ─────────────
-            active_lanes = [
-                lane
-                for lane in model_lanes
-                if lane.runtime_state not in {"stopped", "error"}
-                and lane.sleep_state != "sleeping"  # sleeping handled above
-            ]
             desired_replicas = self._desired_replicas(model_name)
             if len(active_lanes) >= desired_replicas:
                 continue  # model already has its full set of lanes
@@ -5664,13 +5684,15 @@ class CapacityPlanner:
         """How many lanes of this model the operator wants on a worker.
 
         Read from the model's configured replica count (``models.replicas``,
-        exposed through the facade registration). Anything missing or
-        unparsable falls back to 1 — the single-lane behaviour every
-        deployment had before the count existed.
+        exposed through the facade registration). The expected degradations —
+        a facade without the method (test doubles, pre-upgrade) and an
+        unparsable value — fall back to 1, the single-lane behaviour every
+        deployment had before the count existed. Anything else is a real bug
+        and is let through rather than masked for the planner's whole life.
         """
         try:
             return max(1, int(self._facade.get_model_replicas(model_name)))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return 1
 
     def _next_lane_id_for_model(

@@ -112,7 +112,18 @@ export class Models implements OnInit {
     );
   });
 
-  addValid = computed(() => this.addName().trim().length > 0);
+  addValid = computed(() => this.addName().trim().length > 0 && this.replicasInputOk(this.addReplicas()));
+
+  /**
+   * True when the replicas input is empty (the server default of 1 applies)
+   * or a whole number in the 1–16 range the backend enforces — anything else
+   * is rejected locally instead of surfacing as a generic API failure.
+   */
+  replicasInputOk(raw: string): boolean {
+    if (raw.trim() === '') return true;
+    const value = Number(raw);
+    return Number.isInteger(value) && value >= 1 && value <= 16;
+  }
 
   ngOnInit(): void {
     this.fetchModels();
@@ -275,6 +286,10 @@ export class Models implements OnInit {
   async submitEdit(): Promise<void> {
     const target = this.editTarget();
     if (!target || this.editLoading()) return;
+    if (!this.replicasInputOk(this.editReplicas())) {
+      this.editError.set('Replicas per node must be a whole number between 1 and 16.');
+      return;
+    }
     this.editLoading.set(true);
     this.editError.set('');
     const payload: UpdateModelPayload = {

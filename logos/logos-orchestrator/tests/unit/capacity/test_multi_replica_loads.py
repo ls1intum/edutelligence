@@ -491,6 +491,72 @@ class TestDemandPathSecondLane:
 
         assert planner._compute_demand_actions(1, provider.lanes) == []
 
+    def test_surplus_sleeper_stays_asleep_at_the_replica_cap(self):
+        """The operator lowered the count: the model runs its full set of two
+        lanes and a third, sleeping surplus lane exists. The wake path must
+        not raise the active set past the configured count — the surplus
+        sleeper stays asleep (and no cold load tops it up either)."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[
+                _lane("planner-X", "X", "running"),
+                _lane("planner-X-2", "X", "running"),
+                _lane("planner-X-3", "X", "loaded", sleep_state="sleeping"),
+            ],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+            replicas={"X": 2},
+        )
+        planner = _planner(provider)
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+
+        assert actions == []
+
+    def test_sleeper_still_wakes_below_the_cap(self):
+        """The sleeping lane is one of the model's configured set (one awake
+        lane, count 2) — waking it brings the model up to its count, the
+        pre-#789 behaviour."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[
+                _lane("planner-X", "X", "running"),
+                _lane("planner-X-2", "X", "loaded", sleep_state="sleeping"),
+            ],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+            replicas={"X": 2},
+        )
+        planner = _planner(provider)
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+
+        kinds = [(a.action, a.lane_id) for a in actions]
+        assert ("wake", "planner-X-2") in kinds
+        assert all(action == "wake" for action, _ in kinds)
+
+    def test_single_sleeper_still_wakes_at_the_default_count(self):
+        """Base case the cap check must not break: replicas=1 (default), the
+        model's one lane is sleeping — waking it does not add a lane, it
+        reactivates the model's only replica."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "loaded", sleep_state="sleeping")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider)
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+
+        assert [(a.action, a.lane_id) for a in actions] == [("wake", "planner-X")]
+
     def test_first_load_still_lands_on_the_historical_id(self):
         provider = _MockProvider(
             provider_id=1,
