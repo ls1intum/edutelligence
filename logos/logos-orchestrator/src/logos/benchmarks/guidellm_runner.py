@@ -177,6 +177,12 @@ def build_scenario(
     if api_key:
         backend["api_key"] = api_key
     if request_headers:
+        # GuideLLM does not apply ``extras.headers`` to its separate
+        # ``GET /health`` validation request.  A signed, job-scoped benchmark
+        # route therefore cannot authenticate that probe.  The explicit
+        # warm-up request above already validates the exact completion route
+        # with the affinity headers before GuideLLM starts measuring.
+        backend["validate_backend"] = False
         backend["extras"]["headers"] = dict(request_headers)
 
     return {

@@ -42,6 +42,7 @@ def test_build_scenario_uses_fixed_gsm8k_test_split() -> None:
     assert scenario["spec"]["data"][0]["source"] == "openai/gsm8k"
     assert scenario["spec"]["data"][0]["load_kwargs"] == {"name": "main", "split": "test"}
     assert scenario["spec"]["data_loader"]["samples"] == 5
+    assert scenario["spec"]["backend"]["validate_backend"] is False
     assert scenario["spec"]["backend"]["extras"]["headers"][BENCHMARK_PROVIDER_HEADER] == "23"
     assert scenario["spec"]["backend"]["extras"]["headers"][BENCHMARK_PHASE_HEADER] == "measurement"
     assert scenario["spec"]["backend"]["extras"]["headers"][BENCHMARK_TOKEN_HEADER]
