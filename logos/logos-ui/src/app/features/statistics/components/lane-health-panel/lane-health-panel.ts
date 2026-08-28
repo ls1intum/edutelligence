@@ -96,6 +96,27 @@ export function formatContextWindow(tokens: number | null | undefined): string |
   return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens);
 }
 
+/** Which manual sleep/wake action a lane row offers, if any. */
+export type LaneSleepAction = 'sleep' | 'wake' | null;
+
+/**
+ * Which manual sleep/wake action a lane row offers.
+ *
+ * Wake only on a lane that is actually asleep: vLLM's /wake_up on an awake
+ * engine is a no-op at best, so the button would promise a transition that is
+ * not coming. Sleep only on a lane that is awake and idle: the server first
+ * drains in-flight requests (mode="wait"), so on a busy lane the click would
+ * block for as long as the drain takes — the panel offers the action only
+ * where it takes effect immediately. Lanes whose backend has no sleep mode
+ * (Ollama reports sleep_state "unsupported", a vLLM lane that never slept
+ * reports "unknown") offer neither.
+ */
+export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
+  if (lane.sleep_state === 'sleeping') return 'wake';
+  if (lane.sleep_state === 'awake' && !(lane.active_requests > 0)) return 'sleep';
+  return null;
+}
+
 @Component({
   selector: 'app-stats-lane-health-panel',
   standalone: true,
@@ -113,6 +134,11 @@ export class LaneHealthPanel implements OnChanges {
 
   unloadingLaneId = signal<string | null>(null);
   unloadError = signal<string | null>(null);
+
+  // ── Sleep/wake state ─────────────────────────────────────────────────────
+  sleepingLaneId = signal<string | null>(null);
+  wakingLaneId = signal<string | null>(null);
+  sleepWakeError = signal<string | null>(null);
 
   // ── Load-lane state ──────────────────────────────────────────────────────
   pickerOpen = signal(false);
@@ -168,6 +194,11 @@ export class LaneHealthPanel implements OnChanges {
               : null,
         };
       });
+  }
+
+  /** Which sleep/wake button the row offers; the rules live in laneSleepAction. */
+  sleepAction(lane: LaneSignalData): LaneSleepAction {
+    return laneSleepAction(lane);
   }
 
   /** "GPU 0-1" style placement line; null when the lane reports none. */
@@ -254,6 +285,53 @@ export class LaneHealthPanel implements OnChanges {
         this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(err)}`);
       }
     }
+  }
+
+  async handleSleep(laneId: string): Promise<void> {
+    const pid = this.providerId;
+    if (pid == null || this.sleepingLaneId() != null) return;
+    this.sleepingLaneId.set(laneId);
+    this.sleepWakeError.set(null);
+
+    try {
+      await this.statisticsService.sleepLane(pid, laneId);
+      this.sleepingLaneId.set(null);
+    } catch (err: unknown) {
+      this.sleepingLaneId.set(null);
+      this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, err));
+    }
+  }
+
+  async handleWake(laneId: string): Promise<void> {
+    const pid = this.providerId;
+    if (pid == null || this.wakingLaneId() != null) return;
+    this.wakingLaneId.set(laneId);
+    this.sleepWakeError.set(null);
+
+    try {
+      await this.statisticsService.wakeLane(pid, laneId);
+      this.wakingLaneId.set(null);
+    } catch (err: unknown) {
+      this.wakingLaneId.set(null);
+      this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, err));
+    }
+  }
+
+  /**
+   * The human-readable reason out of a failed sleep/wake.
+   *
+   * Same mapping as handleUnload, with one twist: a 404 here can carry the
+   * orchestrator's own reason ("lane not found on this worker"), and that
+   * must win over the stale-server hint. The hint only applies when the
+   * status came with no body to read at all.
+   */
+  private sleepWakeErrorText(verb: string, laneId: string, err: unknown): string {
+    const e = err as { status?: number };
+    const detail = this.failureDetail(err);
+    if ((e.status === 404 || e.status === 501 || e.status === 0) && detail === `HTTP ${e?.status ?? 0}`) {
+      return 'Action not available on this server yet.';
+    }
+    return `${verb} of ${laneId} failed: ${detail}`;
   }
 
   // ── Load-lane handlers ───────────────────────────────────────────────────

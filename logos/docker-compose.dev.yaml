@@ -228,7 +228,7 @@ services:
       # Exact paths in front of the orchestrator's logosnode catch-all (201), so
       # every action added to the UI has to be named here too — see the prod
       # compose for what happens when one is missed.
-      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`)"
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
       - "traefik.http.routers.webservice-logosnode-admin.entrypoints=web8080"
       - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
       - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api"

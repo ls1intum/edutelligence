@@ -2073,6 +2073,16 @@ class _InternalAddLaneRequest(BaseModel):
     lane: dict[str, Any]
 
 
+class _InternalSleepLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+class _InternalWakeLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
 async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
     """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
@@ -2182,6 +2192,85 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
     return JSONResponse(
         status_code=202,
         content={"status": "accepted", "model": model, "provider_id": data.provider_id},
+    )
+
+
+@app.post("/internal/logosnode/lanes/sleep", tags=["admin"])
+async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request: Request):
+    """Sleep a lane on a worker, called by Spring after JWT validation.
+
+    Level 1 keeps the weights resident in host memory, so the lane wakes in
+    seconds; level 2 would release them and pay for a full reload on the next
+    wake — a choice most operators cannot make well, so the button does not
+    offer it and neither does this endpoint.
+
+    In-flight requests are not refused: mode="wait" makes the worker drain
+    them first and only sleep once the lane is idle (a request admitted
+    between drain and sleep makes the worker skip the sleep and stay awake).
+    The command therefore takes as long as the drain — the dispatch budget
+    must cover it, which is why sleep_lane gets the same 120 s as the
+    planner's own sleep commands.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Worker has not sent its first status yet"},
+        )
+    lanes = (snap.get("runtime") or {}).get("lanes") or []
+    lane = next(
+        (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id", "")) == data.lane_id),
+        None,
+    )
+    if lane is None:
+        return JSONResponse(status_code=404, content={"error": f"Lane '{data.lane_id}' not found on this worker"})
+    # "unsupported" is the worker's resolved answer for "cannot sleep this
+    # lane": enable_sleep_mode off for its model (per-model override or the
+    # node-wide kill switch) or a non-vLLM lane. Dispatching would burn the
+    # command budget to fail on the worker, so refuse synchronously with the
+    # reason the panel can display.
+    if str(lane.get("sleep_state", "")).strip().lower() == "unsupported":
+        raise HTTPException(
+            status_code=409,
+            detail="Lane does not support sleep mode; its model is configured without enable_sleep_mode.",
+        )
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="sleep_lane",
+        params={"lane_id": data.lane_id, "level": 1, "mode": "wait"},
+    )
+
+
+@app.post("/internal/logosnode/lanes/wake", tags=["admin"])
+async def internal_logosnode_wake_lane(data: _InternalWakeLaneRequest, request: Request):
+    """Wake a sleeping lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="wake_lane",
+        params={"lane_id": data.lane_id},
     )
 
 
@@ -4903,7 +4992,10 @@ async def logosnode_lanes(data: LogosNodeStatusRequest):
 _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
     "apply_lanes": 180,
     "reconfigure_lane": 180,
-    "sleep_lane": 30,
+    # sleep_lane with mode="wait" first drains in-flight requests (the worker
+    # budgets 30 s for that), so a fixed 30 s here would time out exactly when
+    # a busy lane actually drains. The planner uses 120 s for its own sleeps.
+    "sleep_lane": 120,
     "wake_lane": 120,
     "delete_lane": 30,
 }
