@@ -39,10 +39,14 @@
                        idle check, and a slept lane with queued demand is woken
                        straight back up. -->
                   @switch (sleepAction(row.lane)) {
+                    <!-- The handlers take only one wake/sleep at a time and drop a
+                         second silently, so while one is in flight the buttons of
+                         the other lanes are disabled instead of looking clickable.
+                         The spinner stays on the lane that was actually clicked. -->
                     @case ('wake') {
                       <button
                         class="btn-lane-action"
-                        [disabled]="wakingLaneId() === row.laneId"
+                        [disabled]="wakingLaneId() !== null"
                         (click)="handleWake(row.laneId)"
                         title="Wake this lane (weights stay resident, no cold load). The capacity planner decides on its own and may put it back to sleep once it goes idle."
                       >
@@ -52,7 +56,7 @@
                     @case ('sleep') {
                       <button
                         class="btn-lane-action"
-                        [disabled]="sleepingLaneId() === row.laneId"
+                        [disabled]="sleepingLaneId() !== null"
                         (click)="handleSleep(row.laneId)"
                         title="Put this lane to sleep (weights stay resident, no cold load on wake). The capacity planner decides on its own and may wake it as soon as demand returns."
                       >
