@@ -3439,6 +3439,17 @@ class CapacityPlanner:
                     #     be popular doesn't preempt a recently-warm one
                     #     on speculation alone.
                     #
+                    # has_queued alone is the real-demand signal in branch (a) —
+                    # do NOT stack an eff >= FLOOR requirement on top of it.
+                    # A single queued request contributes QUEUE_WEIGHT to eff
+                    # and its base score decays (DECAY_FACTOR per cycle) within
+                    # a couple of cycles, so a lone waiting request can never
+                    # clear the floor and the bypass deadlocked the sequential
+                    # switchover: model A's benchmark ends, model B is requested
+                    # one at a time, B's request waits until it times out, and
+                    # A's lane sticks (#827). Victims are idle by construction,
+                    # so reclaiming them preempts no real work.
+                    #
                     # Phase 3.2: under v2, branch (a) only fires when the
                     # victim is genuinely idle (eff < floor). Otherwise
                     # both target and victim have queue and we must use
@@ -3457,12 +3468,12 @@ class CapacityPlanner:
                         victim_below_floor = max_non_self < self.DEMAND_WAKE_FLOOR
                         proceed = (
                             self_only
-                            or (has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR)
+                            or (has_queued and victim_below_floor)
                             or eff > max_non_self * self.WAKE_COMPETITIVE_RATIO
                         )
                         if self_only:
                             gate_reason = "self-eviction (same model as target)"
-                        elif has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR:
+                        elif has_queued and victim_below_floor:
                             gate_reason = (
                                 f"queued_demand & victims_idle → bypass ratio "
                                 f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
@@ -3472,9 +3483,7 @@ class CapacityPlanner:
                                 f"target_eff={eff:.2f} > victim={max_non_self:.2f}" f"×{self.WAKE_COMPETITIVE_RATIO}"
                             )
                     else:
-                        proceed = (
-                            has_queued and eff >= self.DEMAND_WAKE_FLOOR
-                        ) or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
+                        proceed = has_queued or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
                         gate_reason = (
                             f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                             if has_queued and eff <= max_victim_score * self.WAKE_COMPETITIVE_RATIO
@@ -3670,11 +3679,12 @@ class CapacityPlanner:
                 )
                 planned_models.add(model_name)
             else:
-                # Contention. Same two-regime logic as the wake path:
-                # real queued requests bypass the ratio (victims are
-                # already idle by construction); speculative score is
-                # gated by LOAD_COMPETITIVE_RATIO to avoid thrashing on
-                # a model that *might* become popular.
+                # Contention. Same two-regime logic as the wake path (see the
+                # regime comment there, including why has_queued alone is the
+                # real-demand signal — #827): real queued requests bypass the
+                # ratio (victims are already idle by construction); speculative
+                # score is gated by LOAD_COMPETITIVE_RATIO to avoid thrashing
+                # on a model that *might* become popular.
                 # Phase 3.2/3.3: under v2, branch (a) requires victim_below_floor
                 # and self-eviction is degenerate.
                 non_self_victims = [s for vlane, _, s in eviction_set if vlane.model_name != model_name]
@@ -3685,12 +3695,12 @@ class CapacityPlanner:
                     victim_below_floor = max_non_self < self.DEMAND_LOAD_FLOOR
                     proceed = (
                         self_only
-                        or (has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR)
+                        or (has_queued and victim_below_floor)
                         or eff > max_non_self * self.LOAD_COMPETITIVE_RATIO
                     )
                     if self_only:
                         gate_reason = "self-eviction (same model as target)"
-                    elif has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR:
+                    elif has_queued and victim_below_floor:
                         gate_reason = (
                             f"queued_demand & victims_idle → bypass ratio "
                             f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
@@ -3698,9 +3708,7 @@ class CapacityPlanner:
                     else:
                         gate_reason = f"target_eff={eff:.2f} > victim={max_non_self:.2f}×{self.LOAD_COMPETITIVE_RATIO}"
                 else:
-                    proceed = (
-                        has_queued and eff >= self.DEMAND_LOAD_FLOOR
-                    ) or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
+                    proceed = has_queued or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
                     gate_reason = (
                         f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                         if has_queued and eff <= max_victim_score * self.LOAD_COMPETITIVE_RATIO
