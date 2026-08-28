@@ -9,6 +9,7 @@ export interface Model {
   weight_quality: number | null;
   /** Only present for logos_admin (the endpoint is open to all roles). */
   last_used_at?: string | null;
+  replicas: number | null;
 }
 
 export interface AddModelPayload {
@@ -19,6 +20,7 @@ export interface AddModelPayload {
   worse_accuracy_id?: number;
   worse_cost_id?: number;
   worse_quality_id?: number;
+  replicas?: number;
 }
 
 export interface UpdateModelPayload {
@@ -30,4 +32,5 @@ export interface UpdateModelPayload {
   weight_accuracy?: number;
   weight_cost?: number;
   weight_quality?: number;
+  replicas?: number;
 }

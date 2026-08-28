@@ -73,6 +73,7 @@ export class Models implements OnInit {
   addWtAccuracy = signal('');
   addWtCost = signal('');
   addWtQuality = signal('');
+  addReplicas = signal('');
   addLoading = signal(false);
   addError = signal('');
 
@@ -85,6 +86,7 @@ export class Models implements OnInit {
   editWtAccuracy = signal('');
   editWtCost = signal('');
   editWtQuality = signal('');
+  editReplicas = signal('');
   editLoading = signal(false);
   editError = signal('');
 
@@ -201,6 +203,7 @@ export class Models implements OnInit {
     this.addWtAccuracy.set('');
     this.addWtCost.set('');
     this.addWtQuality.set('');
+    this.addReplicas.set('');
     this.addError.set('');
     this.addOpen.set(true);
   }
@@ -227,6 +230,8 @@ export class Models implements OnInit {
     const wtQuality = this.addWtQuality() ? Number(this.addWtQuality()) : undefined;
     const hasWeights =
       wtLatency != null || wtAccuracy != null || wtCost != null || wtQuality != null;
+    const replicas = this.addReplicas() ? Number(this.addReplicas()) : undefined;
+    if (replicas != null) payload.replicas = replicas;
 
     try {
       const newModelId = await this.modelService.addModel(payload);
@@ -258,6 +263,7 @@ export class Models implements OnInit {
     this.editWtAccuracy.set(model.weight_accuracy != null ? String(model.weight_accuracy) : '');
     this.editWtCost.set(model.weight_cost != null ? String(model.weight_cost) : '');
     this.editWtQuality.set(model.weight_quality != null ? String(model.weight_quality) : '');
+    this.editReplicas.set(model.replicas != null ? String(model.replicas) : '');
     this.editError.set('');
   }
 
@@ -280,6 +286,7 @@ export class Models implements OnInit {
       weight_accuracy: this.editWtAccuracy() ? Number(this.editWtAccuracy()) : undefined,
       weight_cost: this.editWtCost() ? Number(this.editWtCost()) : undefined,
       weight_quality: this.editWtQuality() ? Number(this.editWtQuality()) : undefined,
+      replicas: this.editReplicas() ? Number(this.editReplicas()) : undefined,
     };
     try {
       await this.modelService.updateModel(payload);
@@ -295,6 +302,7 @@ export class Models implements OnInit {
                 weight_accuracy: payload.weight_accuracy ?? m.weight_accuracy,
                 weight_cost: payload.weight_cost ?? m.weight_cost,
                 weight_quality: payload.weight_quality ?? m.weight_quality,
+                replicas: payload.replicas ?? m.replicas,
               }
             : m,
         ),

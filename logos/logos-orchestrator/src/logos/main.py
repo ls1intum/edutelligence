@@ -299,6 +299,10 @@ def _resolve_requested_model_name(
     planner-safe alias form where ``/``, ``:``, and spaces are rewritten as
     underscores. This lets users copy model ids from lane names or worker logs
     without breaking access-controlled model lookup.
+
+    Lane ids carry a replica suffix for a model's second and further lanes
+    (``planner-<alias>-2``), so those resolve to the model as well — a copied
+    replica lane name is still an address for the same model.
     """
     requested = str(requested_name or "").strip()
     if not requested:
@@ -314,6 +318,12 @@ def _resolve_requested_model_name(
 
         sanitized = _planner_model_alias(canonical)
         if requested in {sanitized, f"planner-{sanitized}"}:
+            alias_matches.add(canonical)
+            continue
+
+        replica_prefix = f"planner-{sanitized}-"
+        suffix = requested[len(replica_prefix) :] if requested.startswith(replica_prefix) else None
+        if suffix is not None and suffix.isdigit() and int(suffix) >= 2:
             alias_matches.add(canonical)
 
     if len(alias_matches) == 1:
@@ -2752,6 +2762,10 @@ async def _register_models_with_facades(
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
                         "provider_id": provider_id,
+                        # How many lanes of this model the capacity planner may
+                        # run on one worker (models.replicas); the planner uses
+                        # it to load additional replicas of an already-loaded model.
+                        "replicas": model_info.get("replicas") or 1,
                     }
                 )
             elif cloud_provider_type == "azure":

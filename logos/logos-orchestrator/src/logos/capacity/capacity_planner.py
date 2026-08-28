@@ -3542,15 +3542,16 @@ class CapacityPlanner:
                         )
                 continue  # sleeping lane found; don't also try cold load
 
-            # ── COLD LOAD: no usable lane exists ─────────────────────────────
+            # ── COLD LOAD: fewer live lanes than the model wants ─────────────
             active_lanes = [
                 lane
                 for lane in model_lanes
                 if lane.runtime_state not in {"stopped", "error"}
                 and lane.sleep_state != "sleeping"  # sleeping handled above
             ]
-            if active_lanes:
-                continue  # has a usable (non-sleeping, non-stopped) lane
+            desired_replicas = self._desired_replicas(model_name)
+            if len(active_lanes) >= desired_replicas:
+                continue  # model already has its full set of lanes
 
             if self._would_evict_cooled_lane(provider_id, model_name, profiles, capacity):
                 logger.info(
@@ -3644,7 +3645,9 @@ class CapacityPlanner:
                     continue
                 if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
                     continue
-                lane_id = self._planner_lane_id(model_name)
+                # Replica 1's id when still free, else the next free index —
+                # an extra copy of an already-loaded model needs its own lane id.
+                lane_id = self._next_lane_id_for_model(provider_id, model_name, model_lanes)
                 if eff >= self.DEMAND_LOAD_FLOOR or has_queued:
                     reason = f"Demand eff={eff:.2f} ≥ floor={self.DEMAND_LOAD_FLOOR}; VRAM free"
                 else:
@@ -3716,7 +3719,7 @@ class CapacityPlanner:
                     # the load gets rejected for "insufficient VRAM" that the
                     # planner itself is about to free in the same cycle. Trust
                     # the placement decision.
-                    lane_id = self._planner_lane_id(model_name)
+                    lane_id = self._next_lane_id_for_model(provider_id, model_name, model_lanes)
                     for vlane, vaction, _ in eviction_set:
                         if vlane.lane_id in claimed_victims:
                             continue
@@ -5642,9 +5645,76 @@ class CapacityPlanner:
 
         return [action for action in actions if id(action) in validated_ids]
 
-    def _planner_lane_id(self, model_name: str) -> str:
+    def _planner_lane_id(self, model_name: str, replica_index: int = 1) -> str:
+        """Planner-owned lane id for one replica of a model.
+
+        Replica 1 keeps the historical id (``planner-<sanitized>``) so lanes
+        placed before per-model replica counts existed stay addressable
+        unchanged. Replicas from two on append ``-<index>`` — the worker keys
+        lanes by lane id only, so a second copy of the same model needs an id
+        the worker does not hold yet.
+        """
         sanitized = model_name.replace("/", "_").replace(":", "_").replace(" ", "_")
-        return f"planner-{sanitized}"
+        base = f"planner-{sanitized}"
+        if replica_index <= 1:
+            return base
+        return f"{base}-{replica_index}"
+
+    def _desired_replicas(self, model_name: str) -> int:
+        """How many lanes of this model the operator wants on a worker.
+
+        Read from the model's configured replica count (``models.replicas``,
+        exposed through the facade registration). Anything missing or
+        unparsable falls back to 1 — the single-lane behaviour every
+        deployment had before the count existed.
+        """
+        try:
+            return max(1, int(self._facade.get_model_replicas(model_name)))
+        except Exception:
+            return 1
+
+    def _next_lane_id_for_model(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: Optional[List[LaneSchedulerSignals]] = None,
+    ) -> str:
+        """The lowest replica lane id the worker does not hold for this model.
+
+        Every lane id the provider currently reports for the model — in any
+        runtime state, an errored or stopping lane still holds its id on the
+        worker — is off limits; the worker refuses ``add_lane`` for an
+        existing lane id. With nothing held, replica 1's id wins so a first
+        load lands exactly where it always did.
+        """
+        if lanes is None:
+            lanes = self._safe_get_lanes(provider_id)
+        taken = {lane.lane_id for lane in lanes if lane.model_name == model_name}
+        if self._planner_lane_id(model_name) not in taken:
+            return self._planner_lane_id(model_name)
+        index = 2
+        while self._planner_lane_id(model_name, index) in taken:
+            index += 1
+        return self._planner_lane_id(model_name, index)
+
+    def _count_live_lanes_for_model(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: Optional[List[LaneSchedulerSignals]] = None,
+    ) -> int:
+        """How many of this model's lanes occupy a slot on the provider.
+
+        Counts every lane in a live state — loaded, running, cold, starting,
+        sleeping. A sleeping replica still holds its VRAM residual, so it
+        counts toward the model's replica budget; only stopped and errored
+        lanes are gone and do not count.
+        """
+        if lanes is None:
+            lanes = self._safe_get_lanes(provider_id)
+        return sum(
+            1 for lane in lanes if lane.model_name == model_name and lane.runtime_state not in {"stopped", "error"}
+        )
 
     def manual_load_rejection_reason(self, provider_id: int) -> Optional[str]:
         """Why a manual load must not be attempted now, or None if it may run.
@@ -5691,11 +5761,21 @@ class CapacityPlanner:
         and report what it says; this re-checks anyway, because the snapshot can
         go away between that call and this one.
 
+        A model may hold more than one lane on a worker — its configured
+        replica count, so two copies of an 8B model can share a node's VRAM
+        for extra parallelism. A manual load therefore adds one lane up to
+        that count, and is a no-op only once the model already has its full
+        set (counting sleeping replicas, which still hold their slot). The
+        lane id it loads is the next free replica id — replica 1's id while
+        that is free, the lowest unused index once it is — the same rule the
+        planner's demand path uses, so manual and planner loads never fight
+        over an id.
+
         Serialized on the per-lane lock, like every other path that loads or
         unloads a lane. The API answers 202 and leaves this running in the
         background, so a second click — or a planner cycle deciding on the same
         model — arrives while the first load is still in flight. Both derive the
-        same deterministic lane id, so without the lock both would dispatch
+        same next-free lane id, so without the lock both would dispatch
         ``add_lane`` for it, and the check inside the lock is what turns the
         second into a no-op instead of a duplicate.
         """
@@ -5704,7 +5784,18 @@ class CapacityPlanner:
             logger.warning("Refusing manual load of %s on worker=%s: %s", model_name, provider_id, rejection)
             return False
 
-        lane_id = self._planner_lane_id(model_name)
+        lanes = self._safe_get_lanes(provider_id)
+        desired_replicas = self._desired_replicas(model_name)
+        if self._count_live_lanes_for_model(provider_id, model_name, lanes) >= desired_replicas:
+            logger.info(
+                "Manual load of %s on worker=%s is a no-op: model already has its full set of %d lane(s)",
+                model_name,
+                provider_id,
+                desired_replicas,
+            )
+            return False
+
+        lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes)
         async with self._lane_lock(provider_id, lane_id):
             # Everything below is re-read under the lock: a load takes minutes,
             # so the provider state this was admitted on is long stale by the
@@ -5715,6 +5806,18 @@ class CapacityPlanner:
                     model_name,
                     provider_id,
                     lane_id,
+                )
+                return False
+
+            # A concurrent planner load — or a second click — may have filled
+            # the model's last replica slot while this waited for the lock.
+            if self._count_live_lanes_for_model(provider_id, model_name) >= self._desired_replicas(model_name):
+                logger.info(
+                    "Manual load of %s on worker=%s is a no-op: model reached its full set of %d lane(s) "
+                    "while waiting for the lane lock",
+                    model_name,
+                    provider_id,
+                    self._desired_replicas(model_name),
                 )
                 return False
 

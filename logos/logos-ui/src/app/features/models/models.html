@@ -377,6 +377,28 @@
       </div>
     </div>
 
+    <p class="form-section-label form-section-label--mt">Placement</p>
+    <div class="form-row">
+      <div class="form-field">
+        <label class="field-label" for="add-replicas">Replicas per node</label>
+        <input
+          id="add-replicas"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          max="16"
+          placeholder="1"
+          [value]="addReplicas()"
+          (input)="addReplicas.set($any($event.target).value)"
+          [disabled]="addLoading()"
+        />
+      </div>
+      <p class="field-hint">
+        How many lanes of this model the planner keeps loaded on one worker node (1–16).
+        Extra replicas give the model more parallel throughput.
+      </p>
+    </div>
+
     @if (addError()) {
       <app-error-message [message]="addError()!" />
     }
@@ -501,6 +523,27 @@
           [disabled]="editLoading()"
         />
       </div>
+    </div>
+
+    <p class="form-section-label form-section-label--mt">Placement</p>
+    <div class="form-row">
+      <div class="form-field">
+        <label class="field-label" for="edit-replicas">Replicas per node</label>
+        <input
+          id="edit-replicas"
+          class="field-input field-input--short"
+          type="number"
+          min="1"
+          max="16"
+          [value]="editReplicas()"
+          (input)="editReplicas.set($any($event.target).value)"
+          [disabled]="editLoading()"
+        />
+      </div>
+      <p class="field-hint">
+        How many lanes of this model the planner keeps loaded on one worker node (1–16).
+        Extra replicas give the model more parallel throughput.
+      </p>
     </div>
 
     @if (editError()) {

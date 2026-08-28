@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- The models.replicas column is the operator's desired number of lanes
+         of a model on one worker node. Logos supports multiple deployments of
+         the same model on a single node (two 8B instances sharing the VRAM
+         for extra parallelism); the capacity planner loads additional
+         replicas up to this count and request routing balances across them.
+         Defaults to 1 so existing models keep their single-lane behaviour.
+         The upper bound is a guard against fat-fingered VRAM exhaustion —
+         the planner's own VRAM validation is the binding constraint. -->
+    <changeSet id="015-add-models-replicas-column" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="models" columnName="replicas"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="models">
+            <column name="replicas" type="INTEGER" defaultValueNumeric="1">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <sql>ALTER TABLE models ADD CONSTRAINT models_replicas_range CHECK (replicas BETWEEN 1 AND 16);</sql>
+        <rollback>
+            <dropColumn tableName="models" columnName="replicas"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

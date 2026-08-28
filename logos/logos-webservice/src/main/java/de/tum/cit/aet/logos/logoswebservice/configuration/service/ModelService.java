@@ -58,6 +58,7 @@ public class ModelService {
         model.setWeightAccuracy(0);
         model.setWeightCost(0);
         model.setWeightQuality(0);
+        model.setReplicas(validateReplicas(req.replicas()));
         model = modelRepository.save(model);
         weightService.rebalanceAfterAdd(
             model.getId(),
@@ -79,6 +80,7 @@ public class ModelService {
         if (req.weightAccuracy() != null) model.setWeightAccuracy(req.weightAccuracy());
         if (req.weightCost() != null) model.setWeightCost(req.weightCost());
         if (req.weightQuality() != null) model.setWeightQuality(req.weightQuality());
+        if (req.replicas() != null) model.setReplicas(validateReplicas(req.replicas()));
         modelRepository.save(model);
         orchestratorNotificationService.notifyRefresh(true);
         return Map.of("result", "Model updated");
@@ -105,6 +107,7 @@ public class ModelService {
             map.put("weight_quality", m.getWeightQuality());
             map.put("tags", m.getTags());
             map.put("description", m.getDescription());
+            map.put("replicas", m.getReplicas() != null ? m.getReplicas() : 1);
             return map;
         });
     }
@@ -126,6 +129,22 @@ public class ModelService {
         return Role.LOGOS_ADMIN.matches(auth.role());
     }
 
+    /**
+     * Desired per-node replica count for a model. Null means "use the
+     * default of 1 lane"; out-of-range values are rejected so the database
+     * CHECK constraint (models_replicas_range, 1..16) is never the thing
+     * that surfaces the error.
+     */
+    private static Integer validateReplicas(Integer replicas) {
+        if (replicas == null) {
+            return 1;
+        }
+        if (replicas < 1 || replicas > 16) {
+            throw new IllegalArgumentException("replicas must be between 1 and 16");
+        }
+        return replicas;
+    }
+
     private static Map<String, Object> toModelMap(ModelWithPriceProjection p, boolean includeLastUsed) {
         Map<String, Object> m = new LinkedHashMap<>();
         int id = p.getId();
@@ -138,6 +157,7 @@ public class ModelService {
         m.put("weight_quality", p.getWeightQuality());
         m.put("tags", p.getTags());
         m.put("description", p.getDescription());
+        m.put("replicas", p.getReplicas() != null ? p.getReplicas() : 1);
         m.put("input_usd_per_million", p.getInputUsdPerMillion());
         m.put("output_usd_per_million", p.getOutputUsdPerMillion());
         if (includeLastUsed) {

@@ -510,7 +510,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
         @staticmethod
         def get_model(model_id: int):
             return {
-                30: {"id": 30, "name": "Qwen/Qwen2.5-Coder-7B-Instruct"},
+                30: {"id": 30, "name": "Qwen/Qwen2.5-Coder-7B-Instruct", "replicas": 2},
                 10: {"id": 10, "name": "azure-gpt-4-omni"},
                 20: {"id": 20, "name": "whisper-1"},
             }[model_id]
@@ -589,6 +589,7 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
             "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
             "total_vram_mb": 32768,
             "provider_id": 13,
+            "replicas": 2,
         }
     ]
     assert main_mod._azure_facade.registrations == [

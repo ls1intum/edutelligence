@@ -260,6 +260,25 @@ Falls back to aggregate (non-per-GPU) accounting when no per-device VRAM info is
 
 When `lanes = []` (worker connected but no models loaded), the main ranked-model loop already handles cold loads via the placement algorithm — `eviction_set` will always be empty on a worker with nothing loaded. The dedicated capability seeding block at `capacity_planner.py:1450` provides a fallback for the edge case where `_pick_cold_load_placement` returns `None` despite no contention (e.g. missing per-GPU device info). Any model with `eff ≥ DEMAND_LOAD_FLOOR` and capabilities declared by the worker is loaded immediately.
 
+### 7.6 Per-model replica counts (multiple lanes of one model on a node)
+
+A model may legitimately want **more than one lane on the same worker** — e.g. two 8B instances sharing a node's VRAM for extra parallelism. The configured count lives in `models.replicas` (default 1), travels with the model registration into the facade (`LogosNodeSchedulingDataFacade.get_model_replicas`), and the planner reads it as `_desired_replicas(model_name)`.
+
+Lane ids are no longer a strict 1:1 function of the model name:
+
+```python
+planner-<sanitized>        # replica 1 — the historical id, unchanged
+planner-<sanitized>-2      # replica 2
+planner-<sanitized>-3      # replica 3
+...
+```
+
+`_next_lane_id_for_model()` picks the lowest replica id the worker does not already report for the model (in any runtime state — the worker refuses `add_lane` for an existing id), so replica 1's id is always reused when it is free.
+
+The cold-load branch of `_compute_demand_actions` loads while `live lanes < desired replicas`, using the exact same floor/competitive-ratio gates as a first load — an extra replica is just another load of the same model, and it only happens when demand justifies it. Sleeping replicas count as live (the WAKE branch wakes them before any new lane is loaded). Request routing already balances across replicas: `select_lane_for_model` ranks all lanes of the model by queue depth / running count / TTFT, and the admission gate sums per-lane headroom ("a busy lane must not mask an idle sibling").
+
+The operator "Load lane" path (`load_lane_manually`) follows the same rule: it loads the next free replica id and is a no-op only once the model already has its full set of replicas — a second click for an already-loaded model is no longer rejected as "lane already exists" while the model is below its configured count.
+
 ---
 
 ## 8. Demand-preemptive drain

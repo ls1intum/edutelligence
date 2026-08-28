@@ -11,6 +11,8 @@ import { RequestItem, VramV2Payload } from '../statistics.models';
 export interface ProviderModel {
   model_id: number;
   model_name: string;
+  /** Desired number of lanes of this model on the node (1 = single lane). */
+  replicas?: number;
 }
 
 /** Position to continue a request-feed page from, as the server hands it back. */

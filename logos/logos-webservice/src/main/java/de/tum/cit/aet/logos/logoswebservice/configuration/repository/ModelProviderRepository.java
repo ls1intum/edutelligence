@@ -16,7 +16,7 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
     List<ModelProvider> findByProviderId(Integer providerId);
 
     @Query(value = """
-        SELECT m.id AS model_id, m.name AS model_name, mp.endpoint, mp.api_key
+        SELECT m.id AS model_id, m.name AS model_name, mp.endpoint, mp.api_key, m.replicas
         FROM model_provider mp JOIN models m ON m.id = mp.model_id
         WHERE mp.provider_id = :providerId ORDER BY m.name ASC
         """, nativeQuery = true)

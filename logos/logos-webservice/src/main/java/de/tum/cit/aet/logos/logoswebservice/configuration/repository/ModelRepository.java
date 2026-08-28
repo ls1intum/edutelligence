@@ -12,7 +12,7 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
 
     @Query(value = """
         SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
-               m.weight_quality, m.tags, m.description,
+               m.weight_quality, m.tags, m.description, m.replicas,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
@@ -54,7 +54,7 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
         -- Logos admins (see ModelService), so the per-model MAX subselect would
         -- be wasted work on every other model list request.
         SELECT DISTINCT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
-               m.weight_quality, m.tags, m.description,
+               m.weight_quality, m.tags, m.description, m.replicas,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)

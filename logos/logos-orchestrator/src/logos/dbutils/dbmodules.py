@@ -117,6 +117,7 @@ class Model(Base):
     weight_quality = Column(Integer)
     tags = Column(Text)
     description = Column(Text)
+    replicas = Column(Integer, nullable=True, default=1)
 
 
 class Provider(Base):

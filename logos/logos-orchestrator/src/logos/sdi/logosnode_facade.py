@@ -3,7 +3,7 @@
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 
@@ -35,6 +35,9 @@ class LogosNodeSchedulingDataFacade:
         self._runtime_registry = runtime_registry
         self._providers: Dict[int, LogosNodeDataProvider] = {}
         self._model_to_provider: Dict[int, Set[int]] = {}
+        # model_name -> configured replica count (models.replicas): how many
+        # lanes of the model the capacity planner may run on one worker.
+        self._model_replicas: Dict[str, int] = {}
         self._request_tracking: Dict[str, Dict] = {}
         self._lock = threading.RLock()
         logger.info("LogosNodeSchedulingDataFacade initialized")
@@ -48,6 +51,7 @@ class LogosNodeSchedulingDataFacade:
         total_vram_mb: Optional[int] = None,
         refresh_interval: float = 5.0,
         provider_id: Optional[int] = None,
+        replicas: Optional[int] = None,
     ) -> None:
         if model_name is None and total_vram_mb is None:
             raise ValueError("model_name and total_vram_mb are required")
@@ -55,6 +59,8 @@ class LogosNodeSchedulingDataFacade:
             raise ValueError(f"provider_id is required for model {model_id} / provider '{provider_name}'")
 
         with self._lock:
+            if model_name is not None:
+                self._set_model_replicas(model_name, replicas)
             provider_key = int(provider_id)
             if provider_key not in self._providers:
                 provider = LogosNodeDataProvider(
@@ -83,6 +89,7 @@ class LogosNodeSchedulingDataFacade:
     def replace_registrations(self, registrations: list[dict]) -> None:
         with self._lock:
             desired_by_provider: Dict[int, Dict[str, object]] = {}
+            replicas_by_name: Dict[str, int] = {}
             for registration in registrations:
                 provider_id = int(registration["provider_id"])
                 entry = desired_by_provider.setdefault(
@@ -98,6 +105,13 @@ class LogosNodeSchedulingDataFacade:
                 entry["base_url"] = registration.get("logosnode_admin_url")
                 entry["total_vram_mb"] = int(registration.get("total_vram_mb") or 0)
                 entry["models"][int(registration["model_id"])] = registration["model_name"]
+                # replicas is a model property, so the first registration of a
+                # name wins over any duplicate with the same value.
+                replicas_by_name.setdefault(
+                    registration["model_name"], self._parse_replicas(registration.get("replicas"))
+                )
+
+            self._model_replicas = replicas_by_name
 
             stale_provider_ids = set(self._providers) - set(desired_by_provider)
             for provider_id in stale_provider_ids:
@@ -145,6 +159,28 @@ class LogosNodeSchedulingDataFacade:
                 )
                 in valid_pairs
             }
+
+    @staticmethod
+    def _parse_replicas(raw: Any) -> int:
+        """Coerce a registration's replicas value to a count >= 1.
+
+        The DB column defaults to 1 and is the only writer, but a missing or
+        malformed value must degrade to the single-lane behaviour rather than
+        break registration.
+        """
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            return 1
+
+    def _set_model_replicas(self, model_name: str, raw: Optional[int]) -> None:
+        self._model_replicas[model_name] = self._parse_replicas(raw)
+
+    def get_model_replicas(self, model_name: str) -> int:
+        """Configured replica count for a model: how many lanes of it a worker
+        may run. Unknown models read as 1 — the pre-replica-count behaviour."""
+        with self._lock:
+            return self._model_replicas.get(model_name) or 1
 
     def get_model_status(self, model_id: int, provider_id: Optional[int] = None) -> ModelStatus:
         provider = self._get_provider_for_model(model_id, provider_id)
