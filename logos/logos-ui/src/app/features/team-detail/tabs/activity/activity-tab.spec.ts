@@ -825,6 +825,27 @@ describe('ActivityTabComponent trace export', () => {
     expect(await lastBlob?.text()).toBe(JSON.stringify(payload, null, 2));
   });
 
+  it('names the download after the team the export was started for', async () => {
+    // A slow export is the whole race: the tab may be pointed at another team
+    // by the time the answer lands, and the file must still say where its data
+    // came from.
+    let resolveExport: (value: TraceExport) => void = () => {};
+    activityService.getTraceExport.mockImplementation(
+      () =>
+        new Promise<TraceExport>((resolve) => {
+          resolveExport = resolve;
+        }),
+    );
+
+    const inFlight = component.exportTraces();
+    component.teamId = 99;
+    resolveExport(payload);
+    await inFlight;
+
+    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, null);
+    expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
+  });
+
   it('cuts the CSV from the same envelope when the format asks for it', async () => {
     component.exportFormat.set('csv');
 

@@ -191,17 +191,22 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
    */
   async exportTraces(): Promise<void> {
     if (!this.teamId || this.exporting()) return;
+    // The download is named after the team the export was started for, not the
+    // team the tab shows when the response lands: the tab may switch teams
+    // mid-flight, and relabeling one team's data under another's id would be
+    // worse than a stale number.
+    const teamId = this.teamId;
     this.exporting.set(true);
     this.exportError.set(null);
     try {
       const payload = await this.activityService.getTraceExport(
-        this.teamId,
+        teamId,
         this.days(),
         this.filterUserId(),
       );
       const format = this.exportFormat();
       this.downloadFile(
-        `logos-traces-team-${this.teamId}-${payload.days}d.${format}`,
+        `logos-traces-team-${teamId}-${payload.days}d.${format}`,
         format === 'csv' ? tracesToCsv(payload) : JSON.stringify(payload, null, 2),
         format === 'csv' ? 'text/csv' : 'application/json',
       );
