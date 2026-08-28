@@ -69,6 +69,15 @@ public final class WebAuthnRegistration {
     private static final BigInteger P256_B =
         new BigInteger("5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B", 16);
 
+    /**
+     * Upper bound for the COSE key bytes persisted as the public key. A
+     * legitimate ES256 key is ~50 bytes and RS256 ~180; even an oversized
+     * RSA key is well under this. The cap stops unbounded CBOR from being
+     * stored for the {@code none} format, whose attestation carries no key
+     * signature to check against.
+     */
+    private static final int MAX_PUBLIC_KEY_BYTES = 1024;
+
     private WebAuthnRegistration() {}
 
     /** Verified content of a registration response. */
@@ -173,6 +182,13 @@ public final class WebAuthnRegistration {
         if (coseKey.getType() != CBORType.Map) {
             throw new IllegalArgumentException("credential public key is not a COSE key");
         }
+        // Bound and validate the COSE key regardless of attestation format: the
+        // raw bytes are persisted, so reject oversized or unparseable keys here
+        // instead of trusting the attestation statement to have checked them.
+        if (coseKeyBytes.length > MAX_PUBLIC_KEY_BYTES) {
+            throw new IllegalArgumentException("credential public key exceeds the supported size");
+        }
+        toJavaPublicKey(coseKey);
 
         // 4. relying party hash
         if (!MessageDigest.isEqual(rpIdHash, sha256(rpId.getBytes(StandardCharsets.UTF_8)))) {
@@ -180,14 +196,17 @@ public final class WebAuthnRegistration {
         }
 
         // 5. attestation statement (and, where present, the credential key signature)
-        byte[] signedData = concat(authData, sha256(clientDataJson));
-        verifyAttestation(format, attStmt, coseKey, coseKeyBytes, attestedCredentialId, signedData);
+        verifyAttestation(format, attStmt, coseKey, coseKeyBytes, attestedCredentialId,
+            rpIdHash, authData, sha256(clientDataJson));
 
         return new Result(attestedCredentialId, base64UrlEncode(attestedCredentialId), coseKeyBytes, signCount);
     }
 
     private static void verifyAttestation(String format, CBORObject attStmt, CBORObject coseKey,
-            byte[] coseKeyBytes, byte[] credentialId, byte[] signedData) {
+            byte[] coseKeyBytes, byte[] credentialId, byte[] rpIdHash, byte[] authData,
+            byte[] clientDataHash) {
+        // Signature base for the "none" and "packed" formats.
+        byte[] signedData = concat(authData, clientDataHash);
         try {
             switch (format) {
                 case "none" -> {
@@ -207,10 +226,26 @@ public final class WebAuthnRegistration {
                     }
                 }
                 case "fido-u2f" -> {
+                    // FIDO U2F signs a different base than packed/none:
+                    // 0x00 || rpIdHash || clientDataHash || credentialId ||
+                    // the uncompressed credential public key (FIDO U2F, §4.4).
+                    byte[] upk = u2fUncompressedKey(coseKey);
+                    byte[] u2fSignedData = new byte[1 + rpIdHash.length + clientDataHash.length
+                        + credentialId.length + upk.length];
+                    int offset = 0;
+                    u2fSignedData[offset++] = 0x00;
+                    System.arraycopy(rpIdHash, 0, u2fSignedData, offset, rpIdHash.length);
+                    offset += rpIdHash.length;
+                    System.arraycopy(clientDataHash, 0, u2fSignedData, offset, clientDataHash.length);
+                    offset += clientDataHash.length;
+                    System.arraycopy(credentialId, 0, u2fSignedData, offset, credentialId.length);
+                    offset += credentialId.length;
+                    System.arraycopy(upk, 0, u2fSignedData, offset, upk.length);
+
                     PublicKey key = hasX5c(attStmt)
                         ? attestationCertificate(attStmt).getPublicKey()
                         : u2fSelfAttestationKey(credentialId, coseKeyBytes);
-                    verifyWithCertificateKey(key, signedData, mapByteStringItem(attStmt, -2, "attStmt", "ecdsa"));
+                    verifyWithCertificateKey(key, u2fSignedData, mapByteStringItem(attStmt, -2, "attStmt", "sig"));
                 }
                 default -> throw new IllegalArgumentException("Unsupported attestation format: " + format);
             }
@@ -219,6 +254,23 @@ public final class WebAuthnRegistration {
         } catch (GeneralSecurityException e) {
             throw new IllegalArgumentException("Attestation verification failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * FIDO U2F uncompressed public key ({@code 0x04 || X || Y}). U2F is EC-only,
+     * so a non-EC credential key is rejected for this attestation format.
+     */
+    private static byte[] u2fUncompressedKey(CBORObject coseKey) {
+        if (mapIntItem(coseKey, 1, "COSE key", "kty") != 2) {
+            throw new IllegalArgumentException("fido-u2f attestation requires an EC credential key");
+        }
+        byte[] x = mapByteStringItem(coseKey, -2, "COSE key", "x");
+        byte[] y = mapByteStringItem(coseKey, -3, "COSE key", "y");
+        byte[] upk = new byte[1 + x.length + y.length];
+        upk[0] = 0x04;
+        System.arraycopy(x, 0, upk, 1, x.length);
+        System.arraycopy(y, 0, upk, 1 + x.length, y.length);
+        return upk;
     }
 
     private static boolean hasX5c(CBORObject attStmt) {
@@ -292,7 +344,7 @@ public final class WebAuthnRegistration {
     }
 
     /** COSE key (CBOR) → JDK public key. ES256 (P-256) and RS256 are supported. */
-    private static PublicKey toJavaPublicKey(CBORObject coseKey) throws GeneralSecurityException {
+    private static PublicKey toJavaPublicKey(CBORObject coseKey) {
         int kty = mapIntItem(coseKey, 1, "COSE key", "kty");
         int alg = mapIntItem(coseKey, 3, "COSE key", "alg");
         try {

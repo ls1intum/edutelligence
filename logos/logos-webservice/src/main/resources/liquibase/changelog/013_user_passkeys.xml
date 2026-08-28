@@ -21,7 +21,9 @@
             <column name="user_id" type="INT">
                 <constraints nullable="false"/>
             </column>
-            <column name="credential_id" type="VARCHAR(512)">
+            <!-- WebAuthn credential ids are up to ~1023 bytes, i.e. up to 1364
+                 base64url characters; 2048 leaves headroom. -->
+            <column name="credential_id" type="VARCHAR(2048)">
                 <constraints nullable="false"/>
             </column>
             <column name="public_key" type="BYTEA">

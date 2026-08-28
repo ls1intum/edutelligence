@@ -225,6 +225,26 @@ class MePasskeysControllerTest {
     }
 
     @Test
+    void register_rejectsUnsupportedCoseKeyWithNoneAttestation() throws Exception {
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        // An OKP (Ed25519) COSE key is outside the supported set (ES256/RS256).
+        // It must be rejected even though the "none" format carries no signature
+        // to check against — the key bytes are persisted, so they are validated
+        // unconditionally.
+        CBORObject unsupportedKey = CBORObject.NewMap();
+        unsupportedKey.Add(1, 1); // kty: OKP
+        unsupportedKey.Add(-1, 6); // crv: Ed25519
+        unsupportedKey.Add(3, -8); // alg: EdDSA
+        unsupportedKey.Add(-2, CBORObject.FromObject(new byte[32]));
+
+        Registration registration = buildNoneRegistrationWithCose(
+            challenge, "new-credential-badkey", RP_ID, 0x45, unsupportedKey);
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void register_rejectsMissingFields() throws Exception {
         mvc.perform(post("/me/passkeys")
                 .with(TestJwt.forSeededUser(ALICE_ID, "alice"))
@@ -368,6 +388,43 @@ class MePasskeysControllerTest {
             }
         }
         attestationObject.Add(2, attStmt);
+        attestationObject.Add(-1, CBORObject.FromObject(authData));
+
+        return new Registration(
+            base64Url(credentialId),
+            base64Url(clientDataJson),
+            base64Url(attestationObject.EncodeToBytes()),
+            challenge);
+    }
+
+    /**
+     * A {@code none}-attestation registration carrying an arbitrary COSE key,
+     * for key-validation tests (the attestation format is irrelevant to COSE
+     * key validation, which happens unconditionally).
+     */
+    private static Registration buildNoneRegistrationWithCose(String challenge, String credentialIdText,
+            String rpId, int flags, CBORObject coseKey) throws Exception {
+        byte[] credentialId = credentialIdText.getBytes(StandardCharsets.UTF_8);
+        byte[] coseKeyBytes = coseKey.EncodeToBytes();
+
+        byte[] authData = new byte[37 + 16 + 2 + credentialId.length + coseKeyBytes.length];
+        System.arraycopy(sha256(rpId.getBytes(StandardCharsets.UTF_8)), 0, authData, 0, 32);
+        authData[32] = (byte) flags;
+        int offset = 53;
+        authData[offset] = (byte) (credentialId.length >>> 8);
+        authData[offset + 1] = (byte) credentialId.length;
+        System.arraycopy(credentialId, 0, authData, offset + 2, credentialId.length);
+        System.arraycopy(coseKeyBytes, 0, authData, offset + 2 + credentialId.length, coseKeyBytes.length);
+
+        Map<String, String> clientData = new LinkedHashMap<>();
+        clientData.put("type", "webauthn.create");
+        clientData.put("challenge", challenge);
+        clientData.put("origin", ORIGIN);
+        byte[] clientDataJson = JSON.writeValueAsBytes(clientData);
+
+        CBORObject attestationObject = CBORObject.NewMap();
+        attestationObject.Add(1, "none");
+        attestationObject.Add(2, CBORObject.NewMap());
         attestationObject.Add(-1, CBORObject.FromObject(authData));
 
         return new Registration(

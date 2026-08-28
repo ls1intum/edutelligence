@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -118,7 +119,12 @@ public class PasskeyService {
         passkey.setSignCount(result.signCount());
         passkey.setLabel(truncateLabel(label));
         passkey.setCreatedAt(Instant.now());
-        return PasskeyDTO.fromEntity(userPasskeyRepository.save(passkey));
+        try {
+            return PasskeyDTO.fromEntity(userPasskeyRepository.save(passkey));
+        } catch (DataIntegrityViolationException e) {
+            // Lost a race with a concurrent registration of the same credential.
+            throw new ConflictException("This passkey is already registered.");
+        }
     }
 
     /**
