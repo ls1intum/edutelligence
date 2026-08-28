@@ -42,6 +42,37 @@ export function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
+// ── Token count scale (issue #816) ───────────────────────────────────────────
+
+/**
+ * The scale a token count is displayed on: the unit steps up the moment the
+ * value leaves its range — K at 1.000, M at 1.000.000, B at 1.000.000.000,
+ * T at 1.000.000.000.000.
+ */
+const TOKEN_COUNT_UNITS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 1_000_000_000_000, label: 'T' },
+  { value: 1_000_000_000, label: 'B' },
+  { value: 1_000_000, label: 'M' },
+  { value: 1_000, label: 'K' },
+];
+
+/**
+ * A token count on the K/M/B/T scale (issue #816): always the highest
+ * applicable magnitude, a space between the value and the unit, and the
+ * value's decimal notation kept — the 2470.7M the issue was filed against
+ * reads "2.470 B", not "2.470,7 M". Counts below 1.000 stay plain.
+ *
+ * The value is truncated to three decimals rather than rounded, so the
+ * digits shown are the digits the count actually has (2.4707 B reads 2.470,
+ * not 2.471).
+ */
+export function formatTokenCount(count: number): string {
+  if (count < 1_000) return String(Math.round(count));
+  const unit = TOKEN_COUNT_UNITS.find((u) => count >= u.value) ?? TOKEN_COUNT_UNITS[0];
+  const thousandths = Math.floor(count / (unit.value / 1000));
+  return `${(thousandths / 1000).toFixed(3)} ${unit.label}`;
+}
+
 // ── X-axis labels (shared by request-volume and VRAM charts) ─────────────────
 
 export interface TimeAxisLabel {

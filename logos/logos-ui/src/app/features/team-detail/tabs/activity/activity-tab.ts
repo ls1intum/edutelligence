@@ -13,7 +13,7 @@ import { CommonModule } from '@angular/common';
 
 import { AppSelectOption, SelectComponent } from '../../../../shared/components/select/select';
 import { RequestItem } from '../../../statistics/statistics.models';
-import { deriveStage, formatTimeAgo } from '../../../statistics/statistics.utils';
+import { deriveStage, formatTimeAgo, formatTokenCount } from '../../../statistics/statistics.utils';
 import { TeamActivityService } from './activity-tab.service';
 import { RequestCursor, TeamActivityPayload } from './activity-tab.models';
 
@@ -190,10 +190,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   /** Token totals run to nine figures; the exact digit is never the question. */
   formatTokens(value: number | null | undefined): string {
     if (typeof value !== 'number' || value <= 0) return '0';
-    if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
-    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-    if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-    return String(value);
+    return formatTokenCount(value);
   }
 
   keyLabel(keyName: string, environment: string | null): string {

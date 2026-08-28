@@ -109,10 +109,11 @@ describe('ActivityTabComponent', () => {
 
     it('abbreviates the totals that run past it', () => {
       // A busy team clears nine figures over a quarter; the tile holds a
-      // figure plus a suffix, not ten digits.
-      expect(component.formatTokens(1_500)).toBe('1.5k');
-      expect(component.formatTokens(1_234_567)).toBe('1.2M');
-      expect(component.formatTokens(2_500_000_000)).toBe('2.5B');
+      // figure plus a suffix, not ten digits. The scale, the space and the
+      // decimal notation are the shared token-count rules (issue #816).
+      expect(component.formatTokens(1_500)).toBe('1.500 K');
+      expect(component.formatTokens(1_234_567)).toBe('1.234 M');
+      expect(component.formatTokens(2_500_000_000)).toBe('2.500 B');
     });
   });
 
