@@ -76,7 +76,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         deployment = None
         target_model_id = None
         priority_int = None
-        for mid, _, pint, _ in sorted_candidates:
+        for mid, _, pint in sorted_candidates:
             matching = [d for d in request.deployments if d["model_id"] == mid]
             # Prefer logosnode for queueing (cloud providers don't queue)
             logosnode_dep = next((d for d in matching if d["type"] == "logosnode"), None)
@@ -142,14 +142,14 @@ class UtilizationAwareScheduler(BaseScheduler):
 
     def _select_best_candidate(
         self,
-        candidates: List[Tuple[int, float, int, int]],
+        candidates: List[Tuple[int, float, int]],
         deployments: list,
         request_id: str,
     ) -> Optional[Tuple[int, int, str, float, int]]:
         """Find the best immediately available model across all deployments."""
         scored_candidates = []
 
-        for model_id, weight, priority_int, parallel in candidates:
+        for model_id, weight, priority_int in candidates:
             # Multi-provider expansion: score every deployment for this model
             matching_deployments = [d for d in deployments if d["model_id"] == model_id]
             if not matching_deployments:

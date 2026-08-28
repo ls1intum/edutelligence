@@ -35,6 +35,39 @@ function ttftColor(secs: number): string {
   return 'rgb(var(--color-error))';
 }
 
+/**
+ * The vLLM lane's "Running" line as "a / b (min. c)":
+ * - a: requests running right now (vLLM `num_requests_running`).
+ * - b: current concurrency capacity — the already-running requests plus how
+ *      many full-context requests fit into the free KV headroom. Request
+ *      contexts are rarely full, so this floats with the workload, usually
+ *      above c.
+ * - c: the minimum the worker guarantees — its KV budget at full context
+ *      (vLLM's startup log line "Maximum concurrency for N tokens per
+ *      request"). Shown only when b actually exceeds it; at idle "0 / 8"
+ *      would just restate the minimum.
+ *
+ * Returns null when the lane reports no running count (the line stays
+ * hidden) and plain "a" while c is unknown (lane still starting up, or the
+ * startup log not parsed yet). Ollama lanes keep their "Active" line and
+ * never reach here.
+ */
+function runningLabel(
+  lane: Pick<LaneSignalData, 'requests_running' | 'num_parallel'>,
+  kvPct: number | null,
+): string | null {
+  const a = lane.requests_running;
+  if (a == null) return null;
+  const c = lane.num_parallel;
+  if (!c || c <= 0) return String(a);
+  if (kvPct == null) return `${a} / ${c}`;
+  const free = Math.max(0, 1 - kvPct / 100);
+  // Block rounding can push the KV fraction slightly past the token ratio,
+  // so clamp b to the guaranteed minimum instead of dipping below it.
+  const b = Math.max(c, a + Math.floor(c * free));
+  return b > c ? `${a} / ${b} (min. ${c})` : `${a} / ${b}`;
+}
+
 export interface LaneRow {
   laneId: string;
   lane: LaneSignalData;
@@ -44,6 +77,10 @@ export interface LaneRow {
   ttftLabel: string | null;
   /** Served context window, abbreviated — "111k". Null when unreported. */
   contextLabel: string | null;
+  /** "2 / 11 (min. 8)" — see runningLabel(); null when the line is hidden. */
+  runningLabel: string | null;
+  /** Tooltip explaining the running/capacity numbers; null when none apply. */
+  runningTooltip: string | null;
 }
 
 /**
@@ -57,6 +94,27 @@ export interface LaneRow {
 export function formatContextWindow(tokens: number | null | undefined): string | null {
   if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens <= 0) return null;
   return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens);
+}
+
+/** Which manual sleep/wake action a lane row offers, if any. */
+export type LaneSleepAction = 'sleep' | 'wake' | null;
+
+/**
+ * Which manual sleep/wake action a lane row offers.
+ *
+ * Wake only on a lane that is actually asleep: vLLM's /wake_up on an awake
+ * engine is a no-op at best, so the button would promise a transition that is
+ * not coming. Sleep only on a lane that is awake and idle: the server first
+ * drains in-flight requests (mode="wait"), so on a busy lane the click would
+ * block for as long as the drain takes — the panel offers the action only
+ * where it takes effect immediately. Lanes whose backend has no sleep mode
+ * (Ollama reports sleep_state "unsupported", a vLLM lane that never slept
+ * reports "unknown") offer neither.
+ */
+export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
+  if (lane.sleep_state === 'sleeping') return 'wake';
+  if (lane.sleep_state === 'awake' && !(lane.active_requests > 0)) return 'sleep';
+  return null;
 }
 
 @Component({
@@ -76,6 +134,11 @@ export class LaneHealthPanel implements OnChanges {
 
   unloadingLaneId = signal<string | null>(null);
   unloadError = signal<string | null>(null);
+
+  // ── Sleep/wake state ─────────────────────────────────────────────────────
+  sleepingLaneId = signal<string | null>(null);
+  wakingLaneId = signal<string | null>(null);
+  sleepWakeError = signal<string | null>(null);
 
   // ── Load-lane state ──────────────────────────────────────────────────────
   pickerOpen = signal(false);
@@ -110,6 +173,7 @@ export class LaneHealthPanel implements OnChanges {
       .map(([laneId, lane]) => {
         const kvPct = lane.gpu_cache_usage_percent;
         const ttft = lane.ttft_p95_seconds;
+        const running = runningLabel(lane, kvPct);
         return {
           laneId,
           lane,
@@ -123,18 +187,24 @@ export class LaneHealthPanel implements OnChanges {
                 : `${ttft.toFixed(2)}s`
               : null,
           contextLabel: formatContextWindow(lane.max_model_len),
+          runningLabel: running,
+          runningTooltip:
+            running != null && lane.num_parallel != null && lane.num_parallel > 0
+              ? 'Currently running / current capacity (live KV headroom). (min. N): guaranteed at full context — the worker-reported KV budget.'
+              : null,
         };
       });
   }
 
-  /** "GPU 0-1 · ×4" style placement line; null when the lane reports none. */
+  /** Which sleep/wake button the row offers; the rules live in laneSleepAction. */
+  sleepAction(lane: LaneSignalData): LaneSleepAction {
+    return laneSleepAction(lane);
+  }
+
+  /** "GPU 0-1" style placement line; null when the lane reports none. */
   gpuLabel(lane: LaneSignalData): string | null {
     const gpu = (lane.effective_gpu_devices || lane.gpu_devices || '').trim();
-    const np = lane.num_parallel;
-    const parts: string[] = [];
-    if (gpu) parts.push(`GPU ${gpu}`);
-    if (np != null && np > 1) parts.push(`×${np}`);
-    return parts.length > 0 ? parts.join(' · ') : null;
+    return gpu ? `GPU ${gpu}` : null;
   }
 
   get providerId(): number | null {
@@ -215,6 +285,53 @@ export class LaneHealthPanel implements OnChanges {
         this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(err)}`);
       }
     }
+  }
+
+  async handleSleep(laneId: string): Promise<void> {
+    const pid = this.providerId;
+    if (pid == null || this.sleepingLaneId() != null) return;
+    this.sleepingLaneId.set(laneId);
+    this.sleepWakeError.set(null);
+
+    try {
+      await this.statisticsService.sleepLane(pid, laneId);
+      this.sleepingLaneId.set(null);
+    } catch (err: unknown) {
+      this.sleepingLaneId.set(null);
+      this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, err));
+    }
+  }
+
+  async handleWake(laneId: string): Promise<void> {
+    const pid = this.providerId;
+    if (pid == null || this.wakingLaneId() != null) return;
+    this.wakingLaneId.set(laneId);
+    this.sleepWakeError.set(null);
+
+    try {
+      await this.statisticsService.wakeLane(pid, laneId);
+      this.wakingLaneId.set(null);
+    } catch (err: unknown) {
+      this.wakingLaneId.set(null);
+      this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, err));
+    }
+  }
+
+  /**
+   * The human-readable reason out of a failed sleep/wake.
+   *
+   * Same mapping as handleUnload, with one twist: a 404 here can carry the
+   * orchestrator's own reason ("lane not found on this worker"), and that
+   * must win over the stale-server hint. The hint only applies when the
+   * status came with no body to read at all.
+   */
+  private sleepWakeErrorText(verb: string, laneId: string, err: unknown): string {
+    const e = err as { status?: number };
+    const detail = this.failureDetail(err);
+    if ((e.status === 404 || e.status === 501 || e.status === 0) && detail === `HTTP ${e?.status ?? 0}`) {
+      return 'Action not available on this server yet.';
+    }
+    return `${verb} of ${laneId} failed: ${detail}`;
   }
 
   // ── Load-lane handlers ───────────────────────────────────────────────────

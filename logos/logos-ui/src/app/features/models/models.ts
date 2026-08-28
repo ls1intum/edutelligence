@@ -16,6 +16,7 @@ import { DataTableComponent } from '../../shared/components/data-table/data-tabl
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { Router } from '@angular/router';
+import { daysSince, formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
 
 @Component({
   selector: 'app-models',
@@ -37,12 +38,26 @@ export class Models implements OnInit {
   readonly role = inject(AuthService).role;
   private router = inject(Router);
 
+  /**
+   * A model without a single logged request for this long is highlighted as a
+   * deprecation candidate.
+   */
+  private static readonly STALE_AFTER_DAYS = 30;
+
   // ── List state ──────────────────────────────────────────────────────────
   models = signal<Model[]>([]);
   capabilities = signal<Record<number, ModelCapability>>({});
   loading = signal(true);
   search = signal('');
   loadError = signal(false);
+  /** Sort of the last-used column: unsorted, oldest first or newest first. */
+  lastUsedSort = signal<'none' | 'asc' | 'desc'>('none');
+
+  /** Sort direction for the table header; null while unsorted. */
+  get lastUsedSortDirection(): 'asc' | 'desc' | null {
+    const dir = this.lastUsedSort();
+    return dir === 'asc' || dir === 'desc' ? dir : null;
+  }
 
   // ── Delete modal ────────────────────────────────────────────────────────
   deleteTarget = signal<Model | null>(null);
@@ -54,7 +69,6 @@ export class Models implements OnInit {
   addName = signal('');
   addDesc = signal('');
   addTags = signal('');
-  addParallel = signal('');
   addWtLatency = signal('');
   addWtAccuracy = signal('');
   addWtCost = signal('');
@@ -67,7 +81,6 @@ export class Models implements OnInit {
   editName = signal('');
   editDesc = signal('');
   editTags = signal('');
-  editParallel = signal('');
   editWtLatency = signal('');
   editWtAccuracy = signal('');
   editWtCost = signal('');
@@ -78,12 +91,22 @@ export class Models implements OnInit {
   // ── Computed ─────────────────────────────────────────────────────────────
   filteredModels = computed(() => {
     const q = this.search().toLowerCase().trim();
-    if (!q) return this.models();
-    return this.models().filter(
-      (m) =>
-        m.name.toLowerCase().includes(q) ||
-        (m.description ?? '').toLowerCase().includes(q) ||
-        (m.tags ?? '').toLowerCase().includes(q),
+    const list = q
+      ? this.models().filter(
+          (m) =>
+            m.name.toLowerCase().includes(q) ||
+            (m.description ?? '').toLowerCase().includes(q) ||
+            (m.tags ?? '').toLowerCase().includes(q),
+        )
+      : this.models();
+    const dir = this.lastUsedSort();
+    if (dir === 'none') return list;
+    // ISO-8601 UTC timestamps sort lexicographically; the empty string (never
+    // used) lands first in ascending order, surfacing the quietest models.
+    return [...list].sort((a, b) =>
+      dir === 'asc'
+        ? (a.last_used_at ?? '').localeCompare(b.last_used_at ?? '')
+        : (b.last_used_at ?? '').localeCompare(a.last_used_at ?? ''),
     );
   });
 
@@ -116,7 +139,28 @@ export class Models implements OnInit {
   getCapabilities(modelId: number): ModelCapability | undefined {
     return this.capabilities()[modelId];
   }
-  
+
+  // ── Last used ─────────────────────────────────────────────────────────────
+  /** Cycles unsorted → oldest first (deprecation candidates) → newest first. */
+  toggleLastUsedSort(): void {
+    this.lastUsedSort.update((dir) => (dir === 'none' ? 'asc' : dir === 'asc' ? 'desc' : 'none'));
+  }
+
+  formatLastUsed(iso: string | null | undefined): string {
+    return formatLastUsedLabel(iso);
+  }
+
+  isStaleModel(iso: string | null | undefined): boolean {
+    return iso == null || daysSince(iso) >= Models.STALE_AFTER_DAYS;
+  }
+
+  /** Tooltip explaining why the model is highlighted; null while it is fresh. */
+  lastUsedTooltip(iso: string | null | undefined): string | null {
+    if (!this.isStaleModel(iso)) return null;
+    if (iso == null) return 'Never used';
+    return `Not used for ${daysSince(iso)} days`;
+  }
+
   openReport(model: Model): void {
     this.router.navigate(['/models', model.id, 'errors']);
   }
@@ -153,7 +197,6 @@ export class Models implements OnInit {
     this.addName.set('');
     this.addDesc.set('');
     this.addTags.set('');
-    this.addParallel.set('');
     this.addWtLatency.set('');
     this.addWtAccuracy.set('');
     this.addWtCost.set('');
@@ -176,7 +219,6 @@ export class Models implements OnInit {
       name: this.addName().trim(),
       description: this.addDesc().trim() || undefined,
       tags: this.addTags().trim() || undefined,
-      parallel: this.addParallel() ? Number(this.addParallel()) : undefined,
     };
 
     const wtLatency = this.addWtLatency() ? Number(this.addWtLatency()) : undefined;
@@ -212,7 +254,6 @@ export class Models implements OnInit {
     this.editName.set(model.name ?? '');
     this.editDesc.set(model.description ?? '');
     this.editTags.set(model.tags ?? '');
-    this.editParallel.set(model.parallel != null ? String(model.parallel) : '');
     this.editWtLatency.set(model.weight_latency != null ? String(model.weight_latency) : '');
     this.editWtAccuracy.set(model.weight_accuracy != null ? String(model.weight_accuracy) : '');
     this.editWtCost.set(model.weight_cost != null ? String(model.weight_cost) : '');
@@ -235,7 +276,6 @@ export class Models implements OnInit {
       name: this.editName().trim() || undefined,
       description: this.editDesc().trim() || undefined,
       tags: this.editTags().trim() || undefined,
-      parallel: this.editParallel() ? Number(this.editParallel()) : undefined,
       weight_latency: this.editWtLatency() ? Number(this.editWtLatency()) : undefined,
       weight_accuracy: this.editWtAccuracy() ? Number(this.editWtAccuracy()) : undefined,
       weight_cost: this.editWtCost() ? Number(this.editWtCost()) : undefined,
@@ -251,7 +291,6 @@ export class Models implements OnInit {
                 name: payload.name ?? m.name,
                 description: payload.description ?? m.description,
                 tags: payload.tags ?? m.tags,
-                parallel: payload.parallel ?? m.parallel,
                 weight_latency: payload.weight_latency ?? m.weight_latency,
                 weight_accuracy: payload.weight_accuracy ?? m.weight_accuracy,
                 weight_cost: payload.weight_cost ?? m.weight_cost,

@@ -130,6 +130,28 @@ export class StatisticsService {
     }));
   }
 
+  /**
+   * Put an awake lane to sleep. The server first drains in-flight requests
+   * (mode="wait"), so the call can take as long as the drain — and rejects
+   * with a reason only when the lane cannot sleep at all (its model is
+   * configured without enable_sleep_mode). Sleep level 1 is fixed
+   * server-side: the weights stay resident, so the wake below does not pay
+   * for a cold load.
+   */
+  sleepLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/sleep', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
+  wakeLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/wake', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
   calibrateUncalibrated(providerId: number): Promise<{ count?: number; models?: string[]; error?: string }> {
     return firstValueFrom(this.http.post<{ count?: number; models?: string[]; error?: string }>(
       '/api/logosdb/providers/logosnode/calibrate_uncalibrated',

@@ -66,6 +66,22 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   private cursorForPage: (RequestCursor | null)[] = [null];
   readonly pageIndex = signal(0);
 
+  /**
+   * Load bookkeeping, numbered in the order the loads start. The pager only
+   * moves while the newest unsettled load is out, and a load may only apply
+   * its answer while it is still the newest: with a page still loading, a
+   * click used to advance the index on the strength of the previous page's
+   * answer — its `has_more` flag and next cursor both pointed at the page
+   * behind — walking past the last page (issue #799).
+   */
+  private loadSeq = 0;
+  /** Seqs of the loads still out. */
+  private inFlightSeqs = new Set<number>();
+  /** Highest seq still out, 0 when none. */
+  private newestInFlight = signal(0);
+  /** Highest seq that has settled, however its answer was fated. */
+  private settledSeq = signal(0);
+
   private timer: ReturnType<typeof setInterval> | null = null;
 
   readonly selectedDaysValue = computed(() => String(this.days()));
@@ -88,6 +104,15 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   readonly hasPrev = computed(() => this.pageIndex() > 0);
   readonly hasNext = computed(() => !!this.activity()?.requests_has_more);
+
+  /**
+   * A load the pager must wait for is still out. The pager waits only on the
+   * newest unsettled load: an older one's answer will be dropped, so it
+   * cannot push the page anywhere — letting a slow stale request hold the
+   * buttons shut would just stall the pager after the shown page is ready
+   * (issue #799).
+   */
+  readonly pageLoadInFlight = computed(() => this.newestInFlight() > this.settledSeq());
 
   /** 1-based number of the first row on this page, for the "21-40 of n" line. */
   readonly firstRowNumber = computed(() =>
@@ -143,7 +168,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   async nextPage(): Promise<void> {
     const cursor = this.activity()?.requests_next_cursor ?? null;
-    if (!cursor || !this.hasNext()) return;
+    if (!cursor || !this.hasNext() || this.pageLoadInFlight()) return;
     const target = this.pageIndex() + 1;
     this.cursorForPage[target] = cursor;
     this.pageIndex.set(target);
@@ -151,7 +176,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   }
 
   async prevPage(): Promise<void> {
-    if (!this.hasPrev()) return;
+    if (!this.hasPrev() || this.pageLoadInFlight()) return;
     this.pageIndex.set(this.pageIndex() - 1);
     await this.load();
   }
@@ -229,20 +254,33 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   private async load(): Promise<void> {
     if (!this.teamId) return;
+    const seq = ++this.loadSeq;
+    this.inFlightSeqs.add(seq);
+    this.newestInFlight.set(seq);
     try {
-      this.activity.set(
-        await this.activityService.getActivity(this.teamId, this.days(), {
-          userId: this.filterUserId(),
-          cursor: this.cursorForPage[this.pageIndex()] ?? null,
-        }),
-      );
+      const payload = await this.activityService.getActivity(this.teamId, this.days(), {
+        userId: this.filterUserId(),
+        cursor: this.cursorForPage[this.pageIndex()] ?? null,
+      });
+      // A newer load has started while this one was out (a page turned, the
+      // window or the filter changed, the timer re-fired). Its answer belongs
+      // to the view we left: applying it would land old rows — and an old
+      // `has_more` flag — on the new page, which is how the pager walked past
+      // the last page (issue #799).
+      if (seq !== this.loadSeq) return;
+      this.activity.set(payload);
       this.error.set(null);
     } catch {
+      if (seq !== this.loadSeq) return;
       // Keep whatever is on screen: this runs on a timer, and blanking the tab
       // over one failed poll would make a brief network blip look like an
       // outage.
       this.error.set('Could not refresh activity.');
     } finally {
+      this.inFlightSeqs.delete(seq);
+      this.settledSeq.update((s) => Math.max(s, seq));
+      const stillOut = [...this.inFlightSeqs];
+      this.newestInFlight.set(stillOut.length > 0 ? Math.max(...stillOut) : 0);
       this.loading.set(false);
     }
   }

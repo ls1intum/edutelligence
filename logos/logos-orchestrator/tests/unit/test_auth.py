@@ -80,6 +80,29 @@ def test_authenticate_api_key_missing_key_raises_401(monkeypatch):
     assert exc.value.status_code == 401
 
 
+def test_authenticate_api_key_preserves_zero_default_priority(monkeypatch):
+    """A key without a configured priority stays 0 (falls back to policy in the pipeline)."""
+    row = _api_key_row("lg-test-zero")
+    row["default_priority"] = 0
+
+    _patch_db(monkeypatch, row)
+
+    ctx = auth.authenticate_api_key({"logos-key": "lg-test-zero"})
+
+    assert ctx.default_priority == 0
+
+
+def test_authenticate_api_key_missing_default_priority_defaults_to_zero(monkeypatch):
+    row = _api_key_row("lg-test-noprio")
+    del row["default_priority"]
+
+    _patch_db(monkeypatch, row)
+
+    ctx = auth.authenticate_api_key({"logos-key": "lg-test-noprio"})
+
+    assert ctx.default_priority == 0
+
+
 def test_authenticate_logos_key_shim_returns_key_and_api_key_id(monkeypatch):
     _patch_db(monkeypatch, _api_key_row("lg-test-abc"))
 

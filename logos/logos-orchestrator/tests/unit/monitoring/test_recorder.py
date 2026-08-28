@@ -41,6 +41,8 @@ def _make_recording_metric(name):
             self.label_calls = []
             self.observations = []
             self.inc_calls = 0
+            self.dec_calls = 0
+            self.set_values = []
 
         def labels(self, **kwargs):
             self.label_calls.append(kwargs)
@@ -53,10 +55,15 @@ def _make_recording_metric(name):
             self.inc_calls += 1
 
         def dec(self):
-            pass
+            self.dec_calls += 1
 
         def set(self, value):
-            pass
+            self.set_values.append(value)
+
+        @property
+        def value(self):
+            """Last published gauge value, or None if never set."""
+            return self.set_values[-1] if self.set_values else None
 
     return _RecordingMetric()
 

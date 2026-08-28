@@ -780,7 +780,7 @@ def _patch_calibration_infra(
     return patches
 
 
-def _run_calibrate(patches, plan=None):
+def _run_calibrate(patches, plan=None, sleep_level=1):
     """Enter all patches and call calibrate_model. Returns (result, mocks_dict)."""
     plan = plan or _make_plan()
     log_dir = Path("/tmp/test-calibration-logs")
@@ -792,7 +792,7 @@ def _run_calibrate(patches, plan=None):
             vllm_binary="vllm",
             port=11499,
             log_dir=log_dir,
-            sleep_level=1,
+            sleep_level=sleep_level,
             ready_timeout_s=60.0,
         )
     finally:
@@ -2336,3 +2336,193 @@ def test_plans_from_config_never_takes_internal_bookkeeping(tmp_path: Path) -> N
     plan = next(p for p in plans_from_config(cfg) if p["model"] == "m")
     assert "_max_model_len_retry_count" not in plan
     assert plan["dtype"] == "bfloat16"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Group 10 — Wake verification (Phase 5.5, issue #702)
+#
+# The calibration sequence is: test request 1 (Phase 2.5 warmup) → sleep
+# (Phase 4) → sleeping measurement (Phase 5) → wake (Phase 5.5) → test
+# request 2 (Phase 5.5) → shutdown. A model that cannot sleep or wake
+# safely does not fail the run — it gets a successful result with
+# sleep_mode_disabled=True and null sleeping measurements, so the profile
+# (and the master's sleep_na view) records "serve awake, never sleep"
+# instead of the model vanishing from the worker's capabilities.
+# ═══════════════════════════════════════════════════════════════════════
+
+_CALIB_BASE_URL = "http://127.0.0.1:11499"
+
+
+def _capturing_post(**routing):
+    """Build a _post side effect that records URLs and routes by suffix.
+
+    ``routing`` maps a URL suffix to a (status, payload) return value;
+    everything else answers (200, {}).
+    """
+    urls: list[str] = []
+
+    def post_side_effect(url, body=None, timeout_s=30.0):
+        """Record *url*, then return its routed response or the default 200."""
+        urls.append(url)
+        for suffix, response in routing.items():
+            if url.endswith(suffix):
+                if callable(response):
+                    return response()
+                return response
+        return (200, {})
+
+    return post_side_effect, urls
+
+
+def test_calibrate_wakes_model_and_serves_second_request():
+    """Happy path: sleep, then wake, then a second test request — in that order."""
+    post, urls = _capturing_post()
+    wait_sleep_calls: list[bool] = []
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+    patches["wait_sleep"] = patch(
+        "logos_worker_node.calibration.wait_sleep_state",
+        side_effect=lambda base_url, target, timeout_s: wait_sleep_calls.append(target),
+    )
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    sleep_idx = urls.index(f"{_CALIB_BASE_URL}/sleep?level=1")
+    wake_idx = urls.index(f"{_CALIB_BASE_URL}/wake_up")
+    completions = [i for i, u in enumerate(urls) if u.endswith("/v1/completions")]
+    # Two test requests: the Phase 2.5 warmup and the post-wake verification.
+    assert len(completions) == 2
+    # Test request 1 → sleep → wake → test request 2.
+    assert completions[0] < sleep_idx < wake_idx < completions[1]
+    # /is_sleeping polled for asleep after /sleep, for awake after /wake_up.
+    assert wait_sleep_calls == [True, False]
+    # The sleep/wake cycle verified — the profile may record the model as sleepable.
+    assert result.sleep_mode_disabled is False
+    assert result.sleeping_residual_mb is not None
+
+
+def test_calibrate_records_sleep_disabled_when_wake_up_returns_error():
+    """A failed /wake_up must not fail the run — it records sleep_mode_disabled=True.
+
+    The model still gets its profile (base_residency measured) so it is
+    served awake, while the master's sleep_na view keeps it out of sleep.
+    """
+    post, urls = _capturing_post(**{"/wake_up": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    # No residual for a sleep that cannot be reversed.
+    assert result.sleeping_residual_mb is None
+    # No test request 2 after a failed wake.
+    assert sum(1 for u in urls if u.endswith("/v1/completions")) == 1
+
+
+def test_calibrate_records_sleep_disabled_when_model_stays_asleep_after_wake():
+    """A wake that never reaches the awake state records sleep_mode_disabled=True."""
+    patches = _patch_calibration_infra()
+
+    def wait_sleep_side_effect(base_url, target, timeout_s):
+        """Simulate a wake that never reaches the awake state."""
+        if target is False:
+            raise TimeoutError(f"/is_sleeping did not reach {target} within {timeout_s:.0f}s")
+
+    patches["wait_sleep"] = patch(
+        "logos_worker_node.calibration.wait_sleep_state",
+        side_effect=wait_sleep_side_effect,
+    )
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    assert result.sleeping_residual_mb is None
+
+
+def test_calibrate_records_sleep_disabled_when_post_wake_request_fails():
+    """A model that served before sleep but not after records sleep_mode_disabled=True."""
+
+    def completions_response():
+        """200 for the Phase 2.5 warmup, 500 for the post-wake request."""
+        # post_side_effect appends the URL before routing, so the count
+        # includes the current call: 1 = Phase 2.5 warmup, 2 = post-wake.
+        completions_so_far = sum(1 for u in urls if u.endswith("/v1/completions"))
+        return (200, {}) if completions_so_far == 1 else (500, {})
+
+    post, urls = _capturing_post(**{"/v1/completions": completions_response})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    assert result.sleeping_residual_mb is None
+    # /wake_up itself succeeded — it is the follow-up request that failed.
+    assert f"{_CALIB_BASE_URL}/wake_up" in urls
+
+
+def test_calibrate_embedding_model_with_unsupported_request_type():
+    """A model that never serves completions (embedding lane) is not a false positive.
+
+    The Phase 2.5 warmup already fails for such a model (request type
+    unsupported, not a serving failure), so a failed post-wake request must
+    not be read as a wake failure — the wake is verified by /is_sleeping.
+    """
+    post, urls = _capturing_post(**{"/v1/completions": (405, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is False
+    # The sleep itself worked — the residual is measured and kept.
+    assert result.sleeping_residual_mb is not None
+    # Both test requests went out and both got 405.
+    assert sum(1 for u in urls if u.endswith("/v1/completions")) == 2
+
+
+def test_calibrate_records_sleep_disabled_when_sleep_call_fails():
+    """A failed /sleep records sleep_mode_disabled=True without a wake attempt."""
+    post, urls = _capturing_post(**{"/sleep?level=1": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    assert result.sleeping_residual_mb is None
+    # Nothing was slept, so nothing was woken either.
+    assert not any(u.endswith("/wake_up") for u in urls)
+
+
+def test_calibrate_sleep_level_zero_skips_wake():
+    """Sleep disabled for the model: no sleep, no wake, one test request only."""
+    post, urls = _capturing_post()
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, sleep_level=0)
+
+    assert result.success, result.error
+    # Substring, not endswith: the sleep URL carries a query string
+    # (/sleep?level=1), which an endswith("/sleep") check would miss.
+    assert not any("/sleep" in u or "/wake_up" in u for u in urls)
+    assert sum(1 for u in urls if u.endswith("/v1/completions")) == 1
+    assert result.sleeping_residual_mb is None
+    # The probe has no verdict when it skips the sleep phases — the stored
+    # value (e.g. the operator gate's) must stand.
+    assert result.sleep_mode_disabled is None
+
+
+def test_result_to_profile_dict_maps_sleep_mode_disabled() -> None:
+    """The measured verdict maps 1:1 into the profile dict (None = no verdict)."""
+    assert result_to_profile_dict(_success_result("m"))["sleep_mode_disabled"] is None
+    assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=True))["sleep_mode_disabled"] is True
+    assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=False))["sleep_mode_disabled"] is False

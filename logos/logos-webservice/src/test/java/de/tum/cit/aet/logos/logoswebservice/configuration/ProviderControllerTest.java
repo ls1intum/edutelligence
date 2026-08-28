@@ -184,4 +184,56 @@ class ProviderControllerTest {
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error").value("provider_id and lane are required"));
     }
+
+    @Test
+    void sleepLane_rejectsNonAdmin() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/sleep")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void sleepLane_requiresProviderAndLane() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/sleep")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane_id are required"));
+
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/sleep")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane_id are required"));
+    }
+
+    @Test
+    void wakeLane_rejectsNonAdmin() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/wake")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void wakeLane_requiresProviderAndLane() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/wake")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane_id are required"));
+
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/wake")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane_id are required"));
+    }
 }

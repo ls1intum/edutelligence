@@ -182,7 +182,7 @@ class LaneSchedulerSignals:
     ttft_p95_seconds: float  # computed from ttft_histogram, 0.0 if unavailable
     e2e_latency_p50_seconds: float  # p50 end-to-end request latency, 0.0 if unavailable
     effective_vram_mb: float
-    num_parallel: int  # Ollama: explicit, vLLM: 0 (continuous batching)
+    num_parallel: int  # Ollama: explicit; vLLM: worker-reported engine max concurrency (0 until the worker reports it)
     gpu_memory_utilization: Optional[float] = None  # vLLM planner target
     tensor_parallel_size: Optional[int] = None  # vLLM topology hint
     gpu_devices: Optional[str] = None  # GPU device indices e.g. "0,1"
@@ -205,6 +205,40 @@ class LaneSchedulerSignals:
             "gpu_memory_utilization": self.gpu_memory_utilization,
             "tensor_parallel_size": self.tensor_parallel_size,
             "gpu_devices": self.gpu_devices,
+        }
+
+
+@dataclass(frozen=True)
+class AdmissionDecision:
+    """Whether a worker should be given another request for a model right now.
+
+    Nothing outside the engine can predict whether vLLM will *start* a given
+    request or park it: that depends on whether the new sequence's KV blocks
+    fit against what the running sequences currently occupy, which is neither
+    exposed nor derivable. The engine reports the answer only afterwards, as
+    ``num_requests_waiting``. So admission is retrospective by necessity —
+    forward while nothing is observed waiting, stop as soon as something is.
+    That keeps the engine-side queue at roughly one request: enough to hand
+    the GPU its next piece of work without a round-trip, few enough that
+    almost everything stays re-prioritisable and re-routable.
+
+    ``batch_limit`` bounds how many queued requests a single dispatch pass
+    may release. It is a *step size*, not a capacity: the per-lane
+    ``num_parallel`` it derives from is the concurrency vLLM guarantees at
+    full context — a lower bound (production runs a lane at 8 concurrent
+    with ``num_parallel=1``), which is sound to add in one go and wrong to
+    treat as a ceiling. ``None`` means the worker reported nothing usable.
+    """
+
+    can_admit: bool
+    batch_limit: Optional[int] = None
+    reason: Optional[str] = None  # backend_queue | kv_cache_pressure
+
+    def to_dict(self) -> dict:
+        return {
+            "can_admit": self.can_admit,
+            "batch_limit": self.batch_limit,
+            "reason": self.reason,
         }
 
 

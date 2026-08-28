@@ -12,7 +12,7 @@ import re
 import secrets
 import threading
 import time
-from contextlib import asynccontextmanager, suppress
+from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
@@ -1015,6 +1015,29 @@ def _build_live_local_provider_vram_payload(
     return payload
 
 
+def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
+    """Stop counting a request that ended without reaching ``record_complete``.
+
+    Metrics only — the caller persists the log row itself. Safe to call for a
+    request that was already settled, or one that never got as far as being
+    enqueued.
+    """
+    if not request_id:
+        return
+    # `_pipeline` is bound by start_pipeline(), not at module scope, so before
+    # startup the *name* does not exist — a bare reference raises NameError
+    # rather than yielding None. This runs on the failure path, which is
+    # reachable before the pipeline is up: a request arriving during the
+    # startup grace period is rejected without one.
+    pipeline = globals().get("_pipeline")
+    if pipeline is None:
+        return
+    try:
+        pipeline.discard_request(request_id, result_status)
+    except Exception:  # noqa: BLE001 — monitoring must never break a request
+        logger.debug("Failed to discard in-flight state for %s", request_id, exc_info=True)
+
+
 def _record_log_failure(
     log_id: Optional[int],
     request_id: Optional[str],
@@ -1026,6 +1049,14 @@ def _record_log_failure(
     classification_stats: Optional[Dict[str, Any]] = None,
     scheduling_stats: Optional[Dict[str, Any]] = None,
 ) -> None:
+    # Close out the in-flight accounting first, and unconditionally: this is
+    # the common funnel for terminal failures that write the log row
+    # themselves (client disconnect, rate-limit and budget rejects), and
+    # none of them used to tell the recorder the request had ended. It also
+    # has to happen for requests without a log row — the `not log_id` return
+    # below is about persistence, not about whether the request finished.
+    _discard_in_flight(request_id, result_status)
+
     if not log_id:
         return
 
@@ -1519,6 +1550,28 @@ class _StreamingCostEnricher:
         return frame
 
 
+ORPHANED_REQUEST_ERROR = "Orchestrator restarted while the request was in flight; outcome unknown."
+
+
+def _close_orphaned_request_logs() -> None:
+    """Finalise log rows a previous orchestrator process left open.
+
+    Without this a deploy or crash strands every in-flight request in the
+    "running" state permanently — nothing else ever revisits those rows, so
+    the live-request views keep counting requests that ended when the process
+    did. Failing here must not keep the orchestrator from starting: stale rows
+    are a reporting defect, an orchestrator that will not boot is an outage.
+    """
+    try:
+        with DBManager() as db:
+            closed = db.close_orphaned_request_logs(ORPHANED_REQUEST_ERROR)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not close orphaned request logs at startup", exc_info=True)
+        return
+    if closed:
+        logger.info("Closed %d request log(s) left in-flight by a previous orchestrator process", closed)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -1556,6 +1609,11 @@ async def lifespan(app: FastAPI):
     # orchestrator no longer bootstraps a `root` user, initialises the schema,
     # or runs migrations — it expects an already-provisioned database and goes
     # straight to start_pipeline(), which queries that schema.
+
+    # Any request still marked in-flight belongs to the process that just
+    # went away — close it before accepting new traffic, while "no terminal
+    # state" unambiguously means "orphaned by a restart".
+    _close_orphaned_request_logs()
 
     # Start Pipeline
     await start_pipeline()
@@ -2015,6 +2073,16 @@ class _InternalAddLaneRequest(BaseModel):
     lane: dict[str, Any]
 
 
+class _InternalSleepLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+class _InternalWakeLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
 async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
     """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
@@ -2124,6 +2192,85 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
     return JSONResponse(
         status_code=202,
         content={"status": "accepted", "model": model, "provider_id": data.provider_id},
+    )
+
+
+@app.post("/internal/logosnode/lanes/sleep", tags=["admin"])
+async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request: Request):
+    """Sleep a lane on a worker, called by Spring after JWT validation.
+
+    Level 1 keeps the weights resident in host memory, so the lane wakes in
+    seconds; level 2 would release them and pay for a full reload on the next
+    wake — a choice most operators cannot make well, so the button does not
+    offer it and neither does this endpoint.
+
+    In-flight requests are not refused: mode="wait" makes the worker drain
+    them first and only sleep once the lane is idle (a request admitted
+    between drain and sleep makes the worker skip the sleep and stay awake).
+    The command therefore takes as long as the drain — the dispatch budget
+    must cover it, which is why sleep_lane gets the same 120 s as the
+    planner's own sleep commands.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Worker has not sent its first status yet"},
+        )
+    lanes = (snap.get("runtime") or {}).get("lanes") or []
+    lane = next(
+        (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id", "")) == data.lane_id),
+        None,
+    )
+    if lane is None:
+        return JSONResponse(status_code=404, content={"error": f"Lane '{data.lane_id}' not found on this worker"})
+    # "unsupported" is the worker's resolved answer for "cannot sleep this
+    # lane": enable_sleep_mode off for its model (per-model override or the
+    # node-wide kill switch) or a non-vLLM lane. Dispatching would burn the
+    # command budget to fail on the worker, so refuse synchronously with the
+    # reason the panel can display.
+    if str(lane.get("sleep_state", "")).strip().lower() == "unsupported":
+        raise HTTPException(
+            status_code=409,
+            detail="Lane does not support sleep mode; its model is configured without enable_sleep_mode.",
+        )
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="sleep_lane",
+        params={"lane_id": data.lane_id, "level": 1, "mode": "wait"},
+    )
+
+
+@app.post("/internal/logosnode/lanes/wake", tags=["admin"])
+async def internal_logosnode_wake_lane(data: _InternalWakeLaneRequest, request: Request):
+    """Wake a sleeping lane on a worker, called by Spring after JWT validation."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    return await _dispatch_logosnode_command(
+        provider_id=data.provider_id,
+        action="wake_lane",
+        params={"lane_id": data.lane_id},
     )
 
 
@@ -2332,16 +2479,21 @@ def _prefer_deployments_with_context_room(
     the same 3000-token margin Claude Code keeps) and keep only the workers
     that offer it.
 
-    Two deliberate escape hatches, because this filter runs on an estimate:
+    Deliberate escape hatches, because this filter runs on an estimate:
 
     * A worker whose window is unknown is always kept. ``max_model_len`` is
       absent for cloud providers, for Ollama lanes and for a vLLM lane the
       worker has not reported a window for — none of those are evidence of a
       *narrow* window.
-    * When no worker is left, the widest ones are returned instead of nothing.
-      The request then fails upstream exactly as it did before this filter
-      existed, rather than turning into a 404 that hides which model was
-      asked for.
+    * A model is never filtered out entirely. If every lane of a model has a
+      known window that is too narrow, the widest of them is kept anyway.
+      Downstream, proxy mode narrows this list to the requested model and
+      turns an emptied model into a 404 "no deployment found" that hides the
+      real state; the engine, by contrast, either serves the request or
+      answers its own honest 400 — which is what the client should see (#810).
+    * When no worker is left, the widest ones are returned instead of nothing,
+      so the request fails upstream exactly as it did before this filter
+      existed.
     """
     required = required_context_tokens(payload)
     if required is None:
@@ -2359,27 +2511,44 @@ def _prefer_deployments_with_context_room(
             return None
         return windows.get((int(deployment["provider_id"]), model_name))
 
-    fitting = [d for d in deployments if (_window_of(d) or required) >= required]
-    if fitting:
-        if len(fitting) != len(deployments):
-            logger.info(
-                "Context routing: request needs ~%d tokens; %d of %d deployment(s) serve a wide " "enough window",
+    # Models whose known windows are all too narrow. Keep their widest lane
+    # anyway: proxy mode narrows the result to the requested model, so an
+    # emptied model would 404 "no deployment found" here, while the engine
+    # would either serve the request or answer its own honest 400.
+    rescued_widest: dict[int, int] = {}
+    by_model: dict[int, list[Deployment]] = {}
+    for deployment in deployments:
+        by_model.setdefault(int(deployment["model_id"]), []).append(deployment)
+    for model_id, model_deployment in by_model.items():
+        if any((_window_of(d) or required) >= required for d in model_deployment):
+            continue
+        widest = max((_window_of(d) for d in model_deployment), default=0)
+        if widest > 0:
+            rescued_widest[model_id] = widest
+            logger.warning(
+                "Context routing: request needs ~%d tokens but the widest served window for "
+                "model %s is %d — keeping the widest lane so the engine can answer",
                 required,
-                len(fitting),
-                len(deployments),
+                model_names.get(model_id, str(model_id)),
+                widest,
             )
-        return fitting
 
-    # Every known window is too narrow. Hand back the widest so the request
-    # gets the best available shot instead of a synthetic 404.
-    widest = max((w for w in (_window_of(d) for d in deployments) if w), default=0)
-    logger.warning(
-        "Context routing: request needs ~%d tokens but the widest served window is %d — "
-        "falling back to the widest deployment(s)",
-        required,
-        widest,
-    )
-    return [d for d in deployments if (_window_of(d) or 0) >= widest] or deployments
+    def _keep(deployment: Deployment) -> bool:
+        if (_window_of(deployment) or required) >= required:
+            return True
+        widest = rescued_widest.get(int(deployment["model_id"]))
+        return widest is not None and (_window_of(deployment) or 0) >= widest
+
+    fitting = [d for d in deployments if _keep(d)]
+    if len(fitting) != len(deployments):
+        logger.info(
+            "Context routing: request needs ~%d tokens; %d of %d deployment(s) serve a wide " "enough window%s",
+            required,
+            len(fitting),
+            len(deployments),
+            f" (+{len(rescued_widest)} widest lane(s) of fully-filtered model(s) kept)" if rescued_widest else "",
+        )
+    return fitting or deployments
 
 
 async def start_pipeline():
@@ -2439,6 +2608,9 @@ async def start_pipeline():
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
     )
+    # Every worker report restores the forwarding gate's budget, so it is
+    # also the moment to reconsider requests being held for it.
+    _logosnode_registry.set_on_runtime_updated(scheduler.on_worker_report)
     _context_resolver = ContextResolver(
         logosnode_registry=_logosnode_registry,
         lane_preparer=_capacity_planner,
@@ -2580,7 +2752,6 @@ async def _register_models_with_facades(
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
                         "provider_id": provider_id,
-                        "db_parallel": model_info.get("parallel"),
                     }
                 )
             elif cloud_provider_type == "azure":
@@ -2653,7 +2824,6 @@ def classifier() -> ClassificationManager:
                         "weight_cost": tpl["weight_cost"],
                         "weight_quality": tpl["weight_quality"],
                         "tags": tpl["tags"],
-                        "parallel": tpl["parallel"],
                         "description": tpl["description"],
                         "classification_weight": Balancer(),
                     }
@@ -2935,21 +3105,38 @@ async def _streaming_response(
             # registry is dropped in the finally below, so a client that walks
             # away cannot leave an entry behind.
             _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
+            # A client that walks away mid-stream closes this generator, which
+            # raises GeneratorExit at the `yield` — no exception reaches the
+            # handler below, so without this flag the request was recorded as
+            # a success. It is not one: nobody read the answer, and the
+            # generation was cancelled on the worker. Recording it honestly
+            # also completes the disconnect count, which until now only saw
+            # the clients that left *before* the first token.
+            stream_completed = False
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
                     produced = False
                     try:
-                        async for chunk in _new_logosnode_chunk_iter():
-                            produced = True
-                            yield chunk
-                            if chunk and not ttft_recorded:
-                                if log_id:
-                                    with DBManager() as db:
-                                        db.set_time_at_first_token(log_id)
-                                ttft_recorded = True
-                            stream_log.feed(chunk)
-                            _live_streams.update(request_id, stream_log.streamed_tokens())
+                        # `aclosing` is what makes an abandoned request reach
+                        # the worker promptly. When this generator is closed
+                        # mid-stream — a client that walked away — a bare
+                        # `async for` would leave the inner generator to the
+                        # async-generator GC hook, so its cleanup (which is
+                        # what sends the cancellation) would run at some
+                        # unspecified later point. Closing it here runs that
+                        # cleanup while the disconnect is being handled.
+                        async with aclosing(_new_logosnode_chunk_iter()) as chunk_iter:
+                            async for chunk in chunk_iter:
+                                produced = True
+                                yield chunk
+                                if chunk and not ttft_recorded:
+                                    if log_id:
+                                        with DBManager() as db:
+                                            db.set_time_at_first_token(log_id)
+                                    ttft_recorded = True
+                                stream_log.feed(chunk)
+                                _live_streams.update(request_id, stream_log.streamed_tokens())
                     except Exception as e:
                         # Retry ONLY if nothing has been streamed to the client yet:
                         # a pre-token failure (e.g. a just-woken level-1 lane whose
@@ -2968,8 +3155,14 @@ async def _streaming_response(
                             continue
                         error_message = str(e)
                         raise e
+                    stream_completed = True
                     break  # stream completed without raising
             finally:
+                if not stream_completed and error_message is None:
+                    error_message = (
+                        "Client disconnected mid-stream; upstream generation cancelled "
+                        f"after {stream_log.streamed_tokens().get('completion_tokens', 0)} token(s)."
+                    )
                 _live_streams.finish(request_id)
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
@@ -3649,7 +3842,6 @@ async def _execute_proxy_mode(
     is_async_job: bool,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
-    priority: int = 1,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -3710,7 +3902,6 @@ async def _execute_proxy_mode(
         request_id=request_id,
         request_path=request_path,
         skip_laura=True,
-        priority=priority,
     )
 
 
@@ -3725,7 +3916,6 @@ async def _execute_resource_mode(
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
     skip_laura: bool = False,
-    priority: int = 1,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -3779,6 +3969,10 @@ async def _execute_resource_mode(
         deployments=deployments,
         skip_laura=skip_laura,
         request_path=request_path,
+        # The key owner's queue priority; 0 falls back to the
+        # policy-level priority inside the pipeline.
+        default_priority=auth.default_priority,
+        api_key_id=auth.api_key_id,
     )
 
     # Process through classification and scheduling
@@ -3958,7 +4152,6 @@ async def route_and_execute(
     log_id: Optional[int],
     is_async_job: bool = False,
     request_id: Optional[str] = None,
-    priority: int = 1,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -3990,7 +4183,6 @@ async def route_and_execute(
         is_async_job: Whether this is a background job (affects error handling)
             - False: Direct endpoint - client waits, raises HTTPException for errors
             - True: Background job - client gets job_id, returns error dict for errors
-        priority: Scheduling priority for the pipeline queue
 
     Returns:
         - For direct endpoints (is_async_job=False):
@@ -4034,7 +4226,6 @@ async def route_and_execute(
                 is_async_job=is_async_job,
                 request_id=request_id,
                 request_path=path,
-                priority=priority,
             )
 
         # RESOURCE mode (no body["model"] → classification + scheduling)
@@ -4047,7 +4238,6 @@ async def route_and_execute(
             is_async_job=is_async_job,
             request_id=request_id,
             request_path=path,
-            priority=priority,
         )
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
@@ -4143,11 +4333,102 @@ async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
     return JSONResponse(status_code=499, content={"detail": "Client closed request"})
 
 
+# How often the startup grace period re-checks for a (re)connected worker.
+_WORKER_CONNECT_POLL_SECONDS = 1.0
+# How long the grace period lasts, both for the window after the orchestrator
+# starts and for the window after an already-connected worker drops (reboot).
+# Such a window is one in which no worker node serves a model, during which
+# every logosnode deployment of it is filtered out and the request 404s with
+# "No available model deployments" — enough to kill a running consumer
+# mid-task. Workers re-attach within seconds of coming back up, so while the
+# window is open a request for a model no worker serves yet waits instead of
+# failing, turning the outage into a delay. Once it has run out, the instant
+# 404 comes back: a worker still missing then is down, not mid-redeploy.
+_STARTUP_GRACE_PERIOD_S = 120.0
+# Monotonic anchor for the grace window. The wall-clock _SERVER_START_TIME
+# can jump (NTP) and must not stretch or shrink the window with it.
+_SERVER_START_MONOTONIC = time.monotonic()
+
+
+def _startup_grace_remaining_s() -> float:
+    """How much of the startup grace period is left (0 once it has run out)."""
+    return max(0.0, _STARTUP_GRACE_PERIOD_S - (time.monotonic() - _SERVER_START_MONOTONIC))
+
+
+def _worker_reconnect_grace_remaining_s(raw_deployments: list[Deployment]) -> float:
+    """How long a request may wait because one of the key's workers recently dropped.
+
+    The startup window only covers the orchestrator's own (re)start. A worker
+    node that reboots or is redeployed on its own drops its session later,
+    and its models go unroutable the moment the registry loses them — the
+    same failure, anchored to the drop instead of the boot. For every
+    logosnode deployment of the key, take the latest of the drop-grace
+    deadlines; the freshest drop dominates.
+    """
+    remaining = 0.0
+    for deployment in raw_deployments:
+        if _normalize_provider_type(deployment.get("type")) != "logosnode":
+            continue
+        remaining = max(
+            remaining,
+            _logosnode_registry.disconnect_grace_remaining_s(int(deployment["provider_id"]), _STARTUP_GRACE_PERIOD_S),
+        )
+    return remaining
+
+
+def _client_timeout_s(payload: dict) -> Optional[float]:
+    """The client's ``timeout_s`` as a positive float, or None if absent/invalid."""
+    try:
+        value = float(payload.get("timeout_s"))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+async def _wait_for_worker_connect(
+    raw_deployments: list[Deployment],
+    payload: dict,
+    request: Optional[Request] = None,
+    client_timeout_s: Optional[float] = None,
+) -> list[Deployment]:
+    """Re-run the deployment filter until a worker serves the model, the grace period runs out, or the client leaves.
+
+    ``raw_deployments`` is what the DB granted this key before the logosnode
+    filter dropped everything because no worker is connected (redeploy). Each
+    poll re-asks the registry; the moment a worker re-attaches and declares
+    its capabilities, the filter hands the deployments back and the request
+    proceeds. The wait is bounded by the later of the two grace windows —
+    what is left of the startup window, and what is left of a recently
+    dropped worker's reconnect window (see ``_worker_reconnect_grace_remaining_s``)
+    — and by the client's ``timeout_s`` if it is smaller. Neither window
+    resets per request, and a worker that already re-attached does not cancel
+    the wait for the models still missing.
+    """
+    wait_s = max(_startup_grace_remaining_s(), _worker_reconnect_grace_remaining_s(raw_deployments))
+    if client_timeout_s is not None:
+        wait_s = min(wait_s, client_timeout_s)
+    if wait_s <= 0:
+        return []
+    deadline = time.monotonic() + wait_s
+    logger.info("No worker is serving the requested model right now; waiting up to %ss for one to (re)connect", wait_s)
+    deployments: list[Deployment] = []
+    while time.monotonic() < deadline:
+        if request is not None and await request.is_disconnected():
+            break
+        await asyncio.sleep(min(_WORKER_CONNECT_POLL_SECONDS, deadline - time.monotonic()))
+        deployments = await _filter_logosnode_deployments(raw_deployments, payload=payload)
+        if deployments:
+            logger.info("Worker connected during startup grace period; routing the request")
+            return deployments
+    return deployments
+
+
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
-    Performs authentication, model setup, and routing/execution with
-    hierarchical priority resolution.
+    Performs authentication, model setup, and routing/execution. Queue
+    priority is derived from the authenticated API key's default_priority
+    (falling back to the policy-level priority inside the pipeline).
     """
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
@@ -4161,14 +4442,26 @@ async def handle_sync_request(path: str, request: Request):
                     request_id=request_id,
                     timeout_s=body.get("timeout_s"),
                 )
-            deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(deployments, payload=body)
+            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+        deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         raise HTTPException(status_code=401, detail=str(e))
     except ValueError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         raise HTTPException(status_code=400, detail=str(e))
+
+    if not deployments and raw_deployments:
+        # The key is granted models that no worker serves right now — either
+        # the orchestrator just (re)started and the workers are still
+        # (re)attaching, or a worker dropped a moment ago (reboot) and its
+        # models are unroutable until it comes back. Give the missing
+        # workers a chance to (re)connect instead of failing instantly; the
+        # window stays in effect even though other workers may already have
+        # re-attached.
+        deployments = await _wait_for_worker_connect(
+            raw_deployments, payload=body, request=request, client_timeout_s=_client_timeout_s(body)
+        )
 
     if not deployments:
         requested_model = body.get("model", "unknown")
@@ -4434,8 +4727,8 @@ async def execute_proxy_job(
                     request_id=request_id,
                     timeout_s=json_data.get("timeout_s"),
                 )
-            deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(deployments, payload=json_data)
+            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+        deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         _, err_body = coerce_upstream_error(401, {"error": str(e)})
@@ -4444,6 +4737,14 @@ async def execute_proxy_job(
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         _, err_body = coerce_upstream_error(400, {"error": str(e)})
         return {"status_code": 400, "data": err_body}
+
+    # Same windows as the sync path: a job submitted while no worker is
+    # connected (startup or a worker reboot) must not fail before the
+    # workers re-attach.
+    if not deployments and raw_deployments:
+        deployments = await _wait_for_worker_connect(
+            raw_deployments, payload=json_data, client_timeout_s=_client_timeout_s(json_data)
+        )
 
     # Force non-streaming for jobs without adding unsupported multipart fields.
     json_data = force_non_streaming_payload(json_data)
@@ -4609,6 +4910,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     calibrating=(
                         bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
                     ),
+                    actions=(payload.get("actions") if isinstance(payload.get("actions"), list) else None),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -4690,7 +4992,10 @@ async def logosnode_lanes(data: LogosNodeStatusRequest):
 _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
     "apply_lanes": 180,
     "reconfigure_lane": 180,
-    "sleep_lane": 30,
+    # sleep_lane with mode="wait" first drains in-flight requests (the worker
+    # budgets 30 s for that), so a fixed 30 s here would time out exactly when
+    # a busy lane actually drains. The planner uses 120 s for its own sleeps.
+    "sleep_lane": 120,
     "wake_lane": 120,
     "delete_lane": 30,
 }
@@ -4898,6 +5203,9 @@ async def scheduler_state(request: Request):
         "queue_total": _pipeline.scheduler.get_total_queue_depth(),
         "logosnode": _logosnode_facade.debug_state(),
     }
+    prefix_router = getattr(_pipeline.scheduler, "_prefix_router", None)
+    if prefix_router is not None:
+        payload["prefix_affinity"] = prefix_router.debug_state()
     return JSONResponse(content=payload, status_code=200)
 
 

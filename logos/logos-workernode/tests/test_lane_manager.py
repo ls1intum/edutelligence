@@ -556,13 +556,18 @@ def test_auto_tp_caps_calibrated_tp_at_gpu_count() -> None:
     assert result.vllm_config.tensor_parallel_size == 4
 
 
-def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
-    """Calibrated tp=1 means the model fit on one GPU during calibration — no escalation."""
+def test_auto_tp_non_calibrated_tp1_falls_through_to_heuristic() -> None:
+    """A tp known only from runtime (no calibration) still defers to the heuristic.
+
+    The calibrated-TP guard must not block escalation for profiles that were
+    never calibrated: here the recorded tp=1 is the vLLM default, and the
+    large base residency still escalates.
+    """
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
     profiles = ModelProfileRegistry()
-    profiles._profiles["small/8B"] = ModelProfileRecord(
-        base_residency_mb=10_000.0,
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(
+        base_residency_mb=42_000.0,
         engine="vllm",
         tensor_parallel_size=1,
     )
@@ -575,12 +580,108 @@ def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
         model_profiles=profiles,
     )
     lane = LaneConfig(
-        model="small/8B",
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size >= 2
+
+
+def test_auto_tp_calibrated_tp1_authoritative_despite_full_footprint_base() -> None:
+    """Issue #616: a calibrated tp=1 must not be escalated by the size heuristic.
+
+    The calibrated base_residency is the FULL awake footprint (weights + KV),
+    which on a 2-GPU Ada node is most of a single card — the heuristic would
+    misread that as "does not fit one GPU" and escalate to tp=2. But the
+    calibrator probed this hardware and proved the model loads fine at tp=1,
+    so the lane must stay at tp=1.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["ms/Phi-4-reasoning"] = ModelProfileRecord(
+        base_residency_mb=46_000.0,  # full footprint vs ~50 GB per GPU
+        engine="vllm",
+        tensor_parallel_size=1,
+        residency_source="calibrated",
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 2,
+        per_gpu_vram_mb=lambda: 50_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="ms/Phi-4-reasoning",
         vllm=True,
         vllm_config=VllmConfig(tensor_parallel_size=1),
     )
     result = manager._auto_tensor_parallel(lane)
     assert result.vllm_config.tensor_parallel_size == 1
+
+
+def test_auto_tp_calibrated_tp1_overrides_incoming_tp() -> None:
+    """Issue #616: the calibrated TP wins over a stale/re-inferred TP from upstream.
+
+    The orchestrator's size-vs-VRAM inference sent tp=2 for a model the
+    calibrator decided fits at tp=1 — the worker must not serve it at tp=2
+    (and thus re-persist tp=2 over the calibrated profile).
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["ms/Phi-4-reasoning"] = ModelProfileRecord(
+        base_residency_mb=46_000.0,
+        engine="vllm",
+        tensor_parallel_size=1,
+        residency_source="calibrated",
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 2,
+        per_gpu_vram_mb=lambda: 50_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="ms/Phi-4-reasoning",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 1
+
+
+def test_auto_tp_calibrated_tp2_applies_over_incoming_tp1() -> None:
+    """A calibrated tp>1 is applied even when the incoming config says tp=1."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(
+        base_residency_mb=42_000.0,
+        engine="vllm",
+        tensor_parallel_size=2,
+        residency_source="calibrated",
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 24_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 2
 
 
 def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
