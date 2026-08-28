@@ -14,9 +14,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 /**
- * Fetches the live model-level health check from the orchestrator. Lane
- * state (warm/sleeping/cold), worker connection state, and node health exist
- * only in the orchestrator's worker registry, so the public
+ * Fetches the live model-level health check from the orchestrator's public
+ * /health endpoint. Lane state, worker connection state, and node health
+ * exist only in the orchestrator's worker registry, so the public
  * get_model_health endpoint is served from this client.
  */
 @Service
@@ -30,9 +30,6 @@ public class OrchestratorModelHealthClient {
     @Value("${logos.orchestrator.url:}")
     private String orchestratorUrl;
 
-    @Value("${logos.orchestrator.internal-secret:}")
-    private String internalSecret;
-
     private volatile List<Map<String, Object>> cached = List.of();
     private volatile long cachedAtMs = 0;
 
@@ -41,26 +38,24 @@ public class OrchestratorModelHealthClient {
     }
 
     /**
-     * Model health entries (model_id, name, status, deployments) for every
-     * model the orchestrator knows. Returns the last cached result (possibly
-     * empty) when the orchestrator is unreachable, so health serving never
-     * fails on the round trip.
+     * Model health entries (name, status) for every model the orchestrator
+     * knows. Returns the last cached result (possibly empty) when the
+     * orchestrator is unreachable, so health serving never fails on the
+     * round trip.
      */
     public List<Map<String, Object>> getModelHealth() {
         long now = System.currentTimeMillis();
         if (now - cachedAtMs < CACHE_TTL_MS) {
             return cached;
         }
-        if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
+        if (orchestratorUrl.isBlank()) {
             return cached;
         }
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", "Bearer " + internalSecret);
             var response = restTemplate.exchange(
-                orchestratorUrl + "/internal/model_health",
+                orchestratorUrl + "/health",
                 HttpMethod.GET,
-                new HttpEntity<Void>(headers),
+                new HttpEntity<Void>(new HttpHeaders()),
                 Map.class);
             Object rawModels = response.getBody() != null ? response.getBody().get("models") : null;
             if (rawModels instanceof List<?> models) {

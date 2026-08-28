@@ -45,64 +45,18 @@ class ModelHealthControllerTest {
     @MockitoBean JwtDecoder jwtDecoder;
     @MockitoBean OrchestratorModelHealthClient modelHealthClient;
 
-    private static Map<String, Object> entry(int modelId, String name, String status,
-            List<Map<String, Object>> deployments) {
+    private static Map<String, Object> entry(String name, String status) {
         Map<String, Object> model = new LinkedHashMap<>();
-        model.put("model_id", modelId);
         model.put("name", name);
         model.put("status", status);
-        model.put("deployments", deployments);
         return model;
     }
 
-    private static Map<String, Object> deployment(int providerId, String providerName, String type,
-            String status, String state) {
-        Map<String, Object> deployment = new LinkedHashMap<>();
-        deployment.put("provider_id", providerId);
-        deployment.put("provider_name", providerName);
-        deployment.put("type", type);
-        deployment.put("status", status);
-        if (state != null) deployment.put("state", state);
-        return deployment;
-    }
-
-    @Test
-    void getModelHealth_logosAdminSeesAllModels() throws Exception {
+    private void mockHealth() {
         when(modelHealthClient.getModelHealth()).thenReturn(List.of(
-            entry(5001, "gpt-4", "UP", List.of(
-                deployment(6001, "openai-provider", "cloud", "UP", null))),
-            entry(5002, "gpt-3.5", "DOWN", List.of())
+            entry("gpt-4", "UP"),
+            entry("gpt-3.5", "DOWN")
         ));
-
-        mvc.perform(post("/logosdb/get_model_health")
-                .with(TestJwt.logosAdmin())
-                .contentType("application/json")
-                .content("{}"))
-           .andExpect(status().isOk())
-           .andExpect(jsonPath("$.models.length()").value(2))
-           .andExpect(jsonPath("$.models[0].model_id").value(5001))
-           .andExpect(jsonPath("$.models[0].name").value("gpt-4"))
-           .andExpect(jsonPath("$.models[0].status").value("UP"))
-           .andExpect(jsonPath("$.models[0].deployments[0].provider_id").value(6001))
-           .andExpect(jsonPath("$.models[0].deployments[0].status").value("UP"))
-           .andExpect(jsonPath("$.models[1].status").value("DOWN"));
-    }
-
-    @Test
-    void getModelHealth_reportsWorkerDeploymentState() throws Exception {
-        when(modelHealthClient.getModelHealth()).thenReturn(List.of(
-            entry(5001, "gpt-4", "UP", List.of(
-                deployment(7001, "gpu-node-1", "logosnode", "UP", "warm"),
-                deployment(7002, "gpu-node-2", "logosnode", "DOWN", "offline")))
-        ));
-
-        mvc.perform(post("/logosdb/get_model_health")
-                .with(TestJwt.logosAdmin())
-                .contentType("application/json")
-                .content("{}"))
-           .andExpect(status().isOk())
-           .andExpect(jsonPath("$.models[0].deployments[0].state").value("warm"))
-           .andExpect(jsonPath("$.models[0].deployments[1].state").value("offline"));
     }
 
     @Test
@@ -111,25 +65,101 @@ class ModelHealthControllerTest {
         "INSERT INTO team_model_permissions (team_id, model_id) VALUES (2001, 5001)",
         "INSERT INTO team_provider_permissions (team_id, provider_id) VALUES (2001, 6001)"
     }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
-    void getModelHealth_regularUserSeesOnlyTeamAssignedModels() throws Exception {
-        when(modelHealthClient.getModelHealth()).thenReturn(List.of(
-            entry(5001, "gpt-4", "UP", List.of(
-                deployment(6001, "openai-provider", "cloud", "UP", null))),
-            entry(5002, "gpt-3.5", "UP", List.of())
-        ));
+    void keyWithTeamAccess_seesOnlyAssignedModels() throws Exception {
+        mockHealth();
 
+        // dev-key-1 belongs to team 2001 and does not use custom permissions.
         mvc.perform(post("/logosdb/get_model_health")
-                .with(TestJwt.testUser())
+                .header("logos_key", "dev-key-1")
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.models.length()").value(1))
-           .andExpect(jsonPath("$.models[0].model_id").value(5001));
+           .andExpect(jsonPath("$.models[0].name").value("gpt-4"))
+           .andExpect(jsonPath("$.models[0].status").value("UP"));
     }
 
     @Test
-    void getModelHealth_requiresAuth() throws Exception {
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "UPDATE api_keys SET use_custom_permissions = true WHERE id = 3001",
+        "INSERT INTO api_key_model_permissions (api_key_id, model_id) VALUES (3001, 5001)",
+        "INSERT INTO api_key_provider_permissions (api_key_id, provider_id) VALUES (3001, 6001)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void keyWithCustomPermissions_usesKeyPermissionsInsteadOfTeam() throws Exception {
+        mockHealth();
+
+        // Team 2001 has no team permissions; dev-key-1's own permissions grant gpt-4.
         mvc.perform(post("/logosdb/get_model_health")
+                .header("logos_key", "dev-key-1")
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.models.length()").value(1))
+           .andExpect(jsonPath("$.models[0].name").value("gpt-4"));
+
+        // admin-key-1 shares the team but has no custom permissions and no team
+        // grants either, so it sees nothing.
+        mvc.perform(post("/logosdb/get_model_health")
+                .header("logos_key", "admin-key-1")
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.models.length()").value(0));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "INSERT INTO team_model_permissions (team_id, model_id) VALUES (2001, 5001)",
+        "INSERT INTO team_provider_permissions (team_id, provider_id) VALUES (2001, 6001)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void bearerHeaderIsAccepted() throws Exception {
+        mockHealth();
+
+        mvc.perform(post("/logosdb/get_model_health")
+                .header("Authorization", "Bearer dev-key-1")
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.models.length()").value(1));
+    }
+
+    @Test
+    void missingKeyIsRejected() throws Exception {
+        mockHealth();
+
+        mvc.perform(post("/logosdb/get_model_health")
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isUnauthorized())
+           .andExpect(jsonPath("$.detail").value("Invalid or missing API key"));
+    }
+
+    @Test
+    void unknownKeyIsRejected() throws Exception {
+        mockHealth();
+
+        mvc.perform(post("/logosdb/get_model_health")
+                .header("logos_key", "not-a-real-key")
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isUnauthorized())
+           .andExpect(jsonPath("$.detail").value("Invalid or missing API key"));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "INSERT INTO team_model_permissions (team_id, model_id) VALUES (2001, 5001)",
+        "INSERT INTO team_provider_permissions (team_id, provider_id) VALUES (2001, 6001)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void jwtIsNotAcceptedAsApiKey() throws Exception {
+        mockHealth();
+
+        // A Keycloak JWT without a Logos API key must not grant access here.
+        mvc.perform(post("/logosdb/get_model_health")
+                .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isUnauthorized());

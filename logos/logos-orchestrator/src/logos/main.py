@@ -1782,6 +1782,44 @@ async def _generic_exception_handler(request: Request, exc: Exception) -> JSONRe
     return openai_error_response(500, "Internal server error")
 
 
+_HEALTH_STATUS_RANK: Dict[str, int] = {"DOWN": 0, "DEGRADED": 1, "UP": 2}
+
+
+def _model_deployment_status(
+    deployment: Dict[str, Any], provider_id: int, worker_ids: set[int], snapshots: Dict[int, Dict[str, Any]]
+) -> str:
+    """Serveability of one model deployment for the /health model breakdown.
+
+    Cloud deployments are UP whenever configured — Logos does not probe cloud
+    providers, which matches the overall /health behaviour. Worker-backed
+    deployments are UP when the worker is online, the model is calibrated, and
+    a lane is loaded/running or sleeping (a wake is fast). A model that only
+    needs a cold load, or that lives on a worker reporting an unhealthy node,
+    is DEGRADED; a missing/stale worker or missing calibration is DOWN.
+    """
+    if provider_id not in worker_ids:
+        return "UP"
+    snapshot = snapshots.get(provider_id)
+    if snapshot is None:
+        return "DOWN"
+    model_name = str(deployment.get("model_name") or "")
+    if model_name not in (snapshot.get("capabilities_models") or []):
+        return "DOWN"
+    runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else {}
+    node_health = runtime.get("node_health")
+    if isinstance(node_health, dict) and node_health.get("healthy") is False:
+        return "DEGRADED"
+    states = {
+        str(lane.get("runtime_state") or "").strip()
+        for lane in (runtime.get("lanes") or [])
+        if isinstance(lane, dict) and str(lane.get("model") or "").strip() == model_name
+    }
+    if states & {"loaded", "running", "sleeping"}:
+        return "UP"
+    # No loaded/running/sleeping lane: a full cold load is needed first.
+    return "DEGRADED"
+
+
 @app.get("/health", tags=["monitoring"])
 async def health():
     """Report overall health plus a breakdown of what is serveable.
@@ -1796,35 +1834,59 @@ async def health():
     exactly is down: ``local_models`` (logosnode workers) and ``cloud_models``
     (Azure/cloud deployments). Cloud may still be serveable even while local is
     down, which the ``detail`` message makes explicit.
+
+    The ``models`` array adds the model-level view applications want before
+    sending traffic: the current overall status of every model that has at
+    least one deployment. A model is UP when any of its deployments can serve
+    right now, DEGRADED when it is only serveable after a cold load or from a
+    worker reporting an unhealthy node, and DOWN otherwise. Only model names
+    and statuses are exposed — no internal ids, no provider names.
     """
     local_ok = False
     cloud_ok = False
+    model_status: Dict[str, str] = {}
     try:
         with DBManager() as db:
             inventory = db.list_local_providers()
-            deployments = db.get_all_deployments()
+            deployments = db.get_all_deployments_with_names()
         # Cloud is serveable if any non-logosnode deployment is configured.
         cloud_ok = any(str(d.get("type")) != "logosnode" for d in deployments)
-        # Local is serveable if an online worker declares at least one capable model.
+        worker_ids: set[int] = set()
+        snapshots: Dict[int, Dict[str, Any]] = {}
         for provider in inventory:
             provider_id = int(provider.get("provider_id") or 0)
             if provider_id <= 0:
                 continue
+            worker_ids.add(provider_id)
             snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
             if not _logosnode_snapshot_is_connected(snapshot):
                 continue
+            snapshots[provider_id] = snapshot
+            # Local is serveable if an online worker declares at least one capable model.
             if snapshot.get("capabilities_models"):
                 local_ok = True
-                break
+        # Model-level breakdown: best deployment status per model.
+        for deployment in deployments:
+            model_name = str(deployment.get("model_name") or "").strip()
+            if not model_name:
+                continue
+            status = _model_deployment_status(
+                deployment, int(deployment.get("provider_id") or 0), worker_ids, snapshots
+            )
+            current = model_status.get(model_name)
+            if current is None or _HEALTH_STATUS_RANK[status] > _HEALTH_STATUS_RANK[current]:
+                model_status[model_name] = status
     except Exception:
         logger.exception("Health check failed to evaluate provider state")
         local_ok = False
         cloud_ok = False
+        model_status = {}
 
     payload = {
         "status": "UP" if local_ok else "DOWN",
         "local_models": "UP" if local_ok else "DOWN",
         "cloud_models": "UP" if cloud_ok else "DOWN",
+        "models": [{"name": name, "status": model_status[name]} for name in sorted(model_status)],
     }
     if not local_ok:
         payload["detail"] = "No local provider with a capable model is online." + (
@@ -1919,115 +1981,6 @@ async def internal_provider_status(request: Request):
             }
         )
     return {"providers": providers}
-
-
-def _model_deployment_health(
-    deployment: Dict[str, Any],
-    provider_id: int,
-    worker_ids: set[int],
-    snapshots: Dict[int, Optional[Dict[str, Any]]],
-) -> Dict[str, Any]:
-    """Health of one model deployment for the model-level health check.
-
-    Worker-backed deployments are checked live against the registry snapshot:
-    UP when the worker is online and the model is calibrated, with ``state``
-    narrowing the readiness (``warm`` a lane is loaded/running, ``sleeping``
-    a wake is needed, ``cold`` a load is needed). A worker reporting an
-    unhealthy node degrades to DEGRADED even with a warm lane, and DOWN with
-    ``offline`` (no fresh heartbeat) or ``uncalibrated``. Cloud deployments
-    are UP whenever configured — Logos does not probe cloud providers, which
-    matches the overall /health behaviour.
-    """
-    entry: Dict[str, Any] = {
-        "provider_id": provider_id,
-        "provider_name": deployment.get("provider_name"),
-        "type": deployment.get("type"),
-    }
-    if provider_id not in worker_ids:
-        entry.update(status="UP", state=None)
-        return entry
-    snapshot = snapshots.get(provider_id)
-    if not _logosnode_snapshot_is_connected(snapshot):
-        entry.update(status="DOWN", state="offline")
-        return entry
-    model_name = str(deployment.get("model_name") or "")
-    capabilities = snapshot.get("capabilities_models") or []
-    if model_name not in capabilities:
-        entry.update(status="DOWN", state="uncalibrated")
-        return entry
-    runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else {}
-    lanes = [
-        lane
-        for lane in (runtime.get("lanes") or [])
-        if isinstance(lane, dict) and str(lane.get("model") or "").strip() == model_name
-    ]
-    states = {str(lane.get("runtime_state") or "").strip() for lane in lanes}
-    if states & {"loaded", "running"}:
-        state = "warm"
-    elif "sleeping" in states:
-        state = "sleeping"
-    else:
-        state = "cold"
-    node_health = runtime.get("node_health")
-    degraded = isinstance(node_health, dict) and node_health.get("healthy") is False
-    entry.update(status="DEGRADED" if degraded else "UP", state=state)
-    return entry
-
-
-@app.get("/internal/model_health", tags=["admin"])
-async def internal_model_health(request: Request):
-    """Model-level health of every deployment, for the Spring webservice.
-
-    Applications want to know before sending traffic which models currently
-    have a healthy/available deployment. Like provider connection state, the
-    live lane state exists only in the orchestrator's worker registry, so it
-    is computed here and served by the webservice's public endpoint.
-
-    A model is UP when any of its deployments is, DEGRADED when only
-    degraded ones are, and DOWN otherwise.
-    """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal model health endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-
-    with DBManager() as db:
-        deployments = db.get_all_deployments_with_names()
-        local_inventory = db.list_local_providers()
-
-    worker_ids: set[int] = set()
-    snapshots: Dict[int, Optional[Dict[str, Any]]] = {}
-    for provider in local_inventory:
-        provider_id = int(provider.get("provider_id") or 0)
-        if provider_id <= 0:
-            continue
-        worker_ids.add(provider_id)
-        snapshots[provider_id] = _logosnode_registry.peek_runtime_snapshot(provider_id)
-
-    models: Dict[int, Dict[str, Any]] = {}
-    for deployment in deployments:
-        model_id = int(deployment.get("model_id") or 0)
-        provider_id = int(deployment.get("provider_id") or 0)
-        model = models.setdefault(
-            model_id,
-            {
-                "model_id": model_id,
-                "name": deployment.get("model_name"),
-                "status": "DOWN",
-                "deployments": [],
-            },
-        )
-        model["deployments"].append(_model_deployment_health(deployment, provider_id, worker_ids, snapshots))
-    for model in models.values():
-        statuses = {deployment["status"] for deployment in model["deployments"]}
-        model["status"] = "UP" if "UP" in statuses else ("DEGRADED" if "DEGRADED" in statuses else "DOWN")
-    return {"models": sorted(models.values(), key=lambda model: str(model["name"] or "").lower())}
 
 
 @app.get("/internal/model_context_windows", tags=["admin"])
