@@ -15,7 +15,7 @@ import { AppSelectOption, SelectComponent } from '../../../../shared/components/
 import { RequestItem } from '../../../statistics/statistics.models';
 import { deriveStage, formatTimeAgo } from '../../../statistics/statistics.utils';
 import { TeamActivityService } from './activity-tab.service';
-import { RequestCursor, TeamActivityPayload } from './activity-tab.models';
+import { RequestCursor, TeamActivityPayload, TraceExport, TraceExportItem } from './activity-tab.models';
 
 /** How often the live counts are refreshed while the tab is open. */
 const REFRESH_MS = 5_000;
@@ -57,6 +57,19 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   readonly error = signal<string | null>(null);
 
   readonly dayOptions = DAY_OPTIONS;
+
+  // ── Trace export (issue #667) ────────────────────────────────────────────
+
+  readonly exportFormat = signal<'json' | 'csv'>('json');
+  readonly exporting = signal(false);
+  readonly exportError = signal<string | null>(null);
+
+  readonly exportFormatOptions: AppSelectOption[] = [
+    { value: 'json', label: 'JSON' },
+    { value: 'csv', label: 'CSV' },
+  ];
+
+  readonly selectedExportFormatValue = computed(() => this.exportFormat());
 
   /**
    * Cursor of each page already visited. Page 0 is always null (start at the
@@ -139,6 +152,39 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
     this.filterUserId.set(next);
     this.resetToFirstPage();
     void this.load();
+  }
+
+  setExportFormat(value: string | null): void {
+    if (value === 'json' || value === 'csv') this.exportFormat.set(value);
+  }
+
+  /**
+   * Download the team's consent-based traces — the FULL-logging requests with
+   * their stored content — as the picked file format. The server answers the
+   * JSON envelope; the CSV is cut from it here, the same way the import
+   * credentials file is cut from the upload result.
+   */
+  async exportTraces(): Promise<void> {
+    if (!this.teamId || this.exporting()) return;
+    this.exporting.set(true);
+    this.exportError.set(null);
+    try {
+      const payload = await this.activityService.getTraceExport(
+        this.teamId,
+        this.days(),
+        this.filterUserId(),
+      );
+      const format = this.exportFormat();
+      this.downloadFile(
+        `logos-traces-team-${this.teamId}-${payload.days}d.${format}`,
+        format === 'csv' ? tracesToCsv(payload) : JSON.stringify(payload, null, 2),
+        format === 'csv' ? 'text/csv' : 'application/json',
+      );
+    } catch {
+      this.exportError.set('Could not export the traces.');
+    } finally {
+      this.exporting.set(false);
+    }
   }
 
   async nextPage(): Promise<void> {
@@ -246,4 +292,84 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
       this.loading.set(false);
     }
   }
+
+  private downloadFile(filename: string, content: string, mimeType: string): void {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ── Trace export helpers (issue #667) ────────────────────────────────────────
+
+/** Column order of the CSV export; the JSON envelope is the reference. */
+export const TRACE_CSV_COLUMNS: (keyof TraceExportItem)[] = [
+  'request_id',
+  'timestamp_request',
+  'timestamp_forwarding',
+  'timestamp_response',
+  'time_at_first_token',
+  'privacy_level',
+  'model_name',
+  'provider_name',
+  'provider_type',
+  'policy_id',
+  'environment',
+  'api_key_id',
+  'api_key_name',
+  'username',
+  'full_name',
+  'team_name',
+  'client_ip',
+  'status',
+  'error_message',
+  'priority',
+  'initial_priority',
+  'priority_when_scheduled',
+  'queue_depth_at_enqueue',
+  'queue_depth_at_schedule',
+  'queue_depth_at_arrival',
+  'timeout_s',
+  'utilization_at_arrival',
+  'queue_wait_ms',
+  'was_cold_start',
+  'load_duration_ms',
+  'available_vram_mb',
+  'azure_rate_remaining_requests',
+  'azure_rate_remaining_tokens',
+  'prompt_tokens',
+  'completion_tokens',
+  'total_tokens',
+  'cost_microcents',
+  'classification_statistics',
+  'input_payload',
+  'headers',
+  'response_payload',
+];
+
+/**
+ * The CSV version of a trace export. Structured fields go out as compact
+ * JSON so a trace stays one row; quoting follows the same rules as the import
+ * credentials file — escape what breaks a table, because a payload is one
+ * comma away from breaking it.
+ */
+export function tracesToCsv(payload: TraceExport): string {
+  const rows = payload.traces.map((trace) =>
+    TRACE_CSV_COLUMNS.map((column) => traceCsvCell(trace[column])).join(','),
+  );
+  return [TRACE_CSV_COLUMNS.join(','), ...rows].join('\n');
+}
+
+export function traceCsvCell(value: unknown): string {
+  const text =
+    value === null || value === undefined
+      ? ''
+      : typeof value === 'string'
+        ? value
+        : JSON.stringify(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }

@@ -134,8 +134,35 @@
         >
           <i class="pi pi-angle-right" aria-hidden="true"></i>
         </button>
+        <!-- Consent-based trace export (issue #667): only the FULL-logging
+             requests come back — the ones whose content was stored because the
+             requester opted in. Follows the period and requester filter above. -->
+        <span class="ac-export">
+          <app-select
+            class="ac-control"
+            [options]="exportFormatOptions"
+            [value]="selectedExportFormatValue()"
+            [compact]="true"
+            ariaLabel="Trace export format"
+            (valueChange)="setExportFormat($event)"
+          />
+          <button
+            class="ac-pager__btn"
+            type="button"
+            [disabled]="exporting()"
+            (click)="exportTraces()"
+            title="Download this team's consent-based traces (full-logging requests, content included)"
+            aria-label="Export consent-based traces"
+          >
+            <i class="pi pi-download" aria-hidden="true"></i>
+          </button>
+        </span>
       </div>
     </div>
+
+    @if (exportError()) {
+      <p class="ac-error">{{ exportError() }}</p>
+    }
 
     @if (requests().length === 0) {
       <p class="ac-note ac-note--quiet">

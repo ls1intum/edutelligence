@@ -1,0 +1,1 @@
+DELETE FROM log_entry WHERE id IN (9003, 9004);

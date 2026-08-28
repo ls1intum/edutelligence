@@ -58,3 +58,69 @@ export interface TeamActivityPayload {
   requests_has_more: boolean;
   requests_next_cursor: RequestCursor | null;
 }
+
+// ── Trace export (issue #667) ────────────────────────────────────────────────
+
+/**
+ * One consent-based request trace: a request the orchestrator recorded at
+ * FULL privacy, so it carries the request and response content on top of the
+ * usual lifecycle metadata.
+ *
+ * The payload fields are `unknown` on purpose — their shape is whatever the
+ * caller sent to the model, and the export must not pretend to know it.
+ */
+export interface TraceExportItem {
+  request_id: string | null;
+  timestamp_request: string | null;
+  timestamp_forwarding: string | null;
+  timestamp_response: string | null;
+  time_at_first_token: string | null;
+  privacy_level: string;
+  model_name: string | null;
+  provider_name: string | null;
+  provider_type: string | null;
+  policy_id: number | null;
+  environment: string | null;
+  api_key_id: number | null;
+  api_key_name: string | null;
+  username: string | null;
+  full_name: string | null;
+  team_name: string | null;
+  client_ip: string | null;
+  status: string;
+  error_message: string | null;
+  priority: string | null;
+  initial_priority: string | null;
+  priority_when_scheduled: string | null;
+  queue_depth_at_enqueue: number | null;
+  queue_depth_at_schedule: number | null;
+  queue_depth_at_arrival: number | null;
+  timeout_s: number | null;
+  utilization_at_arrival: number | null;
+  queue_wait_ms: number | null;
+  was_cold_start: boolean | null;
+  load_duration_ms: number | null;
+  available_vram_mb: number | null;
+  azure_rate_remaining_requests: number | null;
+  azure_rate_remaining_tokens: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  cost_microcents: number | null;
+  classification_statistics: unknown;
+  input_payload: unknown;
+  headers: unknown;
+  response_payload: unknown;
+}
+
+/** Envelope of the trace export — the downloaded file is this object. */
+export interface TraceExport {
+  team_id: number;
+  team_name: string | null;
+  days: number;
+  since: string;
+  count: number;
+  /** True when the window held more traces than one export may carry. */
+  truncated: boolean;
+  traces: TraceExportItem[];
+}
