@@ -75,3 +75,21 @@ def test_build_payloads_removes_secrets_from_configuration():
     assert "authorization" not in payload["configuration"]["scenario"]["spec"]["backend"]["extras"]["headers"]
     assert "token" not in payload["configuration"]["benchmark"]["backend"]
     assert payload["configuration"]["benchmark"]["backend"]["model"] == "Qwen/Qwen3-8B"
+
+
+def test_build_payloads_rejects_inconsistent_or_non_integer_totals():
+    report = {
+        "benchmarks": [
+            {"metrics": {"request_totals": {"successful": 9, "incomplete": 0, "errored": 0, "total": 10}}},
+            {"metrics": {"request_totals": {"successful": 10.0, "incomplete": 0, "errored": 0, "total": 10}}},
+        ]
+    }
+
+    assert importer.build_payloads(report, 7, "openai/gsm8k") == []
+
+
+def test_import_credentials_require_https_except_on_loopback():
+    assert importer.credential_transport_is_secure("https://logos.example/import")
+    assert importer.credential_transport_is_secure("http://localhost:18082/import")
+    assert importer.credential_transport_is_secure("http://127.0.0.1:18082/import")
+    assert not importer.credential_transport_is_secure("http://logos.example/import")

@@ -75,6 +75,9 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
             assert provider_id == 20
             return None
 
+        def lock_model_benchmark_provider(self, provider_id):
+            assert provider_id == 20
+
         def create_job_record(self, **kwargs):
             return 7
 
@@ -106,6 +109,53 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
     assert runner.await_args.kwargs["target"] == "http://127.0.0.1:8080/internal/model_benchmarks/jobs/7"
     assert runner.await_args.kwargs["api_key"] is None
     assert runner.await_args.kwargs["request_headers"][main.BENCHMARK_PROVIDER_HEADER] == "20"
+
+
+@pytest.mark.asyncio
+async def test_external_benchmark_rejects_api_key_over_plaintext_http(monkeypatch):
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get_model_provider_benchmark_target(self, model_provider_id):
+            return {
+                "model_provider_id": model_provider_id,
+                "provider_id": 20,
+                "provider_name": "cloud-provider",
+                "provider_type": "cloud",
+                "model_id": 1,
+                "model_name": "org/model",
+                "target": "http://provider.example/v1",
+                "api_key": "secret",
+            }
+
+    request = MagicMock()
+    request.headers = {"authorization": "Bearer internal-secret"}
+    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+
+    with pytest.raises(main.HTTPException) as exc_info:
+        await main.internal_run_model_benchmark(
+            main._InternalBenchmarkRequest(model_provider_id=31, samples=5),
+            request,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "HTTPS" in exc_info.value.detail
+
+
+def test_internal_secret_rejects_non_ascii_token_without_compare_digest_type_error(monkeypatch):
+    request = MagicMock()
+    request.headers = {"authorization": "Bearer töken"}
+    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+
+    with pytest.raises(main.HTTPException) as exc_info:
+        main._require_internal_secret(request)
+
+    assert exc_info.value.status_code == 401
 
 
 def test_valid_running_job_resolves_required_worker(monkeypatch):
@@ -171,6 +221,22 @@ def test_forged_affinity_is_rejected_before_job_lookup(monkeypatch):
     assert exc_info.value.status_code == 401
 
 
+def test_non_ascii_forged_affinity_is_rejected_without_compare_digest_type_error(monkeypatch):
+    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(main, "DBManager", MagicMock(side_effect=AssertionError("DB must not be queried")))
+    headers = _headers()
+    headers[main.BENCHMARK_TOKEN_HEADER] = "töken"
+
+    with pytest.raises(main.HTTPException) as exc_info:
+        main._benchmark_provider_affinity(
+            headers,
+            {"model": "org/model"},
+            [{"model_id": 1, "provider_id": 20, "type": "logosnode"}],
+        )
+
+    assert exc_info.value.status_code == 401
+
+
 def test_completed_job_token_cannot_be_replayed(monkeypatch):
     monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
     _install_job_db(monkeypatch, _job(status="success"))
@@ -230,3 +296,43 @@ async def test_internal_benchmark_proxy_does_not_resolve_a_user_api_key(monkeypa
     assert response == "response"
     assert execute.await_args.kwargs["deployments"] == [deployment]
     assert execute.await_args.kwargs["allowed_models_override"] == [1]
+
+
+@pytest.mark.asyncio
+async def test_sync_request_records_affinity_http_errors_on_the_request_log(monkeypatch):
+    async def fake_auth_parse_log(request, use_profile_auth=False):
+        auth = MagicMock(api_key_id=5)
+        return {}, auth, {"model": "org/model"}, "127.0.0.1", 99
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def update_log_entry_metrics(self, **kwargs):
+            pass
+
+    failure = MagicMock()
+    monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(
+        main,
+        "request_setup",
+        lambda headers, api_key_id, db=None: ([{"provider_id": 20, "model_id": 1}], ["org/model"]),
+    )
+    monkeypatch.setattr(
+        main,
+        "_benchmark_provider_affinity",
+        MagicMock(side_effect=main.HTTPException(status_code=401, detail="Invalid benchmark worker affinity")),
+    )
+    monkeypatch.setattr(main, "_record_log_failure", failure)
+
+    with pytest.raises(main.HTTPException) as exc_info:
+        await main.handle_sync_request("chat/completions", MagicMock())
+
+    assert exc_info.value.status_code == 401
+    failure.assert_called_once()
+    assert failure.call_args.args[0] == 99
+    assert failure.call_args.args[2] == "Invalid benchmark worker affinity"

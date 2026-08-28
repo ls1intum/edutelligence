@@ -119,3 +119,10 @@ def test_validate_successful_report_surfaces_request_error(tmp_path):
 
     with pytest.raises(RuntimeError, match="404 model not available"):
         runner.validate_successful_report(report_path, expected_samples=5)
+
+
+def test_provider_credentials_require_https_except_on_loopback():
+    assert runner.credential_transport_is_secure("https://provider.example/v1")
+    assert runner.credential_transport_is_secure("http://localhost:8000/v1")
+    assert runner.credential_transport_is_secure("http://[::1]:8000/v1")
+    assert not runner.credential_transport_is_secure("http://provider.example/v1")

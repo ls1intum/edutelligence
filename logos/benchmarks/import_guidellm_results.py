@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 _SECRET_KEYS = {
     "api_key",
@@ -19,6 +21,27 @@ _SECRET_KEYS = {
     "secret",
     "token",
 }
+
+
+def credential_transport_is_secure(url: str) -> bool:
+    """Allow credentials over HTTPS, or plain HTTP only on loopback."""
+    parsed = urlsplit(url)
+    if parsed.scheme == "https" and parsed.hostname:
+        return True
+    if parsed.scheme != "http" or not parsed.hostname:
+        return False
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _request_total(value: Any) -> int | None:
+    """Return a non-negative integer request total, rejecting bools/floats."""
+    return value if type(value) is int and value >= 0 else None
 
 
 def redact_secrets(value: Any) -> Any:
@@ -36,11 +59,20 @@ def build_payloads(report: dict[str, Any], model_provider_id: int, dataset: str)
     for benchmark in report.get("benchmarks", []):
         metrics = benchmark.get("metrics", {})
         totals = metrics.get("request_totals", {})
-        successful = int(totals.get("successful", 0))
-        incomplete = int(totals.get("incomplete", 0))
-        errored = int(totals.get("errored", 0))
-        total = int(totals.get("total", 0))
-        if successful <= 0 or incomplete > 0 or errored > 0 or total <= 0:
+        successful = _request_total(totals.get("successful"))
+        incomplete = _request_total(totals.get("incomplete"))
+        errored = _request_total(totals.get("errored"))
+        total = _request_total(totals.get("total"))
+        if (
+            successful is None
+            or incomplete is None
+            or errored is None
+            or total is None
+            or successful <= 0
+            or successful != total
+            or incomplete != 0
+            or errored != 0
+        ):
             continue
 
         end_time = benchmark.get("end_time")
@@ -95,6 +127,8 @@ def main() -> None:
     token = os.environ.get(args.token_env)
     if not token:
         parser.error(f"Set the admin access token in {args.token_env}")
+    if not credential_transport_is_secure(args.api_url):
+        parser.error("Logos import credentials require HTTPS (plain HTTP is allowed only on loopback)")
 
     report = json.loads(args.report.read_text(encoding="utf-8"))
     payloads = build_payloads(report, args.model_provider_id, args.dataset)

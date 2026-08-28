@@ -38,6 +38,7 @@ from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
 from logos.benchmarks.guidellm_runner import (
     benchmark_affinity_headers,
     benchmark_affinity_token,
+    credential_transport_is_secure,
     extract_serving_configuration,
     internal_benchmark_target,
     resolve_benchmark_target,
@@ -1940,7 +1941,7 @@ async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Requ
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     if not _pipeline or not _logosnode_facade or not _azure_facade:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
@@ -2105,7 +2106,7 @@ def _require_internal_secret(request: Request) -> None:
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
 
@@ -2123,7 +2124,14 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
         endpoint = str(target.get("target") or "").strip()
         if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
+        api_key = str(target.get("api_key") or "").strip()
+        if provider_type != "logosnode" and api_key and not credential_transport_is_secure(endpoint):
+            raise HTTPException(
+                status_code=409,
+                detail="Provider credentials require HTTPS (plain HTTP is allowed only on loopback)",
+            )
 
+        db.lock_model_benchmark_provider(provider_id)
         active = db.find_active_model_benchmark_job(provider_id)
         if active is not None:
             return JSONResponse(
@@ -2192,7 +2200,7 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             model_provider_id=data.model_provider_id,
             target=benchmark_target,
             model=model_name,
-            api_key=None if is_internal_worker_benchmark else str(target.get("api_key") or "") or None,
+            api_key=None if is_internal_worker_benchmark else api_key or None,
             samples=data.samples,
             max_output_tokens=data.max_output_tokens,
             serving_configuration=serving_configuration,
@@ -4524,7 +4532,7 @@ def _benchmark_provider_affinity(
         provider_id=provider_id,
         model=model_name,
     )
-    if not hmac.compare_digest(token, expected_token):
+    if not hmac.compare_digest(token.encode("utf-8"), expected_token.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
 
     with DBManager() as db:
@@ -4686,6 +4694,9 @@ async def handle_sync_request(path: str, request: Request):
                 deployment for deployment in raw_deployments if deployment["provider_id"] == required_provider_id
             ]
         deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
+    except HTTPException as e:
+        _record_log_failure(log_id, request_id, str(e.detail), result_status="error")
+        raise
     except PermissionError as e:
         _record_log_failure(log_id, request_id, str(e), result_status="error")
         raise HTTPException(status_code=401, detail=str(e))

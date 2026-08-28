@@ -1060,6 +1060,13 @@ class CapacityPlanner:
         if target is not None and target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping":
             return True
 
+        if target is not None and target.runtime_state == "starting":
+            return await self._wait_for_benchmark_lane_ready(
+                provider_id,
+                model_name,
+                timeout_seconds,
+            )
+
         if target is not None and target.runtime_state == "sleeping":
             return (
                 await self._prepare_existing_lane(
@@ -1072,6 +1079,27 @@ class CapacityPlanner:
             )
 
         return await self._cold_load_for_request(provider_id, model_name, timeout_seconds) is not None
+
+    async def _wait_for_benchmark_lane_ready(
+        self,
+        provider_id: int,
+        model_name: str,
+        timeout_seconds: float,
+    ) -> bool:
+        """Wait for an already-starting lane instead of issuing a duplicate load."""
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            target = self._pick_request_target_lane(provider_id, model_name)
+            if target is not None:
+                if target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping":
+                    return True
+                if target.runtime_state in {"stopped", "error", "cold", "sleeping"}:
+                    return False
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(1.0, remaining))
 
     async def _prepare_existing_lane(
         self,

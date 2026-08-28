@@ -246,6 +246,48 @@ class ProviderPerformanceControllerTest {
     }
 
     @Test
+    void importModelBenchmark_rejectsInconsistentRequestTotals() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/import")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "model_provider_id": 7001,
+                      "configuration": {"tool":"guidellm"},
+                      "dataset": "openai/gsm8k",
+                      "sample_size": 50,
+                      "metrics": {
+                        "request_totals": {"successful":49,"incomplete":0,"errored":0,"total":50}
+                      }
+                    }
+                    """))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error")
+               .value("Only successful GuideLLM benchmark summaries are stored"));
+    }
+
+    @Test
+    void importModelBenchmark_rejectsFractionalRequestTotals() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/import")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "model_provider_id": 7001,
+                      "configuration": {"tool":"guidellm"},
+                      "dataset": "openai/gsm8k",
+                      "sample_size": 50,
+                      "metrics": {
+                        "request_totals": {"successful":50.5,"incomplete":0,"errored":0,"total":50}
+                      }
+                    }
+                    """))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error")
+               .value("Only successful GuideLLM benchmark summaries are stored"));
+    }
+
+    @Test
     void runModelBenchmark_forwardsFixedSmallRunToOrchestrator() throws Exception {
         when(orchestratorWorkerAdminClient.startModelBenchmark(7001, 5, 512))
             .thenReturn(ResponseEntity.accepted().body(Map.of(

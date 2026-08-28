@@ -207,6 +207,7 @@
 
 .performance-card {
   @include glass-surface;
+
   padding: 24px;
 }
 
@@ -744,6 +745,7 @@
 
 .logs-panel {
   @include glass-surface;
+
   padding: 12px;
   border-radius: 8px;
   display: flex;

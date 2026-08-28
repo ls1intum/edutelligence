@@ -43,3 +43,15 @@ async def test_benchmark_lane_cold_loads_only_on_selected_worker():
 
     assert await planner.prepare_benchmark_lane(7, "org/model", 30.0) is True
     planner._cold_load_for_request.assert_awaited_once_with(7, "org/model", 30.0)
+
+
+@pytest.mark.asyncio
+async def test_benchmark_lane_waits_for_an_existing_start_instead_of_loading_again():
+    starting = SimpleNamespace(runtime_state="starting", sleep_state="unsupported")
+    ready = SimpleNamespace(runtime_state="loaded", sleep_state="awake")
+    planner = _planner(starting)
+    planner._pick_request_target_lane.side_effect = [starting, ready]
+
+    assert await planner.prepare_benchmark_lane(7, "org/model", 30.0) is True
+    planner._prepare_existing_lane.assert_not_awaited()
+    planner._cold_load_for_request.assert_not_awaited()

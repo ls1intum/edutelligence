@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import shutil
@@ -13,8 +14,30 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 DEFAULT_DATASET = "openai/gsm8k"
+
+
+def credential_transport_is_secure(url: str) -> bool:
+    """Allow credentials over HTTPS, or plain HTTP only on loopback."""
+    parsed = urlsplit(url)
+    if parsed.scheme == "https" and parsed.hostname:
+        return True
+    if parsed.scheme != "http" or not parsed.hostname:
+        return False
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _request_total(value: Any) -> int | None:
+    """Return a non-negative integer request total, rejecting bools/floats."""
+    return value if type(value) is int and value >= 0 else None
 
 
 def positive_int(value: str) -> int:
@@ -100,10 +123,10 @@ def validate_successful_report(report_path: Path, expected_samples: int) -> None
     for benchmark in report.get("benchmarks", []):
         metrics = benchmark.get("metrics", {})
         totals = metrics.get("request_totals", {})
-        successful = int(totals.get("successful", 0))
-        incomplete = int(totals.get("incomplete", 0))
-        errored = int(totals.get("errored", 0))
-        total = int(totals.get("total", 0))
+        successful = _request_total(totals.get("successful"))
+        incomplete = _request_total(totals.get("incomplete"))
+        errored = _request_total(totals.get("errored"))
+        total = _request_total(totals.get("total"))
         if successful == expected_samples and total == expected_samples and incomplete == 0 and errored == 0:
             return
 
@@ -137,12 +160,16 @@ def run(args: argparse.Namespace) -> Path:
                 f"Set the provider token in {args.provider_token_env}, "
                 "or pass --no-provider-auth for an unauthenticated local endpoint."
             )
+        if not credential_transport_is_secure(args.target):
+            raise RuntimeError("Provider credentials require HTTPS (plain HTTP is allowed only on loopback)")
 
     if not args.no_import and args.model_provider_id is None:
         raise RuntimeError("--model-provider-id is required unless --no-import is used")
 
     if not args.no_import and not os.environ.get(args.logos_token_env):
         raise RuntimeError(f"Set the Logos admin token in {args.logos_token_env}")
+    if not args.no_import and not credential_transport_is_secure(args.logos_api_url):
+        raise RuntimeError("Logos import credentials require HTTPS (plain HTTP is allowed only on loopback)")
 
     output_dir = args.output_dir or default_output_dir(args.model_provider_id, args.model)
     output_dir.mkdir(parents=True, exist_ok=False)

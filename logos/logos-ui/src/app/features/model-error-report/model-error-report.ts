@@ -344,6 +344,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     }));
   });
   private performancePollTimer: ReturnType<typeof setTimeout> | null = null;
+  private destroyed = false;
 
   // ==========================================================================
   // Tabs
@@ -503,6 +504,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.clearPerformancePoll();
     if (this.logCopiedResetTimer !== null) {
       clearTimeout(this.logCopiedResetTimer);
@@ -719,6 +721,9 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   private schedulePerformancePoll(): void {
     this.clearPerformancePoll();
+    if (this.destroyed) {
+      return;
+    }
     const hasActiveRun = this.benchmarkRuns().some(run => this.isBenchmarkActive(run));
     if (!hasActiveRun && this.activeTab() !== 'performance') {
       return;

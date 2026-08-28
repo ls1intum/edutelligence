@@ -106,7 +106,7 @@ public class ProviderPerformanceService {
         if (request.sampleSize() == null || request.sampleSize() <= 0) {
             throw new IllegalArgumentException("sample_size must be a positive integer");
         }
-        validateSuccessfulGuideLlmMetrics(request.metrics());
+        validateSuccessfulGuideLlmMetrics(request.metrics(), request.sampleSize());
 
         int inserted = modelProviderRepository.insertBenchmark(
             request.modelProviderId(),
@@ -211,20 +211,36 @@ public class ProviderPerformanceService {
         }
     }
 
-    private static void validateSuccessfulGuideLlmMetrics(Map<String, Object> metrics) {
+    private static void validateSuccessfulGuideLlmMetrics(Map<String, Object> metrics, int sampleSize) {
         if (metrics == null || !(metrics.get("request_totals") instanceof Map<?, ?> totals)) {
             throw new IllegalArgumentException("GuideLLM metrics.request_totals is required");
         }
 
-        int successful = intValue(totals.get("successful"));
-        int incomplete = intValue(totals.get("incomplete"));
-        int errored = intValue(totals.get("errored"));
-        if (successful <= 0 || incomplete > 0 || errored > 0) {
+        int successful = nonNegativeInteger(totals.get("successful"));
+        int incomplete = nonNegativeInteger(totals.get("incomplete"));
+        int errored = nonNegativeInteger(totals.get("errored"));
+        int total = nonNegativeInteger(totals.get("total"));
+        if (successful <= 0
+            || successful != total
+            || total != sampleSize
+            || incomplete != 0
+            || errored != 0) {
             throw new IllegalArgumentException("Only successful GuideLLM benchmark summaries are stored");
         }
     }
 
-    private static int intValue(Object value) {
-        return value instanceof Number number ? number.intValue() : 0;
+    private static int nonNegativeInteger(Object value) {
+        if (!(value instanceof Number number)) {
+            throw new IllegalArgumentException("Only successful GuideLLM benchmark summaries are stored");
+        }
+        double doubleValue = number.doubleValue();
+        long longValue = number.longValue();
+        if (!Double.isFinite(doubleValue)
+            || doubleValue != longValue
+            || longValue < 0
+            || longValue > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Only successful GuideLLM benchmark summaries are stored");
+        }
+        return (int) longValue;
     }
 }

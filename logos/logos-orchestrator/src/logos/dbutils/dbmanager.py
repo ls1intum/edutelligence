@@ -486,6 +486,13 @@ class DBManager:
         )
         return dict(row) if row else None
 
+    def lock_model_benchmark_provider(self, provider_id: int) -> None:
+        """Serialize benchmark admission for one provider within this transaction."""
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:namespace, :provider_id)"),
+            {"namespace": 1428947001, "provider_id": int(provider_id)},
+        )
+
     def find_active_model_benchmark_job(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """Return the newest queued/running benchmark for a provider, if any."""
         row = (

@@ -10,6 +10,7 @@ from logos.benchmarks.guidellm_runner import (
     BENCHMARK_TOKEN_HEADER,
     benchmark_affinity_headers,
     build_scenario,
+    credential_transport_is_secure,
     extract_serving_configuration,
     internal_benchmark_target,
     is_logos_benchmark_target,
@@ -85,6 +86,40 @@ async def test_warmup_request_uses_affinity_without_becoming_a_measurement(monke
     assert call.kwargs["json"]["max_tokens"] == 1
 
 
+@pytest.mark.asyncio
+async def test_warmup_redacts_secrets_before_truncating_error_details(monkeypatch) -> None:
+    class Response:
+        is_error = True
+        status_code = 401
+        text = "x" * 499 + "api-secret"
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return Response()
+
+    runner = importlib.import_module("logos.benchmarks.guidellm_runner")
+    monkeypatch.setattr(runner.httpx, "AsyncClient", Client)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await send_warmup_request(
+            target="http://127.0.0.1:8080",
+            model="org/model",
+            api_key="api-secret",
+            request_headers={},
+        )
+
+    assert "api-secret" not in str(exc_info.value)
+
+
 def test_resolve_benchmark_target_uses_internal_api_for_own_domain() -> None:
     assert (
         resolve_benchmark_target(
@@ -101,6 +136,18 @@ def test_internal_benchmark_target_is_job_scoped() -> None:
         internal_benchmark_target(17, internal_base_url="http://127.0.0.1:8080/")
         == "http://127.0.0.1:8080/internal/model_benchmarks/jobs/17"
     )
+
+
+def test_internal_benchmark_target_rejects_plaintext_non_loopback_transport() -> None:
+    with pytest.raises(ValueError, match="HTTPS or a loopback"):
+        internal_benchmark_target(17, internal_base_url="http://orchestrator.internal:8080")
+
+
+def test_credential_transport_accepts_https_and_loopback_only() -> None:
+    assert credential_transport_is_secure("https://provider.example/v1")
+    assert credential_transport_is_secure("http://localhost:8080/v1")
+    assert credential_transport_is_secure("http://127.0.0.1:8080/v1")
+    assert not credential_transport_is_secure("http://provider.example/v1")
 
 
 def test_resolve_benchmark_target_preserves_external_provider() -> None:

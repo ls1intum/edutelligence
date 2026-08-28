@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import shutil
@@ -41,6 +42,22 @@ BENCHMARK_TOKEN_HEADER = "x-logos-benchmark-token"
 BENCHMARK_PHASE_HEADER = "x-logos-benchmark-phase"
 
 
+def credential_transport_is_secure(url: str) -> bool:
+    """Allow credentials over HTTPS, or plain HTTP only on loopback."""
+    parsed = urlsplit(url)
+    if parsed.scheme == "https" and parsed.hostname:
+        return True
+    if parsed.scheme != "http" or not parsed.hostname:
+        return False
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def benchmark_affinity_token(*, secret: str, job_id: int, provider_id: int, model: str) -> str:
     """Sign the worker affinity carried by one internal benchmark job."""
     message = f"{int(job_id)}:{int(provider_id)}:{model}".encode("utf-8")
@@ -69,6 +86,8 @@ def internal_benchmark_target(job_id: int, *, internal_base_url: str | None = No
         if internal_base_url is not None
         else os.getenv("LOGOS_BENCHMARK_INTERNAL_BASE_URL", "http://127.0.0.1:8080")
     ).rstrip("/")
+    if not credential_transport_is_secure(internal):
+        raise ValueError("Internal benchmark credentials require HTTPS or a loopback HTTP URL")
     return f"{internal}/internal/model_benchmarks/jobs/{int(job_id)}"
 
 
@@ -104,9 +123,10 @@ async def send_warmup_request(
             },
         )
     if response.is_error:
-        detail = response.text[:500]
+        detail = response.text
         if api_key:
             detail = detail.replace(api_key, "[redacted]")
+        detail = detail[:500]
         raise RuntimeError(f"Benchmark warm-up failed with HTTP {response.status_code}: {detail}")
 
 
@@ -127,6 +147,8 @@ def resolve_benchmark_target(
         if internal_base_url is not None
         else os.getenv("LOGOS_BENCHMARK_INTERNAL_BASE_URL", "http://127.0.0.1:8080")
     ).rstrip("/")
+    if not credential_transport_is_secure(internal):
+        raise ValueError("Internal benchmark credentials require HTTPS or a loopback HTTP URL")
     path = urlsplit(normalized).path.rstrip("/")
     return f"{internal}{path}"
 
