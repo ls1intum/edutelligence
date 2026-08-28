@@ -83,7 +83,10 @@ class LogosBridgeClient:
         self._app = app
         self._cfg = config
         self._task: asyncio.Task | None = None
-        self._command_tasks: set[asyncio.Task] = set()
+        # Keyed by cmd_id so a single in-flight command can be cancelled. An
+        # unkeyed set only allowed "cancel everything on disconnect", which
+        # left an abandoned request generating until it finished on its own.
+        self._command_tasks: dict[str, asyncio.Task] = {}
         self._stopping = asyncio.Event()
         self._send_lock = asyncio.Lock()
         self._connected = False
@@ -389,6 +392,11 @@ class LogosBridgeClient:
                 "actions": [
                     "infer",
                     "infer_stream",
+                    # The server only sends cancellations to a worker that
+                    # lists this; an older worker keeps the previous
+                    # behaviour instead of being sent a command it would
+                    # answer with "Unsupported bridge command".
+                    "cancel_command",
                     "get_runtime",
                     "get_lanes",
                     "apply_lanes",
@@ -470,10 +478,13 @@ class LogosBridgeClient:
             await ws.send(json.dumps(payload))
 
     def _track_command_task(self, task: asyncio.Task, *, action: str, cmd_id: str) -> None:
-        self._command_tasks.add(task)
+        self._command_tasks[cmd_id] = task
 
         def _cleanup(done_task: asyncio.Task) -> None:
-            self._command_tasks.discard(done_task)
+            # Only drop our own entry: a cmd_id is unique per command, but
+            # clearing blindly would race a same-key re-registration.
+            if self._command_tasks.get(cmd_id) is done_task:
+                self._command_tasks.pop(cmd_id, None)
             try:
                 done_task.result()
             except asyncio.CancelledError:
@@ -491,7 +502,7 @@ class LogosBridgeClient:
         task.add_done_callback(_cleanup)
 
     async def _cancel_command_tasks(self) -> None:
-        tasks = tuple(self._command_tasks)
+        tasks = tuple(self._command_tasks.values())
         if not tasks:
             return
 
@@ -508,6 +519,60 @@ class LogosBridgeClient:
                     exc_info=True,
                 )
         self._command_tasks.clear()
+
+    def cancel_command(self, target_cmd_id: str) -> bool:
+        """Cancel one in-flight command by its cmd_id.
+
+        Returns whether a live task was found. Cancelling the task unwinds
+        ``_execute_stream_command``'s ``finally``, which closes the httpx
+        stream to the lane — that closed connection is what makes vLLM abort
+        the sequence and free its KV blocks — and decrements the lane's
+        in-flight count.
+        """
+        task = self._command_tasks.get(target_cmd_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
+    async def _handle_cancel_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:
+        """Abort the command named by ``params["target_cmd_id"]``.
+
+        Sent when the client behind a request has gone away. Without it the
+        lane keeps generating a response nobody will read: the relay holds a
+        KV slot and burns GPU cycles for the full length of a generation that
+        was abandoned, which under retry storms compounds the overload that
+        caused the retries.
+
+        Answers with a normal ``command_result`` so the server can tell an
+        aborted stream from one that had already finished on its own.
+        """
+        target_cmd_id = str(params.get("target_cmd_id", "")).strip()
+        cancelled = self.cancel_command(target_cmd_id) if target_cmd_id else False
+        if cancelled:
+            logger.info(
+                "%s>> CMD cancel_command%s cmd_id=%s target=%s aborted",
+                _CYAN + _BOLD,
+                _RESET,
+                cmd_id[:8],
+                target_cmd_id[:8],
+            )
+        else:
+            # Not an error: a cancel racing a completing stream is normal.
+            logger.debug(
+                "cancel_command cmd_id=%s target=%s: no in-flight command",
+                cmd_id[:8],
+                target_cmd_id[:8],
+            )
+        await self._send_json(
+            ws,
+            {
+                "type": "command_result",
+                "cmd_id": cmd_id,
+                "success": True,
+                "result": {"cancelled": cancelled, "target_cmd_id": target_cmd_id},
+            },
+        )
 
     async def _execute_command_and_respond(self, ws, cmd_id: str, action: str, params: dict[str, Any]) -> None:
         if action != "infer":
@@ -572,6 +637,12 @@ class LogosBridgeClient:
         action = str(message.get("action", "")).strip()
         params = message.get("params") or {}
         if not cmd_id or not action:
+            return
+
+        # Cancellation must not queue behind the command it cancels — handle
+        # it inline on the receive loop rather than spawning a task.
+        if action == "cancel_command":
+            await self._handle_cancel_command(ws, cmd_id, params)
             return
 
         if action == "infer_stream":
@@ -1569,6 +1640,22 @@ class LogosBridgeClient:
                 )
                 return
             await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": True})
+        except asyncio.CancelledError:
+            # The server cancelled this stream because its client went away.
+            # No terminal frame: nobody is reading, and the server already
+            # dropped the queue for this cmd_id. What matters is the `finally`
+            # below — closing the httpx stream is what tells vLLM to abort the
+            # sequence instead of generating into a socket nobody drains.
+            # CancelledError is a BaseException, so the handler below does not
+            # swallow it and no spurious stream_end is emitted.
+            logger.info(
+                "%s<< STREAM CANCELLED%s cmd_id=%s lane=%s — aborting generation",
+                _YELLOW,
+                _RESET,
+                cmd_id[:8],
+                lane_id,
+            )
+            raise
         except Exception as exc:  # noqa: BLE001
             await self._send_json(
                 ws,
@@ -1583,7 +1670,19 @@ class LogosBridgeClient:
             # Decrement before aclose() so that a client-side disconnect that
             # leaves httpx draining the upstream stream does not keep
             # worker_active > 0 and falsely trigger proxy_stuck detection.
-            await lane_manager.decrement_active_requests(lane_id)
+            #
+            # Guarded so a lane-manager failure cannot skip the aclose below:
+            # on the cancellation path that close is the whole point — it is
+            # what makes vLLM abort the sequence and release its KV blocks.
+            try:
+                await lane_manager.decrement_active_requests(lane_id)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to decrement in-flight count for lane=%s (cmd_id=%s)",
+                    lane_id,
+                    cmd_id[:8],
+                    exc_info=True,
+                )
             if upstream is not None:
                 try:
                     await asyncio.wait_for(upstream.aclose(), timeout=5.0)

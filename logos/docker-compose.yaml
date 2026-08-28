@@ -82,6 +82,10 @@ services:
       # model to load (can exceed 120s), so it timed out before being served.
       LOGOSNODE_INFER_TIMEOUT_SECONDS: "${LOGOSNODE_INFER_TIMEOUT_SECONDS:-600}"
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "${LOGOSNODE_STREAM_TIMEOUT_SECONDS:-600}"
+      # Kill switch for prefix-cache-aware placement (keeping one stream, i.e.
+      # api key + prompt prefix, on the worker that already holds its KV
+      # blocks). Off restores the previous random tie-break placement.
+      LOGOS_PREFIX_AFFINITY_ENABLED: "${LOGOS_PREFIX_AFFINITY_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"

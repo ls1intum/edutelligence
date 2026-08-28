@@ -105,7 +105,7 @@ def _stub_db(monkeypatch):
             return [(1, "test-model")]
 
         def get_model(self, model_id):
-            return {"id": model_id, "name": "test-model", "parallel": 1}
+            return {"id": model_id, "name": "test-model"}
 
         def get_provider_deployment_info(self, mid, pid):
             return {
