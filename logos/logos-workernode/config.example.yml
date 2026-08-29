@@ -145,6 +145,22 @@ logos:
     - model: Qwen/Qwen3.8-27B
       min_context_fraction: 1.0
 
+    # GGUF models are supported on vLLM lanes (GPU builds). Any of these
+    # works — the worker auto-detects GGUF repositories and quantizations:
+    #
+    #   - unsloth/Qwen3-8B-GGUF                      # bare repo → auto-quant
+    #   - unsloth/Qwen3-8B-GGUF:Q4_K_M               # explicit quant
+    #   - unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf # explicit file
+    #
+    # A bare repo downloads/serves one quantization: Q4_K_M when the repo
+    # ships it, otherwise a deterministic fallback order. Pin a different one
+    # under engines.vllm.model_overrides.<model>.gguf_quant. vLLM recommends
+    # passing the base model's tokenizer (gguf_tokenizer) — it also serves as
+    # the HF config source for the GGUF loader.
+    #
+    # - model: unsloth/Qwen3-8B-GGUF
+    #   kv_cache_memory_bytes: 4G
+
   # How often (seconds) the worker sends a status heartbeat to Logos.
   # Lower = server sees fresher lane state; higher = less network chatter.
   heartbeat_interval_seconds: 5
@@ -237,6 +253,18 @@ engines:
     #   quantization: str          — quantization format to load the model with.
     #     Common values: "awq", "gptq", "fp8", "bitsandbytes". Must match the
     #     model weights. Usually inferred automatically from the model config.
+    #
+    #   gguf_quant: str            — GGUF quantization to serve for a GGUF
+    #     model repository (e.g. "Q4_K_M"). GGUF repos ship many quantizations
+    #     in one repo; empty (default) = auto-detect from the repo's .gguf
+    #     file listing (local HF cache first, HuggingFace Hub as fallback),
+    #     preferring Q4_K_M. Alternatively address the model directly as
+    #     "org/name-GGUF:Q4_K_M" to pin the quant without this field.
+    #
+    #   gguf_tokenizer: str        — HuggingFace repo passed to vLLM as
+    #     --tokenizer for GGUF models (e.g. "Qwen/Qwen3-8B" for
+    #     "unsloth/Qwen3-8B-GGUF"); the GGUF loader also uses it as the HF
+    #     config source. vLLM recommends the base model's tokenizer.
     #
     #   dtype: str                 — compute dtype: "auto" | "float16" | "bfloat16".
     #     "auto" picks bfloat16 on Ampere+ and float16 on older cards.

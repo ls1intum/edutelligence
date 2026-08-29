@@ -45,6 +45,28 @@ Adding or editing a template needs no redeploy — the deploy workflow only ship
 `docker-compose.yml` and `.env` — just drop the file on the host and restart the
 lane. Set `LOGOS_CHAT_TEMPLATE_DIR` to relocate the directory (local dev, tests).
 
+## GGUF models (vLLM lanes)
+
+vLLM lanes can serve GGUF repositories. vLLM's GGUF quantization lives in the
+out-of-tree `vllm-gguf-plugin` (installed in GPU worker images); the worker
+auto-detects GGUF models and resolves what to serve:
+
+- `unsloth/Qwen3-8B-GGUF` — bare repo; the worker lists its `.gguf` files
+  (local HF cache first, HuggingFace Hub as fallback) and picks `Q4_K_M` when
+  available, otherwise a deterministic fallback order.
+- `unsloth/Qwen3-8B-GGUF:Q4_K_M` — explicit quant.
+- `unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf` — explicit file; multi-file
+  shard sets (`…-00001-of-00004.gguf`) are read natively by the plugin, no
+  merge step needed.
+
+The lane keeps answering under the model name it was registered with (the
+served reference is aliased back via `--served-model-name`). To pin the quant
+or pass the base model's tokenizer (recommended by vLLM, also the HF config
+source for the GGUF loader), use `engines.vllm.model_overrides` — see
+`gguf_quant` / `gguf_tokenizer` in `config.example.yml`. Startup prefetch
+downloads only the selected quantization's files, not the whole multi-quant
+repository.
+
 ## Storage layout
 
 The worker uses **one persistent volume** for everything that benefits from

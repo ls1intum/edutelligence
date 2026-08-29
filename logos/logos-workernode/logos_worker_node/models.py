@@ -75,6 +75,29 @@ class VllmConfig(BaseModel):
     )
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
+    gguf_quant: str = Field(
+        default="",
+        description=(
+            "GGUF quantization to serve for a GGUF model repository, e.g. 'Q4_K_M'. "
+            "GGUF repositories (unsloth/…, bartowski/…, …) ship many quantizations in one "
+            "repo; vLLM's GGUF loader needs one selected. Empty (default) = auto-detect: "
+            "the worker lists the repo's .gguf files (local HF cache first, HuggingFace "
+            "Hub as fallback) and picks Q4_K_M when available, otherwise a deterministic "
+            "fallback order. Setting the lane model directly as 'org/name-GGUF:Q4_K_M' "
+            "addresses an explicit quant without this field."
+        ),
+    )
+    gguf_tokenizer: str = Field(
+        default="",
+        description=(
+            "HuggingFace repo passed to vLLM as --tokenizer for GGUF models; the GGUF "
+            "loader also uses it as the HF config source. vLLM recommends the base "
+            "model's tokenizer (e.g. 'Qwen/Qwen3-8B' for 'unsloth/Qwen3-8B-GGUF') "
+            "because converting the tokenizer from GGUF metadata is slow and unstable "
+            "for large vocabularies. Empty (default) = let the GGUF repo's own "
+            "config/tokenizer be used (standard for well-formed -GGUF repos)."
+        ),
+    )
     gpu_memory_utilization: float | None = Field(
         default=None,
         ge=0.1,

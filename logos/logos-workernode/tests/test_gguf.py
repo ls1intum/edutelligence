@@ -1,0 +1,345 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from logos_worker_node import gguf
+
+# ---------------------------------------------------------------------------
+# Quant type vocabulary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "quant",
+    [
+        # File (LlamaFileType) quants
+        "F16",
+        "BF16",
+        "Q4_0",
+        "Q4_1",
+        "Q8_0",
+        "Q4_K_M",
+        "Q4_K_S",
+        "Q5_K_M",
+        "IQ2_XXS",
+        "IQ4_XS",
+        "TQ1_0",
+        # Tensor (GGML) base quants
+        "Q4_K",
+        "Q3_K",
+        "I8",
+        "F32",
+        # Extended convention: tensor type + suffix
+        "Q5_K_L",
+        "Q2_K_S",
+        "IQ3_M",
+    ],
+)
+def test_is_valid_gguf_quant_type_accepts_known_names(quant: str) -> None:
+    assert gguf.is_valid_gguf_quant_type(quant) is True
+
+
+@pytest.mark.parametrize("quant", ["", "Q9_X", "Q4_K_", "quantum", "4_K", "Q4K_M", "QX_K_M"])
+def test_is_valid_gguf_quant_type_rejects_unknown_names(quant: str) -> None:
+    assert gguf.is_valid_gguf_quant_type(quant) is False
+
+
+def test_is_valid_gguf_quant_type_strips_whitespace() -> None:
+    assert gguf.is_valid_gguf_quant_type("  Q4_K_M  ") is True
+
+
+def test_is_nonstandard_gguf_quant_type() -> None:
+    assert gguf.is_nonstandard_gguf_quant_type("UD-Q4_K_XL") is True
+    assert gguf.is_nonstandard_gguf_quant_type("Custom-Q8_0") is True
+    # No dash → not the non-standard convention
+    assert gguf.is_nonstandard_gguf_quant_type("Q4_K_M") is False
+    # Dash but no recognizable trailing quant
+    assert gguf.is_nonstandard_gguf_quant_type("foo-bar") is False
+
+
+# ---------------------------------------------------------------------------
+# Reference detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_remote_gguf_ref() -> None:
+    assert gguf.is_remote_gguf_ref("unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
+    assert gguf.is_remote_gguf_ref("bartowski/Llama-3.1-8B-Instruct-GGUF:UD-Q4_K_XL") is True
+    # No colon
+    assert gguf.is_remote_gguf_ref("unsloth/Qwen3-8B-GGUF") is False
+    # Colon with an unknown quant
+    assert gguf.is_remote_gguf_ref("unsloth/Qwen3-8B-GGUF:Q9_X") is False
+    # repo/file.gguf is a file ref, not a remote ref
+    assert gguf.is_remote_gguf_ref("unsloth/Qwen3-8B-GGUF/Qwen3-8B-00001-of-00002-Q4_K_M.gguf") is False
+    assert gguf.is_remote_gguf_ref("") is False
+
+
+def test_is_gguf_file_ref() -> None:
+    assert gguf.is_gguf_file_ref("/models/Qwen3-8B-Q4_K_M.gguf") is True
+    assert gguf.is_gguf_file_ref("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf") is True
+    assert gguf.is_gguf_file_ref("unsloth/Qwen3-8B-GGUF") is False
+
+
+def test_is_gguf_repo_name() -> None:
+    assert gguf.is_gguf_repo_name("unsloth/Qwen3-8B-GGUF") is True
+    assert gguf.is_gguf_repo_name("huihui_ai/gemma-3-4b-it-GGUF") is True
+    assert gguf.is_gguf_repo_name("Qwen/Qwen3-8B") is False
+    # No org/ separator → not a repo id
+    assert gguf.is_gguf_repo_name("Qwen3-8B-GGUF") is False
+
+
+def test_is_gguf_model_and_explicit_ref() -> None:
+    remote = "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    file_ref = "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf"
+    bare = "unsloth/Qwen3-8B-GGUF"
+
+    assert gguf.is_gguf_model(remote) is True
+    assert gguf.is_gguf_model(file_ref) is True
+    assert gguf.is_gguf_model(bare) is True
+    assert gguf.is_gguf_model("Qwen/Qwen3-8B") is False
+
+    assert gguf.is_explicit_gguf_ref(remote) is True
+    assert gguf.is_explicit_gguf_ref(file_ref) is True
+    assert gguf.is_explicit_gguf_ref(bare) is False
+    assert gguf.is_explicit_gguf_ref("Qwen/Qwen3-8B") is False
+
+
+def test_repo_id_of_all_reference_shapes() -> None:
+    assert gguf.repo_id_of("unsloth/Qwen3-8B-GGUF") == "unsloth/Qwen3-8B-GGUF"
+    assert gguf.repo_id_of("unsloth/Qwen3-8B-GGUF:Q4_K_M") == "unsloth/Qwen3-8B-GGUF"
+    assert gguf.repo_id_of("unsloth/Qwen3-8B-GGUF/Qwen3-8B-00001-of-00002-Q4_K_M.gguf") == "unsloth/Qwen3-8B-GGUF"
+
+
+# ---------------------------------------------------------------------------
+# Quant extraction from file names
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("filename", "quant"),
+    [
+        ("Qwen3-8B-Q4_K_M.gguf", "Q4_K_M"),
+        ("Qwen3-8B-Q4_K_M-00001-of-00004.gguf", "Q4_K_M"),
+        ("gpt2.Q8_0.gguf", "Q8_0"),
+        # Non-standard (UD) quant: the standard trailing token is extracted;
+        # it still resolves to the same file via the plugin's *-Q4_K_XL.gguf
+        # pattern, and the exact name can be pinned via gguf_quant.
+        ("Llama-3.1-8B-Instruct-UD-Q4_K_XL.gguf", "Q4_K_XL"),
+        ("model.Q4_0-00002-of-00002.gguf", "Q4_0"),
+        # Non-GGUF files
+        ("tokenizer.gguf", None),
+        ("README.md", None),
+    ],
+)
+def test_quant_from_filename(filename: str, quant: str | None) -> None:
+    assert gguf.quant_from_filename(filename) == quant
+
+
+def test_quant_from_filename_dash_wins_over_dot() -> None:
+    # Model names with dots (Qwen3.5) must not be mistaken for the
+    # dot-separated quant naming.
+    assert gguf.quant_from_filename("Qwen3.5-4B-Q4_K_M.gguf") == "Q4_K_M"
+
+
+def test_candidate_quants_deduplicates_and_skips_mmproj() -> None:
+    filenames = [
+        "Qwen3-8B-Q4_K_M-00001-of-00002.gguf",
+        "Qwen3-8B-Q4_K_M-00002-of-00002.gguf",
+        "Qwen3-8B-Q4_K_S.gguf",
+        "mmproj-Qwen3-8B-F16.gguf",
+        "tokenizer.gguf",
+    ]
+    assert gguf.candidate_quants(filenames) == ["Q4_K_M", "Q4_K_S"]
+
+
+def test_select_quant_preferred_wins() -> None:
+    assert gguf.select_quant(["Q4_K_S", "Q4_K_M"], preferred="Q4_K_S") == "Q4_K_S"
+
+
+def test_select_quant_prefers_q4_k_m() -> None:
+    # Q4_K_M is first in the preferred order regardless of listing order.
+    assert gguf.select_quant(["Q8_0", "Q4_K_S", "Q4_K_M"]) == "Q4_K_M"
+
+
+def test_select_quant_fallback_first_candidate() -> None:
+    assert gguf.select_quant(["IQ4_XS"]) == "IQ4_XS"
+    assert gguf.select_quant([]) is None
+
+
+# ---------------------------------------------------------------------------
+# Local HF cache listing
+# ---------------------------------------------------------------------------
+
+
+def _write_gguf(hf_home: Path, model: str, filenames: list[str], sizes: list[int] | None = None) -> None:
+    repo_dir = hf_home / "hub" / ("models--" + model.replace("/", "--"))
+    snapshot = repo_dir / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    for i, name in enumerate(filenames):
+        (snapshot / name).write_bytes(b"\x00" * (sizes[i] if sizes else 1))
+
+
+def test_list_cached_gguf_files_finds_cached_model(tmp_path: Path) -> None:
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "Qwen3-8B-Q4_K_M-00002-of-00002.gguf", "Qwen3-8B-Q4_K_S.gguf"],
+    )
+    files = gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF")
+    assert files == [
+        "Qwen3-8B-Q4_K_M-00001-of-00002.gguf",
+        "Qwen3-8B-Q4_K_M-00002-of-00002.gguf",
+        "Qwen3-8B-Q4_K_S.gguf",
+    ]
+
+
+def test_list_cached_gguf_files_ignores_zero_byte_and_non_gguf(tmp_path: Path) -> None:
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M.gguf", "empty.gguf", "tokenizer.gguf", "config.json"],
+        sizes=[16, 0, 1, 1],
+    )
+    # Every non-empty .gguf is listed (including tokenizer.gguf — quant
+    # extraction and the mmproj filter happen later in candidate_quants);
+    # zero-byte downloads and non-GGUF files are not.
+    files = gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF")
+    assert files == ["Qwen3-8B-Q4_K_M.gguf", "tokenizer.gguf"]
+
+
+def test_list_cached_gguf_files_none_when_not_cached(tmp_path: Path) -> None:
+    assert gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF") is None
+    assert gguf.list_cached_gguf_files(str(tmp_path), "Qwen3-8B-GGUF") is None
+
+
+def test_list_cached_gguf_files_empty_authoritative(tmp_path: Path) -> None:
+    # Cached repo without GGUF weights → empty list, not None.
+    _write_gguf(tmp_path, "org/some-model", ["config.json", "model.safetensors"])
+    assert gguf.list_cached_gguf_files(str(tmp_path), "org/some-model") == []
+
+
+# ---------------------------------------------------------------------------
+# Download allow patterns
+# ---------------------------------------------------------------------------
+
+
+def test_download_allow_patterns_non_gguf_is_none() -> None:
+    assert gguf.download_allow_patterns("Qwen/Qwen3-8B", "Q4_K_M") is None
+
+
+def test_download_allow_patterns_file_ref() -> None:
+    # The pattern is the repo file name — HF allow_patterns match on names.
+    assert gguf.download_allow_patterns("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf", "") == ["Qwen3-8B-Q4_K_M.gguf"]
+
+
+def test_download_allow_patterns_repo_without_quant_is_none() -> None:
+    # Nothing to filter on yet — the caller falls back to a full download.
+    assert gguf.download_allow_patterns("unsloth/Qwen3-8B-GGUF", "") is None
+
+
+def test_download_allow_patterns_repo_with_quant() -> None:
+    patterns = gguf.download_allow_patterns("unsloth/Qwen3-8B-GGUF", "Q4_K_M")
+    assert patterns is not None
+    # Covers both naming styles (Qwen3-8B-Q4_K_M.gguf / Qwen3-8B.Q4_K_M.gguf),
+    # with and without a shard suffix, in upper and lower case — the same
+    # pattern set the GGUF plugin's own download resolves to.
+    assert "*-Q4_K_M.gguf" in patterns
+    assert "*-Q4_K_M-*.gguf" in patterns
+    assert "*.Q4_K_M.gguf" in patterns
+    assert "*.q4_k_m.gguf" in patterns
+    # Only the one quantization is downloaded.
+    assert len(patterns) == 8
+    assert all("q4_k_m" in p.lower() for p in patterns)
+
+
+# ---------------------------------------------------------------------------
+# Serve-spec resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_gguf_spec_none_for_plain_model() -> None:
+    assert gguf.resolve_gguf_spec("Qwen/Qwen3-8B") is None
+    assert gguf.resolve_gguf_spec("") is None
+
+
+def test_resolve_gguf_spec_remote_ref_passthrough() -> None:
+    spec = gguf.resolve_gguf_spec("unsloth/Qwen3-8B-GGUF:Q4_K_M")
+    assert spec is not None
+    assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    assert spec.quant == "Q4_K_M"
+    assert spec.tokenizer is None
+
+
+def test_resolve_gguf_spec_remote_ref_with_tokenizer() -> None:
+    spec = gguf.resolve_gguf_spec("unsloth/Qwen3-8B-GGUF:Q4_K_M", gguf_tokenizer="Qwen/Qwen3-8B")
+    assert spec is not None
+    assert spec.tokenizer == "Qwen/Qwen3-8B"
+
+
+def test_resolve_gguf_spec_file_ref_passthrough() -> None:
+    ref = "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf"
+    spec = gguf.resolve_gguf_spec(ref)
+    assert spec is not None
+    assert spec.serve_ref == ref
+    assert spec.quant is None
+
+
+def test_resolve_gguf_spec_bare_repo_auto_quant() -> None:
+    spec = gguf.resolve_gguf_spec(
+        "unsloth/Qwen3-8B-GGUF",
+        gguf_file_names=["Qwen3-8B-Q4_K_S.gguf", "Qwen3-8B-Q4_K_M-00001-of-00002.gguf"],
+    )
+    assert spec is not None
+    assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    assert spec.quant == "Q4_K_M"
+
+
+def test_resolve_gguf_spec_bare_repo_operator_pin_wins() -> None:
+    spec = gguf.resolve_gguf_spec(
+        "unsloth/Qwen3-8B-GGUF",
+        gguf_quant="q4_k_s",
+        gguf_file_names=["Qwen3-8B-Q4_K_M.gguf", "Qwen3-8B-Q4_K_S.gguf"],
+    )
+    assert spec is not None
+    assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_S"
+
+
+def test_resolve_gguf_spec_bare_repo_pin_without_listing() -> None:
+    # Listing unavailable (None) — an operator pin still resolves.
+    spec = gguf.resolve_gguf_spec("unsloth/Qwen3-8B-GGUF", gguf_quant="Q4_K_M")
+    assert spec is not None
+    assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+
+
+def test_resolve_gguf_spec_bare_repo_unresolvable_raises() -> None:
+    # No listing, no pin → serving a bare GGUF repo is impossible; the lane
+    # must fail with an actionable message, not a vLLM cryptic error.
+    with pytest.raises(ValueError, match="gguf_quant"):
+        gguf.resolve_gguf_spec("unsloth/Qwen3-8B-GGUF")
+
+
+def test_resolve_gguf_spec_cached_listing_without_gguf_disproves_plain_name() -> None:
+    # A plain name plus an authoritative cached listing without GGUF weights
+    # is not a GGUF model — serve it as a regular model.
+    assert gguf.resolve_gguf_spec("org/some-model", gguf_file_names=[]) is None
+
+
+def test_resolve_gguf_spec_gguf_name_without_any_quant_raises() -> None:
+    # The name says -GGUF, so the name keeps the benefit of the doubt even
+    # over an empty listing (it may be partial) — with no quant anywhere the
+    # lane fails with an actionable message instead of a cryptic vLLM error.
+    with pytest.raises(ValueError, match="gguf_quant"):
+        gguf.resolve_gguf_spec("unsloth/Qwen3-8B-GGUF", gguf_file_names=[])
+
+
+def test_resolve_gguf_spec_plain_name_with_gguf_cache_is_gguf() -> None:
+    # Name doesn't follow the convention, but the cached listing proves the
+    # repo only contains GGUF weights.
+    spec = gguf.resolve_gguf_spec(
+        "org/some-quantized-model",
+        gguf_file_names=["some-model-Q4_K_M.gguf"],
+    )
+    assert spec is not None
+    assert spec.serve_ref == "org/some-quantized-model:Q4_K_M"
