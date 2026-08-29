@@ -6,7 +6,7 @@ stub with user/model lookups and log-write recording.
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -88,7 +88,9 @@ def registry(monkeypatch):
     return reg
 
 
-async def _register(registry, owner_api_key_id=1, models=("llama-3.1-8b", "mistral-7b"), base_url="http://mac.example.com/v1"):
+async def _register(
+    registry, owner_api_key_id=1, models=("llama-3.1-8b", "mistral-7b"), base_url="http://mac.example.com/v1"
+):
     async def probe(base_url_, api_key_):
         return list(models)
 
@@ -359,7 +361,11 @@ async def test_try_temp_provider_routes_sync_for_owner(registry, monkeypatch):
     executor = FakeExecutor()
     executor.sync_result = ExecutionResult(
         success=True,
-        response={"id": "cmpl-1", "choices": [{"message": {"content": "hi"}}], "usage": {"prompt_tokens": 3, "completion_tokens": 2}},
+        response={
+            "id": "cmpl-1",
+            "choices": [{"message": {"content": "hi"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        },
         error=None,
         usage={"prompt_tokens": 3, "completion_tokens": 2},
         is_streaming=False,
@@ -391,7 +397,10 @@ async def test_try_temp_provider_routes_sync_for_owner(registry, monkeypatch):
 
     # Usage logged without DB model/provider references (in-memory only).
     assert ("set_response_payload", (42, None, None)) in db.log_calls
-    assert ("update_log_entry_metrics", {"log_id": 42, "result_status": "success", "error_message": None}) in db.log_calls
+    assert (
+        "update_log_entry_metrics",
+        {"log_id": 42, "result_status": "success", "error_message": None},
+    ) in db.log_calls
 
 
 async def test_try_temp_provider_admin_can_route_to_others_provider(registry, monkeypatch):

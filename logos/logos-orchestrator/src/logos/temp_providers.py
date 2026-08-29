@@ -79,7 +79,9 @@ def match_model_name(requested: str, available: List[str]) -> Optional[str]:
     for name in available:
         if name == requested:
             return name
-    alias_matches = {name for name in available if requested in {_planner_alias(name), f"planner-{_planner_alias(name)}"}}
+    alias_matches = {
+        name for name in available if requested in {_planner_alias(name), f"planner-{_planner_alias(name)}"}
+    }
     if len(alias_matches) == 1:
         return next(iter(alias_matches))
     return None
@@ -312,9 +314,7 @@ class TempProviderRegistry:
         entry.failures_started_mono = None
         entry.last_success_at = time.time()
         if set(models) != set(entry.models):
-            logger.info(
-                "Temporary provider '%s' model list changed: %s -> %s", entry.name, entry.models, models
-            )
+            logger.info("Temporary provider '%s' model list changed: %s -> %s", entry.name, entry.models, models)
             entry.models = models
         if entry.status == STATUS_UNHEALTHY:
             entry.status = STATUS_HEALTHY

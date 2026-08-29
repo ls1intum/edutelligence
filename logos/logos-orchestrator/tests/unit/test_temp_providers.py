@@ -152,7 +152,9 @@ async def test_remove_provider():
 
 async def test_public_dict_never_exposes_api_key():
     registry = _registry()
-    entry = await registry.add_provider(base_url="http://secret.example.com", api_key="super-secret", owner_api_key_id=1)
+    entry = await registry.add_provider(
+        base_url="http://secret.example.com", api_key="super-secret", owner_api_key_id=1
+    )
     public = entry.to_public_dict()
     assert "super-secret" not in str(public)
     assert public["base_url"] == "http://secret.example.com/v1"
