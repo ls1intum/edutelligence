@@ -837,8 +837,12 @@ def _capture_logosnode_provider_snapshot(
                 try:
                     db.upsert_model_profiles(provider_id, model_profiles)
                 except Exception:
-                    logger.debug(
-                        "Failed to upsert model profiles for provider %s",
+                    db.session.rollback()
+                    logger.warning(
+                        "Failed to upsert model profiles for provider %s, the "
+                        "entire row update (base_residency_mb, loaded_vram_mb, "
+                        "kv_budget_mb, measurement_count, last_measured_at) is "
+                        "lost until this recovers",
                         _resolve_provider_name(provider_id),
                         exc_info=True,
                     )
@@ -5604,6 +5608,23 @@ def _profile_native_context_length(profile: dict) -> int:
     return derived_reported_context_length(profile)
 
 
+# The high-water mark only changes when a worker snapshot arrives (a few to a
+# dozen seconds per node), and every model endpoint calls into this, so the
+# lookup result is cached for a short TTL instead of opening a fresh
+# DBManager session per call — /v1/models took two connections where it
+# previously took one. A failed lookup is never cached, so a broken database
+# recovers on the very next call. No lock is needed: every caller runs on the
+# asyncio event loop.
+_HISTORIC_MAX_CONTEXT_TTL_SECONDS = 10.0
+_historic_max_context_cache: tuple[float, dict[str, int]] | None = None
+
+
+def _clear_historic_max_context_cache() -> None:
+    """Drop the cached historic maxima (used by the tests; production never needs it)."""
+    global _historic_max_context_cache
+    _historic_max_context_cache = None
+
+
 def _historic_max_context_by_model() -> dict[str, int]:
     """Model name -> widest context ever reported for it, from the database.
 
@@ -5612,13 +5633,25 @@ def _historic_max_context_by_model() -> dict[str, int]:
     worker snapshot, so this is still what a model's context is when no
     workernode is connected to say otherwise. Returns an empty mapping when the
     database cannot be reached — the live figures then stand on their own, as
-    before.
+    before. The result is cached for a short TTL (see above) because the value
+    only changes when a worker snapshot arrives.
     """
+    global _historic_max_context_cache
+    now = time.monotonic()
+    cached = _historic_max_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
     try:
         with DBManager() as db:
-            return db.get_historic_max_context_by_model()
+            historic = db.get_historic_max_context_by_model()
     except Exception:
+        # Fail open — the live snapshots still stand on their own — but say so:
+        # a persistently broken lookup must not look like "no model has a
+        # historic context".
+        logger.warning("Failed to load the historic max context by model", exc_info=True)
         return {}
+    _historic_max_context_cache = (now, historic)
+    return historic
 
 
 def _served_context_window_stats() -> dict[str, dict[str, int]]:

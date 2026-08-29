@@ -19,9 +19,11 @@
          mark (GREATEST of stored and freshly derived, never shrinking), and
          /v1/models reports it as max_model_len_overall so the number
          survives every workernode going offline and an orchestrator
-         restart. Nullable: rows written before this changeSet hold NULL,
-         and the first upsert after it settles the mark. -->
-    <changeSet id="015-model-profiles-max-reported-context-length" author="wasnertobias">
+         restart. Nullable: rows written before this changeSet hold NULL.
+         The backfill changeSet below settles the mark for operator-pinned
+         models immediately; calibrated-only models settle it on their next
+         worker snapshot. -->
+    <changeSet id="016-model-profiles-max-reported-context-length" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="model_profiles" columnName="max_reported_context_length"/></not>
         </preConditions>
@@ -31,6 +33,25 @@
         <rollback>
             <dropColumn tableName="model_profiles" columnName="max_reported_context_length"/>
         </rollback>
+    </changeSet>
+
+    <!-- One-shot backfill for rows that pre-date the column: operator-pinned
+         models (max_context_length > 0) take the pinned value as their
+         historic mark, so the all-offline fallback works for them the moment
+         the migration has run, without waiting for a worker snapshot.
+         Calibrated-only models (max_context_length NULL) cannot be recovered
+         here — calibration_max_model_len and the KV sweep pairs were never
+         persisted to this table, so those need one worker check-in. The
+         WHERE clause makes the changeSet a no-op once the marks have
+         settled, so it is safe to keep in the change log. -->
+    <changeSet id="016-model-profiles-max-reported-context-length-backfill" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="model_profiles" columnName="max_reported_context_length"/>
+        </preConditions>
+        <update tableName="model_profiles">
+            <column name="max_reported_context_length" valueComputed="max_context_length"/>
+            <where>max_reported_context_length IS NULL AND max_context_length &gt; 0</where>
+        </update>
     </changeSet>
 
 </databaseChangeLog>
