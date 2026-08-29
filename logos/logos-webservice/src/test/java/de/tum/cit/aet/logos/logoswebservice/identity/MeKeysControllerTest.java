@@ -69,6 +69,33 @@ class MeKeysControllerTest {
            .andExpect(jsonPath("$[0].team.budget_used_micro_cents").value(0));
     }
 
+    // GET /me/keys — rate limit usage (issue #672)
+
+    @Test
+    void getMyKeys_reportsZeroRateLimitUsageWithoutTraffic() throws Exception {
+        mvc.perform(get("/me/keys").with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[0].rate_limit_usage.window_seconds").value(60))
+           .andExpect(jsonPath("$[0].rate_limit_usage.cloud_requests").value(0))
+           .andExpect(jsonPath("$[0].rate_limit_usage.cloud_tokens").value(0))
+           .andExpect(jsonPath("$[0].rate_limit_usage.local_requests").value(0))
+           .andExpect(jsonPath("$[0].rate_limit_usage.local_tokens").value(0));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = "/sql/seed-me-keys-rate-limit-usage.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(scripts = "/sql/cleanup-me-keys-rate-limit-usage.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+    void getMyKeys_countsOwnTrafficInsideTheRateLimitWindowOnly() throws Exception {
+        mvc.perform(get("/me/keys").with(TestJwt.forSeededUser(ALICE_ID, "alice")))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[0].rate_limit_usage.window_seconds").value(60))
+           .andExpect(jsonPath("$[0].rate_limit_usage.cloud_requests").value(2))
+           .andExpect(jsonPath("$[0].rate_limit_usage.cloud_tokens").value(2500))
+           .andExpect(jsonPath("$[0].rate_limit_usage.local_requests").value(1))
+           .andExpect(jsonPath("$[0].rate_limit_usage.local_tokens").value(700));
+    }
+
     // PATCH /me/keys/{keyId}/log
 
     @Test

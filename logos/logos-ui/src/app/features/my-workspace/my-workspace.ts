@@ -14,7 +14,7 @@ import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 import { MyKeysService } from '../../core/services/my-keys.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
 import { AuthService } from '../../core/auth/services/auth.service';
-import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
+import { MyKey, ModelAccess, RateLimitUsage } from '../../shared/models/my-key.model';
 import { MyTeam } from '../../shared/models/team.model';
 import { formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
 import { isInteractiveClick } from '../../shared/utils/interactive-click';
@@ -312,13 +312,31 @@ export class MyWorkspace implements OnInit {
   }
 
   // ── Display ────────────────────────────────────────────────────────────────
-  formatRpm(rpm: number | null): string {
-    return rpm != null ? rpm.toLocaleString() : '∞';
+  /** The key's usage inside the current rate-limit window, zeroed when absent. */
+  usageFor(key: MyKey): RateLimitUsage {
+    return key.rate_limit_usage ?? {
+      window_seconds: 60,
+      cloud_requests: 0,
+      cloud_tokens: 0,
+      local_requests: 0,
+      local_tokens: 0,
+    };
   }
 
-  formatTpm(tpm: number | null): string {
-    if (tpm == null) return '∞';
-    return tpm >= 1000 ? (tpm / 1000).toFixed(0) + 'k' : tpm.toString();
+  /**
+   * Used/limit pair for one side of a rate limit: "12/60" when the key or its
+   * team set a limit, plain "12" when it is unlimited — the used figure reads
+   * directly against the limit it is enforced by.
+   */
+  formatRpm(used: number, limit: number | null): string {
+    return limit != null
+      ? `${used.toLocaleString()}/${limit.toLocaleString()}`
+      : used.toLocaleString();
+  }
+
+  formatTpm(used: number, limit: number | null): string {
+    const compact = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : n.toString());
+    return limit != null ? `${compact(used)}/${compact(limit)}` : compact(used);
   }
 
   formatLastUsed(iso: string | null): string {

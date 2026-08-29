@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.repository;
 
+import java.sql.Timestamp;
 import java.util.List;
 import java.util.Optional;
 
@@ -12,6 +13,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.MyKeyProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProjection;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.RateLimitUsageProjection;
 
 public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
     Optional<ApiKey> findByKeyValueAndIsActiveTrue(String keyValue);
@@ -139,6 +141,39 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         ORDER BY ak.id
         """, nativeQuery = true)
     List<MyKeyProjection> findKeysForUser(@Param("userId") int userId);
+
+    /**
+     * Per-key request and token counts inside one rate-limit window (issue
+     * #672), split the way the orchestrator's limiter enforces the limits:
+     * per key, and cloud vs. local by the provider type the request was
+     * actually served on ({@code logosnode} is local, everything else
+     * cloud).
+     *
+     * Requests that have no provider yet (still queued, or rejected before
+     * scheduling) are not counted by the limiter either, so they are left
+     * out here. Token sums read the same {@code total_tokens} rows the
+     * limiter records on completion; request counts use DISTINCT ids because
+     * the usage_tokens join fans one request out to one row per token type.
+     */
+    @Query(value = """
+        SELECT le.api_key_id AS keyId,
+               COUNT(DISTINCT le.id) FILTER (WHERE p.provider_type = 'cloud') AS cloudRequests,
+               COALESCE(SUM(ut.token_count) FILTER (WHERE p.provider_type = 'cloud' AND tt.name = 'total_tokens'), 0) AS cloudTokens,
+               COUNT(DISTINCT le.id) FILTER (WHERE p.provider_type = 'logosnode') AS localRequests,
+               COALESCE(SUM(ut.token_count) FILTER (WHERE p.provider_type = 'logosnode' AND tt.name = 'total_tokens'), 0) AS localTokens
+        FROM log_entry le
+        JOIN api_keys ak ON ak.id = le.api_key_id
+        LEFT JOIN providers p ON p.id = le.provider_id
+        LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
+        LEFT JOIN token_types tt ON tt.id = ut.type_id
+        WHERE ak.user_id = :userId
+          AND ak.is_active = true
+          AND le.timestamp_request >= :since
+        GROUP BY le.api_key_id
+        """, nativeQuery = true)
+    List<RateLimitUsageProjection> findRateLimitUsageForUser(
+            @Param("userId") int userId,
+            @Param("since") Timestamp since);
 
     @Query(value = """
         SELECT m.name AS model_name, p.name AS provider_name, p.provider_type::text AS provider_type
