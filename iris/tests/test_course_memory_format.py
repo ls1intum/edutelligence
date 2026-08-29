@@ -43,43 +43,46 @@ def test_thread_resolved_is_labeled_unverified():
 
 
 def test_backlink_is_a_followable_thread_link():
-    out = format_course_memories(
-        [_memory("TUTOR_WRITTEN", post_id="7", course_id=3)],
-        base_url="https://artemis.example.com",
-    )
+    out = format_course_memories([_memory("TUTOR_WRITTEN", post_id="7", course_id=3)])
     # The link must open the thread itself, so it carries the channel as conversationId and
     # the thread root as focusPostId — conversation_id holds the channel, not the thread.
     assert (
-        "https://artemis.example.com/courses/3/communication"
+        "/courses/3/communication"
         "?conversationId=c1&focusPostId=7&openThreadOnFocus=1" in out
     )
+
+
+def test_backlink_is_root_relative_not_absolute():
+    # Regression: the link used to be built from settings.artemisBaseUrl, i.e. server.url.
+    # That is the Spring Boot server's address, not the origin the student's browser is on
+    # (dev serves the client on :9000 while server.url is :8080), so every citation opened
+    # a page that never bootstrapped. The reply is only ever read inside the Artemis
+    # client, so the path must stay relative to whatever origin that client is served from.
+    out = format_course_memories([_memory("TUTOR_WRITTEN", post_id="7", course_id=3)])
+    assert "http://" not in out
+    assert "https://" not in out
+    assert "source: /courses/3/communication" in out
 
 
 def test_backlink_omits_raw_ids():
     # A bare id is ambiguous (posts and answers have independent id sequences) and means
     # nothing to a student, so it must not be offered as something to cite.
     out = format_course_memories(
-        [_memory("TUTOR_WRITTEN", message_id="99", post_id="7")],
-        base_url="https://artemis.example.com",
+        [_memory("TUTOR_WRITTEN", message_id="99", post_id="7")]
     )
     assert "source message" not in out
     assert "thread: 7" not in out
 
 
-def test_entry_without_base_url_has_no_link():
-    # Half a URL is worse than none: without a base url the entry is still usable, just
-    # not citable.
-    out = format_course_memories([_memory("TUTOR_WRITTEN")])
-    assert "http" not in out
-    assert "source:" not in out
-    assert "Use the submit button." in out
-
-
 def test_entry_missing_backlink_fields_has_no_link():
+    # Half a link is worse than none: an entry stored before backlinking is still usable,
+    # just not citable.
     memory = _memory("TUTOR_WRITTEN")
     del memory[CourseMemorySchema.CONVERSATION_ID.value]
-    out = format_course_memories([memory], base_url="https://artemis.example.com")
-    assert "http" not in out
+    out = format_course_memories([memory])
+    assert "source:" not in out
+    assert "/courses/" not in out
+    assert "Use the submit button." in out
 
 
 def _settings():
