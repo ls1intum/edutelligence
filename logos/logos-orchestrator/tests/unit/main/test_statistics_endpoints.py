@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import logos as main
+from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
 
 
 def _make_request(body: dict | None = None, headers: dict | None = None):
@@ -511,7 +512,7 @@ def test_scheduler_signals_mtp_acceptance_is_token_weighted_across_lanes() -> No
         ],
     }
 
-    signals = main._build_logosnode_scheduler_signals(runtime)
+    signals = _build_logosnode_scheduler_signals(runtime)
     model = signals["models"]["mtp-model"]
 
     # Token-weighted: 1 accepted / 10,001 draft. The unweighted lane-rate
@@ -543,7 +544,7 @@ def test_scheduler_signals_mtp_acceptance_none_without_spec_decode() -> None:
         ],
     }
 
-    signals = main._build_logosnode_scheduler_signals(runtime)
+    signals = _build_logosnode_scheduler_signals(runtime)
     assert signals["models"]["plain-model"]["mtp_acceptance_rate_avg"] is None
     assert signals["models"]["plain-model"]["prefix_cache_hit_rate_avg"] == pytest.approx(0.3)
 
@@ -566,7 +567,7 @@ def _ctx_runtime(lane: dict, profiles: dict | None = None) -> dict:
 
 
 def test_lane_signal_reports_the_window_vllm_is_running_at() -> None:
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
@@ -606,7 +607,7 @@ def test_two_lanes_of_one_model_report_their_own_windows() -> None:
         },
     ]
 
-    signals = main._build_logosnode_scheduler_signals(runtime)
+    signals = _build_logosnode_scheduler_signals(runtime)
 
     assert signals["lanes"]["roomy"]["max_model_len"] == 262144
     assert signals["lanes"]["cramped"]["max_model_len"] == 32768
@@ -615,7 +616,7 @@ def test_two_lanes_of_one_model_report_their_own_windows() -> None:
 def test_lane_signal_falls_back_to_the_calibrated_profile() -> None:
     """A vLLM lane started without --max-model-len takes the calibrated value,
     so the number is not on the lane itself."""
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
@@ -633,7 +634,7 @@ def test_lane_signal_falls_back_to_the_calibrated_profile() -> None:
 
 
 def test_lane_signal_reports_an_ollama_lanes_configured_window() -> None:
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
@@ -652,7 +653,7 @@ def test_lane_signal_reports_an_ollama_lanes_configured_window() -> None:
 def test_lane_signal_omits_a_window_it_cannot_derive() -> None:
     """None rather than 0: the row leaves the badge off instead of claiming a
     size vLLM picked for itself and never reported."""
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",

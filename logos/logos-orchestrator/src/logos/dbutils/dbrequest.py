@@ -64,3 +64,35 @@ class LogosNodeReconfigureLaneRequest(LogosKeyModel):
     provider_id: int
     lane_id: str
     updates: dict[str, Any]
+
+
+# Internal (secret-gated) endpoint request models, called by the Spring
+# webservice after its own JWT validation.
+
+
+class RefreshPipelineRequest(BaseModel):
+    rebuild_classifier: bool = False
+
+
+class InternalCalibrateRequest(BaseModel):
+    provider_id: int
+
+
+class InternalDeleteLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+class InternalAddLaneRequest(BaseModel):
+    provider_id: int
+    lane: dict[str, Any]
+
+
+class InternalSleepLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+class InternalWakeLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
