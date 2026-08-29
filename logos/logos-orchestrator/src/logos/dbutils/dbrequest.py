@@ -23,6 +23,20 @@ class ConnectModelProviderRequest(LogosKeyModel):
     endpoint: Optional[str] = None
 
 
+class AddTempProviderRequest(LogosKeyModel):
+    base_url: str
+    api_key: str = ""
+    name: Optional[str] = None
+    # Logos key of the user (group) the temporary provider is tied to: only
+    # that key (plus logos_admins) may list or route to its models. Defaults
+    # to the registering admin key when omitted.
+    owner_api_key: Optional[str] = None
+
+
+class DeleteTempProviderRequest(LogosKeyModel):
+    provider_id: str
+
+
 class LogosNodeAuthRequest(BaseModel):
     shared_key: str
     capabilities_models: list[str] = Field(default_factory=list)

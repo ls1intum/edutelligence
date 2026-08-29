@@ -51,7 +51,7 @@ from logos.logosnode_registry import (
     LogosNodeSessionConflictError,
 )
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
-from logos.pipeline.context_resolver import ContextResolver
+from logos.pipeline.context_resolver import ContextResolver, ExecutionContext
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
@@ -75,6 +75,7 @@ from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
+from logos.temp_providers import TempProvider, TempProviderError, TempProviderRegistry, match_model_name
 from logos.terminal_logging import (
     GREEN,
     RED,
@@ -176,6 +177,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
 # max(1, ...): a fractional LOGOS_TIMEOUT_S (e.g. 0.5) must not floor to 0 and
 # cause immediate timeouts — clamp to at least 1 second.
 _LOGOSNODE_INFER_TIMEOUT_SECONDS = max(1, int(global_timeout_s(_env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120))))
@@ -198,6 +210,18 @@ _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SEC
 # backoff so the lane finishes waking. Never retries once a token has streamed.
 _LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
 _LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = float(os.getenv("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", "1.0") or 1.0)
+
+# Temporary (volatile) providers: in-memory only, never persisted to the DB.
+# The health loop probes every registered provider, marks it unhealthy as soon
+# as its probes start failing (fail fast: a dead host must stop receiving
+# requests), and removes it entirely once it has stayed unreachable for the
+# expiry window (see logos.temp_providers).
+_temp_providers = TempProviderRegistry(
+    health_interval_s=_env_float("LOGOS_TEMP_PROVIDER_HEALTH_INTERVAL_S", 30.0),
+    unhealthy_after=_env_int("LOGOS_TEMP_PROVIDER_UNHEALTHY_AFTER", 1),
+    expiry_s=_env_float("LOGOS_TEMP_PROVIDER_EXPIRY_S", 86400.0),
+    probe_timeout_s=_env_float("LOGOS_TEMP_PROVIDER_PROBE_TIMEOUT_S", 10.0),
+)
 
 
 def _record_azure_rate_limits(
@@ -1680,9 +1704,13 @@ async def lifespan(app: FastAPI):
     _grpc_server.add_insecure_port("[::]:50051")
     await _grpc_server.start()
 
+    # Health loop for temporary (volatile, in-memory) providers
+    await _temp_providers.start()
+
     yield
 
     # Shutdown logic
+    await _temp_providers.stop()
     if _capacity_planner:
         await _capacity_planner.stop()
     if _calibration_orchestrator:
@@ -2547,6 +2575,16 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
 def _require_root_access(logos_key: str) -> None:
     with DBManager() as db:
         require_logos_admin_key(logos_key, db)
+
+
+def _caller_is_logos_admin(logos_key: str) -> bool:
+    """True when the key belongs to a logos_admin user (False on any error)."""
+    try:
+        with DBManager() as db:
+            require_logos_admin_key(logos_key, db)
+    except Exception:  # noqa: BLE001 — a failed lookup is "not admin", never a crash
+        return False
+    return True
 
 
 def _normalize_provider_type(provider_type: str | None) -> str:
@@ -4048,6 +4086,278 @@ async def _proxy_sync_response(
         )
 
 
+async def _try_execute_temp_provider(
+    path: str,
+    body: Dict[str, Any],
+    auth: "AuthContext",
+    log_id: Optional[int],
+    is_async_job: bool,
+    request_id: Optional[str] = None,
+) -> Optional[Any]:
+    """Route the request to a temporary provider when it serves the model.
+
+    Returns the response to hand back to the client, or ``None`` when no
+    temporary provider this key may use serves the requested model — the
+    caller then continues the normal (DB) flow, which yields the usual 404.
+    Only proxy-mode requests carry a model name; resource-mode requests
+    (classification/scheduling) never touch temporary providers.
+    """
+    if _temp_providers is None or not path:
+        return None
+    requested = str(body.get("model") or "").strip()
+    if not requested:
+        return None
+    hit = _temp_providers.find_by_model(requested)
+    if hit is None:
+        return None
+    entry, model_name = hit
+    # The owner check is in-memory; only a non-owner pays the admin DB lookup.
+    if entry.owner_api_key_id != auth.api_key_id and not _caller_is_logos_admin(auth.key_value):
+        return None
+
+    if not entry.is_healthy:
+        # The host is known to be unreachable: fail fast with a clear error
+        # instead of letting the request hang until the probe timeout.
+        message = (
+            f"Temporary provider '{entry.name}' ({entry.base_url}) is currently unreachable; "
+            "the model is temporarily unavailable."
+        )
+        _record_log_failure(log_id, request_id, message, result_status="error")
+        if is_async_job:
+            return {"status_code": 503, "data": {"error": message}}
+        return openai_error_response(503, message, code="temp_provider_unavailable", headers={"Retry-After": "30"})
+
+    return await _execute_temp_provider_request(entry, model_name, path, body, log_id, is_async_job, request_id)
+
+
+def _temp_provider_forward_context(entry: TempProvider, model_name: str, path: str) -> ExecutionContext:
+    """Execution context for forwarding to a temporary provider.
+
+    The base URL is OpenAI-shaped (``.../v1``), so forwarding is like-for-like
+    on the inbound path, exactly like a cloud provider. The discovered name is
+    what the upstream serves the model under, so it doubles as the model to
+    rewrite into the payload (mirroring ``prepare_headers_and_payload``).
+    """
+    return ExecutionContext(
+        model_id=0,
+        provider_id=0,
+        provider_name=entry.name,
+        provider_type="cloud",
+        forward_url=ContextResolver._cloud_forward_url(entry.base_url, path, None),
+        auth_header="Authorization",
+        auth_value=f"Bearer {entry.api_key}" if entry.api_key else "",
+        model_name=model_name,
+    )
+
+
+async def _execute_temp_provider_request(
+    entry: TempProvider,
+    model_name: str,
+    path: str,
+    body: Dict[str, Any],
+    log_id: Optional[int],
+    is_async_job: bool,
+    request_id: Optional[str] = None,
+):
+    """Forward one request to a temporary provider and log it.
+
+    Temporary provider models have no DB identity, so the usage log row keeps
+    NULL model/provider references; the executor and logging machinery are
+    reused as-is.
+    """
+    context = _temp_provider_forward_context(entry, model_name, path)
+    payload = set_payload_field(dict(body), "model", model_name)
+    proxy_headers, prepared_payload = ContextResolver.prepare_headers_and_payload(context, payload)
+
+    # Same streaming decision as resource mode: stream unless the payload is a
+    # Whisper one (Whisper answers synchronously even with stream=true).
+    if (
+        not is_async_job
+        and payload_requests_streaming(body)
+        and not (is_whisper_payload(body) or "whisper" in model_name.lower())
+    ):
+        return await _temp_provider_streaming_response(context, prepared_payload, log_id, request_id)
+    return await _temp_provider_sync_response(context, prepared_payload, log_id, is_async_job, request_id)
+
+
+async def _temp_provider_streaming_response(
+    context: ExecutionContext,
+    payload: dict,
+    log_id: Optional[int],
+    request_id: Optional[str] = None,
+):
+    """Build the streaming response for a temporary provider request.
+
+    Peeks the first chunk before committing to a ``StreamingResponse`` so a
+    non-2xx upstream answer becomes a proper JSON error response instead of a
+    broken stream (same pattern as the resource-mode HTTP path).
+    """
+    import datetime
+
+    stream_status = StreamingExecutionStatus()
+    chunk_iter = _pipeline.executor.execute_streaming(
+        context.forward_url,
+        _temp_provider_stream_headers(context),
+        payload,
+        status=stream_status,
+    )
+    try:
+        first_chunk = await chunk_iter.__anext__()
+    except UpstreamStreamError as exc:
+        logger.error("Pre-stream error from temporary provider %s: HTTP %s", context.provider_name, exc.status_code)
+        await _close_temp_provider_chunk_iter(chunk_iter)
+        return await _temp_provider_pre_stream_error_response(exc.status_code, exc.body, str(exc), log_id)
+    except StopAsyncIteration:
+        first_chunk = None
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Pre-stream transport error from temporary provider %s: %s: %s",
+            context.provider_name,
+            type(exc).__name__,
+            exc,
+        )
+        await _close_temp_provider_chunk_iter(chunk_iter)
+        return await _temp_provider_pre_stream_error_response(502, {"error": str(exc)}, str(exc), log_id)
+
+    async def all_chunks():
+        if first_chunk:
+            yield first_chunk
+        async with aclosing(chunk_iter) as chunks:
+            async for chunk in chunks:
+                yield chunk
+
+    async def streamer():
+        stream_log = _StreamingLogAccumulator()
+        ttft = None
+        error_message = None
+        # Publish to the live view like every other streamer: start is
+        # non-destructive (the handler already started it with a prompt
+        # estimate) and the finally drops the entry when the stream ends.
+        _live_streams.start(request_id, context.model_name)
+        try:
+            async for chunk in all_chunks():
+                if ttft is None:
+                    ttft = datetime.datetime.now(datetime.timezone.utc)
+                    if log_id:
+                        with DBManager() as db:
+                            db.set_time_at_first_token(log_id)
+                yield chunk
+                stream_log.feed(chunk)
+                _live_streams.update(request_id, stream_log.streamed_tokens())
+        except Exception as exc:  # noqa: BLE001
+            error_message = str(exc)
+            raise
+        finally:
+            if error_message is None:
+                error_message = stream_status.error
+            failed = error_message is not None
+            _live_streams.finish(request_id)
+            if log_id:
+                stream_log.finish()
+                response_payload = stream_log.response_payload()
+                usage_tokens = _usage_tokens_from_payload(response_payload)
+                with DBManager() as db:
+                    if ttft is None and stream_log.first_chunk is not None and not error_message:
+                        db.set_time_at_first_token(log_id)
+                    db.set_response_payload(
+                        log_id,
+                        response_payload,
+                        None,
+                        None,
+                        usage_tokens,
+                        -1,
+                        {},
+                    )
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        result_status="error" if failed else "success",
+                        error_message=error_message,
+                    )
+
+    response_headers = {"X-Request-ID": request_id} if request_id else None
+    return StreamingResponse(streamer(), media_type="text/event-stream", headers=response_headers)
+
+
+async def _close_temp_provider_chunk_iter(chunk_iter) -> None:
+    """Best-effort close of an abandoned executor stream (nothing sent yet)."""
+    with suppress(Exception):
+        await chunk_iter.aclose()
+
+
+async def _temp_provider_pre_stream_error_response(
+    status_code: int, body: Any, error_message: str, log_id: Optional[int]
+) -> JSONResponse:
+    """OpenAI-shaped error for a temporary provider failure before streaming began."""
+    corrected_status, error_body = coerce_upstream_error(status_code, body)
+    if log_id:
+        with DBManager() as db:
+            db.set_response_payload(log_id, error_body, None, None, {}, -1, {})
+            db.update_log_entry_metrics(
+                log_id=log_id,
+                result_status="error",
+                error_message=error_message,
+            )
+    return JSONResponse(content=error_body, status_code=corrected_status)
+
+
+def _temp_provider_stream_headers(context: ExecutionContext) -> dict:
+    """Headers for the provider call: Content-Type plus the provider auth."""
+    headers = {"Content-Type": "application/json"}
+    if context.auth_header and context.auth_value:
+        headers[context.auth_header] = context.auth_value
+    return headers
+
+
+async def _temp_provider_sync_response(
+    context: ExecutionContext,
+    payload: dict,
+    log_id: Optional[int],
+    is_async_job: bool,
+    request_id: Optional[str] = None,
+):
+    """Build the synchronous response for a temporary provider request."""
+    exec_result = await _pipeline.executor.execute_sync(
+        context.forward_url, _temp_provider_stream_headers(context), payload
+    )
+
+    response_payload = exec_result.response
+    if not exec_result.success and not response_payload and exec_result.error:
+        response_payload = {"error": exec_result.error}
+
+    if log_id:
+        usage_tokens = _usage_tokens_from_payload(response_payload)
+        with DBManager() as db:
+            if exec_result.success:
+                db.set_time_at_first_token(log_id)
+            db.set_response_payload(
+                log_id,
+                response_payload,
+                None,
+                None,
+                usage_tokens,
+                -1,
+                {},
+            )
+            db.update_log_entry_metrics(
+                log_id=log_id,
+                result_status="success" if exec_result.success else "error",
+                error_message=None if exec_result.success else exec_result.error,
+            )
+
+    status_code = (
+        exec_result.status_code if exec_result.status_code is not None else (200 if exec_result.success else 500)
+    )
+    if not exec_result.success:
+        status_code, response_payload = coerce_upstream_error(
+            status_code, response_payload or {"error": exec_result.error}
+        )
+
+    if is_async_job:
+        return {"status_code": status_code, "data": response_payload}
+    resp_headers = {"X-Request-ID": request_id} if request_id else None
+    return JSONResponse(content=response_payload, status_code=status_code, headers=resp_headers)
+
+
 async def _execute_proxy_mode(
     body: Dict[str, Any],
     headers: Dict[str, str],
@@ -4076,6 +4386,12 @@ async def _execute_proxy_mode(
         [str(row["name"]) for row in models_info if row.get("name")],
     )
     if model_name is None:
+        # Not in the DB for this key — a temporary provider (in-memory only)
+        # may still serve it. DB deployments always win: this fallback runs
+        # only when the DB has no model of this name for the key.
+        response = await _try_execute_temp_provider(request_path, body, auth, log_id, is_async_job, request_id)
+        if response is not None:
+            return response
         raise HTTPException(
             status_code=404,
             detail=f"Model '{requested_model_name}' not available for this key",
@@ -4100,6 +4416,11 @@ async def _execute_proxy_mode(
     # Narrow deployments to the requested model to preserve provider metadata
     model_deployments = [d for d in deployments if d["model_id"] == model_id]
     if not model_deployments:
+        # The key may the model but no deployment routes it — a temporary
+        # provider (in-memory only) may still serve it.
+        response = await _try_execute_temp_provider(request_path, body, auth, log_id, is_async_job, request_id)
+        if response is not None:
+            return response
         raise HTTPException(status_code=404, detail=f"No deployment found for model '{model_name}'")
 
     # Proxy mode reuses the scheduling/execution pipeline. Policy + token
@@ -4413,8 +4734,12 @@ async def route_and_execute(
         _execute_proxy_mode(): PROXY mode implementation
         _execute_resource_mode(): RESOURCE mode implementation
     """
-    # No models available → ERROR
+    # No models available → ERROR — unless a temporary provider (in-memory
+    # only, never in the DB) serves the requested model to this key.
     if not deployments:
+        response = await _try_execute_temp_provider(path, body, auth, log_id, is_async_job, request_id)
+        if response is not None:
+            return response
         _record_log_failure(
             log_id,
             request_id,
@@ -5440,6 +5765,82 @@ async def connect_model_provider(data: ConnectModelProviderRequest):
     return result
 
 
+@app.post("/logosdb/temp_providers", tags=["admin"])
+async def add_temp_provider(data: AddTempProviderRequest):
+    """Register a temporary (volatile) OpenAI-compatible provider.
+
+    Takes only a base URL and an upstream auth key: the provider's models are
+    discovered via its ``/v1/models`` endpoint and kept in orchestrator
+    memory only — nothing is persisted to the database. The provider is tied
+    to the user (group) given by ``owner_api_key`` (default: the registering
+    key), which is the only key besides logos_admins that may list or route
+    to its models.
+
+    Returns 201 with the provider state (models, provider_id), or 502 when
+    the initial model discovery fails (bad URL, bad key, host offline).
+    """
+    _require_root_access(data.logos_key)
+
+    with DBManager() as db:
+        caller = db.get_user_by_api_key(data.logos_key)
+        owner_key_id = caller["api_key_id"] if caller else None
+        if owner_key_id is None:
+            raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
+        if data.owner_api_key:
+            owner = db.get_user_by_api_key(data.owner_api_key)
+            if owner is None:
+                raise HTTPException(status_code=400, detail="owner_api_key is unknown or inactive")
+            owner_key_id = owner["api_key_id"]
+
+    try:
+        entry = await _temp_providers.add_provider(
+            base_url=data.base_url,
+            api_key=data.api_key,
+            owner_api_key_id=owner_key_id,
+            name=data.name,
+        )
+    except TempProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return JSONResponse(content={"result": "Temporary provider registered.", **entry.to_public_dict()}, status_code=201)
+
+
+@app.get("/logosdb/temp_providers", tags=["admin"])
+async def list_temp_providers(request: Request):
+    """List temporary providers visible to the calling key.
+
+    Admins see every registered provider; any other key sees only the
+    providers it owns. Entries carry live status (healthy/unhealthy) and the
+    currently discovered model list.
+    """
+    auth = authenticate_api_key(dict(request.headers))
+    is_admin = _caller_is_logos_admin(auth.key_value)
+    entries = _temp_providers.list_for_api_key(auth.api_key_id, is_admin=is_admin)
+    return JSONResponse(content={"temp_providers": [entry.to_public_dict() for entry in entries]})
+
+
+@app.post("/logosdb/temp_providers/delete", tags=["admin"])
+async def delete_temp_provider(data: DeleteTempProviderRequest):
+    """Remove a temporary provider (its models become unroutable immediately).
+
+    Allowed for logos_admins and for the owning key of the provider.
+    """
+    with DBManager() as db:
+        caller = db.get_user_by_api_key(data.logos_key)
+    if caller is None:
+        raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
+
+    entry = _temp_providers.get(data.provider_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Temporary provider not found")
+    is_admin = (caller.get("role") or "") == "logos_admin"
+    if not is_admin and entry.owner_api_key_id != caller["api_key_id"]:
+        raise HTTPException(status_code=403, detail="Only the owner or a Logos Admin may delete this provider")
+
+    _temp_providers.remove_provider(data.provider_id)
+    return JSONResponse(content={"result": "Temporary provider removed."})
+
+
 @app.get("/logosdb/scheduler_state", tags=["admin"])
 async def scheduler_state(request: Request):
     """
@@ -5752,7 +6153,38 @@ async def list_models(request: Request):
         for model in models
     ]
 
+    # Temporary provider models live only in the orchestrator's memory; they
+    # are listed on top of the DB models (a DB model of the same name wins).
+    seen = {entry["id"] for entry in data}
+    data.extend(entry for entry in _temp_provider_model_entries(auth) if entry["id"] not in seen)
+
     return JSONResponse(content={"object": "list", "data": data})
+
+
+def _temp_provider_model_entries(auth: "AuthContext") -> list[dict]:
+    """OpenAI-style entries for the temporary provider models this key may use.
+
+    Only the owning key and logos_admins see a temporary provider's models
+    (see TempProviderRegistry). Unhealthy providers are still listed, with
+    their status, so the owner can see that their host went offline.
+    """
+    if _temp_providers is None or len(_temp_providers) == 0:
+        return []
+    is_admin = _caller_is_logos_admin(auth.key_value)
+    entries = []
+    for provider in _temp_providers.list_for_api_key(auth.api_key_id, is_admin=is_admin):
+        for model_name in provider.models:
+            entries.append(
+                {
+                    "id": model_name,
+                    "object": "model",
+                    "created": int(provider.registered_at),
+                    "owned_by": "logos",
+                    "logos_temp_provider": provider.name,
+                    "logos_temp_provider_status": provider.status,
+                }
+            )
+    return entries
 
 
 @app.get("/v1/models/{model_id:path}", tags=["user-facing"])
@@ -5791,6 +6223,13 @@ async def retrieve_model(model_id: str, request: Request):
                 )
 
     if not model:
+        # Fall back to temporary provider models (in-memory only), with the
+        # same owner/admin access rule as the listing above.
+        temp_entries = _temp_provider_model_entries(auth)
+        matched = match_model_name(model_id, [entry["id"] for entry in temp_entries])
+        temp_entry = next((entry for entry in temp_entries if entry["id"] == matched), None)
+        if temp_entry is not None:
+            return JSONResponse(content=temp_entry)
         raise HTTPException(status_code=404, detail="Model not found or access denied")
 
     stats = _served_context_window_stats()
