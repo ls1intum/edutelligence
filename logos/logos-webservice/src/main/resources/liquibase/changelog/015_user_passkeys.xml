@@ -5,7 +5,7 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- WebAuthn credentials (passkeys) managed by the webservice (#694):
+    <!-- WebAuthn credentials (passkeys) managed by the webservice:
          a user may register several passkeys, each stored as the base64url
          credential id plus the COSE public key taken from the registration
          attestation. One credential id per user (the authenticator generates

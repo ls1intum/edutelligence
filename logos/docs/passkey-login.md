@@ -41,7 +41,7 @@ These live on the Keycloak side, not in this repo:
   UI through `/info`); the compose default is `aet.cit.tum.de` for prod. When
   blank (dev), `passkey.ts` falls back to the current hostname (e.g. `localhost`).
 
-## Managing passkeys (#694)
+## Managing passkeys
 
 Beyond the in-page login above, users can **manage their passkeys** — list,
 add multiple, delete — from the **Passkeys** page (`/passkeys`, Personal

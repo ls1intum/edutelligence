@@ -77,7 +77,7 @@
               <groupId>com.fasterxml.jackson.core</groupId>
               <artifactId>jackson-databind</artifactId>
           </dependency>
-          <!-- CBOR parsing for WebAuthn attestation objects (passkey registration, #694) -->
+          <!-- CBOR parsing for WebAuthn attestation objects (passkey registration) -->
           <dependency>
               <groupId>com.upokecenter</groupId>
               <artifactId>cbor</artifactId>

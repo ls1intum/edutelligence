@@ -130,12 +130,15 @@ public final class WebAuthnRegistration {
         if (attestation.getType() != CBORType.Map) {
             throw new IllegalArgumentException("attestationObject is not a CBOR map");
         }
-        String format = mapTextItem(attestation, 1, "attestationObject", "fmt");
-        CBORObject attStmt = mapItem(attestation, 2, "attestationObject", "attStmt");
+        // attestationObject is a CBOR map with TEXT keys (W3C WebAuthn L2, §6.2):
+        // "fmt", "attStmt", "authData". Only the embedded COSE key (in authData)
+        // uses integer labels.
+        String format = mapTextItem(attestation, "fmt", "attestationObject", "fmt");
+        CBORObject attStmt = mapItem(attestation, "attStmt", "attestationObject", "attStmt");
         if (attStmt.getType() != CBORType.Map) {
             throw new IllegalArgumentException("attestationObject.attStmt is not a map");
         }
-        byte[] authData = mapByteStringItem(attestation, -1, "attestationObject", "authData");
+        byte[] authData = mapByteStringItem(attestation, "authData", "attestationObject", "authData");
 
         // 3. authData
         if (authData.length < 37) {
@@ -217,7 +220,7 @@ public final class WebAuthnRegistration {
                     // the key pair binding is proven at first use instead.
                 }
                 case "packed" -> {
-                    byte[] signature = mapByteStringItem(attStmt, -2, "attStmt", "sig");
+                    byte[] signature = mapByteStringItem(attStmt, "sig", "attStmt", "sig");
                     if (hasX5c(attStmt)) {
                         verifyWithCertificate(attestationCertificate(attStmt), signedData, signature);
                     } else {
@@ -245,7 +248,7 @@ public final class WebAuthnRegistration {
                     PublicKey key = hasX5c(attStmt)
                         ? attestationCertificate(attStmt).getPublicKey()
                         : u2fSelfAttestationKey(credentialId, coseKeyBytes);
-                    verifyWithCertificateKey(key, u2fSignedData, mapByteStringItem(attStmt, -2, "attStmt", "sig"));
+                    verifyWithCertificateKey(key, u2fSignedData, mapByteStringItem(attStmt, "sig", "attStmt", "sig"));
                 }
                 default -> throw new IllegalArgumentException("Unsupported attestation format: " + format);
             }
@@ -274,15 +277,15 @@ public final class WebAuthnRegistration {
     }
 
     private static boolean hasX5c(CBORObject attStmt) {
-        if (!attStmt.ContainsKey(-1)) {
+        if (!attStmt.ContainsKey("x5c")) {
             return false;
         }
-        CBORObject x5c = attStmt.get(-1);
+        CBORObject x5c = attStmt.get("x5c");
         return x5c.getType() == CBORType.Array && x5c.size() > 0;
     }
 
     private static X509Certificate attestationCertificate(CBORObject attStmt) throws GeneralSecurityException {
-        byte[] der = attStmt.get(-1).get(0).GetByteString();
+        byte[] der = attStmt.get("x5c").get(0).GetByteString();
         return (X509Certificate) CertificateFactory.getInstance("X.509")
             .generateCertificate(new ByteArrayInputStream(der));
     }
@@ -401,6 +404,35 @@ public final class WebAuthnRegistration {
     }
 
     private static byte[] mapByteStringItem(CBORObject map, int key, String what, String field) {
+        CBORObject item = mapItem(map, key, what, field);
+        if (item.getType() != CBORType.ByteString) {
+            throw new IllegalArgumentException(what + "." + field + " is not a byte string");
+        }
+        return item.GetByteString();
+    }
+
+    /**
+     * Text-key variants for {@code attestationObject} and the attestation
+     * statement, which use text labels per W3C WebAuthn L2 §6.2 ("fmt",
+     * "attStmt", "authData", "sig", "x5c", ...). The integer-key variants
+     * above are for the COSE key (RFC 8152), which uses integer labels.
+     */
+    private static CBORObject mapItem(CBORObject map, String key, String what, String field) {
+        if (!map.ContainsKey(key)) {
+            throw new IllegalArgumentException(what + " is missing " + field);
+        }
+        return map.get(key);
+    }
+
+    private static String mapTextItem(CBORObject map, String key, String what, String field) {
+        CBORObject item = mapItem(map, key, what, field);
+        if (item.getType() != CBORType.TextString) {
+            throw new IllegalArgumentException(what + "." + field + " is not a string");
+        }
+        return item.AsString();
+    }
+
+    private static byte[] mapByteStringItem(CBORObject map, String key, String what, String field) {
         CBORObject item = mapItem(map, key, what, field);
         if (item.getType() != CBORType.ByteString) {
             throw new IllegalArgumentException(what + "." + field + " is not a byte string");

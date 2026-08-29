@@ -377,18 +377,20 @@ class MePasskeysControllerTest {
         }
         byte[] signature = signer.sign();
 
+        // attestationObject / attStmt use TEXT keys (WebAuthn L2 §6.2); only
+        // the COSE key above uses integer labels.
         CBORObject attStmt = CBORObject.NewMap();
         CBORObject attestationObject = CBORObject.NewMap();
         switch (kind) {
-            case NONE -> attestationObject.Add(1, "none");
+            case NONE -> attestationObject.Add("fmt", "none");
             case PACKED_SELF, PACKED_SELF_INVALID_SIGNATURE -> {
-                attStmt.Add(3, -7);
-                attStmt.Add(-2, CBORObject.FromObject(signature));
-                attestationObject.Add(1, "packed");
+                attStmt.Add("alg", -7);
+                attStmt.Add("sig", CBORObject.FromObject(signature));
+                attestationObject.Add("fmt", "packed");
             }
         }
-        attestationObject.Add(2, attStmt);
-        attestationObject.Add(-1, CBORObject.FromObject(authData));
+        attestationObject.Add("attStmt", attStmt);
+        attestationObject.Add("authData", CBORObject.FromObject(authData));
 
         return new Registration(
             base64Url(credentialId),
@@ -422,10 +424,12 @@ class MePasskeysControllerTest {
         clientData.put("origin", ORIGIN);
         byte[] clientDataJson = JSON.writeValueAsBytes(clientData);
 
+        // TEXT keys for the attestationObject (WebAuthn L2 §6.2); the COSE key
+        // inside authData still uses integer labels.
         CBORObject attestationObject = CBORObject.NewMap();
-        attestationObject.Add(1, "none");
-        attestationObject.Add(2, CBORObject.NewMap());
-        attestationObject.Add(-1, CBORObject.FromObject(authData));
+        attestationObject.Add("fmt", "none");
+        attestationObject.Add("attStmt", CBORObject.NewMap());
+        attestationObject.Add("authData", CBORObject.FromObject(authData));
 
         return new Registration(
             base64Url(credentialId),
