@@ -15,7 +15,7 @@ import { AppSelectOption, SelectComponent } from '../../../../shared/components/
 import { RequestItem } from '../../../statistics/statistics.models';
 import { deriveStage, formatTimeAgo, formatTokenCount } from '../../../statistics/statistics.utils';
 import { TeamActivityService } from './activity-tab.service';
-import { RequestCursor, TeamActivityPayload } from './activity-tab.models';
+import { RequestCursor, TeamActivityPayload, TraceExport, TraceExportItem } from './activity-tab.models';
 
 /** How often the live counts are refreshed while the tab is open. */
 const REFRESH_MS = 5_000;
@@ -58,6 +58,19 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   readonly dayOptions = DAY_OPTIONS;
 
+  // ── Trace export (issue #667) ────────────────────────────────────────────
+
+  readonly exportFormat = signal<'json' | 'csv'>('json');
+  readonly exporting = signal(false);
+  readonly exportError = signal<string | null>(null);
+
+  readonly exportFormatOptions: AppSelectOption[] = [
+    { value: 'json', label: 'JSON' },
+    { value: 'csv', label: 'CSV' },
+  ];
+
+  readonly selectedExportFormatValue = computed(() => this.exportFormat());
+
   /**
    * Cursor of each page already visited. Page 0 is always null (start at the
    * newest); going back is a pop rather than a reverse query, because a keyset
@@ -85,6 +98,18 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   private timer: ReturnType<typeof setInterval> | null = null;
 
   readonly selectedDaysValue = computed(() => String(this.days()));
+
+  /**
+   * The hint the export control carries (issue #667): a team whose keys all
+   * stay on billing logging never had request or response content stored, so
+   * the download holds metadata without content — say so before the click
+   * instead of letting the empty columns speak for themselves.
+   */
+  readonly fullLoggingHint = computed<string | null>(() => {
+    const activity = this.activity();
+    if (!activity || activity.full_logging_enabled) return null;
+    return 'Full logging is not activated for this team — the export will not contain request or response content.';
+  });
 
   readonly requesterOptions = computed<AppSelectOption[]>(() => [
     { value: '', label: 'Everyone in this team' },
@@ -164,6 +189,45 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
     this.filterUserId.set(next);
     this.resetToFirstPage();
     void this.load();
+  }
+
+  setExportFormat(value: string | null): void {
+    if (value === 'json' || value === 'csv') this.exportFormat.set(value);
+  }
+
+  /**
+   * Download the team's request traces as the picked file format: every
+   * request of the selected window, and for the consented (FULL-logging)
+   * ones the stored request and response content with it. The server answers
+   * the JSON envelope; the CSV is cut from it here, the same way the import
+   * credentials file is cut from the upload result.
+   */
+  async exportTraces(): Promise<void> {
+    if (!this.teamId || this.exporting()) return;
+    // The download is named after the team the export was started for, not the
+    // team the tab shows when the response lands: the tab may switch teams
+    // mid-flight, and relabeling one team's data under another's id would be
+    // worse than a stale number.
+    const teamId = this.teamId;
+    this.exporting.set(true);
+    this.exportError.set(null);
+    try {
+      const payload = await this.activityService.getTraceExport(
+        teamId,
+        this.days(),
+        this.filterUserId(),
+      );
+      const format = this.exportFormat();
+      this.downloadFile(
+        `logos-traces-team-${teamId}-${payload.days}d.${format}`,
+        format === 'csv' ? tracesToCsv(payload) : JSON.stringify(payload, null, 2),
+        format === 'csv' ? 'text/csv' : 'application/json',
+      );
+    } catch {
+      this.exportError.set('Could not export the traces.');
+    } finally {
+      this.exporting.set(false);
+    }
   }
 
   async nextPage(): Promise<void> {
@@ -280,4 +344,80 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
       this.loading.set(false);
     }
   }
+
+  private downloadFile(filename: string, content: string, mimeType: string): void {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ── Trace export helpers (issue #667) ────────────────────────────────────────
+
+/** Column order of the CSV export; the JSON envelope is the reference. */
+export const TRACE_CSV_COLUMNS: (keyof TraceExportItem)[] = [
+  'request_id',
+  'timestamp_request',
+  'timestamp_forwarding',
+  'timestamp_response',
+  'time_at_first_token',
+  'privacy_level',
+  'model_name',
+  'provider_type',
+  'environment',
+  'api_key_id',
+  'api_key_name',
+  'username',
+  'full_name',
+  'team_name',
+  'client_ip',
+  'status',
+  'error_message',
+  'priority',
+  'initial_priority',
+  'priority_when_scheduled',
+  'queue_depth_at_enqueue',
+  'queue_depth_at_schedule',
+  'queue_depth_at_arrival',
+  'timeout_s',
+  'utilization_at_arrival',
+  'queue_wait_ms',
+  'was_cold_start',
+  'load_duration_ms',
+  'available_vram_mb',
+  'prompt_tokens',
+  'completion_tokens',
+  'total_tokens',
+  'cost_microcents',
+  'classification_statistics',
+  'input_payload',
+  'headers',
+  'response_payload',
+];
+
+/**
+ * The CSV version of a trace export. Structured fields go out as compact
+ * JSON so a trace stays one row; quoting follows the same rules as the import
+ * credentials file — escape what breaks a table, because a payload is one
+ * comma away from breaking it.
+ */
+export function tracesToCsv(payload: TraceExport): string {
+  const rows = payload.traces.map((trace) =>
+    TRACE_CSV_COLUMNS.map((column) => traceCsvCell(trace[column])).join(','),
+  );
+  return [TRACE_CSV_COLUMNS.join(','), ...rows].join('\n');
+}
+
+export function traceCsvCell(value: unknown): string {
+  const text =
+    value === null || value === undefined
+      ? ''
+      : typeof value === 'string'
+        ? value
+        : JSON.stringify(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
