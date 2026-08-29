@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -18,6 +19,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequest
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelWithPriceProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
@@ -31,21 +33,50 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
 public class ModelService {
 
     private final ModelRepository modelRepository;
+    private final ModelProviderRepository modelProviderRepository;
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelCapabilitiesRepository modelCapabilitiesRepository;
     private final OrchestratorModelHealthClient orchestratorModelHealthClient;
     private final ApiKeyRepository apiKeyRepository;
 
-    public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
+    public ModelService(ModelRepository modelRepository, ModelProviderRepository modelProviderRepository,
+                        ModelWeightService weightService,
                         OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository,
                         OrchestratorModelHealthClient orchestratorModelHealthClient, ApiKeyRepository apiKeyRepository) {
         this.modelRepository = modelRepository;
+        this.modelProviderRepository = modelProviderRepository;
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelCapabilitiesRepository = modelCapabilitiesRepository;
         this.orchestratorModelHealthClient = orchestratorModelHealthClient;
         this.apiKeyRepository = apiKeyRepository;
+    }
+
+    /**
+     * Auto-derived L/A/C/Q metrics per model-provider pair (issue #651):
+     * observed latency percentiles and the derived cost figure. An optional
+     * modelId restricts the result to that model's pairs.
+     */
+    public List<Map<String, Object>> getModelMetrics(Integer modelId) {
+        return modelProviderRepository.findPairMetrics(modelId).stream()
+            .map(p -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("model_id", p.getModelId());
+                m.put("model_name", p.getModelName());
+                m.put("provider_id", p.getProviderId());
+                m.put("provider_name", p.getProviderName());
+                m.put("provider_type", p.getProviderType());
+                m.put("cloud_provider_type", p.getCloudProviderType());
+                m.put("derived_ttft_ms", p.getDerivedTtftMs());
+                m.put("derived_total_latency_ms", p.getDerivedTotalLatencyMs());
+                m.put("derived_tpot_ms", p.getDerivedTpotMs());
+                m.put("derived_cost_usd_per_million", p.getDerivedCostUsdPerMillion());
+                m.put("derived_samples", p.getDerivedSamples());
+                m.put("derived_updated_at", p.getDerivedUpdatedAt() != null ? p.getDerivedUpdatedAt().toString() : null);
+                return m;
+            })
+            .toList();
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
@@ -117,13 +148,34 @@ public class ModelService {
         if (req.name() != null) model.setName(req.name());
         if (req.description() != null) model.setDescription(req.description());
         if (req.tags() != null) model.setTags(req.tags());
-        if (req.weightLatency() != null) model.setWeightLatency(req.weightLatency());
-        if (req.weightAccuracy() != null) model.setWeightAccuracy(req.weightAccuracy());
-        if (req.weightCost() != null) model.setWeightCost(req.weightCost());
-        if (req.weightQuality() != null) model.setWeightQuality(req.weightQuality());
+        // A weight that actually changes is a manual decision and pins the
+        // dimension against the auto-derivation (issue #651). Resending the
+        // current value (e.g. the UI saving an untouched dialog) does not.
+        markIfChanged(model, "latency", req.weightLatency(), model.getWeightLatency(),
+            w -> model.setWeightLatency(w));
+        markIfChanged(model, "accuracy", req.weightAccuracy(), model.getWeightAccuracy(),
+            w -> model.setWeightAccuracy(w));
+        markIfChanged(model, "cost", req.weightCost(), model.getWeightCost(),
+            w -> model.setWeightCost(w));
+        markIfChanged(model, "quality", req.weightQuality(), model.getWeightQuality(),
+            w -> model.setWeightQuality(w));
+        if (req.weightOverrides() != null) {
+            model.setWeightOverrides(new LinkedHashMap<>(req.weightOverrides()));
+        }
         modelRepository.save(model);
         orchestratorNotificationService.notifyRefresh(true);
         return Map.of("result", "Model updated");
+    }
+
+    private static void markIfChanged(Model model, String dimension, Integer newValue,
+                                      Integer currentValue, Consumer<Integer> apply) {
+        if (newValue == null || newValue.equals(currentValue)) return;
+        apply.accept(newValue);
+        Map<String, Boolean> overrides = model.getWeightOverrides() != null
+            ? new LinkedHashMap<>(model.getWeightOverrides())
+            : new LinkedHashMap<>();
+        overrides.put(dimension, true);
+        model.setWeightOverrides(overrides);
     }
 
     @Transactional
@@ -153,10 +205,17 @@ public class ModelService {
 
     @Transactional
     public Map<String, Object> updateModelWeight(int id, String category, int feedback) {
-        if (!modelRepository.existsById(id)) {
-            throw new IllegalArgumentException("Model not found: " + id);
-        }
+        Model model = modelRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("Model not found: " + id));
         weightService.rebalanceAfterFeedback(id, category, feedback);
+        // Feedback shifts the ranking through manual input, so the dimension
+        // is pinned against the auto-derivation afterwards (issue #651).
+        Map<String, Boolean> overrides = model.getWeightOverrides() != null
+            ? new LinkedHashMap<>(model.getWeightOverrides())
+            : new LinkedHashMap<>();
+        overrides.put(category, true);
+        model.setWeightOverrides(overrides);
+        modelRepository.save(model);
         return Map.of("result", "Updated Model");
     }
 

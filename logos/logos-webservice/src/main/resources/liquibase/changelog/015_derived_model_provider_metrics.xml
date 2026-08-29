@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+        http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Issue #651: L/A/C/Q values shall be auto-set per model-provider pair.
+
+         The derived_* columns on model_provider hold the auto-derived metrics
+         for one pair: observed latency percentiles (TTFT / total / TPOT) from
+         log_entry, plus a cost figure (catalogue price blend for cloud pairs,
+         VRAM x latency proxy for local pairs). All columns are nullable until
+         the derivation has seen enough data.
+
+         weight_overrides on models records which of the four classification
+         weight dimensions (latency/accuracy/cost/quality) an admin set
+         manually; the derivation never overwrites a dimension that carries an
+         override. -->
+    <changeSet id="015-model-provider-derived-metrics" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="model_provider" columnName="derived_ttft_ms"/></not>
+        </preConditions>
+        <addColumn tableName="model_provider">
+            <column name="derived_ttft_ms" type="INTEGER"/>
+            <column name="derived_total_latency_ms" type="INTEGER"/>
+            <column name="derived_tpot_ms" type="INTEGER"/>
+            <column name="derived_cost_usd_per_million" type="NUMERIC(12,6)"/>
+            <column name="derived_samples" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="derived_updated_at" type="TIMESTAMPTZ"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="015-models-weight-overrides" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="models" columnName="weight_overrides"/></not>
+        </preConditions>
+        <addColumn tableName="models">
+            <column name="weight_overrides" type="JSONB" defaultValue="{}">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

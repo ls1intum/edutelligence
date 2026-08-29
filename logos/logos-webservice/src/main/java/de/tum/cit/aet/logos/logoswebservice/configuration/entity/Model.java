@@ -1,5 +1,11 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.entity;
 
+import java.util.HashMap;
+import java.util.Map;
+
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -25,6 +31,15 @@ public class Model {
     private String tags;
     private String description;
 
+    /**
+     * Classifications-weight dimensions (latency/accuracy/cost/quality) the
+     * admin set manually. The metrics derivation never overwrites a dimension
+     * that carries an override (issue #651).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb", nullable = false)
+    private Map<String, Boolean> weightOverrides = new HashMap<>();
+
     public Integer getId() { return id; }
     public String getName() { return name; }
     public Integer getWeightLatency() { return weightLatency; }
@@ -33,6 +48,7 @@ public class Model {
     public Integer getWeightQuality() { return weightQuality; }
     public String getTags() { return tags; }
     public String getDescription() { return description; }
+    public Map<String, Boolean> getWeightOverrides() { return weightOverrides; }
 
     public void setName(String name) { this.name = name; }
     public void setWeightLatency(Integer w) { this.weightLatency = w; }
@@ -41,4 +57,5 @@ public class Model {
     public void setWeightQuality(Integer w) { this.weightQuality = w; }
     public void setTags(String tags) { this.tags = tags; }
     public void setDescription(String description) { this.description = description; }
+    public void setWeightOverrides(Map<String, Boolean> weightOverrides) { this.weightOverrides = weightOverrides; }
 }

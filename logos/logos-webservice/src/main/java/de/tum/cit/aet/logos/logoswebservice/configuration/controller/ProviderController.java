@@ -25,6 +25,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsR
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.WakeLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelMetricsService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
@@ -36,12 +37,16 @@ public class ProviderController {
 
     private final ProviderService providerService;
     private final PriceUpdaterService priceUpdaterService;
+    private final ModelMetricsService modelMetricsService;
     private final OrchestratorWorkerAdminClient workerAdminClient;
     private final ObjectMapper objectMapper;
 
-    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService,
+                              ModelMetricsService modelMetricsService,
+                              OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
         this.providerService = providerService;
         this.priceUpdaterService = priceUpdaterService;
+        this.modelMetricsService = modelMetricsService;
         this.workerAdminClient = workerAdminClient;
         this.objectMapper = objectMapper;
     }
@@ -96,6 +101,9 @@ public class ProviderController {
         // refresh, so freshly connected cloud models reported a cost of zero.
         if (req.modelId() != null) {
             priceUpdaterService.updatePricesForModelAsync(req.modelId());
+            // The new pair is a new latency/cost data source for the model's
+            // auto-derived weights (issue #651).
+            modelMetricsService.deriveForModelAsync(req.modelId());
         }
         return response;
     }
@@ -105,7 +113,13 @@ public class ProviderController {
     public ResponseEntity<?> disconnectModelProvider(
             @RequestBody DisconnectModelProviderRequestDTO req) {
         try {
-            return ResponseEntity.ok(providerService.disconnectModelProvider(req));
+            ResponseEntity<?> response = ResponseEntity.ok(providerService.disconnectModelProvider(req));
+            // Losing a pair changes the best available latency/cost of the
+            // model, so the auto-derived weights are re-run (issue #651).
+            if (req.modelId() != null) {
+                modelMetricsService.deriveForModelAsync(req.modelId());
+            }
+            return response;
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
         }
