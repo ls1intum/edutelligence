@@ -191,6 +191,11 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
             "result_status": "success",
             "error_message": None,
             "cold_start": False,
+            "usage_tokens": {
+                "prompt_tokens": 3,
+                "completion_tokens": 5,
+                "total_tokens": 8,
+            },
         }
     ]
     assert release_calls == [(27, 12, "logosnode", "req-stream")]
@@ -596,6 +601,8 @@ async def test_http_streaming_terminal_error_is_recorded(monkeypatch, terminal_e
             "result_status": "error",
             "error_message": terminal_error,
             "cold_start": False,
+            # The stream carried no usage chunk, so nothing was extracted.
+            "usage_tokens": {},
         }
     ]
     assert completion_logs[0]["status"] == "error"
@@ -793,6 +800,8 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
             "result_status": "error",
             "error_message": "bad request",
             "cold_start": False,
+            # An error body carries no usage, so nothing was extracted.
+            "usage_tokens": {},
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-sync-error")]
@@ -860,6 +869,11 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
             "result_status": "success",
             "error_message": None,
             "cold_start": True,
+            "usage_tokens": {
+                "prompt_tokens": 11,
+                "completion_tokens": 13,
+                "total_tokens": 24,
+            },
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-job")]

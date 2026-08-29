@@ -307,6 +307,12 @@ export interface RequestItem {
    * orchestrator's running tally and moves until the request completes.
    */
   streaming?: boolean;
+  /**
+   * The prompt figure is the estimate the context routing computed from the
+   * body — the request has not reached a point where the upstream states the
+   * real size yet (it still queues). Shown as an estimate, not a fact.
+   */
+  prompt_estimated?: boolean;
 }
 
 /**

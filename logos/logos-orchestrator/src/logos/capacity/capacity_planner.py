@@ -713,6 +713,7 @@ class CapacityPlanner:
 
             provider_ids.sort(key=_provider_pressure, reverse=True)
         self._log_cluster_summary(provider_ids)
+        self._refresh_engine_cache_metrics(provider_ids)
 
         # Cross-provider best-first ranking: pre-score every (provider,
         # model) candidate so the cheapest worker for each model wins,
@@ -824,6 +825,51 @@ class CapacityPlanner:
                 )
 
         prom.CAPACITY_PLANNER_CYCLE_DURATION_SECONDS.observe(time.time() - cycle_start)
+
+    def _refresh_engine_cache_metrics(self, provider_ids: List[int]) -> None:
+        """Publish per-(provider, model) prefix-cache and MTP-acceptance rates.
+
+        Feeds the ``logos_prefix_cache_hit_rate`` / ``logos_mtp_acceptance_rate``
+        gauges from the workers' lane backend metrics. Aggregation mirrors the
+        live-statistics payload: the prefix hit rate is the plain mean across
+        the model's lanes, while the MTP acceptance rate is token-weighted
+        (sum of accepted / sum of draft tokens), because an unweighted mean of
+        per-lane rates misstates the model rate when lanes see different
+        draft volumes. Pairs with no lanes this cycle are retired by the
+        publish helper.
+        """
+        entries: list[tuple[str, str, float | None, float | None]] = []
+        for pid in provider_ids:
+            snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
+            if snap is None:
+                continue
+            provider_name = self._facade.get_provider_name(pid) or str(pid)
+            runtime = snap.get("runtime") or {}
+            lanes = runtime.get("lanes")
+            per_model: dict[str, dict[str, float]] = {}
+            for lane in lanes if isinstance(lanes, list) else []:
+                if not isinstance(lane, dict):
+                    continue
+                model = str(lane.get("model") or "").strip()
+                if not model:
+                    continue
+                backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+                agg = per_model.setdefault(
+                    model, {"prefix_sum": 0.0, "prefix_count": 0.0, "mtp_draft": 0.0, "mtp_accepted": 0.0}
+                )
+                prefix_rate = lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
+                if prefix_rate is not None:
+                    agg["prefix_sum"] += prefix_rate
+                    agg["prefix_count"] += 1
+                mtp_draft = lane_metric_float(backend_metrics.get("mtp_draft_tokens_total")) or 0.0
+                mtp_accepted = lane_metric_float(backend_metrics.get("mtp_accepted_tokens_total")) or 0.0
+                agg["mtp_draft"] += mtp_draft
+                agg["mtp_accepted"] += mtp_accepted
+            for model, agg in per_model.items():
+                prefix_rate = agg["prefix_sum"] / agg["prefix_count"] if agg["prefix_count"] > 0 else None
+                mtp_rate = agg["mtp_accepted"] / agg["mtp_draft"] if agg["mtp_draft"] > 0 else None
+                entries.append((model, provider_name, prefix_rate, mtp_rate))
+        prom.update_engine_cache_metrics(entries)
 
     def _log_cluster_summary(self, provider_ids: List[int]) -> None:
         """Print a colored cluster overview for the current planner cycle."""

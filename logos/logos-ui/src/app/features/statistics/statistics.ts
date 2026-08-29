@@ -24,6 +24,7 @@ import {
   chooseDynamicTargetBuckets,
   extractProviderVramMb,
   formatRangeLabel,
+  formatTokenCount as formatTokenCountValue,
   normalizeFeedStatus,
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
@@ -712,11 +713,9 @@ export class Statistics implements OnInit, OnDestroy {
   readonly totalTokens = computed(() => this.stats()?.totals.totalTokens ?? 0);
   readonly cloudCostMicroCents = computed(() => this.stats()?.totals.cloudCostMicroCents ?? 0);
 
-  /** Format a token count for the KPI card (1.2M / 340k / 12). */
+  /** Format a token count for the KPI card on the K/M/B/T scale. */
   formatTokenCount(v: number): string {
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
-    return String(Math.round(v));
+    return formatTokenCountValue(v);
   }
 
   /** Format cloud cost in microcents as USD (the unit litellm prices in). */

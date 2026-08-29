@@ -23,6 +23,7 @@ import {
   getRequestBorderColor,
   formatTimeAgo,
   formatElapsed,
+  providerLabel,
   RequestStage,
 } from '../../statistics.utils';
 
@@ -33,6 +34,35 @@ import {
  * sized differently and the "1-10 of n" count would skip or repeat numbers.
  */
 const PAGE_SIZE = 10;
+
+/**
+ * One frame's worth of the way from a shown figure to the pushed one: 30% of
+ * the gap, at least one token. A target below the shown one is reached at
+ * once — that is the estimate the real prompt replaced, and counting backwards
+ * from a wrong number reads as the count falling out of the air.
+ */
+export function chaseStep(shown: number, target: number): number {
+  if (target <= shown) return target;
+  return Math.min(target, shown + Math.max(1, Math.ceil((target - shown) * 0.3)));
+}
+
+/**
+ * The token line as the page shows it: "↑prompt ↓completion", nothing when
+ * neither figure is known. The numbers are the ones on screen — mid-chase
+ * that trails the last pushed one — and a prompt the upstream has not stated
+ * yet (the request still queues) carries a tilde, because it is the estimate
+ * the context routing computed from the body, not a measured figure.
+ */
+export function tokenLabel(
+  prompt: number | null,
+  completion: number | null,
+  shown: { p: number; c: number },
+  promptEstimated: boolean,
+): string | null {
+  if (prompt == null && completion == null) return null;
+  const est = promptEstimated ? '~' : '';
+  return `↑${est}${shown.p} ↓${shown.c}`;
+}
 
 @Component({
   selector: 'app-stats-recent-requests',
@@ -84,6 +114,22 @@ export class RecentRequests implements OnChanges, OnDestroy {
   now = signal(Date.now());
 
   private intervalId: ReturnType<typeof setInterval> | null = null;
+
+  // ── Count-up ───────────────────────────────────────────────────────────────
+
+  /**
+   * The token line does not jump between two pushes — the figure on screen
+   * chases the pushed one a little at a time, so a jump of nine tokens reads
+   * as motion. Keyed by request id; a request that leaves the live set leaves
+   * with its entry.
+   *
+   * The template reads this through `tokensLabelOf`, which is what makes a
+   * write from the (zoneless) interval tick render: the view tracks the
+   * signal, the signal does not care who writes it.
+   */
+  private readonly _shownTokens = signal<Record<string, { p: number; c: number }>>({});
+
+  private chaseId: ReturnType<typeof setInterval> | null = null;
 
   // Input mirror signals so the computed()s below actually react: a plain
   // @Input() is not a tracked producer, so reading it inside computed() would
@@ -194,10 +240,13 @@ export class RecentRequests implements OnChanges, OnDestroy {
     }
     // Re-schedule ticker whenever inputs change so cadence stays correct.
     this.scheduleTicker();
+    // A new push is where the chase gets new ground to cover.
+    if (changes['liveRequests']) this.startChase();
   }
 
   ngOnDestroy(): void {
     this.clearTicker();
+    this.clearChase();
   }
 
   private resetToFirstPage(): void {
@@ -301,10 +350,74 @@ export class RecentRequests implements OnChanges, OnDestroy {
     }
   }
 
+  /**
+   * One frame of the chase: every streaming row's shown figure moves part of
+   * the way to the pushed one. A new row starts at its first pushed figure —
+   * a request that is already mid-generation when the page opens should show
+   * its numbers at once, not count them up from zero — and only the growth
+   * after that is animated.
+   */
+  private chaseFrame(): void {
+    const targets = new Map<string, { p: number; c: number }>();
+    for (const it of this.displayItems()) {
+      if (!it.streaming) continue;
+      targets.set(it.request_id, { p: it.prompt_tokens ?? 0, c: it.completion_tokens ?? 0 });
+    }
+
+    const shown = { ...this._shownTokens() };
+    let dirty = false;
+    let catchingUp = false;
+    for (const [id, target] of targets) {
+      const current = shown[id];
+      if (current === undefined) {
+        shown[id] = target;
+        dirty = true;
+        continue;
+      }
+      const p = chaseStep(current.p, target.p);
+      const c = chaseStep(current.c, target.c);
+      if (p !== current.p || c !== current.c) {
+        shown[id] = { p, c };
+        dirty = true;
+      }
+      if (p < target.p || c < target.c) catchingUp = true;
+    }
+    for (const id of Object.keys(shown)) {
+      if (!targets.has(id)) {
+        delete shown[id];
+        dirty = true;
+      }
+    }
+    if (dirty) this._shownTokens.set(shown);
+
+    // Nothing is streaming anymore, or every figure has reached its target and
+    // the next push will start a new chase. Either way this timer is done.
+    if (targets.size === 0 || !catchingUp) this.clearChase();
+  }
+
+  private startChase(): void {
+    if (this.chaseId !== null) return;
+    // ~15 fps: enough that the count reads as continuous, cheap enough that
+    // re-running change detection on ten rows does not register.
+    this.chaseId = setInterval(() => this.chaseFrame(), 66);
+  }
+
+  private clearChase(): void {
+    if (this.chaseId !== null) {
+      clearInterval(this.chaseId);
+      this.chaseId = null;
+    }
+  }
+
   // ── Template helpers ─────────────────────────────────────────────────────
 
   stageOf(item: RequestItem): RequestStage {
     return deriveStage(item);
+  }
+
+  /** 'none' while the request is still queued — see `providerLabel`. */
+  providerLabelOf(item: RequestItem): string {
+    return providerLabel(item);
   }
 
   borderColorOf(item: RequestItem): string {
@@ -332,12 +445,28 @@ export class RecentRequests implements OnChanges, OnDestroy {
     return formatUsd(item.cost_microcents);
   }
 
-  /** Token line "↑prompt ↓completion", only when token counts are known. */
+  /**
+   * The figures the row shows right now: for a running request the chase
+   * value that is still moving toward the last pushed one, for everything
+   * else the stored numbers.
+   *
+   * Reads the chase signal, which is what keeps this component re-rendering
+   * on the interval's ticks in a zoneless app.
+   */
+  private shownTokensOf(item: RequestItem): { p: number; c: number } {
+    const shown = this._shownTokens();
+    const target = { p: item.prompt_tokens ?? 0, c: item.completion_tokens ?? 0 };
+    if (item.streaming && shown[item.request_id]) return shown[item.request_id];
+    return target;
+  }
+
   tokensLabelOf(item: RequestItem): string | null {
-    const p = item.prompt_tokens;
-    const c = item.completion_tokens;
-    if (p == null && c == null) return null;
-    return `↑${p ?? 0} ↓${c ?? 0}`;
+    return tokenLabel(
+      item.prompt_tokens,
+      item.completion_tokens,
+      this.shownTokensOf(item),
+      item.prompt_estimated ?? false,
+    );
   }
 
   /**
