@@ -102,6 +102,12 @@ class QueueEntry:
     schedules the request, the lane is loaded — `status.is_loaded` no
     longer reflects whether the request actually triggered a cold load."""
 
+    work_estimate: int = 0
+    """Estimated tokens the request occupies (prompt + reserved output),
+    0 when it could not be estimated. Within one priority level the queue
+    orders by this before arrival time so short requests are not held up
+    behind long ones (see PriorityQueueManager)."""
+
     @property
     def wait_time_seconds(self) -> float:
         """Calculate how long this entry has been waiting in queue."""

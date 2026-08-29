@@ -191,6 +191,13 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
     ),
 )
 _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
+# Retry hint sent with a 429 when a request spent its whole queue-wait window
+# without getting a lane. The queue is by definition still under pressure when
+# that happens, so the hint is a modest backoff rather than a computed drain
+# time; clients with a retry policy (including Claude Code's auto-mode
+# classifier, which honours overload-retry since v2.1.243) get a bounded
+# wait-and-retry instead of an opaque 503.
+_QUEUE_TIMEOUT_RETRY_AFTER_S = 30
 # Transparent retry for a logosnode stream that fails BEFORE the first token is
 # forwarded to the client (e.g. a just-woken level-1 lane whose vLLM engine was
 # not yet serveable — the worker now fails cleanly before stream_start). Safe to
@@ -4092,6 +4099,21 @@ async def _execute_resource_mode(
             scheduling_stats=result.scheduling_stats,
             result_status="timeout" if "timeout" in error_msg.lower() else "error",
         )
+        if getattr(result, "queue_timeout_s", None) is not None:
+            # Queue-wait timeout is overload, not unavailability: the lanes
+            # are fine, the request just could not get one within its wait
+            # window. Answer 429 + Retry-After so a client with a retry
+            # policy retries with a bounded backoff instead of surfacing an
+            # opaque 503 (the failure mode that makes Claude Code's
+            # auto-classifier block tool execution, #828).
+            if is_async_job:
+                _, err_body = coerce_upstream_error(429, {"error": error_msg})
+                return {"status_code": 429, "data": err_body}
+            raise HTTPException(
+                status_code=429,
+                detail=error_msg,
+                headers={"Retry-After": str(_QUEUE_TIMEOUT_RETRY_AFTER_S)},
+            )
         if is_async_job:
             return {"status_code": 503, "data": {"error": error_msg}}
         else:

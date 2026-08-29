@@ -10,6 +10,7 @@ import asyncio
 import logging
 from typing import List, Optional, Tuple
 
+from logos.context_budget import estimated_work_tokens
 from logos.queue.priority_queue import Priority
 from logos.timeouts import global_timeout_s
 
@@ -97,7 +98,13 @@ class UtilizationAwareScheduler(BaseScheduler):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        entry_id = self._queue_mgr.enqueue(future, target_model_id, provider_id, priority)
+        entry_id = self._queue_mgr.enqueue(
+            future,
+            target_model_id,
+            provider_id,
+            priority,
+            work_estimate=estimated_work_tokens(request.payload),
+        )
         logger.info(
             "Request %s queued for model %s provider %s (depth=%s)",
             request.request_id,

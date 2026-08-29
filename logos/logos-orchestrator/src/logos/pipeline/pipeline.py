@@ -93,6 +93,11 @@ class PipelineResult:
     classification_stats: Dict[str, Any]
     scheduling_stats: Dict[str, Any]
     error: Optional[str] = None
+    # Set when the failure was a queue-wait timeout (``QueueTimeoutError``),
+    # carrying the window the request was held. Lets the caller answer with
+    # overload semantics (429 + Retry-After) instead of a generic 503 — the
+    # client's wait budget was spent, not the service's availability.
+    queue_timeout_s: Optional[float] = None
 
 
 class RequestPipeline:
@@ -240,6 +245,7 @@ class RequestPipeline:
                     "error": "Queue wait timeout",
                 },
                 error=str(exc),
+                queue_timeout_s=exc.timeout_s,
             )
 
         if not scheduling_result:

@@ -17,6 +17,7 @@ import random
 import time
 from typing import Dict, List, Optional, Tuple
 
+from logos.context_budget import estimated_work_tokens
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
@@ -767,6 +768,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             provider_id,
             priority,
             is_cold_at_queue=is_cold_at_queue,
+            work_estimate=estimated_work_tokens(request.payload),
         )
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(

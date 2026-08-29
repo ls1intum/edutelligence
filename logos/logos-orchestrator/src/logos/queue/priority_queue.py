@@ -8,6 +8,13 @@ queued request can be served by any provider with capability for that model
 For backward compatibility every public method that previously took a
 ``provider_id`` still accepts it (positional or kwarg) and silently ignores
 it. The kwarg pattern lets callers be migrated gradually.
+
+Within one priority level entries are ordered by their ``work_estimate``
+(tokens the request occupies, 0 = could not estimate) before arrival time:
+a short request must not wait behind a long-running one for a freed slot,
+which is what starves latency-sensitive traffic (small classifier-style
+requests) when the queue fills with large ones. Unknown work sorts after
+every estimate so an unmeasurable request is never assumed short.
 """
 
 import heapq
@@ -21,11 +28,22 @@ from typing import Dict, List, Optional, Tuple, Union
 from logos.queue.models import Priority, QueueEntry, QueueStatePerPriority
 
 
+def _work_sort_key(work_estimate: int) -> float:
+    """Heap key for the work-aware ordering inside one priority level.
+
+    Shorter estimated work sorts first so a latency-sensitive request
+    (small prompt, capped output) is dispatched before a long-running one
+    when capacity frees up. 0 means "could not estimate" and sorts after
+    every estimate: an unknown-sized request must not be assumed short.
+    """
+    return float(work_estimate) if work_estimate > 0 else float("inf")
+
+
 class PriorityQueueManager:
     """Thread-safe priority queue manager keyed by ``model_id``.
 
     Maintains separate priority heaps per model:
-        queues[model_id][Priority.HIGH] = [(neg_priority, ts, entry_id, QueueEntry), ...]
+        queues[model_id][Priority.HIGH] = [(-priority, work_key, ts, entry_id, QueueEntry), ...]
         queues[model_id][Priority.NORMAL] = [...]
         queues[model_id][Priority.LOW] = [...]
 
@@ -36,6 +54,8 @@ class PriorityQueueManager:
       from the same queue (release path picks via lane_comparator).
     - Backward-compatible: every method that previously accepted
       ``provider_id`` still accepts it and ignores it.
+    - Within a priority level: shorter estimated work first, then arrival
+      time (unknown work last, see ``_work_sort_key``).
     """
 
     def __init__(self):
@@ -63,11 +83,17 @@ class PriorityQueueManager:
         provider_id: int = None,  # Ignored — kept for back-compat.
         priority: Priority = Priority.NORMAL,
         is_cold_at_queue: bool = False,
+        work_estimate: int = 0,
     ) -> str:
         """Add a task to the priority queue for ``model_id``.
 
         ``provider_id`` is accepted but ignored (back-compat). Any provider
         with capability for ``model_id`` can later dispatch this task.
+
+        ``work_estimate`` (tokens the request occupies, 0 = unknown) orders
+        entries within the priority level: shorter work dispatches first, so
+        a small request arriving while the queue holds large ones is not
+        made to wait for all of them.
         """
         with self._lock:
             self._entry_counter += 1
@@ -81,10 +107,12 @@ class PriorityQueueManager:
                 current_priority=priority,
                 enqueue_time=datetime.now(),
                 is_cold_at_queue=is_cold_at_queue,
+                work_estimate=work_estimate,
             )
 
             heap_entry = (
                 -int(priority),
+                _work_sort_key(work_estimate),
                 datetime.now().timestamp(),
                 entry_id,
                 entry,
@@ -144,7 +172,7 @@ class PriorityQueueManager:
         if not queue:
             return None, None
 
-        _, _, entry_id, entry = heapq.heappop(queue)
+        _neg_pri, _work_key, _ts, entry_id, entry = heapq.heappop(queue)
         del self._entry_lookup[entry_id]
 
         logging.debug(
@@ -166,7 +194,7 @@ class PriorityQueueManager:
             for priority in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
                 queue = self._queues[model_id][priority]
                 if queue:
-                    _, _, _, entry = queue[0]
+                    _, _, _, _, entry = queue[0]
                     return entry.task, priority
             return None
 
@@ -183,7 +211,7 @@ class PriorityQueueManager:
 
             current_queue = self._queues[model_id][current_priority]
             entry_to_move = None
-            for i, (_, _, eid, entry) in enumerate(current_queue):
+            for i, (_, _, _, eid, entry) in enumerate(current_queue):
                 if eid == entry_id:
                     entry_to_move = entry
                     del current_queue[i]
@@ -199,6 +227,7 @@ class PriorityQueueManager:
 
             heap_entry = (
                 -int(new_priority),
+                _work_sort_key(entry_to_move.work_estimate),
                 datetime.now().timestamp(),
                 entry_id,
                 entry_to_move,
@@ -253,7 +282,7 @@ class PriorityQueueManager:
 
         with self._lock:
             queue = self._queues[model_id][priority]
-            entries = [entry for (_, _, _, entry) in queue]
+            entries = [entry for (_, _, _, _eid, entry) in queue]
             entries.sort(key=lambda e: e.enqueue_time)
             return entries
 
@@ -264,7 +293,7 @@ class PriorityQueueManager:
                 return None
             model_id, priority = self._entry_lookup[entry_id]
             queue = self._queues[model_id][priority]
-            for _, _, eid, entry in queue:
+            for _, _, _work_key, eid, entry in queue:
                 if eid == entry_id:
                     return entry
             return None
@@ -276,7 +305,7 @@ class PriorityQueueManager:
                 return False
             model_id, priority = self._entry_lookup[entry_id]
             queue = self._queues[model_id][priority]
-            for i, (_, _, eid, _) in enumerate(queue):
+            for i, (_, _, _, eid, _) in enumerate(queue):
                 if eid == entry_id:
                     del queue[i]
                     heapq.heapify(queue)
@@ -314,7 +343,7 @@ class PriorityQueueManager:
             if not model_queues:
                 return False
             for queue in model_queues.values():
-                for _neg_pri, _ts, _eid, entry in queue:
+                for _neg_pri, _work_key, _ts, _eid, entry in queue:
                     if entry.is_cold_at_queue:
                         return True
             return False

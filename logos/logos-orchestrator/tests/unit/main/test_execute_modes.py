@@ -70,6 +70,95 @@ async def test_execute_resource_mode_failure_records_error(monkeypatch):
     assert exc.value.status_code == 503
 
 
+async def test_execute_resource_mode_queue_timeout_returns_429_with_retry_after(monkeypatch):
+    """A queue-wait timeout is overload, not unavailability (#828).
+
+    The client spent its wait window without a lane, so the answer is a
+    retryable 429 + Retry-After — the signal a retry policy (including
+    Claude Code's auto-mode classifier, which honours overload-retry since
+    v2.1.243) can recover from — not an opaque 503.
+    """
+
+    class Result:
+        success = False
+        error = "Queue wait timeout after 1200s"
+        execution_context = None
+        provider_id = None
+        model_id = 10
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-1"}
+        queue_timeout_s = 1200.0
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type(
+            "P",
+            (),
+            {
+                "process": AsyncMock(return_value=Result()),
+                "record_completion": lambda *a, **k: None,
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main._execute_resource_mode(
+            deployments=[{"model_id": 10, "provider_id": 1}],
+            body={},
+            headers={"h": "v"},
+            auth=MagicMock(key_value="lg-test", api_key_id=1),
+            log_id=1,
+            is_async_job=False,
+        )
+    assert exc.value.status_code == 429
+    assert exc.value.headers == {"Retry-After": str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)}
+    assert "timeout" in str(exc.value.detail).lower()
+
+
+async def test_execute_resource_mode_queue_timeout_job_gets_retryable_body(monkeypatch):
+    """Async jobs get the same overload semantics as direct requests."""
+
+    class Result:
+        success = False
+        error = "Queue wait timeout after 1200s"
+        execution_context = None
+        provider_id = None
+        model_id = 10
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-1"}
+        queue_timeout_s = 1200.0
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type(
+            "P",
+            (),
+            {
+                "process": AsyncMock(return_value=Result()),
+                "record_completion": lambda *a, **k: None,
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+
+    out = await main._execute_resource_mode(
+        deployments=[{"model_id": 10, "provider_id": 1}],
+        body={},
+        headers={"h": "v"},
+        auth=MagicMock(key_value="lg-test", api_key_id=1),
+        log_id=1,
+        is_async_job=True,
+    )
+    assert out["status_code"] == 429
+    assert out["data"]["error"]["type"] == "rate_limit_error"
+    assert "timeout" in out["data"]["error"]["message"].lower()
+
+
 async def test_execute_resource_mode_forwards_api_key_priority_to_pipeline(monkeypatch):
     """The authenticated key's default_priority reaches the PipelineRequest."""
 
