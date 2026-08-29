@@ -266,4 +266,108 @@ class ModelControllerTest {
                 .content("{\"id\":5001,\"category\":\"accuracy\",\"value\":1}"))
            .andExpect(status().isForbidden());
     }
+
+    @Test
+    void addModel_withAliasesExposesThemInModelAndList() throws Exception {
+        MvcResult addResult = mvc.perform(post("/logosdb/add_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"alias-model\",\"aliases\":[\"local-most-powerful\",\"local-fast\"]}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int modelId = JsonPath.read(addResult.getResponse().getContentAsString(), "$.model_id");
+
+        // The single-model endpoint returns the sorted alias list...
+        mvc.perform(post("/logosdb/get_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"id\":" + modelId + "}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.aliases.length()").value(2))
+           .andExpect(jsonPath("$.aliases[0]").value("local-fast"))
+           .andExpect(jsonPath("$.aliases[1]").value("local-most-powerful"));
+
+        // ...the model list the comma-joined form, and a model without
+        // aliases gets no value at all.
+        mvc.perform(post("/logosdb/get_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[?(@.id == %d)].aliases".formatted(modelId))
+                .value("local-fast, local-most-powerful"))
+           // A model without aliases has no alias value (null or absent).
+           .andExpect(jsonPath("$[?(@.id == 5001)].aliases[0]").doesNotExist());
+    }
+
+    @Test
+    void updateModelInfo_replacesAndClearsAliases() throws Exception {
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"aliases\":[\"local-gpt\"]}"))
+           .andExpect(status().isOk());
+        mvc.perform(post("/logosdb/get_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"id\":5001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.aliases.length()").value(1))
+           .andExpect(jsonPath("$.aliases[0]").value("local-gpt"));
+
+        // Re-adding the same alias with different capitalization keeps a
+        // single case-insensitively unique entry.
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"aliases\":[\"Local-GPT\"]}"))
+           .andExpect(status().isOk());
+        mvc.perform(post("/logosdb/get_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"id\":5001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.aliases.length()").value(1));
+
+        // An empty list removes all aliases.
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"aliases\":[]}"))
+           .andExpect(status().isOk());
+        mvc.perform(post("/logosdb/get_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"id\":5001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.aliases.length()").value(0));
+    }
+
+    @Test
+    void updateModelInfo_aliasCollidingWithModelNameIsRejected() throws Exception {
+        // Model 5001 is named 'gpt-4'; an alias differing only in
+        // capitalization would be ambiguous to resolve.
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5002,\"aliases\":[\"GPT-4\"]}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").exists());
+    }
+
+    @Test
+    void addModel_aliasAlreadyAssignedToAnotherModelIsRejected() throws Exception {
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"aliases\":[\"shared-alias\"]}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(post("/logosdb/add_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"alias-conflict\",\"aliases\":[\"shared-alias\"]}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").exists());
+    }
 }

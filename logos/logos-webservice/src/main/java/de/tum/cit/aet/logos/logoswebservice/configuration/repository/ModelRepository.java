@@ -10,9 +10,15 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 
 public interface ModelRepository extends JpaRepository<Model, Integer> {
 
+    boolean existsByNameIgnoreCase(String name);
+
     @Query(value = """
         SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
                m.weight_quality, m.tags, m.description,
+               (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                FROM model_aliases a
+                WHERE a.model_id = m.id
+               ) AS aliases,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
@@ -55,6 +61,10 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
         -- be wasted work on every other model list request.
         SELECT DISTINCT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
                m.weight_quality, m.tags, m.description,
+               (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                FROM model_aliases a
+                WHERE a.model_id = m.id
+               ) AS aliases,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)

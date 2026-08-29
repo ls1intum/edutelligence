@@ -1,9 +1,13 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -15,7 +19,9 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ModelCapabilitiesDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelAlias;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelAliasRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelWithPriceProjection;
@@ -29,13 +35,17 @@ public class ModelService {
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelCapabilitiesRepository modelCapabilitiesRepository;
+    private final ModelAliasRepository modelAliasRepository;
 
     public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
-                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository) {
+                        OrchestratorNotificationService orchestratorNotificationService,
+                        ModelCapabilitiesRepository modelCapabilitiesRepository,
+                        ModelAliasRepository modelAliasRepository) {
         this.modelRepository = modelRepository;
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelCapabilitiesRepository = modelCapabilitiesRepository;
+        this.modelAliasRepository = modelAliasRepository;
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
@@ -59,6 +69,7 @@ public class ModelService {
         model.setWeightCost(0);
         model.setWeightQuality(0);
         model = modelRepository.save(model);
+        saveAliases(model.getId(), req.aliases());
         weightService.rebalanceAfterAdd(
             model.getId(),
             req.worseLatencyId(), req.worseAccuracyId(),
@@ -80,6 +91,7 @@ public class ModelService {
         if (req.weightCost() != null) model.setWeightCost(req.weightCost());
         if (req.weightQuality() != null) model.setWeightQuality(req.weightQuality());
         modelRepository.save(model);
+        saveAliases(model.getId(), req.aliases());
         orchestratorNotificationService.notifyRefresh(true);
         return Map.of("result", "Model updated");
     }
@@ -104,6 +116,7 @@ public class ModelService {
             map.put("weight_cost", m.getWeightCost());
             map.put("weight_quality", m.getWeightQuality());
             map.put("tags", m.getTags());
+            map.put("aliases", listAliases(m.getId()));
             map.put("description", m.getDescription());
             return map;
         });
@@ -122,6 +135,73 @@ public class ModelService {
         return Map.of("totalModels", modelRepository.count());
     }
 
+    /** Sorted alias names of a model, for the single-model endpoint. */
+    public List<String> listAliases(Integer modelId) {
+        return modelAliasRepository.findByModelId(modelId)
+            .stream()
+            .map(ModelAlias::getAlias)
+            .sorted()
+            .toList();
+    }
+
+    /**
+     * Replaces the aliases of the given model with the supplied list.
+     * A null list leaves the aliases unchanged; an empty list removes them all.
+     *
+     * Aliases are trimmed and de-duplicated case-insensitively. They must not
+     * contain the comma that joins them in list responses, and they must not
+     * collide case-insensitively with any model name or with an alias of
+     * another model — model-name and alias matching is case-insensitive at
+     * the request boundary, so either collision would resolve ambiguously.
+     */
+    private void saveAliases(Integer modelId, List<String> aliases) {
+        if (aliases == null) {
+            return;
+        }
+        List<String> normalized = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (String raw : aliases) {
+            String alias = raw == null ? "" : raw.trim();
+            if (alias.isEmpty()) {
+                continue;
+            }
+            if (alias.contains(",")) {
+                throw new IllegalArgumentException("Alias '" + alias + "' must not contain a comma");
+            }
+            if (seen.add(alias.toLowerCase(Locale.ROOT))) {
+                normalized.add(alias);
+            }
+        }
+
+        List<ModelAlias> existing = modelAliasRepository.findByModelId(modelId);
+        Set<String> existingLower = existing.stream()
+            .map(a -> a.getAlias().toLowerCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+        for (String alias : normalized) {
+            String lower = alias.toLowerCase(Locale.ROOT);
+            if (!existingLower.contains(lower) && modelAliasRepository.existsByAliasIgnoreCase(alias)) {
+                throw new IllegalArgumentException("Alias '" + alias + "' is already assigned to another model");
+            }
+            if (modelRepository.existsByNameIgnoreCase(alias)) {
+                throw new IllegalArgumentException("Alias '" + alias + "' collides with an existing model name");
+            }
+        }
+
+        for (ModelAlias stored : existing) {
+            if (!seen.contains(stored.getAlias().toLowerCase(Locale.ROOT))) {
+                modelAliasRepository.delete(stored);
+            }
+        }
+        for (String alias : normalized) {
+            if (!existingLower.contains(alias.toLowerCase(Locale.ROOT))) {
+                ModelAlias stored = new ModelAlias();
+                stored.setModelId(modelId);
+                stored.setAlias(alias);
+                modelAliasRepository.save(stored);
+            }
+        }
+    }
+
     private static boolean isLogosAdmin(AuthContext auth) {
         return Role.LOGOS_ADMIN.matches(auth.role());
     }
@@ -137,6 +217,7 @@ public class ModelService {
         m.put("weight_cost", p.getWeightCost());
         m.put("weight_quality", p.getWeightQuality());
         m.put("tags", p.getTags());
+        m.put("aliases", p.getAliases());
         m.put("description", p.getDescription());
         m.put("input_usd_per_million", p.getInputUsdPerMillion());
         m.put("output_usd_per_million", p.getOutputUsdPerMillion());

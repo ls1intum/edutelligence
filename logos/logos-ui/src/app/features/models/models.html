@@ -26,18 +26,18 @@
   [columns]="[
     'MODEL NAME',
     'DESCRIPTION',
-    ...(role() === 'logos_admin' ? ['TAGS'] : []),
+    ...(role() === 'logos_admin' ? ['TAGS', 'ALIASES'] : []),
     'CAPABILITIES',
     ...(role() === 'logos_admin' ? ['LAST USED', 'WEIGHTS', ''] : [])
   ]"
   [gridCols]="
     role() === 'logos_admin'
-      ? '220fr 260fr 160fr 220fr 130fr 180fr 72px'
+      ? '200fr 240fr 140fr 160fr 200fr 120fr 170fr 72px'
       : '220fr 260fr 220fr'
   "
   [loading]="loading()"
   [empty]="filteredModels().length === 0"
-  [sortableColumn]="role() === 'logos_admin' ? 4 : -1"
+  [sortableColumn]="role() === 'logos_admin' ? 5 : -1"
   [sortDirection]="lastUsedSortDirection"
   (sortToggle)="toggleLastUsedSort()"
   emptyMessage="No models match your search."
@@ -102,6 +102,19 @@
         >
           <span class="tags-text">
             {{ model.tags || '-' }}
+          </span>
+        </div>
+      }
+
+      <!-- Aliases: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-aliases tags-cell"
+          role="cell"
+          data-label="Aliases"
+        >
+          <span class="tags-text">
+            {{ model.aliases || '-' }}
           </span>
         </div>
       }
@@ -322,6 +335,19 @@
         autocomplete="off"
       />
     </div>
+    <div class="form-field">
+      <label class="field-label" for="add-aliases">Aliases</label>
+      <input
+        id="add-aliases"
+        class="field-input"
+        type="text"
+        placeholder="local-most-powerful"
+        [value]="addAliases()"
+        (input)="addAliases.set($any($event.target).value)"
+        [disabled]="addLoading()"
+        autocomplete="off"
+      />
+    </div>
 
     <p class="form-section-label form-section-label--mt">Weights</p>
     <div class="form-row">
@@ -444,6 +470,19 @@
         type="text"
         [value]="editTags()"
         (input)="editTags.set($any($event.target).value)"
+        [disabled]="editLoading()"
+        autocomplete="off"
+      />
+    </div>
+    <div class="form-field">
+      <label class="field-label" for="edit-aliases">Aliases</label>
+      <input
+        id="edit-aliases"
+        class="field-input"
+        type="text"
+        placeholder="local-most-powerful"
+        [value]="editAliases()"
+        (input)="editAliases.set($any($event.target).value)"
         [disabled]="editLoading()"
         autocomplete="off"
       />

@@ -51,16 +51,20 @@ public class ModelController {
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addModel(
             @RequestBody AddModelRequestDTO req) {
-        Map<String, Object> serviceResult = modelService.addModel(req);
-        Integer newModelId = (Integer) serviceResult.get("model_id");
-        if (newModelId != null && req.name() != null) {
-            priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
-            modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
-                newModelId,
-                req.name()
-            );
+        try {
+            Map<String, Object> serviceResult = modelService.addModel(req);
+            Integer newModelId = (Integer) serviceResult.get("model_id");
+            if (newModelId != null && req.name() != null) {
+                priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
+                    newModelId,
+                    req.name()
+                );
+            }
+            return ResponseEntity.ok(serviceResult);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
-        return ResponseEntity.ok(serviceResult);
     }
 
     @PostMapping("/update_model_info")
@@ -75,7 +79,12 @@ public class ModelController {
             }
             return response;
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+            // "Model not found: ..." is a lookup miss; alias validation
+            // failures are bad input.
+            int status = e.getMessage() != null && e.getMessage().startsWith("Model not found")
+                ? 404
+                : 400;
+            return ResponseEntity.status(status).body(Map.of("error", e.getMessage()));
         }
     }
 
