@@ -38,6 +38,13 @@ jobs:
       file: logos/logos-orchestrator/Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # GHA build cache. Without this the reusable workflow defaults to
+      # cache=false, so every build re-runs every layer on a fresh runner
+      # (apt toolchain, uv venv, full dependency install) even when only
+      # source files changed. A fixed scope lets all PRs/main/release builds
+      # share the same cached layers.
+      cache: true
+      cache-scope: logos-orchestrator
       sign: false
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos
       meta-tags: |
