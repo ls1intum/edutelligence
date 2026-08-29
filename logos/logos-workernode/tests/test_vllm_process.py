@@ -54,6 +54,40 @@ def test_build_cmd_does_not_duplicate_enforce_eager(monkeypatch) -> None:
     assert cmd.count("--enforce-eager") == 1
 
 
+def test_build_cmd_includes_prompt_tokens_details_by_default(monkeypatch) -> None:
+    # vLLM keeps usage.prompt_tokens_details (cached_tokens) off by default;
+    # Logos lanes must enable it so consumers see the prefix-cache hit share
+    # of local requests the same way they do for cloud providers (#813).
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    # Return a list, like the real _resolve_vllm_binary does: _build_cmd
+    # splats the prefix, so a string would expand into a broken command.
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: ["/tmp/vllm"])
+
+    lane = LaneConfig(
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+    assert cmd[0] == "/tmp/vllm" and cmd[1] == "serve"
+    assert cmd.count("--enable-prompt-tokens-details") == 1
+
+
+def test_build_cmd_omits_prompt_tokens_details_when_disabled(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    # List, not string — see the default test above for why.
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: ["/tmp/vllm"])
+
+    lane = LaneConfig(
+        model="google/gemma-4-26B-A4B-it",
+        vllm=True,
+        vllm_config=VllmConfig(enable_prompt_tokens_details=False),
+    )
+    cmd = handle._build_cmd(lane)
+    assert cmd[0] == "/tmp/vllm" and cmd[1] == "serve"
+    assert "--enable-prompt-tokens-details" not in cmd
+
+
 def test_build_cmd_includes_stability_and_sleep_flags(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "/tmp/vllm")
