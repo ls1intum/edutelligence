@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
@@ -32,7 +32,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.context_budget import required_context_tokens
+from logos.context_budget import estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
@@ -1101,7 +1101,7 @@ _MESSAGES_EVENT_TYPES = frozenset({"message_start", "message_delta", "message_st
 
 
 class _LiveStreamRegistry:
-    """Token counts of the streams running right now, keyed by request id.
+    """Token counts of the requests running right now, keyed by request id.
 
     A finished request's usage is in the database; one still running is
     nowhere, and "nowhere" is what the statistics page showed for the whole
@@ -1109,31 +1109,66 @@ class _LiveStreamRegistry:
     and on the orchestrator, because that is the only process that sees the
     chunks go past.
 
-    Bounded by construction: an entry exists only while its request is
-    streaming and is dropped in the same ``finally`` that logs the completion.
+    Bounded by construction: an entry exists only while its request is in
+    flight and is dropped in the same ``finally`` that logs the completion.
     """
 
     def __init__(self, now: Any = time.time) -> None:
         self._streams: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
+        # Bumped on every mutation so a subscriber (the SSE stream) can tell
+        # that something moved without diffing the whole table.
+        self._version = 0
         # Injected rather than read off the module so a test can drive the clock
         # without patching time.time for everything else running in-process.
         self._now = now
 
-    def start(self, request_id: Optional[str], model_name: Optional[str]) -> None:
+    @property
+    def version(self) -> int:
+        with self._lock:
+            return self._version
+
+    def start(
+        self,
+        request_id: Optional[str],
+        model_name: Optional[str] = None,
+        prompt_tokens: int = 0,
+        prompt_estimated: bool = False,
+    ) -> None:
+        """Register a request as in-flight; non-destructive for known ids.
+
+        A request is tracked from the moment it arrives, long before its
+        response starts streaming: while it queues, the only figure available
+        is the prompt estimate the context routing already computes. When the
+        streamer later calls this with the model name, the entry must keep its
+        counters and start time rather than resetting them — the numbers on
+        the page would jump backwards.
+        """
         if not request_id:
             return
         with self._lock:
-            self._streams[request_id] = {
-                "model_name": model_name,
-                "started_at": self._now(),
-                # Set on the first delta, not here: the wait for a lane to warm
-                # up is not generation, and averaging over it would report a
-                # rate no one is seeing.
-                "first_token_at": None,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-            }
+            entry = self._streams.get(request_id)
+            if entry is None:
+                self._streams[request_id] = {
+                    "model_name": model_name,
+                    "started_at": self._now(),
+                    # Set on the first delta, not here: the wait for a lane to warm
+                    # up is not generation, and averaging over it would report a
+                    # rate no one is seeing.
+                    "first_token_at": None,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": 0,
+                    # True until the upstream states the real prompt size; the
+                    # page shows such a figure as an estimate, not a fact.
+                    "prompt_estimated": prompt_estimated and prompt_tokens > 0,
+                }
+            else:
+                if model_name:
+                    entry["model_name"] = model_name
+                if prompt_tokens > 0 and entry["prompt_tokens"] == 0:
+                    entry["prompt_tokens"] = prompt_tokens
+                    entry["prompt_estimated"] = prompt_estimated
+            self._version += 1
 
     def update(self, request_id: Optional[str], tokens: Dict[str, int]) -> None:
         if not request_id:
@@ -1145,17 +1180,24 @@ class _LiveStreamRegistry:
             completion = tokens.get("completion_tokens", 0)
             if completion > 0 and entry["first_token_at"] is None:
                 entry["first_token_at"] = self._now()
-            entry["prompt_tokens"] = tokens.get("prompt_tokens", 0)
+            prompt = tokens.get("prompt_tokens", 0)
+            if prompt > 0:
+                # The upstream has stated the prompt size; the estimate it
+                # stood in for is no longer an estimate.
+                entry["prompt_tokens"] = prompt
+                entry["prompt_estimated"] = False
             entry["completion_tokens"] = completion
+            self._version += 1
 
     def finish(self, request_id: Optional[str]) -> None:
         if not request_id:
             return
         with self._lock:
-            self._streams.pop(request_id, None)
+            if self._streams.pop(request_id, None) is not None:
+                self._version += 1
 
     def snapshot(self) -> list[dict[str, Any]]:
-        """Every running stream, with the rate it is generating at."""
+        """Every running request, with the rate it is generating at."""
         now = self._now()
         out: list[dict[str, Any]] = []
         with self._lock:
@@ -1169,6 +1211,7 @@ class _LiveStreamRegistry:
                     "request_id": request_id,
                     "model_name": entry["model_name"],
                     "prompt_tokens": entry["prompt_tokens"],
+                    "prompt_estimated": entry["prompt_estimated"],
                     "completion_tokens": completion,
                     # Measured from the first token, so it is the generation
                     # rate rather than an average dragged down by queueing.
@@ -1208,6 +1251,10 @@ class _StreamingLogAccumulator:
     # earlier — see _consume_messages_event.
     messages_usage: Optional[Dict[str, Any]] = None
     _saw_messages_events: bool = False
+    # True once message_delta's usage has arrived — the only event whose
+    # output_tokens is settled. message_start's is a one-token placeholder
+    # that must not stand in for the running count; see streamed_tokens.
+    _messages_final_usage: bool = False
     # Text deltas seen so far. The exact completion count only arrives with the
     # terminal usage event, which is no help to anyone watching the request run
     # — so the delta count stands in for it until then. See streamed_tokens.
@@ -1253,9 +1300,15 @@ class _StreamingLogAccumulator:
         """
         usage = self.usage()
         prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         if not isinstance(prompt, int):
             prompt = 0
+        # A Messages stream's message_start already carries an
+        # ``output_tokens`` figure — but it is a one-token placeholder, not a
+        # count, and trusting it pins the live figure at 1 for the whole
+        # generation. Until message_delta settles it, the deltas are the count.
+        if self._saw_messages_events and not self._messages_final_usage:
+            return {"prompt_tokens": prompt, "completion_tokens": self.delta_count}
+        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         if not isinstance(completion, int) or completion <= 0:
             completion = self.delta_count
         return {"prompt_tokens": prompt, "completion_tokens": completion}
@@ -1398,6 +1451,8 @@ class _StreamingLogAccumulator:
         if not isinstance(usage, dict):
             return
 
+        if event_type == "message_delta":
+            self._messages_final_usage = True
         merged = dict(self.messages_usage or {})
         merged.update(usage)
         # Anthropic omits a total — it is the sum, so it says it once. Logos
@@ -1840,6 +1895,45 @@ async def _generic_exception_handler(request: Request, exc: Exception) -> JSONRe
     return openai_error_response(500, "Internal server error")
 
 
+_HEALTH_STATUS_RANK: Dict[str, int] = {"DOWN": 0, "DEGRADED": 1, "UP": 2}
+
+
+def _model_deployment_status(
+    deployment: Dict[str, Any], provider_id: int, worker_ids: set[int], snapshots: Dict[int, Dict[str, Any]]
+) -> str:
+    """Serveability of one model deployment for the per-model health breakdown.
+
+    Deployments outside the local provider inventory are cloud — UP whenever
+    configured, because Logos does not probe cloud providers (matching the
+    overall /health behaviour). Worker-backed
+    deployments are UP when the worker is online, the model is calibrated, and
+    a lane is loaded/running or sleeping (a wake is fast). A model that only
+    needs a cold load, or that lives on a worker reporting an unhealthy node,
+    is DEGRADED; a missing/stale worker or missing calibration is DOWN.
+    """
+    if provider_id not in worker_ids:
+        return "UP"
+    snapshot = snapshots.get(provider_id)
+    if snapshot is None:
+        return "DOWN"
+    model_name = str(deployment.get("model_name") or "")
+    if model_name not in (snapshot.get("capabilities_models") or []):
+        return "DOWN"
+    runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else {}
+    node_health = runtime.get("node_health")
+    if isinstance(node_health, dict) and node_health.get("healthy") is False:
+        return "DEGRADED"
+    states = {
+        str(lane.get("runtime_state") or "").strip()
+        for lane in (runtime.get("lanes") or [])
+        if isinstance(lane, dict) and str(lane.get("model") or "").strip() == model_name
+    }
+    if states & {"loaded", "running", "sleeping"}:
+        return "UP"
+    # No loaded/running/sleeping lane: a full cold load is needed first.
+    return "DEGRADED"
+
+
 @app.get("/health", tags=["monitoring"])
 async def health():
     """Report overall health plus a breakdown of what is serveable.
@@ -1854,6 +1948,11 @@ async def health():
     exactly is down: ``local_models`` (logosnode workers) and ``cloud_models``
     (Azure/cloud deployments). Cloud may still be serveable even while local is
     down, which the ``detail`` message makes explicit.
+
+    This endpoint stays a lean liveness signal: it is public (its own Traefik
+    router on the secure entrypoint, and liveness probes call it), so it must
+    not carry the model catalogue. The per-model view applications need lives
+    on the secret-gated /internal/model_health endpoint instead.
     """
     local_ok = False
     cloud_ok = False
@@ -1861,19 +1960,22 @@ async def health():
         with DBManager() as db:
             inventory = db.list_local_providers()
             deployments = db.get_all_deployments()
-        # Cloud is serveable if any non-logosnode deployment is configured.
-        cloud_ok = any(str(d.get("type")) != "logosnode" for d in deployments)
-        # Local is serveable if an online worker declares at least one capable model.
+        worker_ids: set[int] = set()
         for provider in inventory:
             provider_id = int(provider.get("provider_id") or 0)
             if provider_id <= 0:
                 continue
+            worker_ids.add(provider_id)
             snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
             if not _logosnode_snapshot_is_connected(snapshot):
                 continue
+            # Local is serveable if an online worker declares at least one capable model.
             if snapshot.get("capabilities_models"):
                 local_ok = True
-                break
+        # Cloud is serveable if any deployment lives outside the local provider
+        # inventory — by type alone this would miscount legacy local worker
+        # types (ollama, node, ...) as cloud.
+        cloud_ok = any(int(d.get("provider_id") or 0) not in worker_ids for d in deployments)
     except Exception:
         logger.exception("Health check failed to evaluate provider state")
         local_ok = False
@@ -1889,6 +1991,72 @@ async def health():
             " Cloud models may still be served." if cloud_ok else " No cloud models are configured."
         )
     return JSONResponse(status_code=200 if local_ok else 503, content=payload)
+
+
+@app.get("/internal/model_health", tags=["admin"])
+async def internal_model_health(request: Request):
+    """Current per-model health, for the Spring webservice.
+
+    Lane state, worker connection state, and node health exist only in the
+    orchestrator's worker registry, so the webservice's get_model_health
+    endpoint (API-key authenticated, permission filtered) is served from this
+    payload. It is secret-gated rather than part of /health because /health is
+    public: the full model catalogue must not be readable without a credential.
+
+    Status codes mirror /health — 503 while every local worker is down, whose
+    body still carries the breakdown (cloud models may be serveable) — and the
+    entries expose only model names and statuses, best across deployments
+    (see :func:`_model_deployment_status`).
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal model health endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    local_ok = False
+    model_status: Dict[str, str] = {}
+    try:
+        with DBManager() as db:
+            inventory = db.list_local_providers()
+            deployments = db.get_all_deployments_with_names()
+        worker_ids: set[int] = set()
+        snapshots: Dict[int, Dict[str, Any]] = {}
+        for provider in inventory:
+            provider_id = int(provider.get("provider_id") or 0)
+            if provider_id <= 0:
+                continue
+            worker_ids.add(provider_id)
+            snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+            if not _logosnode_snapshot_is_connected(snapshot):
+                continue
+            snapshots[provider_id] = snapshot
+            if snapshot.get("capabilities_models"):
+                local_ok = True
+        for deployment in deployments:
+            model_name = str(deployment.get("model_name") or "").strip()
+            if not model_name:
+                continue
+            status = _model_deployment_status(
+                deployment, int(deployment.get("provider_id") or 0), worker_ids, snapshots
+            )
+            current = model_status.get(model_name)
+            if current is None or _HEALTH_STATUS_RANK[status] > _HEALTH_STATUS_RANK[current]:
+                model_status[model_name] = status
+    except Exception:
+        logger.exception("Model health check failed to evaluate provider state")
+        local_ok = False
+        model_status = {}
+
+    return JSONResponse(
+        status_code=200 if local_ok else 503,
+        content={"models": [{"name": name, "status": model_status[name]} for name in sorted(model_status)]},
+    )
 
 
 @app.get("/metrics", tags=["monitoring"])
@@ -2010,6 +2178,20 @@ async def internal_model_context_windows(request: Request):
     }
 
 
+def _require_internal_secret(request: Request) -> None:
+    """Authenticate an /internal/* call: the shared secret, no user context."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+
 @app.get("/internal/live_streams", tags=["admin"])
 async def internal_live_streams(request: Request):
     """Token counts of the requests streaming right now, for the statistics page.
@@ -2022,17 +2204,47 @@ async def internal_live_streams(request: Request):
     Cheap by construction: a dict of the in-flight requests, no database work,
     and the webservice already polls on the cadence it pushes the feed at.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     return {"streams": _live_streams.snapshot()}
+
+
+# How often the live-stream SSE connection checks for a changed snapshot. The
+# push is event-driven in effect — a token delta bumps the registry's version
+# and the very next check sends it — but the check itself is a short poll so
+# the endpoint stays a plain generator instead of event plumbing.
+_LIVE_STREAMS_SSE_TICK_S = 0.2
+
+
+@app.get("/internal/live_streams/stream", tags=["admin"])
+async def internal_live_streams_stream(request: Request):
+    """The live view as an SSE stream: the current snapshot, then one event
+    per change.
+
+    The statistics page's token counts used to move at the webservice's poll
+    interval; this lets the webservice forward a change the moment it happens
+    and push it to its websocket clients in real time. The payload is the
+    same shape as ``/internal/live_streams`` so both clients parse one way.
+    """
+    _require_internal_secret(request)
+
+    async def events():
+        version = -1
+        while True:
+            current = _live_streams.version
+            if current != version:
+                version = current
+                yield f"data: {json.dumps({'streams': _live_streams.snapshot()})}\n\n"
+            else:
+                # A comment line: keeps idle (but healthy) connections from
+                # being reaped by anything in the middle.
+                yield ": ping\n\n"
+            await asyncio.sleep(_LIVE_STREAMS_SSE_TICK_S)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/internal/calibration_probe_logs", tags=["admin"])
@@ -3198,6 +3410,7 @@ async def _streaming_response(
                         result_status="error" if error_message else "success",
                         error_message=error_message,
                         cold_start=scheduling_stats.get("is_cold_start"),
+                        usage_tokens=usage_tokens,
                     )
                 _log_request_completion(
                     model_id=model_id,
@@ -3363,6 +3576,7 @@ async def _streaming_response(
                     result_status="error" if failed else "success",
                     error_message=error_message,
                     cold_start=scheduling_stats.get("is_cold_start"),
+                    usage_tokens=usage_tokens,
                 )
             _log_request_completion(
                 model_id=model_id,
@@ -3581,6 +3795,7 @@ async def _sync_response(
                     error_message if timed_out else (exec_result.error if not exec_result.success else None)
                 ),
                 cold_start=scheduling_stats.get("is_cold_start"),
+                usage_tokens=usage_tokens,
             )
 
         if rl_key:
@@ -4214,10 +4429,16 @@ async def route_and_execute(
         else:
             raise HTTPException(status_code=404, detail="No models available for this API key.")
 
+    # Jobs reach this point without going through handle_sync_request, so they
+    # publish their live view here. start() is non-destructive, so a request
+    # that already arrived on the sync path keeps the entry it has.
+    _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(body), prompt_estimated=True)
+
+    response = None
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
         if body.get("model"):
-            return await _execute_proxy_mode(
+            response = await _execute_proxy_mode(
                 body=body,
                 headers=headers,
                 auth=auth,
@@ -4227,18 +4448,19 @@ async def route_and_execute(
                 request_id=request_id,
                 request_path=path,
             )
-
-        # RESOURCE mode (no body["model"] → classification + scheduling)
-        return await _execute_resource_mode(
-            deployments=deployments,
-            body=body,
-            headers=headers,
-            auth=auth,
-            log_id=log_id,
-            is_async_job=is_async_job,
-            request_id=request_id,
-            request_path=path,
-        )
+        else:
+            # RESOURCE mode (no body["model"] → classification + scheduling)
+            response = await _execute_resource_mode(
+                deployments=deployments,
+                body=body,
+                headers=headers,
+                auth=auth,
+                log_id=log_id,
+                is_async_job=is_async_job,
+                request_id=request_id,
+                request_path=path,
+            )
+        return response
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
         if is_async_job:
@@ -4247,6 +4469,11 @@ async def route_and_execute(
     except Exception as exc:
         _record_log_failure(log_id, request_id, str(exc), result_status="error")
         raise
+    finally:
+        # Same hand-off as handle_sync_request: a stream keeps its entry until
+        # the streamer ends it, everything else ends here.
+        if not isinstance(response, StreamingResponse):
+            _live_streams.finish(request_id)
 
 
 _CLIENT_DISCONNECT_POLL_SECONDS = 1.0
@@ -4434,51 +4661,66 @@ async def handle_sync_request(path: str, request: Request):
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
 
+    # Publish the request to the live view from the moment it is known, so the
+    # statistics feed shows its (estimated) prompt size while it waits for a
+    # deployment or a reconnecting worker instead of sitting as a blank row.
+    _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(body), prompt_estimated=True)
+
+    response = None
     try:
-        with DBManager() as db:
-            if log_id:
-                db.update_log_entry_metrics(
-                    log_id=log_id,
-                    request_id=request_id,
-                    timeout_s=body.get("timeout_s"),
-                )
-            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
-    except PermissionError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        raise HTTPException(status_code=401, detail=str(e))
-    except ValueError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        raise HTTPException(status_code=400, detail=str(e))
+        try:
+            with DBManager() as db:
+                if log_id:
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        request_id=request_id,
+                        timeout_s=body.get("timeout_s"),
+                    )
+                raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+            deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
+        except PermissionError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            raise HTTPException(status_code=401, detail=str(e))
+        except ValueError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            raise HTTPException(status_code=400, detail=str(e))
 
-    if not deployments and raw_deployments:
-        # The key is granted models that no worker serves right now — either
-        # the orchestrator just (re)started and the workers are still
-        # (re)attaching, or a worker dropped a moment ago (reboot) and its
-        # models are unroutable until it comes back. Give the missing
-        # workers a chance to (re)connect instead of failing instantly; the
-        # window stays in effect even though other workers may already have
-        # re-attached.
-        deployments = await _wait_for_worker_connect(
-            raw_deployments, payload=body, request=request, client_timeout_s=_client_timeout_s(body)
+        if not deployments and raw_deployments:
+            # The key is granted models that no worker serves right now — either
+            # the orchestrator just (re)started and the workers are still
+            # (re)attaching, or a worker dropped a moment ago (reboot) and its
+            # models are unroutable until it comes back. Give the missing
+            # workers a chance to (re)connect instead of failing instantly; the
+            # window stays in effect even though other workers may already have
+            # re-attached.
+            deployments = await _wait_for_worker_connect(
+                raw_deployments, payload=body, request=request, client_timeout_s=_client_timeout_s(body)
+            )
+
+        if not deployments:
+            requested_model = body.get("model", "unknown")
+            msg = f"No available model deployments for model '{requested_model}' for this key"
+            _record_log_failure(log_id, request_id, msg, result_status="error")
+            raise HTTPException(status_code=404, detail=msg)
+
+        execute_kwargs = dict(
+            deployments=deployments,
+            body=body,
+            headers=headers,
+            auth=auth,
+            path=path,
+            log_id=log_id,
+            request_id=request_id,
         )
-
-    if not deployments:
-        requested_model = body.get("model", "unknown")
-        msg = f"No available model deployments for model '{requested_model}' for this key"
-        _record_log_failure(log_id, request_id, msg, result_status="error")
-        raise HTTPException(status_code=404, detail=msg)
-
-    execute_kwargs = dict(
-        deployments=deployments,
-        body=body,
-        headers=headers,
-        auth=auth,
-        path=path,
-        log_id=log_id,
-        request_id=request_id,
-    )
-    return await _execute_cancelling_on_disconnect(request, **execute_kwargs)
+        response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)
+        return response
+    finally:
+        # A streaming response hands the live entry to its generator: the
+        # streamer drops it when the stream ends. Every other outcome — sync
+        # response, an error raise, the client walking away — ends the request
+        # here.
+        if not isinstance(response, StreamingResponse):
+            _live_streams.finish(request_id)
 
 
 async def auth_parse_log(request: Request, use_profile_auth: bool = False):
@@ -4718,48 +4960,58 @@ async def execute_proxy_job(
 
     request_id = secrets.token_urlsafe(16)
 
-    # Get available models for this API key
+    # Same early publication as the sync path: the moment the job has a
+    # request id, its (estimated) prompt is on the feed instead of the row
+    # sitting blank through the worker wait below.
+    _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(json_data), prompt_estimated=True)
     try:
-        with DBManager() as db:
-            if log_id:
-                db.update_log_entry_metrics(
-                    log_id=log_id,
-                    request_id=request_id,
-                    timeout_s=json_data.get("timeout_s"),
-                )
-            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
-    except PermissionError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        _, err_body = coerce_upstream_error(401, {"error": str(e)})
-        return {"status_code": 401, "data": err_body}
-    except ValueError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        _, err_body = coerce_upstream_error(400, {"error": str(e)})
-        return {"status_code": 400, "data": err_body}
+        # Get available models for this API key
+        try:
+            with DBManager() as db:
+                if log_id:
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        request_id=request_id,
+                        timeout_s=json_data.get("timeout_s"),
+                    )
+                raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+            deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
+        except PermissionError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            _, err_body = coerce_upstream_error(401, {"error": str(e)})
+            return {"status_code": 401, "data": err_body}
+        except ValueError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            _, err_body = coerce_upstream_error(400, {"error": str(e)})
+            return {"status_code": 400, "data": err_body}
 
-    # Same windows as the sync path: a job submitted while no worker is
-    # connected (startup or a worker reboot) must not fail before the
-    # workers re-attach.
-    if not deployments and raw_deployments:
-        deployments = await _wait_for_worker_connect(
-            raw_deployments, payload=json_data, client_timeout_s=_client_timeout_s(json_data)
+        # Same windows as the sync path: a job submitted while no worker is
+        # connected (startup or a worker reboot) must not fail before the
+        # workers re-attach.
+        if not deployments and raw_deployments:
+            deployments = await _wait_for_worker_connect(
+                raw_deployments, payload=json_data, client_timeout_s=_client_timeout_s(json_data)
+            )
+
+        # Force non-streaming for jobs without adding unsupported multipart fields.
+        json_data = force_non_streaming_payload(json_data)
+
+        # Route and execute request
+        return await route_and_execute(
+            deployments=deployments,
+            body=json_data,
+            headers=headers,
+            auth=auth,
+            path=path,
+            log_id=log_id,
+            is_async_job=True,
+            request_id=request_id,
         )
-
-    # Force non-streaming for jobs without adding unsupported multipart fields.
-    json_data = force_non_streaming_payload(json_data)
-
-    # Route and execute request
-    return await route_and_execute(
-        deployments=deployments,
-        body=json_data,
-        headers=headers,
-        auth=auth,
-        path=path,
-        log_id=log_id,
-        is_async_job=True,
-        request_id=request_id,
-    )
+    finally:
+        # A job never streams, so nothing here hands the entry on: every way
+        # out — error dict above, route_and_execute's own finally, an
+        # unexpected raise — ends the entry here at the latest.
+        _live_streams.finish(request_id)
 
 
 # ============================================================================
