@@ -71,6 +71,28 @@ def test_extract_qa_uses_existing_answer_for_corrections():
     assert answer == "The corrected answer."
 
 
+def test_extract_qa_keeps_the_approved_draft_verbatim():
+    """An approved-unchanged draft must be stored as the tutor read it.
+
+    The extractor still derives the question from the thread, but re-deriving the
+    *answer* would store a paraphrase the tutor never saw — and then serve it back
+    to students labelled as tutor-verified.
+    """
+    dto = SimpleNamespace(
+        thread=[ThreadMessageDTO(id="1", authorRole="student", content="why?")],
+        source=CourseMemorySource.IRIS_AUTO,
+        existing_answer="The exact draft the tutor approved.",
+        message_id="1",
+    )
+    pipeline = _pipeline_with_mocked_llm(dto)
+    _mock_response(pipeline, '{"question": "Why?", "answer": "a paraphrase"}')
+
+    question, answer = pipeline.extract_qa()
+
+    assert question == "Why?"
+    assert answer == "The exact draft the tutor approved."
+
+
 def test_extract_qa_falls_back_to_root_post_when_parse_fails_for_correction():
     dto = SimpleNamespace(
         thread=[ThreadMessageDTO(id="1", authorRole="student", content="Why is X?")],

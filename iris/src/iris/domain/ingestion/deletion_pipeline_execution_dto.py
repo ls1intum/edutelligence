@@ -20,7 +20,7 @@ class FaqDeletionExecutionDto(PipelineExecutionDTO):
 class CourseMemoryDeletionExecutionDto(PipelineExecutionDTO):
     """Removes course-memory entries that no longer have a source in Artemis.
 
-    Two scopes, exactly one of which must be given:
+    Three scopes, exactly one of which must be given:
 
     * ``postId`` — a single thread stopped being resolved: its resolving answer was
       un-marked or deleted, or the thread itself was removed.
@@ -28,11 +28,15 @@ class CourseMemoryDeletionExecutionDto(PipelineExecutionDTO):
       mined from it has to go, because eligibility is only evaluated when an entry is
       written; without this, content that was public at ingestion time would keep being
       served after the channel was restricted.
+    * ``wholeCourse`` — the course itself was deleted. Artemis drops all of its
+      conversations in one bulk statement, so no channel ids survive to purge
+      individually and nothing would ever be left to ask for these entries' removal.
     """
 
     course_id: int = Field(..., alias="courseId")
     post_id: Optional[str] = Field(default=None, alias="postId")
     conversation_id: Optional[str] = Field(default=None, alias="conversationId")
+    whole_course: bool = Field(default=False, alias="wholeCourse")
     # Required, unlike the lecture/FAQ deletion DTOs above: the deletion worker reads
     # settings.authentication_token and settings.artemis_base_url to build its status
     # callback, so a null here would surface as a 500 from a background thread that can
@@ -41,12 +45,17 @@ class CourseMemoryDeletionExecutionDto(PipelineExecutionDTO):
 
     @model_validator(mode="after")
     def _require_exactly_one_scope(self) -> "CourseMemoryDeletionExecutionDto":
-        """Exactly one of ``postId`` / ``conversationId``.
+        """Exactly one of ``postId`` / ``conversationId`` / ``wholeCourse``.
 
-        Neither would delete nothing while still reporting success, and both would leave
-        the intended scope ambiguous — a deletion that quietly does the wrong amount is
-        worse than a rejected request.
+        None of them would delete nothing while still reporting success, and more than
+        one would leave the intended scope ambiguous — a deletion that quietly does the
+        wrong amount is worse than a rejected request. ``wholeCourse`` is an explicit
+        flag rather than "neither id given" for exactly that reason: a client bug that
+        drops an id must not silently escalate into wiping a whole course.
         """
-        if bool(self.post_id) == bool(self.conversation_id):
-            raise ValueError("exactly one of postId or conversationId must be provided")
+        scopes = [bool(self.post_id), bool(self.conversation_id), self.whole_course]
+        if sum(scopes) != 1:
+            raise ValueError(
+                "exactly one of postId, conversationId or wholeCourse must be provided"
+            )
         return self

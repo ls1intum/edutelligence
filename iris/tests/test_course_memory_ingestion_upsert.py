@@ -54,9 +54,9 @@ def _real_callback():
 
 
 def test_deterministic_uuid_is_stable():
-    u1 = CourseMemoryIngestionPipeline._deterministic_uuid("post-1", 7)
-    u2 = CourseMemoryIngestionPipeline._deterministic_uuid("post-1", 7)
-    u3 = CourseMemoryIngestionPipeline._deterministic_uuid("post-2", 7)
+    u1 = cm_module._deterministic_uuid("post-1", 7)
+    u2 = cm_module._deterministic_uuid("post-1", 7)
+    u3 = cm_module._deterministic_uuid("post-2", 7)
     assert u1 == u2
     assert u1 != u3
 
@@ -155,7 +155,7 @@ def test_tutor_verification_upgrades_thread_resolved_entry():
 def test_delete_during_ingestion_prevents_stale_write():
     """A delete arriving mid-ingestion must not be undone by the older write."""
     pipeline = _make_pipeline(exists=False)
-    obj_uuid = pipeline._deterministic_uuid("post-1", 7)
+    obj_uuid = cm_module._deterministic_uuid("post-1", 7)
     # Ingestion snapshots the counter before its (slow) extraction...
     start = cm_module._current_delete_generation(obj_uuid)
     # ...a delete for the same key completes during that extraction...
@@ -169,7 +169,7 @@ def test_delete_during_ingestion_prevents_stale_write():
 
 def test_ingestion_writes_when_no_delete_during_extraction():
     pipeline = _make_pipeline(exists=False)
-    obj_uuid = pipeline._deterministic_uuid("post-1", 7)
+    obj_uuid = cm_module._deterministic_uuid("post-1", 7)
     start = cm_module._current_delete_generation(obj_uuid)
 
     pipeline.upsert("q", "a", start_delete_gen=start)
@@ -271,7 +271,7 @@ def test_delete_targets_the_thread_entry():
     assert pipeline.delete_for_thread("post-1", 7) is True
 
     pipeline.collection.data.delete_by_id.assert_called_once_with(
-        pipeline._deterministic_uuid("post-1", 7)
+        cm_module._deterministic_uuid("post-1", 7)
     )
 
 
@@ -312,3 +312,61 @@ def test_disabled_feature_skips_ingestion_without_writing(monkeypatch):
     pipeline.extract_qa.assert_not_called()
     pipeline.upsert.assert_not_called()
     assert pipeline.callback.status.run_state == RunStateEnum.FINISHED
+
+
+def test_course_purge_during_ingestion_prevents_stale_write():
+    """A course purge mid-ingestion must not be undone by the older write.
+
+    The course scope is the one from which nothing can retract afterwards: once
+    the course is gone Artemis has no post, channel or course left that could ask
+    for the entry's removal, so a write landing after the purge is permanent.
+    """
+    pipeline = _make_pipeline(exists=False)
+    pipeline.dto.course_id = 4242
+    start = cm_module._current_course_delete_generation(4242)
+    pipeline.delete_for_course(4242)
+
+    pipeline.upsert("q", "a", start_course_delete_gen=start)
+
+    pipeline.collection.data.insert.assert_not_called()
+    pipeline.collection.data.replace.assert_not_called()
+
+
+def test_purge_of_another_course_does_not_block_the_write():
+    pipeline = _make_pipeline(exists=False)
+    start = cm_module._current_course_delete_generation(7)
+    pipeline.delete_for_course(4243)
+
+    pipeline.upsert("q", "a", start_course_delete_gen=start)
+
+    pipeline.collection.data.insert.assert_called_once()
+
+
+def test_course_purge_filters_on_the_course_alone():
+    """Course deletion drops every conversation at once, so no channel id survives."""
+    pipeline = _make_pipeline(exists=True)
+
+    assert pipeline.delete_for_course(7) is True
+
+    pipeline.collection.data.delete_many.assert_called_once()
+
+
+def test_delete_generations_are_bounded():
+    """The counters must not grow one entry per deleted thread forever."""
+    generations = cm_module._DeleteGenerations(max_entries=3)
+    for key in ("a", "b", "c", "d"):
+        generations.bump(key)
+
+    assert len(generations._counters) == 3
+    # The oldest key is evicted; a counter only has to outlive the ingestion that
+    # sampled it, which is a matter of seconds.
+    assert generations.get("a") == 0
+    assert generations.get("d") == 1
+
+
+def test_delete_generations_are_monotonic_per_key():
+    generations = cm_module._DeleteGenerations()
+
+    assert generations.bump("k") == 1
+    assert generations.bump("k") == 2
+    assert generations.get("k") == 2

@@ -88,7 +88,11 @@ def test_ingestion_webhook_logs_receipt_before_dispatch(monkeypatch, caplog):
 
 def test_deletion_webhook_logs_receipt(monkeypatch, caplog):
     dto = SimpleNamespace(
-        course_id=42, post_id="post-7", conversation_id=None, settings=None
+        course_id=42,
+        post_id="post-7",
+        conversation_id=None,
+        whole_course=False,
+        settings=None,
     )
     monkeypatch.setattr(webhooks, "validate_pipeline_variant", lambda *_: "default")
     monkeypatch.setattr(webhooks, "Thread", lambda **kw: MagicMock())
@@ -104,7 +108,11 @@ def test_deletion_webhook_logs_channel_scope(monkeypatch, caplog):
     # A channel-wide purge and a single-thread retraction have very different blast
     # radii, so the log line has to say which one was asked for.
     dto = SimpleNamespace(
-        course_id=42, post_id=None, conversation_id="channel-3", settings=None
+        course_id=42,
+        post_id=None,
+        conversation_id="channel-3",
+        whole_course=False,
+        settings=None,
     )
     monkeypatch.setattr(webhooks, "validate_pipeline_variant", lambda *_: "default")
     monkeypatch.setattr(webhooks, "Thread", lambda **kw: MagicMock())
