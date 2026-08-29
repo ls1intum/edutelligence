@@ -259,7 +259,7 @@ class MonitoringRecorder:
         if context_tokens > 0:
             # How much of the model's context window the request used — the
             # signal for whether a deployment can be downsized or needs a
-            # bigger window (issue #819).
+            # bigger window.
             prom.REQUEST_CONTEXT_TOKENS.labels(model=model).observe(context_tokens)
 
     def discard(self, request_id: str, result_status: ResultStatus | str) -> None:

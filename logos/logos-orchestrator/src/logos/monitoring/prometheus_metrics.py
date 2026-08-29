@@ -3,6 +3,8 @@
 Defines all custom metrics and exposes a WSGI app for the /metrics endpoint.
 """
 
+from typing import Any
+
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 
 registry = CollectorRegistry()
@@ -271,13 +273,37 @@ REQUEST_CONTEXT_TOKENS = Histogram(
 _PUBLISHED_ENGINE_METRIC_KEYS: set[tuple[str, str]] = set()
 
 
+def _remove_label_silently(metric: Any, model: str, provider: str) -> None:
+    """Remove a (model, provider) label set, tolerating a never-published gauge.
+
+    ``prometheus_client``'s ``remove()`` raises ``KeyError`` for a label set
+    that was never created, and a pair can legitimately be missing one side:
+    a model without speculative decoding never publishes an MTP acceptance
+    rate (no ``MTP_ACCEPTANCE_RATE`` child exists for it), and a lane that
+    reports no prefix data never publishes a prefix rate. Retiring such a pair
+    must not raise — a raised error here would abort the planner cycle before
+    it does any capacity planning.
+    """
+    try:
+        # `remove()` lives on the parent metric and takes positional label
+        # values; a child obtained from .labels() has no working remove of its own.
+        metric.remove(model, provider)
+    except KeyError:
+        pass
+
+
 def update_engine_cache_metrics(entries: list[tuple[str, str, float | None, float | None]]) -> None:
     """Publish per-(model, provider) engine rates and retire stale label sets.
 
     Each entry is ``(model, provider, prefix_cache_hit_rate, mtp_acceptance_rate)``;
     a ``None`` rate is simply not published for that metric (the previous value
     stays until the pair disappears). Label sets that were published before but
-    are missing from *entries* are removed from both gauges.
+    are missing from *entries* are removed from the gauges that hold them.
+
+    The tracked-key state is refreshed in a ``finally`` so that a failure
+    during retirement can never leave it frozen — a stale diff set would
+    re-raise on every subsequent call and keep the caller (the planner cycle)
+    dead.
     """
     current: set[tuple[str, str]] = set()
     for model, provider, prefix_rate, mtp_rate in entries:
@@ -286,13 +312,13 @@ def update_engine_cache_metrics(entries: list[tuple[str, str, float | None, floa
             PREFIX_CACHE_HIT_RATE.labels(model=model, provider=provider).set(prefix_rate)
         if mtp_rate is not None:
             MTP_ACCEPTANCE_RATE.labels(model=model, provider=provider).set(mtp_rate)
-    # `remove()` lives on the parent metric and takes positional label values;
-    # a child obtained from .labels() has no working remove of its own.
-    for model, provider in _PUBLISHED_ENGINE_METRIC_KEYS - current:
-        PREFIX_CACHE_HIT_RATE.remove(model, provider)
-        MTP_ACCEPTANCE_RATE.remove(model, provider)
-    _PUBLISHED_ENGINE_METRIC_KEYS.clear()
-    _PUBLISHED_ENGINE_METRIC_KEYS.update(current)
+    try:
+        for model, provider in _PUBLISHED_ENGINE_METRIC_KEYS - current:
+            _remove_label_silently(PREFIX_CACHE_HIT_RATE, model, provider)
+            _remove_label_silently(MTP_ACCEPTANCE_RATE, model, provider)
+    finally:
+        _PUBLISHED_ENGINE_METRIC_KEYS.clear()
+        _PUBLISHED_ENGINE_METRIC_KEYS.update(current)
 
 
 # ---------------------------------------------------------------------------

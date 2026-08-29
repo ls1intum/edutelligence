@@ -6,13 +6,18 @@ fakes so the assertions are deterministic regardless of whether a stubbed
 ``prometheus_client`` is installed by the capacity test modules.
 """
 
+import pytest
+
 from logos.monitoring import prometheus_metrics as prom
 
 
 class _FakeLabeledGauge:
-    """Mirrors the real prometheus_client API: values are set through
+    """Mirrors the real prometheus_client API strictly: values are set through
     ``.labels(**kwargs)`` children, while ``remove(*labelvalues)`` lives on
-    the parent metric."""
+    the parent metric and raises ``KeyError`` for a label set that was never
+    created (the real library does ``del self._metrics[labelvalues]``). A
+    lenient ``pop(key, None)`` here would mask retire-path bugs that kill the
+    capacity planner in production."""
 
     _labelnames = ("model", "provider")
 
@@ -26,7 +31,7 @@ class _FakeLabeledGauge:
     def remove(self, *labelvalues):
         key = tuple(zip(self._labelnames, labelvalues))
         self.removed.append(key)
-        self.values.pop(key, None)
+        del self.values[key]
 
 
 class _FakeLabeledChild:
@@ -111,3 +116,89 @@ def test_empty_entries_retire_all_published_pairs(monkeypatch):
     assert fake_mtp.values == {}
     assert fake_prefix.removed == [_key("model-a", "node-1")]
     assert fake_mtp.removed == [_key("model-a", "node-1")]
+
+
+# ---------------------------------------------------------------------------
+# Retire path with a missing series (the planner-killing KeyError)
+# ---------------------------------------------------------------------------
+
+
+def test_retiring_pair_without_mtp_series_does_not_raise(monkeypatch):
+    """A model without speculative decoding never published an MTP child, so
+    its MTP remove raises KeyError in the real library. Retiring the pair must
+    still succeed — an escape here kills the capacity planner cycle and the
+    tracked-key state freezes, re-raising on every cycle afterwards."""
+    fake_prefix, fake_mtp = _patch_prom(monkeypatch)
+
+    prom.update_engine_cache_metrics([("qwen", "w1", 0.5, None)])
+    prom.update_engine_cache_metrics([])
+
+    assert fake_prefix.values == {}
+    assert fake_mtp.values == {}
+    assert fake_prefix.removed == [_key("qwen", "w1")]
+    # The MTP remove was attempted and its KeyError swallowed by production
+    # code, not masked by a lenient fake.
+    assert fake_mtp.removed == [_key("qwen", "w1")]
+
+
+def test_retiring_pair_without_prefix_series_does_not_raise(monkeypatch):
+    """Symmetric case: a lane that reported no prefix data has no prefix child."""
+    fake_prefix, fake_mtp = _patch_prom(monkeypatch)
+
+    prom.update_engine_cache_metrics([("qwen", "w1", None, 0.4)])
+    prom.update_engine_cache_metrics([])
+
+    assert fake_prefix.values == {}
+    assert fake_mtp.values == {}
+    assert fake_prefix.removed == [_key("qwen", "w1")]
+    assert fake_mtp.removed == [_key("qwen", "w1")]
+
+
+def test_retiring_pair_never_published_either_series_does_not_raise(monkeypatch):
+    """A pair seen only with two None rates (scrape failure) has no child on
+    either gauge."""
+    fake_prefix, fake_mtp = _patch_prom(monkeypatch)
+
+    prom.update_engine_cache_metrics([("qwen", "w1", None, None)])
+    prom.update_engine_cache_metrics([])
+
+    assert fake_prefix.values == {}
+    assert fake_mtp.values == {}
+    assert fake_prefix.removed == [_key("qwen", "w1")]
+    assert fake_mtp.removed == [_key("qwen", "w1")]
+
+
+def test_tracked_state_refreshes_even_when_retirement_raises(monkeypatch):
+    """A failure during retirement must not freeze the tracked-key state: a
+    stale diff set would re-raise on every subsequent call and keep the
+    planner cycle dead. The ``finally`` refresh guarantees the next call sees
+    the up-to-date set of live pairs."""
+    fake_prefix, fake_mtp = _patch_prom(monkeypatch)
+
+    prom.update_engine_cache_metrics(
+        [
+            ("model-a", "node-1", 0.5, 0.3),
+            ("model-b", "node-1", 0.2, 0.1),
+        ]
+    )
+
+    real_mtp_remove = fake_mtp.remove
+
+    def _explode(*labelvalues):
+        raise RuntimeError("boom")
+
+    fake_mtp.remove = _explode
+    with pytest.raises(RuntimeError, match="boom"):
+        prom.update_engine_cache_metrics([("model-a", "node-1", 0.6, 0.4)])
+
+    # Round 3 must diff against {model-a} only — model-b was dropped from the
+    # tracked state despite round 2's failure. With a frozen state, model-b's
+    # MTP remove would be attempted again here.
+    fake_mtp.remove = real_mtp_remove
+    prom.update_engine_cache_metrics([])
+
+    assert fake_prefix.removed == [
+        _key("model-b", "node-1"),  # round 2, before the failure
+        _key("model-a", "node-1"),  # round 3
+    ]
+    assert fake_mtp.removed == [_key("model-a", "node-1")]  # round 3 only
