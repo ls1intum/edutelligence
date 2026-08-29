@@ -24,6 +24,28 @@ export function getRequestBorderColor(stage: RequestStage, status: string): stri
   }
 }
 
+/**
+ * The provider label a request row shows.
+ *
+ * The log row already carries a provider while the request is still queued at
+ * the orchestrator: it is the deployment the request was made for, written at
+ * enqueue time, not the one that will serve it — scheduling can pick a
+ * different model or provider entirely. Naming it while the request has not
+ * been forwarded anywhere reads as a decision that has not been made, so a
+ * queued row says 'none' and the real provider appears only once the request
+ * was handed off (or the row settled).
+ */
+export function providerLabel(
+  item: {
+    provider_name: string | null;
+    scheduled_ts: string | null;
+    request_complete_ts: string | null;
+  },
+): string {
+  if (deriveStage(item) === 'queued') return 'none';
+  return item.provider_name || 'none';
+}
+
 export function formatTimeAgo(ts: string | null, nowMs: number): string {
   if (!ts) return '';
   const diffS = Math.max(0, (nowMs - new Date(ts).getTime()) / 1000);
