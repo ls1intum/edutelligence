@@ -90,8 +90,11 @@ class MeKeysControllerTest {
         mvc.perform(get("/me/keys").with(TestJwt.forSeededUser(ALICE_ID, "alice")))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$[0].rate_limit_usage.window_seconds").value(60))
-           .andExpect(jsonPath("$[0].rate_limit_usage.cloud_requests").value(2))
-           .andExpect(jsonPath("$[0].rate_limit_usage.cloud_tokens").value(2500))
+           // 9307 arrived 70s ago but was admitted (timestamp_forwarding) only
+           // 10s ago, so the limiter charges it to this window and the figure
+           // must include it.
+           .andExpect(jsonPath("$[0].rate_limit_usage.cloud_requests").value(3))
+           .andExpect(jsonPath("$[0].rate_limit_usage.cloud_tokens").value(2600))
            .andExpect(jsonPath("$[0].rate_limit_usage.local_requests").value(1))
            .andExpect(jsonPath("$[0].rate_limit_usage.local_tokens").value(700));
     }

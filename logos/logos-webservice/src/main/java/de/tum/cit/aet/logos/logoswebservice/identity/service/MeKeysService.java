@@ -34,6 +34,12 @@ public class MeKeysService {
      * The sliding window the orchestrator's rate limiter enforces rpm/tpm
      * limits over; the usage numbers shown next to a limit must come from the
      * same window to be comparable to it.
+     *
+     * This is a copy of the default of {@code RateLimitConfig.window_seconds}
+     * in {@code logos/logos-orchestrator/src/logos/rate_limiter.py} — the
+     * orchestrator is the source of truth. Keep the two in sync; the test
+     * {@code RateLimitWindowConsistencyTest} fails if they drift, and the
+     * corresponding comment in rate_limiter.py points back here.
      */
     private static final int RATE_LIMIT_WINDOW_SECONDS = 60;
 
