@@ -2,7 +2,9 @@
 -- operations seed stays untouched for the other test classes.
 
 -- Consent-based (FULL) trace: the requester opted into full logging, so the
--- request and response data was stored and belongs in the export.
+-- request and response data was stored and belongs in the export. The stored
+-- headers are the request's headers, which means the authorization header
+-- holds a working API key — exactly what the export must not hand back.
 INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
                        timestamp_request, timestamp_forwarding, timestamp_response,
                        privacy_level, client_ip, input_payload, headers, response_payload,
@@ -12,7 +14,7 @@ VALUES
    NOW() - INTERVAL '6 minutes', NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes',
    'FULL', '127.0.0.1',
    '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello, Logos"}]}'::jsonb,
-   '{"content-type": "application/json"}'::jsonb,
+   '{"content-type": "application/json", "authorization": "Bearer lg-9c4e5f6a7b8c9d0e1f2a3b4c5d6e7f80"}'::jsonb,
    '{"choices": [{"message": {"role": "assistant", "content": "Hi there!"}}]}'::jsonb,
    false, 1, 1001, 2001, NULL);
 

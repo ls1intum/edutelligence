@@ -29,8 +29,10 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
  * down what the export shows: every request of the window, with the content
  * columns filled only where the requester consented — an export must
  * describe the same slice of traffic the activity list does, not a silently
- * smaller one. The added key 3009 turns full logging on for 2001 (the shared
- * keys are all at the BILLING default), so the "activated" and the "not
+ * smaller one. 9003's stored headers additionally carry an authorization
+ * header with a working API key, which the export must strip on the way
+ * out. The added key 3009 turns full logging on for 2001 (the shared keys
+ * are all at the BILLING default), so the "activated" and the "not
  * activated" sides of the envelope hint are both covered by the seeded
  * teams: 2002 has no keys and no traffic at all.
  * User 1002 is an app admin owning 2001; team 2002 exists and they do not own
@@ -146,6 +148,21 @@ class TeamActivityExportControllerTest {
            .andExpect(jsonPath("$.traces[0].client_ip").value(nullValue()))
            .andExpect(jsonPath("$.traces[2].privacy_level").value("BILLING"))
            .andExpect(jsonPath("$.traces[2].input_payload").value(nullValue()));
+    }
+
+    @Test
+    void theAuthorizationHeaderNeverLeavesTheExport() throws Exception {
+        // The stored headers carry the request's API key in the clear
+        // (authorization: Bearer lg-…). An export that hands that back would
+        // let a team owner impersonate any of their members — the key is
+        // stripped on the way out, the remaining headers stay.
+        mvc.perform(post("/logosdb/teams/2001/activity/export")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.traces[1].headers['authorization']").doesNotExist())
+           .andExpect(jsonPath("$.traces[1].headers['content-type']").value("application/json"));
     }
 
     @Test

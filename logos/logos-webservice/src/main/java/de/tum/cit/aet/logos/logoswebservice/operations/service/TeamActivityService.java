@@ -253,9 +253,28 @@ public class TeamActivityService {
         m.put("cost_microcents", p.getCostMicroCents());
         m.put("classification_statistics", json(p.getClassificationStatistics()));
         m.put("input_payload", json(p.getInputPayload()));
-        m.put("headers", json(p.getHeaders()));
+        m.put("headers", stripAuthorizationHeader(json(p.getHeaders())));
         m.put("response_payload", json(p.getResponsePayload()));
         return m;
+    }
+
+    /**
+     * The headers were stored the way the request carried them — which means
+     * the authorization header holds a working API key, in the clear. The
+     * export is the administrator's trace of the team's traffic, not a
+     * credential dump: a team owner reading this file must not be able to
+     * impersonate any of their members, so the key comes out on the way.
+     * The remaining headers (content-type, user-agent, …) stay.
+     */
+    private Object stripAuthorizationHeader(Object headers) {
+        if (!(headers instanceof Map<?, ?> stored)) return headers;
+        Map<String, Object> redacted = new LinkedHashMap<>();
+        stored.forEach((name, value) -> {
+            if (!"authorization".equalsIgnoreCase(String.valueOf(name))) {
+                redacted.put(String.valueOf(name), value);
+            }
+        });
+        return redacted;
     }
 
     /**
