@@ -56,6 +56,17 @@ try:
 except ImportError:
     _HAS_YAML = False
 
+from logos_worker_node.gguf import (
+    GgufServeSpec,
+    fetch_repo_gguf_files,
+    is_explicit_gguf_ref,
+    is_gguf_model,
+    is_gguf_repo_name,
+    list_cached_gguf_files,
+    repo_id_of,
+    resolve_gguf_spec,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -817,9 +828,19 @@ def _build_vllm_cmd(
     host: str,
     port: int,
     kv_cache_memory_bytes: str,
+    *,
+    hf_home: str | None = None,
 ) -> list[str]:
     """Build the vLLM command list without spawning a process."""
     model = plan["model"]
+    # GGUF models are served through the out-of-tree GGUF plugin under a
+    # resolved reference (repo:quant or file) — mirror the serving lane's
+    # _build_cmd so the probe measures exactly what production runs.
+    gguf_spec = None
+    if is_gguf_model(model):
+        gguf_spec = _resolve_gguf_calibration_spec(plan, hf_home)
+    if gguf_spec is not None:
+        model = gguf_spec.serve_ref
     tp = int(plan.get("tensor_parallel_size", 1))
     dtype = str(plan.get("dtype", "auto"))
     quant = str(plan.get("quantization") or "")
@@ -892,8 +913,48 @@ def _build_vllm_cmd(
         cmd.append("--enforce-eager")
     if disable_custom_all_reduce:
         cmd.append("--disable-custom-all-reduce")
+    if gguf_spec is not None:
+        # The probe addresses the model by plan["model"] (warmup request);
+        # alias the resolved GGUF reference back to that name.
+        cmd.extend(["--served-model-name", plan["model"]])
+        if gguf_spec.tokenizer:
+            cmd.extend(["--tokenizer", gguf_spec.tokenizer])
     cmd.extend(extra_args)
     return cmd
+
+
+def _resolve_gguf_calibration_spec(plan: dict[str, Any], hf_home: str | None) -> GgufServeSpec | None:
+    """Resolve the GGUF serve reference for a calibration plan.
+
+    Same detection the serving lane uses (see vllm_process._resolve_gguf_spec):
+    file listing from the local HF cache first, HuggingFace Hub as fallback.
+    Calibration runs in a worker thread, so the Hub listing is a plain
+    blocking call there.
+    """
+    model = plan["model"]
+    file_names: list[str] | None = None
+    if not is_explicit_gguf_ref(model):
+        file_names = list_cached_gguf_files(hf_home, model)
+        if not file_names and is_gguf_repo_name(model):
+            try:
+                file_names = list(fetch_repo_gguf_files(repo_id_of(model)))
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "GGUF quant selection for %s falls back to the configured "
+                    "gguf_quant (if any): HuggingFace listing failed",
+                    model,
+                    exc_info=True,
+                )
+                file_names = None
+    try:
+        return resolve_gguf_spec(
+            model,
+            gguf_quant=str(plan.get("gguf_quant") or ""),
+            gguf_tokenizer=str(plan.get("gguf_tokenizer") or ""),
+            gguf_file_names=file_names,
+        )
+    except ValueError as exc:
+        raise RuntimeError(f"GGUF model {model}: {exc}") from exc
 
 
 def spawn_vllm(
@@ -910,7 +971,7 @@ def spawn_vllm(
     """Spawn vLLM and return ``(process, cmd_list)``."""
     tp = int(plan.get("tensor_parallel_size", 1))
 
-    cmd = _build_vllm_cmd(plan, vllm_binary, host, port, kv_cache_memory_bytes)
+    cmd = _build_vllm_cmd(plan, vllm_binary, host, port, kv_cache_memory_bytes, hf_home=hf_home)
 
     env = os.environ.copy()
     env["VLLM_SERVER_DEV_MODE"] = "1"

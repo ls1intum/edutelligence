@@ -366,6 +366,10 @@ class VllmProcessHandle:
         self._process_group_id: int | None = None
         self._max_concurrency: int | None = None
         self.hf_home_override: str | None = None
+        # Set by _resolve_gguf_spec when the lane model is a GGUF model; _build_cmd
+        # then serves the resolved reference (repo:quant / file) instead of the
+        # bare model name.
+        self._gguf_spec: Any | None = None
         # Set by _maybe_prepare_sharded_checkpoint when a pre-sharded checkpoint
         # is used for a TP>1 lane; _build_cmd then serves this directory with
         # --load-format sharded_state instead of the full checkpoint.
@@ -459,6 +463,11 @@ class VllmProcessHandle:
         """A single vLLM spawn attempt; raises on startup failure."""
         self._recent_logs.clear()
         self._lane_config = lane_config
+        # Resolve the serve reference for GGUF models BEFORE anything else —
+        # _build_cmd serves the resolved reference, and the sharded-checkpoint
+        # path (safetensors-only) skips GGUF lanes.
+        self._gguf_spec = None
+        await self._resolve_gguf_spec(lane_config)
         # Resolve (and, if needed, build) a sharded checkpoint for TP>1 lanes
         # BEFORE building the command — sets self._sharded_model_dir on success.
         self._sharded_model_dir = None
@@ -1242,6 +1251,71 @@ class VllmProcessHandle:
             return None
         return int(value)
 
+    async def _resolve_gguf_spec(self, lane_config: LaneConfig) -> None:
+        """Detect a GGUF model and resolve its serve reference.
+
+        Detection is two-stage: the model string first (``repo:quant``
+        reference, ``…/file.gguf``, or the ``…-GGUF`` repo naming convention),
+        then the file listing — local HF cache first, HuggingFace Hub as a
+        fallback — so repositories that only contain GGUF weights are found
+        even when their name doesn't follow the convention. A cached listing
+        without GGUF files disproves the naming convention; an unavailable
+        listing does not (the lane then fails at spawn with a clear error if
+        the name was a false positive).
+
+        Multi-file GGUFs (``-N-of-M`` shards) need no merge step: the GGUF
+        plugin's loader expands the shard set itself, making the ``gguf-split``
+        merge the old in-tree loader pointed operators at obsolete.
+        """
+        vc = lane_config.vllm_config
+        if vc is None:
+            return
+        model = lane_config.model
+        try:
+            from logos_worker_node import gguf  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            logger.debug("[%s] gguf module import failed", self.lane_id, exc_info=True)
+            return
+
+        hf_home = self.hf_home_override or self._resolve_hf_home(
+            self._resolve_persistent_cache_root(self._global_config)
+        )
+        file_names: list[str] | None = None
+        if not gguf.is_explicit_gguf_ref(model):
+            file_names = gguf.list_cached_gguf_files(hf_home, model)
+            if not file_names and gguf.is_gguf_repo_name(model):
+                repo = gguf.repo_id_of(model)
+                try:
+                    file_names = list(await asyncio.to_thread(gguf.fetch_repo_gguf_files, repo))
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "[%s] Could not list %s on the HuggingFace Hub — quant selection "
+                        "falls back to the configured gguf_quant (if any)",
+                        self.lane_id,
+                        repo,
+                        exc_info=True,
+                    )
+                    file_names = None
+
+        try:
+            spec = gguf.resolve_gguf_spec(
+                model,
+                gguf_quant=vc.gguf_quant,
+                gguf_tokenizer=vc.gguf_tokenizer,
+                gguf_file_names=file_names,
+            )
+        except ValueError as exc:
+            raise RuntimeError(f"[{self.lane_id}] {exc}") from exc
+        self._gguf_spec = spec
+        if spec is not None:
+            logger.info(
+                "[%s] GGUF model detected — serving %s (quant=%s, tokenizer=%s)",
+                self.lane_id,
+                spec.serve_ref,
+                spec.quant or "from file",
+                spec.tokenizer or "model default",
+            )
+
     async def _maybe_prepare_sharded_checkpoint(self, lane_config: LaneConfig) -> None:
         """Resolve (and, if missing, build) a sharded checkpoint for TP>1 lanes.
 
@@ -1257,6 +1331,11 @@ class VllmProcessHandle:
         """
         vc = lane_config.vllm_config
         if vc is None:
+            return
+        if self._gguf_spec is not None:
+            # The sharded_state checkpoint is a safetensors conversion; GGUF
+            # lanes serve the plugin's repo:quant reference, which reads
+            # multi-file shard sets natively.
             return
         if self._skip_sharded_checkpoint:
             # Set by spawn() after the loader rejected the cached conversion.
@@ -1362,10 +1441,13 @@ class VllmProcessHandle:
         vllm_prefix = self._resolve_vllm_binary(vc.vllm_binary)
         # For TP>1 lanes with a pre-sharded checkpoint, serve the sharded
         # directory so each rank reads only its own shard (constant load time
-        # in TP) instead of the full checkpoint. Everything else keyed off the
-        # model name (tool parser, compile cache, profiles) still uses
-        # lane_config.model — only the served path and load-format change.
-        serve_target = self._sharded_model_dir or lane_config.model
+        # in TP) instead of the full checkpoint. For GGUF lanes, serve the
+        # resolved reference (repo:quant or file) instead of the bare model
+        # name. Everything else keyed off the model name (tool parser, compile
+        # cache, profiles) still uses lane_config.model — only the served path
+        # (and load-format) change.
+        gguf_spec = self._gguf_spec
+        serve_target = self._sharded_model_dir or (gguf_spec.serve_ref if gguf_spec is not None else lane_config.model)
         cmd = [
             *vllm_prefix,
             "serve",
@@ -1381,12 +1463,18 @@ class VllmProcessHandle:
         ]
         if self._sharded_model_dir:
             cmd.extend(["--load-format", "sharded_state"])
-            # The sharded checkpoint is served from a filesystem path, so vLLM
-            # would otherwise register the model under that path and return HTTP
-            # 404 for any request that addresses it by its real model id. Alias
-            # the served name back to lane_config.model so clients and the
-            # orchestrator's lane routing can reach it as usual.
+        # The sharded checkpoint is served from a filesystem path and a GGUF
+        # lane from its resolved reference (repo:quant / file), so vLLM would
+        # otherwise register the model under that string and return HTTP 404
+        # for any request that addresses it by its real model id. Alias the
+        # served name back to lane_config.model so clients and the
+        # orchestrator's lane routing can reach it as usual.
+        if self._sharded_model_dir or gguf_spec is not None:
             cmd.extend(["--served-model-name", lane_config.model])
+        if gguf_spec is not None and gguf_spec.tokenizer:
+            # The GGUF loader also uses --tokenizer as the HF config source —
+            # the base model's tokenizer/config per the vLLM GGUF docs.
+            cmd.extend(["--tokenizer", gguf_spec.tokenizer])
         # Resolve gpu_memory_utilization: explicit per-model override wins;
         # otherwise auto-derive from the calibrated profile so vLLM's startup
         # floor check (free_per_gpu >= gmu * total_per_gpu, raised by
