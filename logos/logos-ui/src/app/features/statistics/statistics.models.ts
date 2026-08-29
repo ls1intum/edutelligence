@@ -152,6 +152,15 @@ export interface VramV2Sample {
       total_memory_mb?: number;
       used_memory_mb?: number;
       free_memory_mb?: number;
+      /**
+       * Host RAM of the worker (MiB), from the runtime's host_memory summary.
+       * Optional like its VRAM siblings: undefined on workers that predate
+       * the field or cannot read /proc/meminfo, and the page has to read
+       * that as "not reported" rather than a host with 0 MB.
+       */
+      host_ram_total_mb?: number;
+      host_ram_used_mb?: number;
+      host_ram_available_mb?: number;
       lane_count?: number;
       active_requests?: number;
       loaded_lane_count?: number;
