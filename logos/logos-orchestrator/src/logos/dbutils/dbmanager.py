@@ -507,10 +507,21 @@ class DBManager:
 
         original_provider_type = provider_type or ""
 
-        provider_type = normalize_provider_type(original_provider_type)
+        # Ollama is no longer a provider type — every worker lane runs vLLM.
+        # Refuse it explicitly instead of letting it through as an unknown
+        # type the DB enum would reject with a raw constraint error.
+        if original_provider_type.strip().lower() == "ollama":
+            return (
+                {
+                    "error": (
+                        "provider_type 'ollama' is no longer supported: every worker lane runs vLLM. "
+                        "Use 'logosnode' for worker-backed providers."
+                    )
+                },
+                400,
+            )
 
-        if provider_type in {"node", "node_controller", "ollama", "logos_worker_node"}:
-            provider_type = "logosnode"
+        provider_type = normalize_provider_type(original_provider_type)
 
         if not provider_type:
             return {"error": "provider_type is required"}, 400
@@ -914,7 +925,8 @@ class DBManager:
         Args:
             logos_key: Authorization key (root user only)
             provider_id: Provider ID to configure
-            ollama_admin_url: Internal admin endpoint for Ollama (e.g., http://gpu-vm-1:11434)
+            ollama_admin_url: Internal admin endpoint of the worker (e.g., http://gpu-vm-1:5000).
+                Legacy column name — the value is the worker's base URL.
             total_vram_mb: Total VRAM capacity in MB (e.g., 49152 for 48GB)
             parallel_capacity: Max concurrent requests per model
             keep_alive_seconds: How long models stay loaded when idle
@@ -989,7 +1001,7 @@ class DBManager:
         error_message: Optional[str] = None,
     ) -> int:
         """
-        Insert Ollama provider snapshot into monitoring table.
+        Insert provider snapshot into the monitoring table.
 
         Args:
             provider_id: Provider ID (FK to providers.id)
@@ -1005,7 +1017,7 @@ class DBManager:
         """
         sql = text(
             """
-            INSERT INTO ollama_provider_snapshots (
+            INSERT INTO provider_snapshots (
                 provider_id,
                 snapshot_ts,
                 total_models_loaded,
@@ -1234,7 +1246,7 @@ class DBManager:
         rows = self.session.execute(sql, {"model_name": model_name}).fetchall()
         return [dict(row._mapping) for row in rows]
 
-    def get_ollama_vram_stats(
+    def get_provider_vram_stats(
         self,
         logos_key: str,
         day: str,
@@ -1289,7 +1301,7 @@ class DBManager:
                 p.total_vram_mb,
                 MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
                     OVER (PARTITION BY s.provider_id) AS capacity_bytes
-            FROM ollama_provider_snapshots s
+            FROM provider_snapshots s
             LEFT JOIN providers p
               ON p.id = s.provider_id
             WHERE s.poll_success = TRUE
@@ -1357,10 +1369,10 @@ class DBManager:
             return {"providers": providers_list}, 200
 
         except Exception as e:
-            logger.error(f"Failed to query ollama_vram_stats: {e}")
+            logger.error(f"Failed to query provider_vram_stats: {e}")
             return {"error": str(e)}, 500
 
-    def get_ollama_vram_deltas(
+    def get_provider_vram_deltas(
         self,
         logos_key: str,
         day: str,
@@ -1430,7 +1442,7 @@ class DBManager:
                     p.total_vram_mb,
                     MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
                         OVER (PARTITION BY s.provider_id) AS capacity_bytes
-                FROM ollama_provider_snapshots s
+                FROM provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
                 WHERE s.poll_success = TRUE
@@ -1458,7 +1470,7 @@ class DBManager:
                     p.total_vram_mb,
                     MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
                         OVER (PARTITION BY s.provider_id) AS capacity_bytes
-                FROM ollama_provider_snapshots s
+                FROM provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
                 WHERE s.poll_success = TRUE
@@ -1542,7 +1554,7 @@ class DBManager:
             }, 200
 
         except Exception as e:
-            logger.error(f"Failed to query ollama_vram_deltas: {e}")
+            logger.error(f"Failed to query provider_vram_deltas: {e}")
             return {"error": str(e)}, 500
 
     def get_auth_info_to_deployment(
@@ -2149,7 +2161,6 @@ class DBManager:
             FROM providers
             WHERE LOWER(provider_type::text) IN (
                 'logosnode',
-                'ollama',
                 'node',
                 'node_controller',
                 'logos_worker_node'
@@ -2171,6 +2182,24 @@ class DBManager:
             }
             for row in rows
         ]
+
+    def find_ollama_typed_providers(self) -> list[dict]:
+        """Provider rows still typed 'ollama' — the engine Logos dropped.
+
+        Used as a startup gate: such rows point at servers the deployment no
+        longer runs, so they must be fixed by hand rather than silently left
+        unservable.
+        """
+        sql = text(
+            """
+            SELECT id, name, provider_type
+            FROM providers
+            WHERE LOWER(provider_type::text) = 'ollama'
+            ORDER BY id
+        """
+        )
+        rows = self.session.execute(sql).fetchall()
+        return [{"id": row.id, "name": row.name, "provider_type": row.provider_type} for row in rows]
 
     def log(self, api_key_id: int):
         sql = text(

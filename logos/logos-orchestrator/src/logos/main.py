@@ -321,15 +321,6 @@ def _resolve_requested_model_name(
     return None
 
 
-def _runtime_modes_for_lanes(lanes: list[dict[str, Any]]) -> list[str]:
-    modes: set[str] = set()
-    for lane in lanes:
-        if not isinstance(lane, dict):
-            continue
-        modes.add("vllm" if bool(lane.get("vllm")) else "ollama")
-    return sorted(modes)
-
-
 def _safe_float(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -447,7 +438,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "sleeping_lane_count": _safe_int(capacity.get("sleeping_lane_count")) or 0,
         "cold_lane_count": _safe_int(capacity.get("cold_lane_count")) or 0,
         "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb")) or 0.0,
-        "runtime_modes": _runtime_modes_for_lanes(lanes),
+        "runtime_modes": ["vllm"],
     }
 
     raw_device_list = devices.get("devices") or []
@@ -475,8 +466,6 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             model_name,
             {
                 "lane_count": 0,
-                "vllm_lane_count": 0,
-                "ollama_lane_count": 0,
                 "loaded_lane_count": 0,
                 "running_lane_count": 0,
                 "sleeping_lane_count": 0,
@@ -514,7 +503,6 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         model_name = str(lane.get("model") or "").strip()
         lane_id = str(lane.get("lane_id") or "").strip()
         runtime_state = str(lane.get("runtime_state") or "").strip()
-        is_vllm = bool(lane.get("vllm"))
         active_requests = _safe_int(lane.get("active_requests")) or 0
         backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
         ttft_histogram = (
@@ -524,7 +512,6 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
 
         lane_signal = {
             "model": model_name,
-            "vllm": is_vllm,
             "runtime_state": runtime_state,
             "sleep_state": lane.get("sleep_state"),
             "gpu_devices": str(lane.get("gpu_devices") or ""),
@@ -559,10 +546,6 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
 
         entry = _ensure_model_entry(model_name)
         entry["lane_count"] += 1
-        if is_vllm:
-            entry["vllm_lane_count"] += 1
-        else:
-            entry["ollama_lane_count"] += 1
 
         if runtime_state == "loaded":
             entry["loaded_lane_count"] += 1
@@ -684,7 +667,6 @@ def _build_live_local_provider_sample(
         remaining_vram_mb = max(total_vram_mb - used_vram_mb, 0.0)
 
     loaded_models = _normalize_loaded_models(lanes)
-    runtime_modes = _runtime_modes_for_lanes(lanes)
     scheduler_signals = _build_logosnode_scheduler_signals(runtime)
 
     if remaining_vram_mb is None and not loaded_models and used_vram_mb <= 0:
@@ -713,7 +695,7 @@ def _build_live_local_provider_sample(
         "connection_state": "online",
         "connected": True,
         "transport_connected": bool(transport.get("connected", True)),
-        "runtime_modes": runtime_modes,
+        "runtime_modes": ["vllm"],
         "vram_mb": used_vram_mb,
         "used_vram_mb": used_vram_mb,
         "remaining_vram_mb": remaining_vram_mb,
@@ -759,7 +741,7 @@ def _load_persisted_local_provider_vram_payload(
 ) -> Dict[str, Any]:
     with DBManager() as db:
         if int(after_snapshot_id or 0) > 0:
-            payload, status = db.get_ollama_vram_deltas(
+            payload, status = db.get_provider_vram_deltas(
                 logos_key,
                 day=day,
                 after_snapshot_id=int(after_snapshot_id or 0),
@@ -770,14 +752,14 @@ def _load_persisted_local_provider_vram_payload(
             # snapshots — the UI only renders a 30-min live window anyway,
             # and live deltas keep flowing afterwards via after_snapshot_id.
             recent_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
-            payload, status = db.get_ollama_vram_deltas(
+            payload, status = db.get_provider_vram_deltas(
                 logos_key,
                 day="all",
                 after_snapshot_id=0,
                 since=recent_since,
             )
         else:
-            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
+            payload, status = db.get_provider_vram_stats(logos_key, day=day, bucket_seconds=5)
     if status != 200 or not isinstance(payload, dict):
         return {
             "providers": [],
@@ -934,10 +916,8 @@ def _merge_local_provider_vram_payload(
         entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
 
         runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
-        lanes = runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
-        runtime_modes = _runtime_modes_for_lanes(lanes)
-        if runtime_modes:
-            entry["runtime_modes"] = runtime_modes
+        runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
+        entry["runtime_modes"] = ["vllm"]
         transport = (
             runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
         )
@@ -1627,6 +1607,27 @@ def _close_orphaned_request_logs() -> None:
         logger.info("Closed %d request log(s) left in-flight by a previous orchestrator process", closed)
 
 
+def _assert_no_ollama_typed_providers() -> None:
+    """Refuse to start while provider rows of the dropped 'ollama' type exist.
+
+    Ollama servers are gone from the deployment — every worker lane runs
+    vLLM — so a provider still typed 'ollama' would be routed nowhere. Dropping
+    it from scheduling silently would hide the data problem; a startup failure
+    forces the operator to retype the row (worker-backed: 'logosnode') or
+    delete it before any traffic is accepted.
+    """
+    with DBManager() as db:
+        stale = db.find_ollama_typed_providers()
+    if stale:
+        rows = ", ".join(f"#{p['id']} {p['name']!r}" for p in stale)
+        raise RuntimeError(
+            "Startup aborted: providers of the dropped type 'ollama' still exist "
+            f"in the database: {rows}. Ollama is no longer served by Logos — "
+            "retype each provider as 'logosnode' (worker-backed) or delete it, "
+            "then restart."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -1669,6 +1670,10 @@ async def lifespan(app: FastAPI):
     # went away — close it before accepting new traffic, while "no terminal
     # state" unambiguously means "orphaned by a restart".
     _close_orphaned_request_logs()
+
+    # Ollama-typed provider rows are a data problem, not a runtime state —
+    # abort loudly instead of scheduling around them.
+    _assert_no_ollama_typed_providers()
 
     # Start Pipeline
     await start_pipeline()
@@ -1974,7 +1979,7 @@ async def health():
                 local_ok = True
         # Cloud is serveable if any deployment lives outside the local provider
         # inventory — by type alone this would miscount legacy local worker
-        # types (ollama, node, ...) as cloud.
+        # types (node, ...) as cloud.
         cloud_ok = any(int(d.get("provider_id") or 0) not in worker_ids for d in deployments)
     except Exception:
         logger.exception("Health check failed to evaluate provider state")
@@ -2694,9 +2699,8 @@ def _prefer_deployments_with_context_room(
     Deliberate escape hatches, because this filter runs on an estimate:
 
     * A worker whose window is unknown is always kept. ``max_model_len`` is
-      absent for cloud providers, for Ollama lanes and for a vLLM lane the
-      worker has not reported a window for — none of those are evidence of a
-      *narrow* window.
+      absent for cloud providers and for a vLLM lane the worker has not
+      reported a window for — neither is evidence of a *narrow* window.
     * A model is never filtered out entirely. If every lane of a model has a
       known window that is too narrow, the widest of them is kept anyway.
       Downstream, proxy mode narrows this list to the requested model and
@@ -4145,7 +4149,7 @@ async def _execute_resource_mode(
     current system state.
 
     The scheduler is aware of:
-    - Real-time model availability (via Ollama/Azure SDI facades)
+    - Real-time model availability (via LogosNode/Azure SDI facades)
     - Current queue depths per model
     - Cold start penalties
     - Model utilization levels
@@ -5550,13 +5554,12 @@ async def forward_host(request: Request):
 def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
     """Served context window of one lane in tokens, 0 when unknown.
 
-    Mirrors the worker's --max-model-len precedence for vLLM lanes
+    Mirrors the worker's --max-model-len precedence for the vLLM lane
     (vllm_process.py): explicit vllm_config value, then a non-sentinel lane
     context_length (4096 is the shared lane-schema default, meaning "unset"
-    for vLLM), then the calibrated profile value. Ollama lanes always run at
-    their configured context_length. A vLLM lane where none of these are set
-    lets vLLM pick the model's native maximum, which the worker does not
-    report — such lanes yield 0 rather than a guess.
+    for vLLM), then the calibrated profile value. A lane where none of these
+    are set lets vLLM pick the model's native maximum, which the worker does
+    not report — such lanes yield 0 rather than a guess.
     """
     model = lane.get("model")
     if not model:
@@ -5568,9 +5571,6 @@ def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
         except (TypeError, ValueError):
             return 0
         return value if value > 0 else 0
-
-    if not lane.get("vllm"):
-        return _as_len(lane.get("context_length"))
 
     backend_metrics = lane.get("backend_metrics")
     explicit = _as_len(backend_metrics.get("max_model_len")) if isinstance(backend_metrics, dict) else 0

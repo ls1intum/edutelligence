@@ -11,7 +11,7 @@ VALUES
    NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes', NOW() - INTERVAL '3 minutes',
    true, 0, NULL, NULL, 'production');
 
-INSERT INTO ollama_provider_snapshots
+INSERT INTO provider_snapshots
   (id, provider_id, snapshot_ts, poll_success,
    total_vram_used_bytes, total_memory_bytes, free_memory_bytes,
    total_models_loaded, loaded_models, scheduler_signals)

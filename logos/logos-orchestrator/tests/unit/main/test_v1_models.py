@@ -291,10 +291,11 @@ async def test_list_models_includes_served_context_window(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_models_ollama_lane_context_length(monkeypatch):
-    """Ollama lanes report their configured context length directly."""
+async def test_list_models_lane_configured_context_length(monkeypatch):
+    """A lane whose engine has not reported a window falls back to its
+    configured context_length (the 4096 sentinel means "unset")."""
     models = [{"id": 1, "name": "mistral-7b", "description": None}]
-    lane = {"model": "mistral-7b", "vllm": False, "context_length": 16384, "backend_metrics": {}}
+    lane = _vllm_lane("mistral-7b", max_model_len=0, context_length=16384)
     registry = DummyRegistry({7: _snapshot([lane])})
 
     entries = await _list_ids_to_entries(monkeypatch, models, registry)

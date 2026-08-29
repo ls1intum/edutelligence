@@ -50,7 +50,6 @@ def _make_view(
                 model_name=model_name,
                 runtime_state=best_lane_state,
                 sleep_state=best_sleep_state,
-                is_vllm=False,
                 active_requests=aggregate_active_requests,
                 queue_waiting=aggregate_queue_waiting,
                 requests_running=float(aggregate_active_requests),

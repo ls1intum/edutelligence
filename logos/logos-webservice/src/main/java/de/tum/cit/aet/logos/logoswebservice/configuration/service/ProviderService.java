@@ -155,7 +155,12 @@ public class ProviderService {
     private static ProviderType parseProviderType(String raw) {
         if (raw == null) return ProviderType.logosnode;
         String normalized = raw.toLowerCase();
-        if (List.of("node", "node_controller", "ollama", "logos_worker_node").contains(normalized)) {
+        if ("ollama".equals(normalized)) {
+            throw new IllegalArgumentException(
+                "provider_type 'ollama' is no longer supported: every worker lane runs vLLM. "
+                + "Use 'logosnode' for worker-backed providers.");
+        }
+        if (List.of("node", "node_controller", "logos_worker_node").contains(normalized)) {
             return ProviderType.logosnode;
         }
         try { return ProviderType.valueOf(normalized); }

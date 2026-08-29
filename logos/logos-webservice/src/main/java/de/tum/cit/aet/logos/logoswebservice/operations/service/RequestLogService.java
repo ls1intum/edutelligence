@@ -163,8 +163,7 @@ public class RequestLogService {
 
     private static boolean isCloudProviderType(String providerType) {
         return providerType != null && !providerType.isEmpty()
-               && !providerType.equalsIgnoreCase("logosnode")
-               && !providerType.equalsIgnoreCase("ollama");
+               && !providerType.equalsIgnoreCase("logosnode");
     }
 
     /**

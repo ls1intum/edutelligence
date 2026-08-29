@@ -67,7 +67,7 @@ def _make_app(lanes):
 
 
 @pytest.mark.asyncio
-async def test_build_runtime_status_uses_proc_meminfo_for_degraded_ollama(monkeypatch):
+async def test_build_runtime_status_uses_proc_meminfo_for_degraded_node(monkeypatch):
     monkeypatch.setattr(
         "logos_worker_node.runtime._read_proc_meminfo_mb",
         lambda: (8192.0, 3072.0, 5120.0),
@@ -76,19 +76,16 @@ async def test_build_runtime_status_uses_proc_meminfo_for_degraded_ollama(monkey
     lanes = [
         LaneStatus(
             lane_id="lane-a",
-            lane_uid="ollama:lane-a",
-            model="gemma2:2b",
+            lane_uid="vllm:lane-a",
+            model="gemma-2b",
             port=11437,
-            vllm=False,
             process=ProcessStatus(state=ProcessState.RUNNING, pid=101),
             runtime_state="loaded",
             routing_url="http://127.0.0.1:11437",
             num_parallel=4,
             context_length=4096,
-            keep_alive="5m",
-            kv_cache_type="q8_0",
             flash_attention=True,
-            lane_config=LaneConfig(model="gemma2:2b"),
+            lane_config=LaneConfig(model="gemma-2b"),
             loaded_models=[],
             effective_vram_mb=0.0,
         )

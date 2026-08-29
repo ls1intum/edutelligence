@@ -21,18 +21,17 @@ from logos_worker_node.models import (
     LaneEvent,
     LaneStatus,
     LoadedModel,
-    OllamaConfig,
     ProcessState,
     VllmConfig,
     VllmEngineConfig,
+    WorkerConfig,
 )
-from logos_worker_node.ollama_process import OllamaProcessHandle
 from logos_worker_node.vllm_process import VllmProcessHandle
 
 logger = logging.getLogger("logos_worker_node.lane_manager")
 
-# Union type for all supported backend handles
-ProcessHandle = OllamaProcessHandle | VllmProcessHandle
+# Type for the backend process handle (vLLM is the only engine)
+ProcessHandle = VllmProcessHandle
 
 _DEFAULT_PORT_START = 11436
 _DEFAULT_PORT_END = 11499
@@ -174,35 +173,17 @@ def _lane_id_from_config(lane_config: LaneConfig) -> str:
     return _normalize_lane_id(lane_config.model)
 
 
-def _routing_inference_endpoint(vllm: bool) -> str:
-    if vllm:
-        return "/v1/chat/completions"
-    return "/v1/chat/completions"
-
-
 def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
     """Check if the lane config change requires a process restart.
 
     Only compares fields that cannot be changed at runtime and truly require
-    stopping and re-spawning the vLLM/Ollama process.  Fields like
+    stopping and re-spawning the vLLM process.  Fields like
     kv_cache_memory_bytes and enable_sleep_mode are set at spawn time but
     changing them should NOT trigger a restart of an already-loaded lane —
     the planner should use sleep/reconfigure for KV tuning instead.
     """
     if current.model != desired.model:
         return True
-    if current.vllm != desired.vllm:
-        return True
-    # Ollama-specific fields
-    if not current.vllm:
-        return (
-            current.num_parallel != desired.num_parallel
-            or current.context_length != desired.context_length
-            or current.kv_cache_type != desired.kv_cache_type
-            or current.flash_attention != desired.flash_attention
-            or current.gpu_devices != desired.gpu_devices
-            or current.keep_alive != desired.keep_alive
-        )
     # vLLM: only compare fields that require a process restart
     cv = current.vllm_config
     dv = desired.vllm_config
@@ -232,23 +213,21 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
 def _create_handle(
     lane_id: str,
     port: int,
-    global_config: OllamaConfig,
+    global_config: WorkerConfig,
     vllm_engine_config: VllmEngineConfig,
     lane_config: LaneConfig,
     model_profiles: ModelProfileRegistry | None = None,
     per_gpu_total_mb: Callable[[], float] | None = None,
-) -> ProcessHandle:
-    """Factory: create the correct process handle based on backend type."""
-    if lane_config.vllm:
-        return VllmProcessHandle(
-            lane_id,
-            port,
-            global_config,
-            vllm_engine_config,
-            model_profiles=model_profiles,
-            per_gpu_total_mb=per_gpu_total_mb,
-        )
-    return OllamaProcessHandle(lane_id, port, global_config)
+) -> VllmProcessHandle:
+    """Create the vLLM process handle for a lane."""
+    return VllmProcessHandle(
+        lane_id,
+        port,
+        global_config,
+        vllm_engine_config,
+        model_profiles=model_profiles,
+        per_gpu_total_mb=per_gpu_total_mb,
+    )
 
 
 class _ApplyAbort(Exception):
@@ -263,11 +242,11 @@ class LaneNotServingError(RuntimeError):
 
 
 class LaneManager:
-    """Manages a pool of process handles (Ollama or vLLM), one per model lane."""
+    """Manages a pool of vLLM process handles, one per model lane."""
 
     def __init__(
         self,
-        global_config: OllamaConfig,
+        global_config: WorkerConfig,
         vllm_engine_config: VllmEngineConfig | None = None,
         lane_port_start: int = _DEFAULT_PORT_START,
         lane_port_end: int = _DEFAULT_PORT_END,
@@ -524,13 +503,7 @@ class LaneManager:
                         try:
                             await self._restart_lane_unlocked(lid, desired_lc)
                             restarted_ids.append(lid)
-                            if desired_lc.vllm:
-                                details = f"restart: backend=vllm, ctx={desired_lc.context_length}"
-                            else:
-                                details = (
-                                    f"restart: num_parallel={desired_lc.num_parallel}, "
-                                    f"ctx={desired_lc.context_length}"
-                                )
+                            details = f"restart: backend=vllm, ctx={desired_lc.context_length}"
                             actions.append(
                                 LaneAction(
                                     action="reconfigured",
@@ -590,7 +563,7 @@ class LaneManager:
                                     exc_info=True,
                                 )
                         elif elc is not None:
-                            # Lane lacks sleep-mode support (Ollama, or vLLM with
+                            # Lane lacks sleep-mode support (vLLM with
                             # enable_sleep_mode=False). It will continue to hold
                             # its full VRAM allocation while the new lane spawns,
                             # so the new spawn may OOM if total fleet VRAM is
@@ -614,10 +587,7 @@ class LaneManager:
                             await self._add_lane_unlocked(lid, lc)
                             added_ids.append(lid)
                             port = self._port_alloc.get_port(lid)
-                            if lc.vllm:
-                                details = f"port={port}, continuous_batching=true"
-                            else:
-                                details = f"port={port}, num_parallel={lc.num_parallel}"
+                            details = f"port={port}, continuous_batching=true"
                             actions.append(
                                 LaneAction(
                                     action="added",
@@ -827,8 +797,8 @@ class LaneManager:
             if handle is None:
                 raise KeyError(f"Lane '{lane_id}' not found")
             lc = handle.lane_config
-            if lc is None or not lc.vllm:
-                raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
+            if lc is None:
+                raise ValueError(f"Lane '{lane_id}' has no lane config")
             # Final interlock closing the drain gap: a request may have been
             # admitted between the drain loop's last (lock-free) check and here.
             # self._lock is held continuously from this point through
@@ -871,8 +841,8 @@ class LaneManager:
             if handle is None:
                 raise KeyError(f"Lane '{lane_id}' not found")
             lc = handle.lane_config
-            if lc is None or not lc.vllm:
-                raise ValueError(f"Lane '{lane_id}' is not a vLLM lane")
+            if lc is None:
+                raise ValueError(f"Lane '{lane_id}' has no lane config")
             try:
                 await handle.wake_up()
             except Exception as exc:
@@ -1300,7 +1270,7 @@ class LaneManager:
         last so it cannot be re-enabled by a per-model override or by what the
         Logos server sends.
         """
-        if not lane_config.vllm or lane_config.vllm_config is None:
+        if lane_config.vllm_config is None:
             return lane_config
         overrides = self._vllm_engine_config.model_overrides.get(lane_config.model) or {}
         disable_sleep = self._vllm_engine_config.disable_sleep_mode
@@ -1356,7 +1326,7 @@ class LaneManager:
           "always use all GPUs" approach while still preventing guaranteed
           OOM failures.
         """
-        if not lane_config.vllm or lane_config.vllm_config is None:
+        if lane_config.vllm_config is None:
             return lane_config
         vc = lane_config.vllm_config
         gpu_count = self._gpu_device_count()
@@ -1518,12 +1488,6 @@ class LaneManager:
         if profile is None:
             return 0.0
 
-        if not lane_config.vllm:
-            if profile.loaded_vram_mb and profile.loaded_vram_mb > 0:
-                return float(profile.loaded_vram_mb)
-            estimated = profile.estimate_vram_mb()
-            return float(estimated) if estimated > 0 else 0.0
-
         base_mb = float(profile.base_residency_mb or profile.estimate_base_residency_mb(lane_config.model) or 0.0)
 
         # Calibrated base_residency_mb already includes KV (measured under the
@@ -1634,7 +1598,7 @@ class LaneManager:
           toward the most free VRAM (spread, not best-fit packing: a GPU
           whose only occupants are sleeping lanes is treated as empty).
         """
-        if not lane_config.vllm or lane_config.vllm_config is None:
+        if lane_config.vllm_config is None:
             return lane_config
         if lane_config.gpu_devices:
             return lane_config
@@ -1755,7 +1719,7 @@ class LaneManager:
                     s = s.strip()
                     if s.isdigit():
                         multi_gpu_indices.add(int(s))
-            if lc is None or not lc.vllm or not lc.gpu_devices:
+            if lc is None or not lc.gpu_devices:
                 continue
             try:
                 if h.status().state != ProcessState.RUNNING:
@@ -1841,8 +1805,6 @@ class LaneManager:
         planner's own retry loop handles any remaining race.
         """
         if self._gpu_force_poll is None or self._gpu_snapshot is None:
-            return
-        if not lane_config.vllm:
             return
 
         total_needed_mb = self._estimate_lane_vram_mb(lane_config)
@@ -1938,7 +1900,7 @@ class LaneManager:
             raise ValueError(f"MAX_LANES limit reached ({self._max_lanes})")
         # Ensure model is in RAM cache if available
         hf_home_override: str | None = None
-        if self._model_cache is not None and getattr(self._model_cache, "enabled", False) and lane_config.vllm:
+        if self._model_cache is not None and getattr(self._model_cache, "enabled", False):
             # Startup pre-population runs in the background — if the model
             # is already being copied (or queued behind others), bump it to
             # the front and block this lane add until the copy finishes.
@@ -2036,9 +1998,8 @@ class LaneManager:
             port=port,
         )
         logger.info(
-            "Restart '%s': stopping old %s process on port %d",
+            "Restart '%s': stopping old vLLM process on port %d",
             lane_id,
-            "vllm" if (old_config and old_config.vllm) else "ollama",
             port,
         )
 
@@ -2070,9 +2031,8 @@ class LaneManager:
             port=port,
         )
         logger.info(
-            "Restart '%s': spawning new %s process on port %d",
+            "Restart '%s': spawning new vLLM process on port %d",
             lane_id,
-            "vllm" if new_config.vllm else "ollama",
             port,
         )
 
@@ -2388,8 +2348,6 @@ class LaneManager:
         now = asyncio.get_running_loop().time()
         for status in statuses:
             lid = status.lane_id
-            if not status.vllm:
-                continue
             metrics = status.backend_metrics or {}
             gen_tokens = metrics.get("generation_tokens_total")
             prompt_tokens = metrics.get("prompt_tokens_total")
@@ -2596,11 +2554,11 @@ class LaneManager:
         vram = float(status.effective_vram_mb or 0.0)
         if vram <= 0:
             return
-        engine = "vllm" if status.vllm else "ollama"
+        engine = "vllm"
         observed_gpu_memory_utilization = None
         tensor_parallel_size = None
         lane_config = status.lane_config
-        if status.vllm and lane_config is not None and lane_config.vllm_config is not None:
+        if lane_config is not None and lane_config.vllm_config is not None:
             if lane_config.vllm_config.gpu_memory_utilization is not None:
                 observed_gpu_memory_utilization = float(lane_config.vllm_config.gpu_memory_utilization)
             tensor_parallel_size = int(lane_config.vllm_config.tensor_parallel_size)
@@ -2614,8 +2572,7 @@ class LaneManager:
         if status.runtime_state in ("loaded", "running"):
             kv_cache_sent_mb = 0.0
             if (
-                status.vllm
-                and lane_config is not None
+                lane_config is not None
                 and lane_config.vllm_config is not None
                 and lane_config.vllm_config.kv_cache_memory_bytes
             ):
@@ -2639,8 +2596,7 @@ class LaneManager:
                 _profile, tensor_parallel_size
             )
             if (
-                status.vllm
-                and observed_gpu_memory_utilization is not None
+                observed_gpu_memory_utilization is not None
                 and previous_state not in {"loaded", "running", "sleeping"}
                 and not _tp_conflicts
             ):
@@ -2711,7 +2667,6 @@ class LaneManager:
             host_ram_source = source
 
         effective_gpu_devices = ""
-        is_vllm = False
         routing_url = f"http://127.0.0.1:{handle.port}"
         inference_endpoint = "/v1/chat/completions"
         sleep_mode_enabled = False
@@ -2720,39 +2675,21 @@ class LaneManager:
         model = ""
         num_parallel = 0
         context_length = 0
-        keep_alive = ""
-        kv_cache_type = ""
         flash_attention = False
         gpu_devices = ""
 
         if lc is not None:
-            is_vllm = lc.vllm
             model = lc.model
-            if lc.vllm:
-                # Use vLLM-reported max concurrency (KV-budget-derived) when available.
-                vllm_max = getattr(handle, "max_concurrency", None)
-                num_parallel = vllm_max if vllm_max and vllm_max > 0 else 0
-            else:
-                num_parallel = lc.num_parallel
+            # Use vLLM-reported max concurrency (KV-budget-derived) when available.
+            vllm_max = getattr(handle, "max_concurrency", None)
+            num_parallel = vllm_max if vllm_max and vllm_max > 0 else 0
             context_length = lc.context_length
-            keep_alive = lc.keep_alive
-            kv_cache_type = lc.kv_cache_type
             flash_attention = lc.flash_attention
             gpu_devices = lc.gpu_devices
             effective_gpu_devices = lc.gpu_devices or self._global_config.gpu_devices
-            inference_endpoint = _routing_inference_endpoint(lc.vllm)
-            if lc.vllm:
-                sleep_mode_enabled = bool(lc.vllm_config and lc.vllm_config.enable_sleep_mode)
-                backend_metrics = lc.vllm_config.model_dump(mode="json") if lc.vllm_config else {}
-            else:
-                backend_metrics = {
-                    "engine": "ollama",
-                    "num_parallel": lc.num_parallel,
-                    "keep_alive": lc.keep_alive,
-                    "kv_cache_type": lc.kv_cache_type,
-                    "flash_attention": lc.flash_attention,
-                    "context_length": lc.context_length,
-                }
+            if lc.vllm_config:
+                sleep_mode_enabled = bool(lc.vllm_config.enable_sleep_mode)
+                backend_metrics = lc.vllm_config.model_dump(mode="json")
         if hasattr(handle, "get_backend_metrics"):
             try:
                 backend_metrics.update(await handle.get_backend_metrics())
@@ -2763,7 +2700,7 @@ class LaneManager:
                     exc_info=True,
                 )
 
-        if lc is not None and lc.vllm:
+        if lc is not None:
             if not sleep_mode_enabled:
                 sleep_state = "unsupported"
             elif ps.state != ProcessState.RUNNING:
@@ -2785,7 +2722,7 @@ class LaneManager:
         starting_deadline = self._starting_deadlines.get(handle.lane_id, 0.0)
         now = asyncio.get_running_loop().time()
         if ps.state == ProcessState.RUNNING:
-            if lc is not None and lc.vllm and sleep_mode_enabled and sleep_state == "sleeping":
+            if lc is not None and sleep_mode_enabled and sleep_state == "sleeping":
                 runtime_state = "sleeping"
             elif not loaded_models and now < starting_deadline:
                 runtime_state = "starting"
@@ -2818,10 +2755,9 @@ class LaneManager:
 
         return LaneStatus(
             lane_id=handle.lane_id,
-            lane_uid=f"{'vllm' if is_vllm else 'ollama'}:{handle.lane_id}",
+            lane_uid=f"vllm:{handle.lane_id}",
             model=model,
             port=handle.port,
-            vllm=is_vllm,
             is_static=handle.lane_id in self._static_lane_ids,
             process=ps,
             runtime_state=runtime_state,
@@ -2829,8 +2765,6 @@ class LaneManager:
             inference_endpoint=inference_endpoint,
             num_parallel=num_parallel,
             context_length=context_length,
-            keep_alive=keep_alive,
-            kv_cache_type=kv_cache_type,
             flash_attention=flash_attention,
             gpu_devices=gpu_devices,
             effective_gpu_devices=effective_gpu_devices,

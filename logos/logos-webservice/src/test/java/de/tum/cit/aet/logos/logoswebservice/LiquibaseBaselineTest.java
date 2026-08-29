@@ -57,6 +57,20 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration015_providerSnapshotsTableRenamed() {
+        assertThat(tableExists("provider_snapshots")).isTrue();
+        assertThat(tableExists("ollama_provider_snapshots")).isFalse();
+    }
+
+    @Test
+    void migration016_allowsStartWithoutOllamaTypedProviders() {
+        // The 016 gate must be a no-op on a clean schema (the provider_type
+        // enum makes 'ollama' rows impossible) — reaching this test already
+        // proves the changelog ran to the end.
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM providers", Integer.class)).isZero();
+    }
+
+    @Test
     void migration003_backfillsKeyForKeylessMembership() {
         // A current membership with no developer key for that team (the legacy
         // logos_admin case) must receive exactly one active developer key whose

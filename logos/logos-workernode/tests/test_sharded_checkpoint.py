@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from logos_worker_node import sharded_checkpoint as sc
-from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig, VllmEngineConfig
+from logos_worker_node.models import LaneConfig, VllmConfig, VllmEngineConfig, WorkerConfig
 from logos_worker_node.vllm_process import VllmProcessHandle
 
 
@@ -98,7 +98,7 @@ def _lane(tp: int, tmp_path: Path) -> LaneConfig:
 
 
 def test_build_cmd_uses_sharded_dir(tmp_path: Path, monkeypatch) -> None:
-    handle = VllmProcessHandle("lane-x", 19010, OllamaConfig(), VllmEngineConfig())
+    handle = VllmProcessHandle("lane-x", 19010, WorkerConfig(), VllmEngineConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: ["/tmp/vllm"])
     lane = _lane(2, tmp_path)
     handle._sharded_model_dir = "/cache/.sharded_cache/org__Model-A/tp2"
@@ -114,7 +114,7 @@ def test_build_cmd_uses_sharded_dir(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_build_cmd_full_checkpoint_when_not_sharded(tmp_path: Path, monkeypatch) -> None:
-    handle = VllmProcessHandle("lane-y", 19011, OllamaConfig(), VllmEngineConfig())
+    handle = VllmProcessHandle("lane-y", 19011, WorkerConfig(), VllmEngineConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: ["/tmp/vllm"])
     lane = _lane(2, tmp_path)
     cmd = handle._build_cmd(lane)
@@ -123,7 +123,7 @@ def test_build_cmd_full_checkpoint_when_not_sharded(tmp_path: Path, monkeypatch)
 
 
 def test_maybe_prepare_uses_existing_checkpoint(tmp_path: Path) -> None:
-    gc = OllamaConfig(models_path=str(tmp_path))
+    gc = WorkerConfig(models_path=str(tmp_path))
     handle = VllmProcessHandle("lane-z", 19012, gc, VllmEngineConfig())
     lane = _lane(2, tmp_path)
     ready = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
@@ -135,7 +135,7 @@ def test_maybe_prepare_uses_existing_checkpoint(tmp_path: Path) -> None:
 
 
 def test_maybe_prepare_skips_when_disabled(tmp_path: Path) -> None:
-    gc = OllamaConfig(models_path=str(tmp_path))
+    gc = WorkerConfig(models_path=str(tmp_path))
     handle = VllmProcessHandle("lane-d", 19013, gc, VllmEngineConfig(sharded_checkpoint_enabled=False))
     lane = _lane(2, tmp_path)
     ready = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
@@ -147,7 +147,7 @@ def test_maybe_prepare_skips_when_disabled(tmp_path: Path) -> None:
 
 
 def test_maybe_prepare_tp1_noop(tmp_path: Path) -> None:
-    gc = OllamaConfig(models_path=str(tmp_path))
+    gc = WorkerConfig(models_path=str(tmp_path))
     handle = VllmProcessHandle("lane-1", 19014, gc, VllmEngineConfig())
     lane = _lane(1, tmp_path)
     asyncio.run(handle._maybe_prepare_sharded_checkpoint(lane))
@@ -155,7 +155,7 @@ def test_maybe_prepare_tp1_noop(tmp_path: Path) -> None:
 
 
 def test_maybe_prepare_convert_on_spawn_disabled(tmp_path: Path, monkeypatch) -> None:
-    gc = OllamaConfig(models_path=str(tmp_path))
+    gc = WorkerConfig(models_path=str(tmp_path))
     handle = VllmProcessHandle("lane-c", 19015, gc, VllmEngineConfig(sharded_checkpoint_convert_on_spawn=False))
     lane = _lane(2, tmp_path)
 
@@ -196,7 +196,7 @@ def test_invalidate_is_a_noop_when_nothing_is_cached(tmp_path: Path) -> None:
 
 
 def test_a_rejected_checkpoint_is_detected_from_the_logs(tmp_path: Path) -> None:
-    handle = VllmProcessHandle("lane-s", 19020, OllamaConfig(), VllmEngineConfig())
+    handle = VllmProcessHandle("lane-s", 19020, WorkerConfig(), VllmEngineConfig())
     handle._recent_logs = [
         'File ".../vllm/model_executor/model_loader/sharded_state_loader.py", line 154, in load_weights',
         "RuntimeError: The size of tensor a (1536) must match the size of tensor b (6144)",
@@ -210,7 +210,7 @@ def test_a_rejected_checkpoint_is_detected_from_the_logs(tmp_path: Path) -> None
 
 
 def test_an_unrelated_startup_failure_is_not_blamed_on_the_checkpoint() -> None:
-    handle = VllmProcessHandle("lane-s", 19021, OllamaConfig(), VllmEngineConfig())
+    handle = VllmProcessHandle("lane-s", 19021, WorkerConfig(), VllmEngineConfig())
     handle._sharded_model_dir = "/cache/.sharded_cache/org__Model-A/tp2"
     handle._recent_logs = ["torch.OutOfMemoryError: CUDA out of memory."]
 
@@ -221,7 +221,7 @@ def test_spawn_retries_from_the_full_checkpoint_after_a_rejection(tmp_path: Path
     """The lane must come up on the full checkpoint instead of failing. Without
     this a rejected conversion takes the model down for good: a model pinned
     awake (enable_sleep_mode: false) has no other path back up."""
-    gc = OllamaConfig(models_path=str(tmp_path))
+    gc = WorkerConfig(models_path=str(tmp_path))
     handle = VllmProcessHandle("lane-r", 19022, gc, VllmEngineConfig())
     lane = _lane(2, tmp_path)
     target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
@@ -251,7 +251,7 @@ def test_spawn_retries_from_the_full_checkpoint_after_a_rejection(tmp_path: Path
 def test_spawn_does_not_retry_twice_for_the_same_reason(tmp_path: Path, monkeypatch) -> None:
     """One retry. A failure that survives serving the full checkpoint is a real
     fault and has to reach the caller."""
-    gc = OllamaConfig(models_path=str(tmp_path))
+    gc = WorkerConfig(models_path=str(tmp_path))
     handle = VllmProcessHandle("lane-r2", 19023, gc, VllmEngineConfig())
     lane = _lane(2, tmp_path)
     target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)

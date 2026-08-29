@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import enum
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
 _DEFAULT_LANE_CONTEXT_LENGTH = 4096
@@ -31,28 +34,6 @@ def _gpu_device_count(value: str) -> int | None:
     if normalized in {"", "all", "none"}:
         return None
     return len(normalized.split(","))
-
-
-class OllamaConfig(BaseModel):
-    """Shared Ollama engine defaults for all non-vLLM lanes."""
-
-    ollama_binary: str = "/usr/local/bin/ollama"
-    gpu_devices: str = "all"
-    max_queue: int = 512
-    sched_spread: bool = False
-    multiuser_cache: bool = False
-    gpu_overhead_bytes: int = 0
-    load_timeout: str = ""
-    origins: list[str] = Field(default_factory=list)
-    noprune: bool = False
-    llm_library: str = ""
-    models_path: str = "/usr/share/ollama/.ollama/models"
-    env_overrides: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("gpu_devices")
-    @classmethod
-    def _validate_gpu_devices(cls, value: str) -> str:
-        return _normalize_gpu_devices(value)
 
 
 class VllmConfig(BaseModel):
@@ -341,7 +322,6 @@ class VllmEngineConfig(BaseModel):
 class EnginesConfig(BaseModel):
     """Shared engine defaults."""
 
-    ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     vllm: VllmEngineConfig = Field(default_factory=VllmEngineConfig)
 
 
@@ -367,13 +347,29 @@ class WorkerConfig(BaseModel):
             "(e.g. air-gapped hosts that pre-stage weights out of band)."
         ),
     )
+    models_path: str = Field(
+        default="/usr/share/ollama/.ollama/models",
+        description=(
+            "Persistent model store directory (the deployment's model volume). "
+            "The container path keeps its historical name; the directory now "
+            "holds the HuggingFace model store that vLLM lanes load from. "
+            "Also the default for cache_path when that field is empty."
+        ),
+    )
+    gpu_devices: str = Field(
+        default="all",
+        description=(
+            "Worker-wide default GPU placement ('all', 'none', or a "
+            "comma-separated index list like '0,1'). A lane's own "
+            "gpu_devices overrides this when set."
+        ),
+    )
     cache_path: str = Field(
         default="",
         description=(
             "Persistent root directory for HF model weights, vLLM compilation "
             "cache, torch inductor cache, and FlashInfer JIT kernels. Empty "
-            "(default) → fall back to engines.ollama.models_path so existing "
-            "ollama-aware deployments keep working unchanged. The env var "
+            "(default) → fall back to worker.models_path. The env var "
             "LOGOS_WORKER_CACHE_ROOT, when set, takes precedence over this "
             "field."
         ),
@@ -409,6 +405,11 @@ class WorkerConfig(BaseModel):
             "faster GPU receives proportionally more requests."
         ),
     )
+
+    @field_validator("gpu_devices")
+    @classmethod
+    def _validate_gpu_devices(cls, value: str) -> str:
+        return _normalize_gpu_devices(value)
 
 
 class LogosConfig(BaseModel):
@@ -476,11 +477,9 @@ class LaneConfig(BaseModel):
 
     lane_id: str | None = None
     model: str
-    vllm: bool = False
+    vllm: bool = True
     num_parallel: int = Field(default=20, ge=1)
     context_length: int = Field(default=_DEFAULT_LANE_CONTEXT_LENGTH, ge=128)
-    keep_alive: str = "2m"
-    kv_cache_type: str = "q8_0"
     flash_attention: bool = True
     gpu_devices: str = ""
     vllm_config: VllmConfig | None = None
@@ -490,13 +489,36 @@ class LaneConfig(BaseModel):
     def _validate_gpu_devices(cls, value: str) -> str:
         return _normalize_gpu_devices(value)
 
-    @model_validator(mode="after")
-    def _validate_backend_specific_fields(self) -> LaneConfig:
-        if not self.vllm:
-            if self.vllm_config is not None:
-                raise ValueError("Remove vllm_config or set vllm=true.")
-            return self
+    @field_validator("vllm")
+    @classmethod
+    def _validate_vllm(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError(
+                "vllm=false is no longer supported: the worker only runs vLLM lanes, "
+                "the Ollama engine was removed. Remove the field (the default is true) "
+                "or set it to true."
+            )
+        return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_ollama_lane_fields(cls, values: Any) -> Any:
+        """Config keys that belonged to the removed Ollama engine.
+
+        extra='forbid' would already refuse them, but with a generic
+        'extra fields not permitted' message — say what they were instead.
+        """
+        if isinstance(values, dict):
+            removed = [key for key in ("keep_alive", "kv_cache_type") if key in values]
+            if removed:
+                raise ValueError(
+                    f"Lane field(s) {removed} belonged to the removed Ollama engine "
+                    "and are no longer supported. Remove them from the lane config."
+                )
+        return values
+
+    @model_validator(mode="after")
+    def _validate_vllm_fields(self) -> LaneConfig:
         if self.vllm_config is None:
             self.vllm_config = VllmConfig()
 
@@ -524,6 +546,45 @@ class AppConfig(BaseModel):
         "incorrect or unavailable HF metadata. Keys are model names; values are "
         "dicts with fields like base_residency_mb, kv_per_token_bytes, etc.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_ollama_engine_fields(cls, values: Any) -> Any:
+        """Carry ``engines.ollama.models_path``/``gpu_devices`` into ``worker.*``.
+
+        Existing deployment configs still set these keys under the removed
+        Ollama engine section. The worker-wide values they held are now
+        ``worker.models_path`` and ``worker.gpu_devices`` — move them instead
+        of dropping them silently. Fields the worker never consumed from the
+        Ollama section (queue/sleep/cache tuning) are gone on purpose.
+        """
+        if not isinstance(values, dict):
+            return values
+        engines = values.get("engines")
+        if not isinstance(engines, dict):
+            return values
+        ollama = engines.get("ollama")
+        if not isinstance(ollama, dict):
+            return values
+        worker = values.get("worker")
+        if not isinstance(worker, dict):
+            worker = {}
+        migrated = []
+        for old_key, new_key in (
+            ("models_path", "models_path"),
+            ("gpu_devices", "gpu_devices"),
+        ):
+            if old_key in ollama and new_key not in worker:
+                worker[new_key] = ollama[old_key]
+                migrated.append(f"engines.ollama.{old_key} -> worker.{new_key}")
+        if migrated:
+            values["worker"] = worker
+            logger.warning(
+                "Migrating legacy Ollama config keys: %s. Move them to the [worker] "
+                "section and drop the [engines.ollama] section from your config file.",
+                ", ".join(migrated),
+            )
+        return values
 
 
 def model_can_sleep(cfg: AppConfig, model_name: str) -> bool:
@@ -638,7 +699,7 @@ class LaneStatus(BaseModel):
     lane_uid: str = ""
     model: str
     port: int
-    vllm: bool = False
+    vllm: bool = True
     is_static: bool = False
     process: ProcessStatus
     runtime_state: Literal["cold", "starting", "loaded", "running", "sleeping", "stopped", "error"]
@@ -646,8 +707,6 @@ class LaneStatus(BaseModel):
     inference_endpoint: str = "/v1/chat/completions"
     num_parallel: int = 0
     context_length: int = 0
-    keep_alive: str = ""
-    kv_cache_type: str = ""
     flash_attention: bool = False
     gpu_devices: str = ""
     effective_gpu_devices: str = ""

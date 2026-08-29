@@ -105,15 +105,13 @@ export type DeviceInfo = {
 // LaneSignalData from logos-ui-old/components/statistics/types.ts
 export type LaneSignalData = {
   model: string;
-  vllm: boolean;
   runtime_state: string; // "running"|"loaded"|"sleeping"|"starting"|"cold"|"stopped"|"error"
   sleep_state: string | null;
   gpu_devices: string | null;
   effective_gpu_devices: string | null;
   /**
-   * Worker-reported concurrency. vLLM lanes: full-context KV budget parsed
-   * from the startup log (guaranteed minimum; 0 until the log is parsed).
-   * Ollama lanes: static slot count (legacy — the UI ignores it).
+   * Worker-reported concurrency: the lane's full-context KV budget parsed
+   * from the vLLM startup log (guaranteed minimum; 0 until the log is parsed).
    */
   num_parallel: number | null;
   active_requests: number;

@@ -17,7 +17,6 @@ def normalize_provider_type(provider_type: Optional[str]) -> str:
     if normalized in {
         "node",
         "node_controller",
-        "ollama",
         "logos_worker_node",
         "logos-workernode",
         "logosnode",

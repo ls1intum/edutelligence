@@ -10,7 +10,7 @@ def _make_lane(
     model="llama3.3:latest",
     runtime_state="loaded",
     sleep_state="unsupported",
-    vllm=False,
+    vllm=True,
     active_requests=0,
     num_parallel=4,
     effective_vram_mb=8192.0,
@@ -87,8 +87,8 @@ def _build_facade(registry, model_id, model_name, monkeypatch, provider_id=12):
 # ---------------------------------------------------------------------------
 
 
-def test_scheduler_view_loaded_vllm_and_sleeping_ollama(monkeypatch):
-    """One loaded vLLM lane + one sleeping Ollama lane for same model
+def test_scheduler_view_loaded_and_sleeping_lanes(monkeypatch):
+    """One loaded lane + one sleeping lane for the same model
     → is_loaded=True, best_lane_state='loaded'."""
     lanes = [
         _make_lane(
@@ -108,11 +108,10 @@ def test_scheduler_view_loaded_vllm_and_sleeping_ollama(monkeypatch):
             },
         ),
         _make_lane(
-            lane_id="ollama-1",
+            lane_id="sleeping-1",
             model="llama3.3:latest",
             runtime_state="sleeping",
             sleep_state="sleeping",
-            vllm=False,
             active_requests=0,
             num_parallel=4,
             effective_vram_mb=2000.0,
@@ -134,16 +133,14 @@ def test_scheduler_view_loaded_vllm_and_sleeping_ollama(monkeypatch):
 
     # Verify lane signals
     vllm_lane = next(l for l in view.lanes if l.lane_id == "vllm-1")
-    assert vllm_lane.is_vllm is True
     assert vllm_lane.requests_running == 2.0
     assert vllm_lane.gpu_cache_usage_percent == 45.0
     assert vllm_lane.gpu_memory_utilization == 0.7
     assert vllm_lane.tensor_parallel_size == 2
 
-    ollama_lane = next(l for l in view.lanes if l.lane_id == "ollama-1")
-    assert ollama_lane.is_vllm is False
-    assert ollama_lane.requests_running == 0.0  # Ollama uses active_requests for requests_running
-    assert ollama_lane.gpu_cache_usage_percent is None
+    sleeping_lane = next(l for l in view.lanes if l.lane_id == "sleeping-1")
+    assert sleeping_lane.requests_running == 0.0  # no running count reported → 0.0
+    assert sleeping_lane.gpu_cache_usage_percent is None
 
 
 def test_scheduler_view_all_cold_lanes(monkeypatch):
@@ -330,7 +327,7 @@ def test_get_model_profiles_reads_from_snapshot(monkeypatch):
             "disk_size_bytes": 4_000_000_000,
             "base_residency_mb": 4300.0,
             "kv_budget_mb": 3892.0,
-            "engine": "ollama",
+            "engine": "vllm",
             "measurement_count": 5,
             "last_measured_epoch": 1710000000.0,
         },
@@ -361,7 +358,7 @@ def test_get_model_profiles_reads_from_snapshot(monkeypatch):
     assert llama.disk_size_bytes == 4_000_000_000
     assert llama.base_residency_mb == 4300.0
     assert llama.kv_budget_mb == 3892.0
-    assert llama.engine == "ollama"
+    assert llama.engine == "vllm"
     assert llama.measurement_count == 5
 
     qwen = profiles["qwen3:8b"]
@@ -506,16 +503,17 @@ def test_vllm_estimate_vram_prefers_base_residency():
     assert estimate == 5500.0  # Should prefer base_residency for vLLM
 
 
-def test_ollama_estimate_vram_uses_loaded():
-    """For Ollama (non-vLLM), estimate_vram_mb should return loaded_vram_mb as before."""
+def test_legacy_profile_estimate_vram_uses_loaded():
+    """For a legacy profile without an engine value, estimate_vram_mb should
+    return loaded_vram_mb as before."""
     profile = ModelProfile(
         model_name="gemma2:2b",
         loaded_vram_mb=2048.0,
         base_residency_mb=1700.0,
-        engine=None,  # Ollama
+        engine=None,  # legacy profile from before the field existed
     )
     estimate = profile.estimate_vram_mb()
-    assert estimate == 2048.0  # Should use loaded_vram_mb for non-vLLM
+    assert estimate == 2048.0  # Should use loaded_vram_mb when no engine is recorded
 
 
 def test_vllm_estimate_vram_falls_back_to_loaded_when_no_base():

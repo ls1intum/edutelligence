@@ -202,7 +202,7 @@ def _check_storage() -> SensorResult:
     probed: list[Path] = [p for p in _STORAGE_PATHS_TO_PROBE if str(p) and p.exists()]
     if not probed:
         # No HF cache configured on this host — not a failure. Workers
-        # without a model cache (e.g. ollama-only) are healthy.
+        # without a model cache are healthy.
         return SensorResult(state="ok", detail="no HF cache path configured")
 
     target = probed[0]

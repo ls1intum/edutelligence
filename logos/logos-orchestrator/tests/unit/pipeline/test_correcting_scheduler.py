@@ -36,7 +36,6 @@ def _make_view(
                 model_name=model_name,
                 runtime_state=best_lane_state,
                 sleep_state="awake" if is_loaded else "unsupported",
-                is_vllm=False,
                 active_requests=1 if is_loaded else 0,
                 queue_waiting=aggregate_queue_waiting,
                 requests_running=1.0 if is_loaded else 0.0,

@@ -1403,13 +1403,12 @@ class CapacityPlanner:
         # Use the same reclaim engine as wake — it checks aggregate + per-GPU
         # VRAM with ledger awareness, and returns True immediately if sufficient.
         # If not, it runs the full reclaim loop (sleep loaded lanes, drain busy
-        # lanes, stop non-vLLM lanes) with provider capacity lock serialization.
+        # lanes, stop other lanes) with provider capacity lock serialization.
         synthetic_target = LaneSchedulerSignals(
             lane_id=lane_id,
             model_name=model_name,
             runtime_state="cold",
             sleep_state="unsupported",
-            is_vllm=profile.engine == "vllm" if profile else False,
             active_requests=0,
             queue_waiting=0.0,
             requests_running=0.0,
@@ -1666,7 +1665,7 @@ class CapacityPlanner:
             # Skip awake vLLM lanes — these are reclaimed via sleep (which
             # is allowed even within cooldown) rather than direct stop.
             # After sleeping, the lane re-enters as a sleeping stop candidate.
-            if lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
+            if lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
                 continue
 
             key = self._lane_key(provider_id, lane.lane_id)
@@ -1681,7 +1680,7 @@ class CapacityPlanner:
             current_vram = float(lane.effective_vram_mb or 0.0)
             if current_vram <= 0 and profile is not None:
                 current_vram = self._estimate_model_loaded_vram(profile)
-            if lane.is_vllm and lane.runtime_state == "sleeping" and profile is not None:
+            if lane.runtime_state == "sleeping" and profile is not None:
                 base_residency = float(getattr(profile, "base_residency_mb", 0) or 0)
                 if base_residency > current_vram:
                     current_vram = base_residency
@@ -1741,7 +1740,7 @@ class CapacityPlanner:
                 continue
             if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
                 continue
-            if not (lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake"):
+            if not (lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake"):
                 continue
 
             # Check if this lane is actually blocked by tenure
@@ -2233,7 +2232,7 @@ class CapacityPlanner:
             tp = max(len(lane_gpus), 1)
 
             # Prefer sleep (less disruptive); fall back to stop
-            if lane.is_vllm and lane.runtime_state in ("loaded", "running") and lane.sleep_state == "awake":
+            if lane.runtime_state in ("loaded", "running") and lane.sleep_state == "awake":
                 # Sleep_l1 is reversible but the scheduler needs time to
                 # finish dispatching any request it routed in the moment
                 # before the cycle decided to sleep. LANE_MIN_TENURE_SECONDS
@@ -2329,7 +2328,7 @@ class CapacityPlanner:
                 if residual_mb <= 0 and profile:
                     residual_mb = float(profile.sleeping_residual_mb or 0.0)
                 freed_total = residual_mb
-            elif lane.is_vllm and lane.runtime_state in ("loaded", "running") and lane.sleep_state == "unsupported":
+            elif lane.runtime_state in ("loaded", "running") and lane.sleep_state == "unsupported":
                 # Lane was started with enable_sleep_mode=False (static
                 # operator config). Sleep is impossible — the only way to
                 # reclaim its VRAM is a destructive cold stop. Apply the
@@ -2704,10 +2703,6 @@ class CapacityPlanner:
             if lane.runtime_state in ("stopped", "error", "cold"):
                 continue
 
-            # Only vLLM lanes support sleep
-            if not lane.is_vllm:
-                continue
-
             # Sleep L2 after 10 minutes of observed L1 sleep
             if (
                 lane.sleep_state == "sleeping"
@@ -2944,8 +2939,7 @@ class CapacityPlanner:
             # Eviction will be needed. Pick the cheapest available victim type:
             # sleep_l1 if any non-target lane can sleep, otherwise stop.
             other_can_sleep = any(
-                lane.is_vllm
-                and lane.runtime_state in ("loaded", "running")
+                lane.runtime_state in ("loaded", "running")
                 and lane.sleep_state == "awake"
                 and lane.model_name != model_name
                 for lane in lanes
@@ -4028,7 +4022,6 @@ class CapacityPlanner:
                 model_name=model_name,
                 runtime_state="cold",
                 sleep_state="unsupported",
-                is_vllm=True,
                 active_requests=0,
                 queue_waiting=0.0,
                 requests_running=0.0,
@@ -4050,7 +4043,6 @@ class CapacityPlanner:
                     model_name=model_name,
                     runtime_state="cold",
                     sleep_state="unsupported",
-                    is_vllm=True,
                     active_requests=0,
                     queue_waiting=0.0,
                     requests_running=0.0,
@@ -4727,7 +4719,7 @@ class CapacityPlanner:
                         # emitting sleep_l1 — otherwise the worker would raise
                         # in _ensure_sleep_mode_ready and the action fails.
                         lane_can_sleep = lane.sleep_state != "unsupported"
-                        if lane.is_vllm and sleeping_residual > 0 and lane_can_sleep:
+                        if sleeping_residual > 0 and lane_can_sleep:
                             # For vLLM lanes, ALWAYS prefer sleep over stop.
                             # Sleeping frees 14-18 GB (loaded - residual) while
                             # keeping the model warm for 2-3s wake.  Stopping
@@ -4834,7 +4826,7 @@ class CapacityPlanner:
             # Add as last-resort stop candidates (high penalty) — only chosen
             # when sleeping awake lanes can't free enough VRAM AND the model
             # has nothing pending that would benefit from the fast wake.
-            if lane.is_vllm and lane.runtime_state == "sleeping":
+            if lane.runtime_state == "sleeping":
                 pending_demand = (
                     self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) > 0
                     or self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
@@ -4855,7 +4847,7 @@ class CapacityPlanner:
                     )
                 continue
 
-            if lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
+            if lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
                 # Idle loaded vLLM lane — candidate for sleep.
                 # Tenure gate: a freshly-woken/loaded model has 0 active
                 # requests and looks "idle", but its queued requests haven't
@@ -5126,7 +5118,7 @@ class CapacityPlanner:
         """Record per-lane KV cache pressure every cycle (cheap, no actions)."""
         now = time.time()
         for lane in lanes:
-            if not lane.is_vllm or lane.gpu_cache_usage_percent is None:
+            if lane.gpu_cache_usage_percent is None:
                 continue
             if lane.runtime_state not in ("loaded", "running"):
                 continue
@@ -5166,7 +5158,7 @@ class CapacityPlanner:
         now = time.time()
 
         # Check if any lane has an emergency (bypasses interval)
-        has_emergency = any(self._is_kv_emergency(provider_id, lane.lane_id) for lane in lanes if lane.is_vllm)
+        has_emergency = any(self._is_kv_emergency(provider_id, lane.lane_id) for lane in lanes)
         if not has_emergency and (now - self._last_kv_rebalance_time) < self.KV_CACHE_REBALANCE_INTERVAL_SECONDS:
             return []
 
@@ -5190,8 +5182,6 @@ class CapacityPlanner:
         # Collect vLLM lanes with their profiles and per-lane GPU count
         vllm_lanes: list[tuple[LaneSchedulerSignals, ModelProfile, int]] = []
         for lane in lanes:
-            if not lane.is_vllm:
-                continue
             if lane.runtime_state not in ("loaded", "running", "sleeping"):
                 continue
             profile = profiles.get(lane.model_name)
