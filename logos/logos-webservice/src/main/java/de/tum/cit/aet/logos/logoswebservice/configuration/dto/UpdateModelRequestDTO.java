@@ -8,6 +8,5 @@ public record UpdateModelRequestDTO(
     Integer weightLatency,
     Integer weightAccuracy,
     Integer weightCost,
-    Integer weightQuality,
-    Integer replicas
+    Integer weightQuality
 ) {}

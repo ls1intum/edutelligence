@@ -139,7 +139,6 @@ public class ProviderService {
                 m.put("model_name", p.getModelName());
                 m.put("endpoint", p.getEndpoint() != null ? p.getEndpoint() : "");
                 m.put("api_key", p.getApiKey() != null ? p.getApiKey() : "");
-                m.put("replicas", p.getReplicas() != null ? p.getReplicas() : 1);
                 return m;
             })
             .toList();

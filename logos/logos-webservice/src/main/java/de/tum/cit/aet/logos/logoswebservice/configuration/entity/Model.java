@@ -25,15 +25,6 @@ public class Model {
     private String tags;
     private String description;
 
-    /**
-     * Desired number of lanes of this model on one worker node. Logos
-     * supports multiple deployments of the same model on a single node for
-     * extra parallelism; the capacity planner loads additional replicas up to
-     * this count. Defaults to 1 (single lane).
-     */
-    @Column(nullable = false)
-    private Integer replicas = 1;
-
     public Integer getId() { return id; }
     public String getName() { return name; }
     public Integer getWeightLatency() { return weightLatency; }
@@ -42,7 +33,6 @@ public class Model {
     public Integer getWeightQuality() { return weightQuality; }
     public String getTags() { return tags; }
     public String getDescription() { return description; }
-    public Integer getReplicas() { return replicas; }
 
     public void setName(String name) { this.name = name; }
     public void setWeightLatency(Integer w) { this.weightLatency = w; }
@@ -51,5 +41,4 @@ public class Model {
     public void setWeightQuality(Integer w) { this.weightQuality = w; }
     public void setTags(String tags) { this.tags = tags; }
     public void setDescription(String description) { this.description = description; }
-    public void setReplicas(Integer replicas) { this.replicas = replicas; }
 }

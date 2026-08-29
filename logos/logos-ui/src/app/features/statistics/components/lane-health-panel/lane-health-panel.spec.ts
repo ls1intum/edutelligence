@@ -169,10 +169,13 @@ describe('laneSleepAction', () => {
 /**
  * Which models the "Load lane" picker still offers.
  *
- * A model is loadable while its live lane count is below the replicas it
- * wants. The count must agree with the capacity planner: a stopped or error
- * lane does not satisfy the model's demand, so a model whose one lane is in
- * error may be reloaded.
+ * Every provider model is offered, loaded or not: a model that already runs
+ * lanes on the node may take one more (multiple deployments of one model per
+ * node are supported), and the worker's own VRAM is the final word on
+ * whether the copy fits. The only model withheld is one whose load was just
+ * accepted — its lane takes minutes to show up in the status stream, and
+ * offering it again would invite a second click on the very lane being
+ * brought up.
  */
 describe('lane picker loadability', () => {
   it('counts every lane except stopped and error as live', () => {
@@ -187,60 +190,46 @@ describe('lane picker loadability', () => {
     expect(countLiveLanesByModel(lanes)).toEqual(new Map([['foo', 2]]));
   });
 
-  it('keeps the single-lane behaviour when replicas is absent', () => {
-    const models = [{ model_id: 1, model_name: 'foo' }, { model_id: 2, model_name: 'bar' }];
-    const live = countLiveLanesByModel({ 'planner-foo': lane({ model: 'foo', runtime_state: 'loaded' }) });
-    expect(filterLoadableModels(models, live, null).map((m) => m.model_name)).toEqual(['bar']);
-  });
-
-  it('offers a model with extra replicas while it is short of its lanes', () => {
+  it('offers every provider model with a name', () => {
     const models = [
       { model_id: 1, model_name: 'foo' },
-      { model_id: 2, model_name: 'bar', replicas: 2 },
+      { model_id: 2, model_name: 'bar' },
+      { model_id: 3, model_name: '' },
     ];
-    const live = countLiveLanesByModel({ 'planner-bar': lane({ model: 'bar', runtime_state: 'running' }) });
-    // bar wants two lanes and has one: still loadable. foo has none of its
-    // single lane: loadable too.
-    expect(filterLoadableModels(models, live, null).map((m) => m.model_name)).toEqual([
-      'foo',
-      'bar',
-    ]);
+    expect(filterLoadableModels(models, null).map((m) => m.model_name)).toEqual(['foo', 'bar']);
   });
 
-  it('drops a model once it has its full set of replicas', () => {
+  it('keeps a model that already runs lanes offered — loading it adds another deployment', () => {
+    // bar runs one healthy and one broken lane: the broken one holds the
+    // historical id, so the planner allocates a fresh one for the next load —
+    // from the picker's side the model is simply offered, like any other.
     const models = [
-      { model_id: 2, model_name: 'bar', replicas: 2 },
-      { model_id: 3, model_name: 'baz', replicas: 3 },
+      { model_id: 1, model_name: 'foo' },
+      { model_id: 2, model_name: 'bar' },
     ];
     const live = countLiveLanesByModel({
       'planner-bar': lane({ model: 'bar', runtime_state: 'running' }),
-      'planner-bar-2': lane({ model: 'bar', runtime_state: 'loaded' }),
-      'planner-baz': lane({ model: 'baz', runtime_state: 'running' }),
-      'planner-baz-2': lane({ model: 'baz', runtime_state: 'starting' }),
+      'planner-bar-2': lane({ model: 'bar', runtime_state: 'error' }),
     });
-    expect(filterLoadableModels(models, live, null).map((m) => m.model_name)).toEqual(['baz']);
+    expect(live).toEqual(new Map([['bar', 1]]));
+    expect(filterLoadableModels(models, null).map((m) => m.model_name)).toEqual(['foo', 'bar']);
   });
 
-  it('still offers a reload when the only live lane fell into error', () => {
-    // The broken lane holds replica 1's id, so the planner allocates the new
-    // lane a fresh id — but from the picker's side the model is short of its
-    // demand and must stay selectable.
-    const models = [{ model_id: 1, model_name: 'foo' }];
-    const live = countLiveLanesByModel({ 'planner-foo': lane({ model: 'foo', runtime_state: 'error' }) });
-    expect(filterLoadableModels(models, live, null).map((m) => m.model_name)).toEqual(['foo']);
-  });
-
-  it('counts an accepted-but-not-yet-visible load towards the replica count', () => {
-    const models = [{ model_id: 2, model_name: 'bar', replicas: 2 }];
-    const live = countLiveLanesByModel({ 'planner-bar': lane({ model: 'bar', runtime_state: 'running' }) });
-    // Second load accepted, its lane not in the status stream yet: bar would
-    // otherwise be offered again and the operator would double-load it.
-    expect(filterLoadableModels(models, live, 'bar')).toEqual([]);
+  it('withholds a model whose load was just accepted', () => {
+    // The accepted lane is not in the status stream yet; offering it again
+    // would double-click the very lane being brought up.
+    const models = [
+      { model_id: 1, model_name: 'foo' },
+      { model_id: 2, model_name: 'bar' },
+    ];
+    expect(filterLoadableModels(models, 'bar').map((m) => m.model_name)).toEqual(['foo']);
   });
 
   it('matches model names case-insensitively', () => {
-    const models = [{ model_id: 1, model_name: 'Foo/Baz' }];
-    const live = countLiveLanesByModel({ 'planner-foo_baz': lane({ model: 'foo/baz', runtime_state: 'loaded' }) });
-    expect(filterLoadableModels(models, live, null)).toEqual([]);
+    const models = [
+      { model_id: 1, model_name: 'Foo/Baz' },
+      { model_id: 2, model_name: 'qux' },
+    ];
+    expect(filterLoadableModels(models, ' foo/baz ').map((m) => m.model_name)).toEqual(['qux']);
   });
 });

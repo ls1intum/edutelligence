@@ -151,8 +151,8 @@
                 @for (m of loadableModels; track m.model_name) {
                   <option [value]="m.model_name">
                     {{ m.model_name }}
-                    @if ((m.replicas ?? 1) > 1) {
-                      ({{ laneCountFor(m.model_name) }}/{{ m.replicas }} lanes)
+                    @if (laneCountLabel(m.model_name); as label) {
+                      {{ label }}
                     }
                   </option>
                 }

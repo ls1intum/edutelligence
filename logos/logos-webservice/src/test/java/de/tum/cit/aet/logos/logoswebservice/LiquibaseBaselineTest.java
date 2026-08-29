@@ -1,7 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -116,27 +115,6 @@ class LiquibaseBaselineTest {
             "SELECT is_active FROM api_keys WHERE key_value='lg-existing'", Boolean.class)).isFalse();
         assertThat(developerKeyCount(rootUser, teamId)).isEqualTo(0);
         assertThat(developerKeyCount(inactiveUser, teamId)).isEqualTo(0);
-    }
-
-    @Test
-    void migration015_replicasColumnWithDefaultAndRange() {
-        assertThat(columnExists("models", "replicas")).isTrue();
-        var column = jdbc.queryForMap(
-            "SELECT is_nullable, column_default FROM information_schema.columns "
-                + "WHERE table_schema='public' AND table_name='models' AND column_name='replicas'");
-        assertThat((String) column.get("is_nullable")).isEqualTo("NO");
-        assertThat((String) column.get("column_default")).isEqualTo("1");
-
-        Integer constraintCount = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM pg_constraint "
-                + "WHERE conname='models_replicas_range' AND conrelid='models'::regclass",
-            Integer.class);
-        assertThat(constraintCount).isEqualTo(1);
-
-        // The range guard is enforced by the database, not only by the webservice.
-        assertThatThrownBy(() -> jdbc.update(
-            "INSERT INTO models (name, replicas) VALUES ('out-of-range', 17)"))
-            .hasStackTraceContaining("models_replicas_range");
     }
 
     private int developerKeyCount(Integer userId, Integer teamId) {

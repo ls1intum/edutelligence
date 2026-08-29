@@ -115,10 +115,12 @@ class CapacityPlanner:
     LOAD_COMPETITIVE_RATIO = 2.0  # target must beat eviction set by 2×
     DRAIN_COMPETITIVE_RATIO = 3.0  # target must 3× outweigh victim (prevents flip-flop)
 
-    # Speculative replication: when a hot model is already loaded on at least
-    # one worker and other workers have free VRAM + capability, the planner
-    # can opportunistically load a replica without eviction. Caps and floors
-    # below; rollout is behind LOGOS_REPLICATE_ON_FREE_VRAM (default off).
+    # Speculative replication: when a hot model is already loaded, the planner
+    # can opportunistically load another copy — a second lane on the SAME
+    # worker (intra-node scale-out in the demand pass, e.g. two 8B instances
+    # sharing VRAM) or a lane on another worker (the cross-provider pass) —
+    # without eviction. Caps and floors below; rollout is behind
+    # LOGOS_REPLICATE_ON_FREE_VRAM (default off).
     DEMAND_REPLICATION_FLOOR = 2.0  # twice DEMAND_LOAD_FLOOR — sustained hot
     MAX_REPLICAS_PER_MODEL = 3  # safety cap; never more than N copies cluster-wide
 
@@ -3269,10 +3271,10 @@ class CapacityPlanner:
                 cross_queue,
             )
 
-            # Awake, live lanes — the model's currently active set. Both
-            # branches below gate on it: the wake path must not raise the
-            # active set past the configured replica count, and the cold-load
-            # path must not add a lane once the set is full.
+            # Awake, live lanes — the model's currently active set on this
+            # worker. The cold-load path reads it to tell a first lane (full
+            # load semantics) apart from an additional one (replication
+            # semantics: sustained demand, no eviction, replication flag).
             active_lanes = [
                 lane
                 for lane in model_lanes
@@ -3288,21 +3290,6 @@ class CapacityPlanner:
                 and not self._lane_is_in_wake_failure_cooldown(provider_id, lane.lane_id)
             ]
             if sleeping_lanes:
-                # Replica cap on the wake path: waking a lane raises the
-                # model's active set, so a model that already runs its full
-                # configured count keeps any surplus sleeper asleep — the
-                # operator lowered the count and the planner must not fight
-                # that by reactivating the extra lane. Counts awake lanes only
-                # on purpose: the sleeper being woken is one of the model's
-                # configured set, not a lane beyond it.
-                if len(active_lanes) >= self._desired_replicas(model_name):
-                    logger.info(
-                        "Skipping wake of %s on worker=%s: model already runs its full set of %d lane(s)",
-                        model_name,
-                        self._facade.get_provider_name(provider_id) or provider_id,
-                        self._desired_replicas(model_name),
-                    )
-                    continue
                 target = best_lane(sleeping_lanes)
                 profile = profiles.get(model_name)
 
@@ -3568,10 +3555,31 @@ class CapacityPlanner:
                         )
                 continue  # sleeping lane found; don't also try cold load
 
-            # ── COLD LOAD: fewer live lanes than the model wants ─────────────
-            desired_replicas = self._desired_replicas(model_name)
-            if len(active_lanes) >= desired_replicas:
-                continue  # model already has its full set of lanes
+            # ── COLD LOAD ────────────────────────────────────────────────────
+            # An additional lane — the model already runs awake on this
+            # worker — is speculative scale-out and gets the same deal as the
+            # cross-provider replication pass: sustained demand, the cluster-
+            # wide copy cap, and the replication flag. The no-eviction rule is
+            # enforced once the placement is known (an extra copy must never
+            # push out another model's lane). A first lane keeps the full load
+            # semantics below.
+            is_additional_lane = bool(active_lanes)
+            if is_additional_lane and (
+                not self._replicate_on_free_vram
+                or eff < self.DEMAND_REPLICATION_FLOOR
+                or (cluster_lanes_by_model or {}).get(model_name, 0) >= self.MAX_REPLICAS_PER_MODEL
+            ):
+                logger.info(
+                    "Skipping additional lane of %s on worker=%s: extra copies need "
+                    "LOGOS_REPLICATE_ON_FREE_VRAM, eff=%.2f ≥ replication floor=%.1f, "
+                    "free VRAM without eviction, and cluster copies < %d",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    eff,
+                    self.DEMAND_REPLICATION_FLOOR,
+                    self.MAX_REPLICAS_PER_MODEL,
+                )
+                continue
 
             if self._would_evict_cooled_lane(provider_id, model_name, profiles, capacity):
                 logger.info(
@@ -3637,6 +3645,14 @@ class CapacityPlanner:
                     sorted(placement_gpus),
                 )
                 continue
+            if is_additional_lane and eviction_set:
+                logger.info(
+                    "Skipping additional lane of %s on worker=%s: no free VRAM without "
+                    "eviction — extra copies never evict",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                )
+                continue
             logger.info(
                 "Load candidate model=%s tp=%d load_cost=%.0fMB placement=%s eviction_needed=%s",
                 model_name,
@@ -3668,7 +3684,12 @@ class CapacityPlanner:
                 # Replica 1's id when still free, else the next free index —
                 # an extra copy of an already-loaded model needs its own lane id.
                 lane_id = self._next_lane_id_for_model(provider_id, model_name, model_lanes)
-                if eff >= self.DEMAND_LOAD_FLOOR or has_queued:
+                if is_additional_lane:
+                    reason = (
+                        f"Additional lane: sustained demand eff={eff:.2f} ≥ "
+                        f"replication floor={self.DEMAND_REPLICATION_FLOOR}; VRAM free, no eviction"
+                    )
+                elif eff >= self.DEMAND_LOAD_FLOOR or has_queued:
                     reason = f"Demand eff={eff:.2f} ≥ floor={self.DEMAND_LOAD_FLOOR}; VRAM free"
                 else:
                     reason = f"Announced upcoming use (eff={eff:.2f} below floor); VRAM free"
@@ -5680,21 +5701,6 @@ class CapacityPlanner:
             return base
         return f"{base}-{replica_index}"
 
-    def _desired_replicas(self, model_name: str) -> int:
-        """How many lanes of this model the operator wants on a worker.
-
-        Read from the model's configured replica count (``models.replicas``,
-        exposed through the facade registration). The expected degradations —
-        a facade without the method (test doubles, pre-upgrade) and an
-        unparsable value — fall back to 1, the single-lane behaviour every
-        deployment had before the count existed. Anything else is a real bug
-        and is let through rather than masked for the planner's whole life.
-        """
-        try:
-            return max(1, int(self._facade.get_model_replicas(model_name)))
-        except (AttributeError, TypeError, ValueError):
-            return 1
-
     def _next_lane_id_for_model(
         self,
         provider_id: int,
@@ -5718,25 +5724,6 @@ class CapacityPlanner:
         while self._planner_lane_id(model_name, index) in taken:
             index += 1
         return self._planner_lane_id(model_name, index)
-
-    def _count_live_lanes_for_model(
-        self,
-        provider_id: int,
-        model_name: str,
-        lanes: Optional[List[LaneSchedulerSignals]] = None,
-    ) -> int:
-        """How many of this model's lanes occupy a slot on the provider.
-
-        Counts every lane in a live state — loaded, running, cold, starting,
-        sleeping. A sleeping replica still holds its VRAM residual, so it
-        counts toward the model's replica budget; only stopped and errored
-        lanes are gone and do not count.
-        """
-        if lanes is None:
-            lanes = self._safe_get_lanes(provider_id)
-        return sum(
-            1 for lane in lanes if lane.model_name == model_name and lane.runtime_state not in {"stopped", "error"}
-        )
 
     def manual_load_rejection_reason(self, provider_id: int) -> Optional[str]:
         """Why a manual load must not be attempted now, or None if it may run.
@@ -5783,15 +5770,15 @@ class CapacityPlanner:
         and report what it says; this re-checks anyway, because the snapshot can
         go away between that call and this one.
 
-        A model may hold more than one lane on a worker — its configured
-        replica count, so two copies of an 8B model can share a node's VRAM
-        for extra parallelism. A manual load therefore adds one lane up to
-        that count, and is a no-op only once the model already has its full
-        set (counting sleeping replicas, which still hold their slot). The
-        lane id it loads is the next free replica id — replica 1's id while
-        that is free, the lowest unused index once it is — the same rule the
-        planner's demand path uses, so manual and planner loads never fight
-        over an id.
+        A model may hold more than one lane on a worker, so two copies of an
+        8B model can share a node's VRAM for extra parallelism. A manual load
+        adds one such lane with no count to enforce — the plannability and
+        capacity-snapshot checks above are the gate, and the worker's own
+        VRAM is the final word — and is a no-op only once the lane id it
+        would take already exists. That id is the next free replica id:
+        replica 1's id while that is free, the lowest unused index once it
+        is — the same rule the planner's demand path uses, so manual and
+        planner loads never fight over an id.
 
         Serialized on the per-lane lock, like every other path that loads or
         unloads a lane. The API answers 202 and leaves this running in the
@@ -5807,16 +5794,6 @@ class CapacityPlanner:
             return False
 
         lanes = self._safe_get_lanes(provider_id)
-        desired_replicas = self._desired_replicas(model_name)
-        if self._count_live_lanes_for_model(provider_id, model_name, lanes) >= desired_replicas:
-            logger.info(
-                "Manual load of %s on worker=%s is a no-op: model already has its full set of %d lane(s)",
-                model_name,
-                provider_id,
-                desired_replicas,
-            )
-            return False
-
         lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes)
         async with self._lane_lock(provider_id, lane_id):
             # Everything below is re-read under the lock: a load takes minutes,
@@ -5828,18 +5805,6 @@ class CapacityPlanner:
                     model_name,
                     provider_id,
                     lane_id,
-                )
-                return False
-
-            # A concurrent planner load — or a second click — may have filled
-            # the model's last replica slot while this waited for the lock.
-            if self._count_live_lanes_for_model(provider_id, model_name) >= self._desired_replicas(model_name):
-                logger.info(
-                    "Manual load of %s on worker=%s is a no-op: model reached its full set of %d lane(s) "
-                    "while waiting for the lane lock",
-                    model_name,
-                    provider_id,
-                    self._desired_replicas(model_name),
                 )
                 return False
 

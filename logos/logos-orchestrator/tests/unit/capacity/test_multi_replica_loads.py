@@ -1,23 +1,25 @@
-"""Per-model replica counts: a model may hold more than one lane on a worker.
+"""Multiple lanes of one model on a worker, placed dynamically.
 
-Issue #789 — "Can a model be deployed multiple times on one node?" The
-capacity planner loads extra lanes of a model up to its configured replica
-count (``models.replicas``, default 1), and the operator's manual "Load lane"
-adds one more lane instead of no-opping once a lane exists.
+Issue #789 — "Can a model be deployed multiple times on one node?" There is
+no configured replica count anywhere (no ``models.replicas``, no worker
+entry): the planner derives scale-out from the live signals, the same
+principle that dropped ``models.parallel``. A model's additional lane on a
+worker that already runs it is speculative scale-out — the same deal as the
+cross-provider replication pass: behind ``LOGOS_REPLICATE_ON_FREE_VRAM``,
+sustained demand (``DEMAND_REPLICATION_FLOOR``), free VRAM without eviction,
+and the cluster-wide copy cap. The operator's manual "Load lane" adds one
+more lane instead of no-opping once a lane exists.
 
 The pieces under test:
 
 * lane id allocation — replica 1 keeps the historical id (``planner-<alias>``)
-  so lanes placed before the count existed stay addressable, replicas from two
-  on append ``-<index>``;
-* "taken" vs "live" accounting — every lane the worker holds for the model,
-  in any runtime state, blocks its id (the worker refuses ``add_lane`` for an
-  existing id), but only lanes in a live state count toward the model's
-  replica demand (an errored lane must not mask a reload);
-* the manual load path — adds one lane up to the count, a no-op at the cap,
-  re-checking the count under the per-lane lock;
-* the demand path — emits an extra load for a model that has fewer live
-  lanes than it wants, on the next free id.
+  so lanes placed before scale-out existed stay addressable, replicas from
+  two on append ``-<index>``;
+* the manual load path — adds one lane on the next free id, a no-op only
+  once that id exists (re-checked under the per-lane lock);
+* the demand path — the first lane keeps the full load semantics; an
+  additional lane needs the replication flag + sustained demand + no
+  eviction + cluster cap headroom.
 """
 
 from __future__ import annotations
@@ -165,72 +167,12 @@ class TestNextLaneIdForModel:
         assert planner._next_lane_id_for_model(1, "org/model-a") == "planner-org_model-a"
 
 
-class TestDesiredReplicas:
-    """The configured count, with a fallback to the historical single lane."""
-
-    def _planner(self, facade) -> CapacityPlanner:
-        planner = CapacityPlanner.__new__(CapacityPlanner)
-        planner._facade = facade
-        return planner
-
-    def test_reads_the_configured_count(self):
-        facade = MagicMock()
-        facade.get_model_replicas.return_value = 3
-        assert self._planner(facade)._desired_replicas("m") == 3
-
-    def test_zero_and_negative_degrade_to_one(self):
-        facade = MagicMock()
-        facade.get_model_replicas.return_value = 0
-        assert self._planner(facade)._desired_replicas("m") == 1
-
-    def test_missing_method_falls_back_to_one(self):
-        """A facade without the method (pre-upgrade, or a test double) must
-        degrade to the single-lane behaviour, not break the planner cycle."""
-        assert self._planner(SimpleNamespace())._desired_replicas("m") == 1
-
-
-class TestCountLiveLanesForModel:
-    """Live = everything except stopped and error; a sleeper keeps its slot."""
-
-    def _planner(self, lanes: List[LaneSchedulerSignals]) -> CapacityPlanner:
-        planner = CapacityPlanner.__new__(CapacityPlanner)
-        facade = MagicMock()
-        facade.get_all_provider_lane_signals.return_value = lanes
-        planner._facade = facade
-        return planner
-
-    def test_counts_all_live_states(self):
-        lanes = [
-            _lane("planner-m", "m", "running"),
-            _lane("planner-m-2", "m", "loaded"),
-            _lane("planner-m-3", "m", "loaded", sleep_state="sleeping"),
-            _lane("planner-m-4", "m", "starting"),
-        ]
-        assert self._planner(lanes)._count_live_lanes_for_model(1, "m") == 4
-
-    def test_stopped_and_error_do_not_count(self):
-        lanes = [
-            _lane("planner-m", "m", "running"),
-            _lane("planner-m-2", "m", "error"),
-            _lane("planner-m-3", "m", "stopped"),
-        ]
-        assert self._planner(lanes)._count_live_lanes_for_model(1, "m") == 1
-
-    def test_other_models_are_excluded(self):
-        lanes = [_lane("planner-m", "m", "running"), _lane("planner-other", "other", "running")]
-        assert self._planner(lanes)._count_live_lanes_for_model(1, "m") == 1
-
-
 # ---------------------------------------------------------------------------
 # Manual "Load lane"
 # ---------------------------------------------------------------------------
 
 
-def _manual_load_planner(
-    lanes: List[LaneSchedulerSignals],
-    *,
-    replicas: Any = "unset",
-) -> CapacityPlanner:
+def _manual_load_planner(lanes: List[LaneSchedulerSignals]) -> CapacityPlanner:
     """Planner with a mock facade reporting exactly `lanes`."""
     planner = CapacityPlanner.__new__(CapacityPlanner)
     registry = MagicMock()
@@ -241,11 +183,6 @@ def _manual_load_planner(
     facade.get_capacity_info.return_value = object()
     facade.get_provider_name.return_value = "worker-a"
     facade.get_all_provider_lane_signals.return_value = lanes
-    if replicas != "unset":
-        facade.get_model_replicas.return_value = replicas
-    else:
-        # A plain MagicMock's __int__ is 1: the "no count configured" case.
-        pass
     planner._facade = facade
     planner._lane_action_locks = {}
     planner._safe_get_profiles = MagicMock(return_value={})
@@ -267,87 +204,61 @@ def _with_capture(planner: CapacityPlanner) -> List[str]:
     return dispatched
 
 
-class TestManualLoadReplicas:
-    def test_adds_a_second_lane_when_replicas_allow(self):
-        planner = _manual_load_planner(
-            [_lane("planner-org_model-a", "org/model-a", "running")],
-            replicas=2,
-        )
-        dispatched = _with_capture(planner)
-
-        assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is True
-        assert dispatched == ["planner-org_model-a-2"]
-
-    def test_is_a_no_op_at_the_full_replica_set(self):
-        planner = _manual_load_planner(
-            [
-                _lane("planner-org_model-a", "org/model-a", "running"),
-                _lane("planner-org_model-a-2", "org/model-a", "loaded"),
-            ],
-            replicas=2,
-        )
-        dispatched = _with_capture(planner)
-
-        assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is False
-        assert dispatched == []
-
-    def test_default_stays_single_lane(self):
-        """Without a configured count the historical rule holds: a model with
-        a lane is not loaded a second time by the operator's button."""
+class TestManualLoadLane:
+    def test_adds_a_second_lane_to_an_already_loaded_model(self):
         planner = _manual_load_planner([_lane("planner-org_model-a", "org/model-a", "running")])
         dispatched = _with_capture(planner)
 
-        assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is False
-        assert dispatched == []
+        assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is True
+        assert dispatched == ["planner-org_model-a-2"]
 
     def test_an_errored_lane_does_not_fill_the_slot(self):
-        """A model whose only lane is in error is short of its demand — the
-        operator may reload it, and the new lane gets the next free id."""
-        planner = _manual_load_planner([_lane("planner-org_model-a", "org/model-a", "error")], replicas=1)
+        """A model whose only lane is in error is not really running — the
+        operator may load a fresh one, and it gets the next free id (the
+        broken lane still holds replica 1's)."""
+        planner = _manual_load_planner([_lane("planner-org_model-a", "org/model-a", "error")])
         dispatched = _with_capture(planner)
 
         assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is True
         assert dispatched == ["planner-org_model-a-2"]
 
-    def test_a_sleeping_replica_still_counts(self):
-        """A sleeping lane holds its VRAM residual — loading another one on
-        top would exceed the configured count's memory budget."""
-        planner = _manual_load_planner(
-            [
-                _lane("planner-org_model-a", "org/model-a", "loaded"),
-                _lane("planner-org_model-a-2", "org/model-a", "loaded", sleep_state="sleeping"),
-            ],
-            replicas=2,
-        )
+    def test_a_second_click_is_a_no_op_once_the_first_is_dispatched(self):
+        """The API answers 202 and the load runs in the background, so a
+        second click arrives while the first is in flight. Both derive the
+        same next-free lane id — the in-lock re-read against the runtime
+        turns the second into a no-op instead of a duplicate lane."""
+        planner = _manual_load_planner([_lane("planner-org_model-a", "org/model-a", "running")])
         dispatched = _with_capture(planner)
+
+        assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is True
+        assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is False
+        assert dispatched == ["planner-org_model-a-2"]
+
+    def test_no_op_when_the_lane_id_already_exists_under_the_lock(self):
+        """A concurrent planner load — or another click — took the id while
+        this load waited for the per-lane lock. The in-lock re-read catches
+        it even when the lane-signal feed has not caught up yet."""
+        planner = _manual_load_planner([_lane("planner-org_model-a", "org/model-a", "running")])
+        dispatched = _with_capture(planner)
+        planner._lane_exists_in_runtime = lambda provider_id, lane_id: lane_id == "planner-org_model-a-2"
 
         assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is False
         assert dispatched == []
 
-    def test_rechecks_the_count_under_the_lane_lock(self):
-        """A second click — or a planner cycle — can fill the last slot while
-        this load waits for the per-lane lock. The in-lock re-read turns it
-        into a no-op instead of a duplicate lane."""
-        lanes_before = [_lane("planner-org_model-a", "org/model-a", "running")]
-        planner = _manual_load_planner(lanes_before, replicas=2)
-        facade = planner._facade
-        # Pre-lock read sees one lane; the dispatch-time re-read sees the
-        # sibling load that landed while the lock was held.
-        facade.get_all_provider_lane_signals.side_effect = [
-            lanes_before,
-            [
-                _lane("planner-org_model-a", "org/model-a", "running"),
-                _lane("planner-org_model-a-2", "org/model-a", "starting"),
-            ],
-        ]
+    def test_refuses_without_a_capacity_snapshot(self):
+        """No capacity snapshot → the lane cannot be checked against free
+        VRAM → the load is refused with the reason the operator gets."""
+        planner = _manual_load_planner([_lane("planner-org_model-a", "org/model-a", "running")])
         dispatched = _with_capture(planner)
+        planner._facade.get_capacity_info.return_value = None
 
         assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is False
         assert dispatched == []
+        assert "No capacity information" in planner.manual_load_rejection_reason(1)
 
 
 # ---------------------------------------------------------------------------
-# Demand path: the planner loads a model's next replica
+# Demand path: the planner scales a model out by one additional lane
 # ---------------------------------------------------------------------------
 
 
@@ -360,7 +271,6 @@ class _MockProvider:
     capabilities: List[str] = field(default_factory=list)
     available_vram_mb: float = 0.0
     total_vram_mb: float = 96_000.0
-    replicas: Dict[str, int] = field(default_factory=dict)
 
 
 class _MockFacade:
@@ -393,12 +303,6 @@ class _MockFacade:
     def get_scheduler_queue_depth_by_model_name(self, model_name: str, provider_id: int) -> int:
         return 0
 
-    def get_model_replicas(self, model_name: str) -> int:
-        for p in self._providers.values():
-            if model_name in p.replicas:
-                return p.replicas[model_name]
-        return 1
-
 
 def _profile(loaded_vram_mb: float = 20_000.0) -> SimpleNamespace:
     return SimpleNamespace(
@@ -413,7 +317,9 @@ def _profile(loaded_vram_mb: float = 20_000.0) -> SimpleNamespace:
     )
 
 
-def _planner(provider: _MockProvider, *, score: float = 2.0) -> CapacityPlanner:
+def _planner(provider: _MockProvider, *, score: float = 2.0, replicate: bool = False) -> CapacityPlanner:
+    """Harness for the per-worker demand pass. ``replicate`` maps to the
+    ``LOGOS_REPLICATE_ON_FREE_VRAM`` flag the scale-out gate reads."""
     facade = _MockFacade([provider])
     registry = MagicMock()
     registry.has_received_first_status.return_value = True
@@ -432,6 +338,7 @@ def _planner(provider: _MockProvider, *, score: float = 2.0) -> CapacityPlanner:
     planner._cross_provider_best_first = True
     planner._replica_first_eviction = True
     planner._cross_provider_dedup = False
+    planner._replicate_on_free_vram = replicate
     planner._lane_loaded_at = {}
     planner._lane_idle_since = {}
     planner._lane_sleep_since = {}
@@ -448,15 +355,38 @@ def _planner(provider: _MockProvider, *, score: float = 2.0) -> CapacityPlanner:
     )
     planner._get_queue_depth_across_deployments = lambda *_: 0
     planner._build_load_params = lambda *a, **k: {}
-    # The gate under test is lane-id allocation, not feasibility: with the
+    # The gate under test is the scale-out decision, not feasibility: with the
     # profile shape above the real gate would additionally parse KV pairs the
     # stub profile does not carry.
     planner._passes_minimum_load_feasibility = lambda *a, **k: True
     return planner
 
 
-class TestDemandPathSecondLane:
-    def test_loads_the_second_replica_on_the_next_free_id(self):
+class TestDemandPathAdditionalLane:
+    def test_first_lane_keeps_full_load_semantics(self):
+        """No lane yet: the first load needs only the load floor (1.0) and no
+        replication flag — score 1.2 loads onto the historical id even with
+        replication off. One lane per cycle; scale-out follows later."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=1.2, replicate=False)
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+
+        kinds = [(a.action, a.lane_id) for a in actions]
+        assert ("load", "planner-X") in kinds
+        assert all(lane_id == "planner-X" for _a, lane_id in kinds if "X" in lane_id)
+
+    def test_additional_lane_requires_the_replication_flag(self):
+        """The model runs hot (2.5 ≥ replication floor) and VRAM is free, but
+        the rollout flag is off: no second lane — the pre-scale-out
+        behaviour is preserved by default."""
         provider = _MockProvider(
             provider_id=1,
             name="A",
@@ -464,20 +394,33 @@ class TestDemandPathSecondLane:
             capabilities=["X"],
             available_vram_mb=50_000,
             profiles={"X": _profile()},
-            replicas={"X": 2},
         )
-        planner = _planner(provider)
+        planner = _planner(provider, score=2.5, replicate=False)
+
+        assert planner._compute_demand_actions(1, provider.lanes) == []
+
+    def test_additional_lane_loads_on_sustained_demand_and_free_vram(self):
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
 
         actions = planner._compute_demand_actions(1, provider.lanes)
 
         kinds = [(a.action, a.provider_id, a.lane_id) for a in actions]
         assert ("load", 1, "planner-X-2") in kinds
-        # The id the first replica holds is not planned again.
+        # The id the first lane holds is not planned again.
         assert ("load", 1, "planner-X") not in kinds
 
-    def test_no_second_load_below_the_configured_count(self):
-        """replicas=1 (the historical default): a model with its one lane
-        gets no further load — the pre-#789 behaviour is preserved."""
+    def test_additional_lane_needs_sustained_demand(self):
+        """1.2 is hot enough for a first lane but below the replication
+        floor (2.0): no second copy — scale-out is for sustained load, not
+        a single spike."""
         provider = _MockProvider(
             provider_id=1,
             name="A",
@@ -485,40 +428,55 @@ class TestDemandPathSecondLane:
             capabilities=["X"],
             available_vram_mb=50_000,
             profiles={"X": _profile()},
-            replicas={"X": 1},
         )
-        planner = _planner(provider)
+        planner = _planner(provider, score=1.2, replicate=True)
 
         assert planner._compute_demand_actions(1, provider.lanes) == []
 
-    def test_surplus_sleeper_stays_asleep_at_the_replica_cap(self):
-        """The operator lowered the count: the model runs its full set of two
-        lanes and a third, sleeping surplus lane exists. The wake path must
-        not raise the active set past the configured count — the surplus
-        sleeper stays asleep (and no cold load tops it up either)."""
+    def test_additional_lane_never_evicts(self):
+        """An extra copy must not push out another model's lane: when the
+        placement needs an eviction set, the scale-out is skipped outright."""
         provider = _MockProvider(
             provider_id=1,
             name="A",
             lanes=[
                 _lane("planner-X", "X", "running"),
-                _lane("planner-X-2", "X", "running"),
-                _lane("planner-X-3", "X", "loaded", sleep_state="sleeping"),
+                _lane("planner-other", "other", "running"),
             ],
+            capabilities=["X", "other"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile(), "other": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        planner._pick_cold_load_placement = lambda *a, **k: ("0", [(_lane("planner-other", "other"), "stop", None)])
+
+        assert planner._compute_demand_actions(1, provider.lanes) == []
+
+    def test_additional_lane_respects_the_cluster_copy_cap(self):
+        """The model already has MAX_REPLICAS_PER_MODEL copies cluster-wide —
+        this worker would be the 4th: the scale-out stops at the cap, same
+        as the cross-provider pass."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running")],
             capabilities=["X"],
             available_vram_mb=50_000,
             profiles={"X": _profile()},
-            replicas={"X": 2},
         )
-        planner = _planner(provider)
+        planner = _planner(provider, score=2.5, replicate=True)
 
-        actions = planner._compute_demand_actions(1, provider.lanes)
+        actions = planner._compute_demand_actions(
+            1, provider.lanes, cluster_lanes_by_model={"X": CapacityPlanner.MAX_REPLICAS_PER_MODEL}
+        )
 
         assert actions == []
 
-    def test_sleeper_still_wakes_below_the_cap(self):
-        """The sleeping lane is one of the model's configured set (one awake
-        lane, count 2) — waking it brings the model up to its count, the
-        pre-#789 behaviour."""
+    def test_sleeper_wakes_even_while_siblings_run(self):
+        """Waking the model's own sleeping lane is not an additional copy —
+        it stays subject to the wake floor (0.5), not the replication gate:
+        score 0.7 wakes it with replication off, and no cold load is emitted
+        on top."""
         provider = _MockProvider(
             provider_id=1,
             name="A",
@@ -529,9 +487,8 @@ class TestDemandPathSecondLane:
             capabilities=["X"],
             available_vram_mb=50_000,
             profiles={"X": _profile()},
-            replicas={"X": 2},
         )
-        planner = _planner(provider)
+        planner = _planner(provider, score=0.7, replicate=False)
 
         actions = planner._compute_demand_actions(1, provider.lanes)
 
@@ -539,10 +496,9 @@ class TestDemandPathSecondLane:
         assert ("wake", "planner-X-2") in kinds
         assert all(action == "wake" for action, _ in kinds)
 
-    def test_single_sleeper_still_wakes_at_the_default_count(self):
-        """Base case the cap check must not break: replicas=1 (default), the
-        model's one lane is sleeping — waking it does not add a lane, it
-        reactivates the model's only replica."""
+    def test_single_sleeper_still_wakes(self):
+        """Base case: the model's one lane is sleeping — waking it does not
+        add a lane, it reactivates the model's only copy."""
         provider = _MockProvider(
             provider_id=1,
             name="A",
@@ -551,27 +507,8 @@ class TestDemandPathSecondLane:
             available_vram_mb=50_000,
             profiles={"X": _profile()},
         )
-        planner = _planner(provider)
+        planner = _planner(provider, score=0.7, replicate=False)
 
         actions = planner._compute_demand_actions(1, provider.lanes)
 
         assert [(a.action, a.lane_id) for a in actions] == [("wake", "planner-X")]
-
-    def test_first_load_still_lands_on_the_historical_id(self):
-        provider = _MockProvider(
-            provider_id=1,
-            name="A",
-            lanes=[],
-            capabilities=["X"],
-            available_vram_mb=50_000,
-            profiles={"X": _profile()},
-            replicas={"X": 2},
-        )
-        planner = _planner(provider)
-
-        actions = planner._compute_demand_actions(1, provider.lanes)
-
-        kinds = [(a.action, a.lane_id) for a in actions]
-        assert ("load", "planner-X") in kinds
-        # One lane per cycle: the second replica follows once the first is up.
-        assert all(lane_id == "planner-X" for _a, lane_id in kinds if "X" in lane_id)

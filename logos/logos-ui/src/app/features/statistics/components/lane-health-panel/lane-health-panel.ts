@@ -74,10 +74,10 @@ const NOT_LIVE_STATES = new Set(['stopped', 'error']);
 /**
  * Live lanes per model (keyed by the lower-cased, trimmed model name).
  *
- * Stopped and error lanes are not counted: the capacity planner only
- * considers the remaining states as fulfilling a model's replica demand, and
- * the picker must agree with it — a model whose one lane is in error may be
- * reloaded, not blocked by its own broken lane.
+ * Stopped and error lanes are not counted — they serve no requests — so the
+ * picker's badge agrees with what the capacity planner schedules: a model
+ * whose one lane is in error reads as not running, and loading it again
+ * allocates it a fresh lane id rather than the broken lane's.
  */
 export function countLiveLanesByModel(
   lanes: Record<string, LaneSignalData>,
@@ -93,24 +93,22 @@ export function countLiveLanesByModel(
 }
 
 /**
- * Models whose live lane count is still below the replicas they want.
+ * Models the "Load lane" picker still offers.
  *
- * An accepted load whose lane has not shown up in the status stream yet
- * (that takes minutes) counts as one, so a second load of the very replica
- * the first request is still bringing up is not offered.
+ * Every provider model is offered, loaded or not: a model that already runs
+ * lanes on the node may take one more (multiple deployments of one model per
+ * node are supported), and the worker's own VRAM is the final word on
+ * whether the copy fits. The only model withheld is one whose load was just
+ * accepted and whose lane has not shown up in the status stream yet (that
+ * takes minutes) — offering it again would invite a second click on the very
+ * lane the first request is still bringing up.
  */
 export function filterLoadableModels(
   models: ProviderModel[],
-  live: Map<string, number>,
   acceptedModel: string | null,
 ): ProviderModel[] {
-  const counts = new Map(live);
   const key = (acceptedModel ?? '').trim().toLowerCase();
-  if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
-  return models.filter((m) => {
-    if (!m.model_name) return false;
-    return (counts.get(m.model_name.trim().toLowerCase()) ?? 0) < (m.replicas ?? 1);
-  });
+  return models.filter((m) => m.model_name && m.model_name.trim().toLowerCase() !== key);
 }
 
 export interface LaneRow {
@@ -283,17 +281,18 @@ export class LaneHealthPanel implements OnChanges {
   /**
    * Models that may still be loaded on this provider.
    *
-   * A model is loadable while its live lane count is below the replicas it
-   * wants (default 1 — the historical "one lane per model"). An accepted load
-   * whose lane has not shown up in the status stream yet counts as one.
+   * A model with live lanes stays offered — loading it adds another
+   * deployment on the node. An accepted load whose lane has not shown up in
+   * the status stream yet is withheld until it appears.
    */
   get loadableModels(): ProviderModel[] {
-    return filterLoadableModels(this.loadModels(), this.liveLaneCounts, this.acceptedModel());
+    return filterLoadableModels(this.loadModels(), this.acceptedModel());
   }
 
-  /** Live lanes the model already has — shown next to models with replicas > 1. */
-  laneCountFor(modelName: string): number {
-    return this.liveLaneCounts.get(modelName.trim().toLowerCase()) ?? 0;
+  /** Live lanes the model already runs here — "(2 lanes)", null when none. */
+  laneCountLabel(modelName: string): string | null {
+    const count = this.liveLaneCounts.get(modelName.trim().toLowerCase()) ?? 0;
+    return count === 1 ? '(1 lane)' : count > 1 ? `(${count} lanes)` : null;
   }
 
   minKvPct(pct: number): number {

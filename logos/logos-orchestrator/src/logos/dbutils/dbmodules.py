@@ -117,9 +117,6 @@ class Model(Base):
     weight_quality = Column(Integer)
     tags = Column(Text)
     description = Column(Text)
-    # Read-only mirror of the webservice-owned column (NOT NULL DEFAULT 1 in
-    # the Liquibase schema); the orchestrator never writes this table.
-    replicas = Column(Integer, nullable=False, default=1)
 
 
 class Provider(Base):

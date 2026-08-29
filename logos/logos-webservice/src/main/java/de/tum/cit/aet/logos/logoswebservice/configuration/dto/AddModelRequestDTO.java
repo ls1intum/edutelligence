@@ -7,6 +7,5 @@ public record AddModelRequestDTO(
     Integer worseCostId,
     Integer worseQualityId,
     String tags,
-    String description,
-    Integer replicas
+    String description
 ) {}

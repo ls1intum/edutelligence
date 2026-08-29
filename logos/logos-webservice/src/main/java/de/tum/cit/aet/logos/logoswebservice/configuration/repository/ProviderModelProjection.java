@@ -5,5 +5,4 @@ public interface ProviderModelProjection {
     String getModelName();
     String getEndpoint();
     String getApiKey();
-    Integer getReplicas();
 }

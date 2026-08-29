@@ -2762,10 +2762,6 @@ async def _register_models_with_facades(
                         "model_name": model_name,
                         "total_vram_mb": provider_config.get("total_vram_mb", 65536),
                         "provider_id": provider_id,
-                        # How many lanes of this model the capacity planner may
-                        # run on one worker (models.replicas); the planner uses
-                        # it to load additional replicas of an already-loaded model.
-                        "replicas": model_info.get("replicas") or 1,
                     }
                 )
             elif cloud_provider_type == "azure":

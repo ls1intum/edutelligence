@@ -18,6 +18,5 @@
     <include file="liquibase/changelog/012_log_entry_timestamp_index.xml"/>
     <include file="liquibase/changelog/013_drop_models_parallel.xml"/>
     <include file="liquibase/changelog/014_log_entry_model_id_timestamp_index.xml"/>
-    <include file="liquibase/changelog/015_add_models_replicas.xml"/>
 
 </databaseChangeLog>

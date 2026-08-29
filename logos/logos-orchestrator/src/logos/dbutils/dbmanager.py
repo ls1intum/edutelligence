@@ -2027,10 +2027,6 @@ class DBManager:
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
         if result is None:
             return None
-        # The replicas column is added by a webservice migration (014), so a
-        # database from before that migration answers SELECT * without it.
-        # getattr degrades that mixed-version window to the single-lane count
-        # instead of breaking startup.
         return {
             "id": result.id,
             "name": result.name,
@@ -2040,7 +2036,6 @@ class DBManager:
             "weight_quality": result.weight_quality,
             "tags": result.tags,
             "description": result.description,
-            "replicas": getattr(result, "replicas", None) or 1,
         }
 
     def get_provider(self, provider_id: int):

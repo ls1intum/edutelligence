@@ -144,15 +144,6 @@
   color: rgb(var(--color-typography-300));
 }
 
-.field-hint {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-normal);
-  color: rgb(var(--color-typography-700));
-  margin: 0;
-  align-self: end;
-  padding-bottom: 8px;
-}
-
 .required { color: rgb(var(--color-error)); }
 
 .field-input {
