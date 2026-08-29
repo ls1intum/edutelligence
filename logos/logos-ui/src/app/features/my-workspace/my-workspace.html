@@ -85,11 +85,11 @@
               <div class="limits-row">
                 <div class="limit-group">
                   <span class="limit-label">CLOUD</span>
-                  <span class="limit-value" title="RPM = requests per minute, TPM = tokens per minute">{{ formatRpm(key.settings?.cloud_rpm_limit ?? null) }} RPM · {{ formatTpm(key.settings?.cloud_tpm_limit ?? null) }} TPM</span>
+                  <span class="limit-value" title="RPM = requests per minute, TPM = tokens per minute · usage is what the last minute (the limit's window) counted, shown against the limit">{{ formatRpm(usageFor(key).cloud_requests, key.settings?.cloud_rpm_limit ?? null) }} RPM · {{ formatTpm(usageFor(key).cloud_tokens, key.settings?.cloud_tpm_limit ?? null) }} TPM</span>
                 </div>
                 <div class="limit-group">
                   <span class="limit-label">LOCAL</span>
-                  <span class="limit-value" title="RPM = requests per minute, TPM = tokens per minute">{{ formatRpm(key.settings?.local_rpm_limit ?? null) }} RPM · {{ formatTpm(key.settings?.local_tpm_limit ?? null) }} TPM</span>
+                  <span class="limit-value" title="RPM = requests per minute, TPM = tokens per minute · usage is what the last minute (the limit's window) counted, shown against the limit">{{ formatRpm(usageFor(key).local_requests, key.settings?.local_rpm_limit ?? null) }} RPM · {{ formatTpm(usageFor(key).local_tokens, key.settings?.local_tpm_limit ?? null) }} TPM</span>
                 </div>
                 <div class="limit-group limit-group--budget">
                   <span class="limit-label">KEY BUDGET</span>
