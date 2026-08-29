@@ -1702,11 +1702,19 @@ class LaneManager:
         per_gpu_required_mb = required_total_mb / float(tp_size)
         per_gpu_threshold_mb = per_gpu_required_mb * _GPU_PLACEMENT_SECURITY_RATIO + _GPU_PLACEMENT_HEADROOM_OFFSET_MB
 
-        # When vLLM sizes its KV cache from gpu_memory_utilization, it clamps a
-        # small model's GMU up to _VLLM_GMU_FLOOR and pre-allocates that fraction
-        # of total GPU memory at startup; checking only the calibrated footprint
-        # would let placement succeed here but vLLM startup fail with
-        # "free memory < desired gpu_memory_utilization".
+        # When vLLM sizes its KV cache from gpu_memory_utilization, it
+        # pre-allocates effective-GMU × total per GPU at startup and refuses
+        # to start if free is below that; checking only the calibrated
+        # footprint would let placement succeed here but vLLM startup fail
+        # with "free memory < desired gpu_memory_utilization".
+        #
+        # The effective GMU is what VllmProcessHandle._resolve_gmu passes to
+        # vLLM: an explicit operator gpu_memory_utilization wins verbatim (no
+        # clamping), while the auto-derived value is clamped to
+        # [_VLLM_GMU_FLOOR, 0.95] — so _VLLM_GMU_FLOOR is the minimum the
+        # auto-derivation can reach. Gating the explicit value on the
+        # derivation floor would understate e.g. a 0.95 reservation as 0.5 and
+        # place the lane on a GPU vLLM cannot start on (#570).
         #
         # BUT when the lane pins kv_cache_memory_bytes, vLLM skips memory
         # profiling and ignores gpu_memory_utilization entirely (it logs exactly
@@ -1719,15 +1727,19 @@ class LaneManager:
         gpu_totals = [float(row.get("total_mb", 0.0)) for row in allowed_rows if row.get("total_mb", 0.0) > 0]
         if gpu_totals and not kv_pinned:
             min_gpu_total_mb = min(gpu_totals)
-            vllm_floor_mb = _VLLM_GMU_FLOOR * min_gpu_total_mb
+            gmu = _VLLM_GMU_FLOOR
+            explicit_gmu = lane_config.vllm_config.gpu_memory_utilization
+            if explicit_gmu is not None:
+                gmu = float(explicit_gmu)
+            vllm_floor_mb = gmu * min_gpu_total_mb
             if vllm_floor_mb > per_gpu_threshold_mb:
                 logger.debug(
                     "Auto-placement lane '%s': raising per-GPU threshold from %.0fMB to %.0fMB "
-                    "(vLLM GMU floor %.2f × %.0fMB GPU total)",
+                    "(vLLM GMU %.2f × %.0fMB GPU total)",
                     lane_id,
                     per_gpu_threshold_mb,
                     vllm_floor_mb,
-                    _VLLM_GMU_FLOOR,
+                    gmu,
                     min_gpu_total_mb,
                 )
                 per_gpu_threshold_mb = vllm_floor_mb
