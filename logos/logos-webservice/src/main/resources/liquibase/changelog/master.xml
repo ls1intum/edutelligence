@@ -18,5 +18,6 @@
     <include file="liquibase/changelog/012_log_entry_timestamp_index.xml"/>
     <include file="liquibase/changelog/013_drop_models_parallel.xml"/>
     <include file="liquibase/changelog/014_log_entry_model_id_timestamp_index.xml"/>
+    <include file="liquibase/changelog/015_model_profiles_max_reported_context_length.xml"/>
 
 </databaseChangeLog>

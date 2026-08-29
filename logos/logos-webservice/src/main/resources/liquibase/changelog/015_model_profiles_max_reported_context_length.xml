@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- The model_profiles table only persisted the operator-pinned
+         max_context_length, which is NULL for calibrated models — the width
+         they actually run at lives in calibration_max_model_len and the KV
+         sweep pairs, neither of which had a column. The orchestrator's view
+         of a model's context therefore existed only in the live worker
+         runtime snapshots: every workernode going offline wiped it from
+         /v1/models and clients fell back to a guessed window (#829).
+
+         The new column is the durable half of that fix: a historic maximum,
+         the widest context any worker has ever reported for the model. The
+         orchestrator's upsert_model_profiles maintains it as a high-water
+         mark (GREATEST of stored and freshly derived, never shrinking), and
+         /v1/models reports it as max_model_len_overall so the number
+         survives every workernode going offline and an orchestrator
+         restart. Nullable: rows written before this changeSet hold NULL,
+         and the first upsert after it settles the mark. -->
+    <changeSet id="015-model-profiles-max-reported-context-length" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="model_profiles" columnName="max_reported_context_length"/></not>
+        </preConditions>
+        <addColumn tableName="model_profiles">
+            <column name="max_reported_context_length" type="INTEGER"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="model_profiles" columnName="max_reported_context_length"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
