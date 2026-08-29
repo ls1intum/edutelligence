@@ -307,6 +307,32 @@ engines:
     #     Example: {enable_thinking: false} to opt-out of Gemma 4 thinking mode.
     #     Example: {enable_thinking: false} to disable Qwen3 chain-of-thought.
     #
+    #   rope_scaling: dict        — RoPE scaling for long-context variants,
+    #     e.g. YaRN to extend the context window beyond the model's native
+    #     limit. vLLM reads the technique from the model's HF config, so this
+    #     is passed as an --hf-overrides deep merge into that config (there
+    #     is no dedicated CLI flag). Unset (default) = disabled: the model's
+    #     own rope settings are used as-is.
+    #     Keys:
+    #       rope_type: str (required) — "yarn" | "linear" | "dynamic" |
+    #         "llama3" | "longrope" | "deepseek_yarn" | "dynamic_yarn"
+    #         (| "default" to suppress a scaling the model config ships).
+    #       factor: float — scaling factor, e.g. 4.0 = 4x the native window.
+    #         Required for the yarn techniques.
+    #       original_max_position_embeddings: int — the model's native context
+    #         limit in tokens, before scaling. Required for the yarn
+    #         techniques.
+    #       rope_theta: float — rotary base frequency, e.g. 10000000. Optional.
+    #       config_path: str — where in the model config the dict is written;
+    #         default "rope_scaling". Qwen3.5/3.8-style multimodal configs
+    #         keep their rope settings under "text_config.rope_parameters".
+    #     Any further keys (mrope_section, partial_rotary_factor, ...) are
+    #     passed through to vLLM verbatim. Mutually exclusive with a
+    #     --hf-overrides flag in extra_args. The calibration probe receives
+    #     the same setting, so the profile describes the lane that serves.
+    #     Example: {rope_type: yarn, factor: 4.0,
+    #               original_max_position_embeddings: 32768}
+    #
     #   extra_args: list           — arbitrary extra CLI flags passed verbatim to
     #     "vllm serve". Use for features not yet exposed as first-class fields.
 
@@ -346,6 +372,14 @@ engines:
       some-org/some-qwen3-model:
         chat_template_kwargs:
           enable_thinking: false          # disable chain-of-thought
+
+      # Long-context variant: YaRN scaling 4x on a 32K model (issue #744).
+      # Lane and calibration run with the scaled context window.
+      some-org/some-32k-model-long:
+        rope_scaling:
+          rope_type: yarn
+          factor: 4.0
+          original_max_position_embeddings: 32768
 
       # Custom chat template: the file must exist in the persistent template
       # directory (/opt/logos-workernode/chat-templates on the host, mounted at
@@ -397,6 +431,8 @@ engines:
 #     chat_template: str          — template file name under
 #                                   /opt/logos-workernode/chat-templates.
 #     chat_template_kwargs: dict  — merged on top of inferred family defaults.
+#     rope_scaling: dict          — RoPE scaling (e.g. YaRN long-context);
+#                                   see model_overrides above.
 #     extra_args: list[str]
 
 lanes: []

@@ -1436,6 +1436,16 @@ class VllmProcessHandle:
             cmd.extend(["--speculative-config", vc.speculative_config.strip()])
         if vc.quantization:
             cmd.extend(["--quantization", vc.quantization])
+        # RoPE scaling (e.g. YaRN long-context variants): vLLM reads the
+        # technique from the model's HF config, so it is passed as an
+        # --hf-overrides deep merge — there is no dedicated CLI flag. Must
+        # match what calibration ran with (see calibration.py), otherwise the
+        # profile describes the unscaled model while the lane serves the
+        # scaled one.
+        if vc.rope_scaling is not None:
+            import json as _json
+
+            cmd.extend(["--hf-overrides", _json.dumps(vc.rope_scaling.to_hf_overrides())])
         # enforce_eager defaults to False (CUDA graph capture enabled).
         # Set enforce_eager=True in vllm_config to skip torch.compile + graph
         # capture — required on Turing (SM 7.5) and other pre-Ampere boards

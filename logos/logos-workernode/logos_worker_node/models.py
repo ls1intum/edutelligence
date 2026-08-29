@@ -33,6 +33,21 @@ def _gpu_device_count(value: str) -> int | None:
     return len(normalized.split(","))
 
 
+# RoPE scaling techniques vLLM can apply, and the subset of them that builds
+# on YaRN and therefore needs both the scaling factor and the model's original
+# context limit to compute the rescaled rotary frequencies.
+_ROPE_SCALING_TYPES = frozenset(
+    {"default", "linear", "yarn", "dynamic", "llama3", "longrope", "deepseek_yarn", "dynamic_yarn"}
+)
+_ROPE_SCALING_TYPES_REQUIRING_FACTOR = frozenset({"yarn", "deepseek_yarn", "dynamic_yarn"})
+_ROPE_CONFIG_PATH_SEGMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def extra_args_has_hf_overrides(extra_args: list[str] | None) -> bool:
+    """True when extra_args already carries a vLLM --hf-overrides flag."""
+    return any(str(arg) == "--hf-overrides" or str(arg).startswith("--hf-overrides=") for arg in (extra_args or []))
+
+
 class OllamaConfig(BaseModel):
     """Shared Ollama engine defaults for all non-vLLM lanes."""
 
@@ -53,6 +68,105 @@ class OllamaConfig(BaseModel):
     @classmethod
     def _validate_gpu_devices(cls, value: str) -> str:
         return _normalize_gpu_devices(value)
+
+
+class RopeScalingConfig(BaseModel):
+    """RoPE scaling settings for long-context model variants (e.g. YaRN).
+
+    vLLM has no dedicated CLI flag for RoPE scaling — it reads the technique
+    from the model's HF config — so this is passed as an ``--hf-overrides``
+    deep merge into that config (see :meth:`to_hf_overrides`). Extra keys are
+    passed through verbatim so family-specific settings (attention_factor,
+    beta_fast/beta_slow, mrope_section, partial_rotary_factor, ...) work
+    without extending the schema.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    rope_type: str = Field(
+        description=(
+            "RoPE scaling technique: 'yarn', 'linear', 'dynamic', 'llama3', "
+            "'longrope', 'deepseek_yarn', 'dynamic_yarn' — or 'default' to "
+            "suppress a scaling the model config ships with."
+        ),
+    )
+    factor: float | None = Field(
+        default=None,
+        ge=1.0,
+        description="Context scaling factor (e.g. 4.0 = 4x the native window). " "Required for the yarn techniques.",
+    )
+    original_max_position_embeddings: int | None = Field(
+        default=None,
+        gt=0,
+        description="The model's native context limit in tokens, before scaling. " "Required for the yarn techniques.",
+    )
+    rope_theta: float | None = Field(
+        default=None,
+        gt=0,
+        description="Base frequency of the rotary embeddings (e.g. 10000000). Optional.",
+    )
+    config_path: str | None = Field(
+        default=None,
+        description=(
+            "Where in the model's HF config the scaling dict is written. "
+            "Default 'rope_scaling' (Llama, Qwen2.5, ...). Models that nest "
+            "their rope settings elsewhere set the dotted path instead — "
+            "Qwen3.5/3.8-style multimodal configs use 'text_config.rope_parameters'."
+        ),
+    )
+
+    @field_validator("rope_type")
+    @classmethod
+    def _validate_rope_type(cls, value: str) -> str:
+        cleaned = (value or "").strip().lower()
+        if cleaned not in _ROPE_SCALING_TYPES:
+            raise ValueError(f"Invalid rope_type: {value!r}. " f"Supported: {', '.join(sorted(_ROPE_SCALING_TYPES))}.")
+        return cleaned
+
+    @field_validator("config_path")
+    @classmethod
+    def _validate_config_path(cls, value: str | None) -> str | None:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return None
+        for segment in cleaned.split("."):
+            if not _ROPE_CONFIG_PATH_SEGMENT.fullmatch(segment):
+                raise ValueError(
+                    f"Invalid config_path: {value!r}. Use a dotted path of plain "
+                    "identifiers like 'text_config.rope_parameters'."
+                )
+        return cleaned
+
+    @model_validator(mode="after")
+    def _validate_yarn_requirements(self) -> RopeScalingConfig:
+        if self.rope_type in _ROPE_SCALING_TYPES_REQUIRING_FACTOR:
+            missing = [
+                name
+                for name, value in (
+                    ("factor", self.factor),
+                    ("original_max_position_embeddings", self.original_max_position_embeddings),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(f"rope_type '{self.rope_type}' requires {', '.join(missing)} in rope_scaling.")
+        return self
+
+    def to_hf_overrides(self) -> dict[str, Any]:
+        """Build the ``--hf-overrides`` payload for this setting.
+
+        The scaling dict is written under ``config_path`` (default
+        'rope_scaling'). Unset optional keys are omitted so the deep merge
+        into the model config never clobbers the model's own values with nulls.
+        """
+        value = {key: val for key, val in self.model_dump(exclude={"config_path"}).items() if val is not None}
+        path = (self.config_path or "rope_scaling").split(".")
+        root: dict[str, Any] = {}
+        node = root
+        for segment in path[:-1]:
+            node = node.setdefault(segment, {})
+        node[path[-1]] = value
+        return root
 
 
 class VllmConfig(BaseModel):
@@ -195,6 +309,23 @@ class VllmConfig(BaseModel):
         "draft model in the same format as the main model, and a pre-sharded cache has no "
         'shards for it ("only pre-sharded checkpoints are currently supported").',
     )
+    rope_scaling: RopeScalingConfig | None = Field(
+        default=None,
+        description=(
+            "RoPE scaling for long-context variants (e.g. YaRN to extend the "
+            "context window beyond the model's native limit). vLLM reads the "
+            "technique from the model's HF config, so this is passed as "
+            "--hf-overrides, which deep-merges into that config. None "
+            "(default) = disabled: the model's own rope settings are used "
+            "as-is, so an unconfigured lane can never silently serve a scaled "
+            "context. Requires rope_type; the yarn techniques also require "
+            "factor and original_max_position_embeddings. For models that "
+            "store their rope settings under a different config key (Qwen3.5/"
+            "3.8-style text_config.rope_parameters) set config_path "
+            "accordingly. Mutually exclusive with a --hf-overrides flag in "
+            "extra_args — see RopeScalingConfig."
+        ),
+    )
     extra_args: list[str] = Field(default_factory=list)
     env_overrides: dict[str, str] = Field(
         default_factory=dict,
@@ -231,6 +362,22 @@ class VllmConfig(BaseModel):
         if re.fullmatch(r"\d+(\.\d+)?[GMK]?", v):
             return v
         raise ValueError(f"Invalid kv_cache_memory_bytes: {value!r}. " "Use e.g. '4G', '2048M', or raw byte count.")
+
+    @model_validator(mode="after")
+    def _validate_rope_scaling_conflicts(self) -> VllmConfig:
+        # Both rope_scaling and a --hf-overrides extra arg set vLLM's
+        # --hf-overrides; only the last occurrence on the command line would
+        # take effect, so the pair is a silent-wrong-config hazard.
+        if self.rope_scaling is not None and extra_args_has_hf_overrides(self.extra_args):
+            raise ValueError(
+                "vllm_config.rope_scaling and a --hf-overrides flag in "
+                "extra_args are mutually exclusive — both set vLLM's "
+                "--hf-overrides, and only the last occurrence would take "
+                "effect. Either drop rope_scaling and pass the rope settings "
+                "inside the existing --hf-overrides JSON, or remove the "
+                "--hf-overrides flag from extra_args."
+            )
+        return self
 
 
 class VllmEngineConfig(BaseModel):

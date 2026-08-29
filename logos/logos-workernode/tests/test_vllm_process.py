@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -276,6 +277,82 @@ def test_build_cmd_omits_kv_cache_dtype_when_empty(monkeypatch) -> None:
     )
     cmd = handle._build_cmd(lane)
     assert "--kv-cache-dtype" not in cmd
+
+
+def test_build_cmd_omits_hf_overrides_without_rope_scaling(monkeypatch) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: ["/tmp/vllm"])
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+    assert "--hf-overrides" not in cmd
+
+
+def test_build_cmd_emits_rope_scaling_as_hf_overrides(monkeypatch) -> None:
+    # YaRN is read by vLLM from the model's HF config, so Logos passes it as
+    # an --hf-overrides deep merge under the 'rope_scaling' key (#744).
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: ["/tmp/vllm"])
+
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        vllm=True,
+        vllm_config=VllmConfig(
+            rope_scaling={
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768,
+            }
+        ),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--hf-overrides")
+    assert json.loads(cmd[idx + 1]) == {
+        "rope_scaling": {
+            "rope_type": "yarn",
+            "factor": 4.0,
+            "original_max_position_embeddings": 32768,
+        }
+    }
+
+
+def test_build_cmd_emits_nested_rope_scaling_config_path(monkeypatch) -> None:
+    # Qwen3.5/3.8-style multimodal configs keep their rope settings under
+    # text_config.rope_parameters, not top-level rope_scaling (issue #744).
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: ["/tmp/vllm"])
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.8-27B",
+        vllm=True,
+        vllm_config=VllmConfig(
+            rope_scaling={
+                "rope_type": "yarn",
+                "rope_theta": 10000000,
+                "partial_rotary_factor": 0.25,
+                "factor": 4.0,
+                "original_max_position_embeddings": 262144,
+                "config_path": "text_config.rope_parameters",
+            }
+        ),
+    )
+    cmd = handle._build_cmd(lane)
+    idx = cmd.index("--hf-overrides")
+    assert json.loads(cmd[idx + 1]) == {
+        "text_config": {
+            "rope_parameters": {
+                "rope_type": "yarn",
+                "rope_theta": 10000000.0,
+                "partial_rotary_factor": 0.25,
+                "factor": 4.0,
+                "original_max_position_embeddings": 262144,
+            }
+        }
+    }
 
 
 def test_build_cmd_uses_default_chat_template_kwargs_flag(monkeypatch) -> None:

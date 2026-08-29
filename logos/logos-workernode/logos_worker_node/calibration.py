@@ -888,6 +888,25 @@ def _build_vllm_cmd(
         cmd.extend(["--quantization", quant])
     if kv_cache_dtype:
         cmd.extend(["--kv-cache-dtype", kv_cache_dtype])
+    # RoPE scaling (e.g. YaRN) has to reach the probe the same way extra_args
+    # does (plans_from_config carries both through from model_overrides):
+    # calibrating without it measures the unscaled model's context window,
+    # and the planner then sizes KV budgets against a window the serving lane
+    # never runs.
+    rope_scaling = plan.get("rope_scaling")
+    if rope_scaling is not None:
+        from logos_worker_node.models import RopeScalingConfig, extra_args_has_hf_overrides  # noqa: PLC0415
+
+        if extra_args_has_hf_overrides(extra_args):
+            raise ValueError(
+                "rope_scaling and a --hf-overrides flag in extra_args are "
+                "mutually exclusive — both set vLLM's --hf-overrides, and only "
+                "the last occurrence would take effect. Either drop "
+                "rope_scaling and pass the rope settings inside the existing "
+                "--hf-overrides JSON, or remove the --hf-overrides flag from "
+                "extra_args."
+            )
+        cmd.extend(["--hf-overrides", json.dumps(RopeScalingConfig.model_validate(rope_scaling).to_hf_overrides())])
     if enforce_eager:
         cmd.append("--enforce-eager")
     if disable_custom_all_reduce:

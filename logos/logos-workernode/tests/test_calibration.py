@@ -2317,6 +2317,72 @@ def test_plans_from_config_forwards_extra_args(tmp_path: Path) -> None:
     assert hf in _build_vllm_cmd(plan, "vllm", "127.0.0.1", 9000, "4G")
 
 
+def test_plans_from_config_forwards_rope_scaling(tmp_path: Path) -> None:
+    """rope_scaling has to reach calibration like --hf-overrides does (#744).
+
+    Without it the probe measures the unscaled model's context window, and the
+    planner sizes KV budgets against a window the serving lane never runs.
+    """
+    import json
+
+    from logos_worker_node.calibration import _build_vllm_cmd, plans_from_config
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:\n"
+        "        rope_scaling:\n"
+        "          rope_type: yarn\n"
+        "          factor: 4.0\n"
+        "          original_max_position_embeddings: 32768\n"
+    )
+    plan = next(p for p in plans_from_config(cfg) if "Coder" in p["model"])
+    assert plan["rope_scaling"]["rope_type"] == "yarn"
+    cmd = _build_vllm_cmd(plan, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--hf-overrides")
+    assert json.loads(cmd[idx + 1]) == {
+        "rope_scaling": {
+            "rope_type": "yarn",
+            "factor": 4.0,
+            "original_max_position_embeddings": 32768,
+        }
+    }
+
+
+def test_build_vllm_cmd_rejects_rope_scaling_with_hf_overrides_extra_arg() -> None:
+    """Same conflict rule as the lane's VllmConfig — both paths must agree."""
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _build_vllm_cmd(
+            {
+                "model": "m",
+                "rope_scaling": {
+                    "rope_type": "yarn",
+                    "factor": 4.0,
+                    "original_max_position_embeddings": 32768,
+                },
+                "extra_args": ['--hf-overrides={"rope_scaling":{"rope_type":"linear","factor":2}}'],
+            },
+            "vllm",
+            "127.0.0.1",
+            9000,
+            "4G",
+        )
+
+
+def test_build_vllm_cmd_omits_hf_overrides_without_rope_scaling() -> None:
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    cmd = _build_vllm_cmd({"model": "m"}, "vllm", "127.0.0.1", 9000, "4G")
+    assert "--hf-overrides" not in cmd
+
+
 def test_plans_from_config_never_takes_internal_bookkeeping(tmp_path: Path) -> None:
     """The retry counters steer the sweep and must not be settable from config."""
     from logos_worker_node.calibration import plans_from_config

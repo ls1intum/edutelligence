@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from logos_worker_node.models import LaneConfig, LaneSetRequest, LogosConfig, VllmConfig
+from logos_worker_node.models import LaneConfig, LaneSetRequest, LogosConfig, RopeScalingConfig, VllmConfig
 
 
 def test_lane_config_normalizes_gpu_devices() -> None:
@@ -82,3 +82,151 @@ def test_logos_config_extracts_inline_capability_overrides() -> None:
         "kv_budget_mb": 2048,
         "max_context_length": 4096,
     }
+
+
+# ── RoPE scaling (issue #744) ────────────────────────────────────────────────
+
+
+def test_vllm_config_rope_scaling_defaults_to_disabled() -> None:
+    cfg = VllmConfig()
+    assert cfg.rope_scaling is None
+
+
+def test_rope_scaling_yarn_round_trips() -> None:
+    cfg = VllmConfig(
+        rope_scaling={
+            "rope_type": "yarn",
+            "factor": 4.0,
+            "original_max_position_embeddings": 32768,
+            "rope_theta": 10000000,
+        }
+    )
+    rs = cfg.rope_scaling
+    assert isinstance(rs, RopeScalingConfig)
+    assert rs.rope_type == "yarn"
+    assert rs.factor == 4.0
+    assert rs.original_max_position_embeddings == 32768
+
+
+def test_rope_scaling_requires_rope_type() -> None:
+    with pytest.raises(ValidationError):
+        VllmConfig(rope_scaling={"factor": 4.0})
+
+
+def test_rope_scaling_rejects_unknown_rope_type() -> None:
+    with pytest.raises(ValidationError, match="Invalid rope_type"):
+        VllmConfig(rope_scaling={"rope_type": "yarnn"})
+
+
+def test_rope_scaling_yarn_requires_factor_and_original_max() -> None:
+    with pytest.raises(ValidationError, match="factor"):
+        VllmConfig(rope_scaling={"rope_type": "yarn", "original_max_position_embeddings": 32768})
+    with pytest.raises(ValidationError, match="original_max_position_embeddings"):
+        VllmConfig(rope_scaling={"rope_type": "yarn", "factor": 4.0})
+
+
+def test_rope_scaling_rejects_factor_below_one() -> None:
+    with pytest.raises(ValidationError):
+        VllmConfig(rope_scaling={"rope_type": "yarn", "factor": 0.5, "original_max_position_embeddings": 32768})
+
+
+def test_rope_scaling_hf_overrides_default_key_and_strips_unset_keys() -> None:
+    # Unset optional keys must not be emitted: the hf-overrides merge is a
+    # deep merge, so a null factor would clobber the model's own value.
+    cfg = VllmConfig(
+        rope_scaling={
+            "rope_type": "yarn",
+            "factor": 2.0,
+            "original_max_position_embeddings": 32768,
+        }
+    )
+    assert cfg.rope_scaling.to_hf_overrides() == {
+        "rope_scaling": {
+            "rope_type": "yarn",
+            "factor": 2.0,
+            "original_max_position_embeddings": 32768,
+        }
+    }
+
+
+def test_rope_scaling_passes_through_family_specific_keys() -> None:
+    # The Qwen3.5/3.8-style block from issue #744: family-specific keys are
+    # not part of the schema and must still reach vLLM.
+    cfg = VllmConfig(
+        rope_scaling={
+            "rope_type": "yarn",
+            "rope_theta": 10000000,
+            "partial_rotary_factor": 0.25,
+            "factor": 4.0,
+            "original_max_position_embeddings": 262144,
+            "mrope_interleaved": True,
+            "mrope_section": [11, 11, 10],
+            "config_path": "text_config.rope_parameters",
+        }
+    )
+    assert cfg.rope_scaling.to_hf_overrides() == {
+        "text_config": {
+            "rope_parameters": {
+                "rope_type": "yarn",
+                "rope_theta": 10000000.0,
+                "partial_rotary_factor": 0.25,
+                "factor": 4.0,
+                "original_max_position_embeddings": 262144,
+                "mrope_interleaved": True,
+                "mrope_section": [11, 11, 10],
+            }
+        }
+    }
+
+
+def test_rope_scaling_rejects_path_traversal_in_config_path() -> None:
+    with pytest.raises(ValidationError, match="Invalid config_path"):
+        VllmConfig(
+            rope_scaling={
+                "rope_type": "yarn",
+                "factor": 2.0,
+                "original_max_position_embeddings": 32768,
+                "config_path": "../escape",
+            }
+        )
+
+
+def test_rope_scaling_equality_sees_family_specific_keys() -> None:
+    # _lane_needs_restart compares RopeScalingConfig values; extra keys must
+    # participate in equality or a mrope_section change would not restart.
+    base = {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 262144}
+    a = RopeScalingConfig.model_validate({**base, "mrope_section": [11, 11, 10]})
+    b = RopeScalingConfig.model_validate({**base, "mrope_section": [11, 11, 10]})
+    c = RopeScalingConfig.model_validate(base)
+    assert a == b
+    assert a != c
+
+
+def test_vllm_config_rejects_rope_scaling_with_hf_overrides_extra_arg() -> None:
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        VllmConfig(
+            rope_scaling={
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768,
+            },
+            extra_args=["--hf-overrides", '{"rope_scaling":{"rope_type":"linear","factor":2}}'],
+        )
+
+
+def test_vllm_config_rejects_rope_scaling_with_hf_overrides_equals_form() -> None:
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        VllmConfig(
+            rope_scaling={
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768,
+            },
+            extra_args=['--hf-overrides={"rope_scaling":{"rope_type":"linear","factor":2}}'],
+        )
+
+
+def test_vllm_config_accepts_rope_scaling_alone() -> None:
+    cfg = VllmConfig(rope_scaling={"rope_type": "linear", "factor": 2.0})
+    assert cfg.rope_scaling is not None
+    assert cfg.rope_scaling.rope_type == "linear"

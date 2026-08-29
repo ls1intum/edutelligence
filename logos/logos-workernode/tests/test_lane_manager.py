@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from logos_worker_node.lane_manager import LaneManager, PortAllocator
+from logos_worker_node.lane_manager import LaneManager, PortAllocator, _lane_needs_restart
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import (
     DeviceInfo,
@@ -2358,3 +2358,50 @@ def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
     merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
 
     assert merged.vllm_config is not None
+
+
+def test_model_overrides_can_set_rope_scaling() -> None:
+    """model_overrides is where an operator pins YaRN for a served model (#744)."""
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(
+            model_overrides={
+                "org/model-27b": {
+                    "rope_scaling": {
+                        "rope_type": "yarn",
+                        "factor": 4.0,
+                        "original_max_position_embeddings": 32768,
+                    }
+                }
+            }
+        ),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None
+    assert merged.vllm_config.rope_scaling is not None
+    assert merged.vllm_config.rope_scaling.rope_type == "yarn"
+    assert merged.vllm_config.rope_scaling.factor == 4.0
+
+
+def test_lane_needs_restart_on_rope_scaling_change() -> None:
+    """RoPE scaling changes the vLLM startup args — the lane must restart."""
+    base = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+    scaled = LaneConfig(
+        model="org/model-27b",
+        vllm=True,
+        vllm_config=VllmConfig(
+            rope_scaling={
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768,
+            }
+        ),
+    )
+    assert not _lane_needs_restart(base, base)
+    assert _lane_needs_restart(base, scaled)
+    assert _lane_needs_restart(scaled, base)
