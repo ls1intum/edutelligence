@@ -3198,6 +3198,7 @@ async def _streaming_response(
                         result_status="error" if error_message else "success",
                         error_message=error_message,
                         cold_start=scheduling_stats.get("is_cold_start"),
+                        usage_tokens=usage_tokens,
                     )
                 _log_request_completion(
                     model_id=model_id,
@@ -3363,6 +3364,7 @@ async def _streaming_response(
                     result_status="error" if failed else "success",
                     error_message=error_message,
                     cold_start=scheduling_stats.get("is_cold_start"),
+                    usage_tokens=usage_tokens,
                 )
             _log_request_completion(
                 model_id=model_id,
@@ -3581,6 +3583,7 @@ async def _sync_response(
                     error_message if timed_out else (exec_result.error if not exec_result.success else None)
                 ),
                 cold_start=scheduling_stats.get("is_cold_start"),
+                usage_tokens=usage_tokens,
             )
 
         if rl_key:

@@ -547,13 +547,19 @@ class RequestPipeline:
         result_status: str,
         error_message: Optional[str] = None,
         cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
     ):
-        """Record request completion."""
+        """Record request completion.
+
+        ``usage_tokens`` (the ``extract_token_usage`` dict) feeds the token
+        counters and the per-model context-window histogram when present.
+        """
         self._monitoring.record_complete(
             request_id=request_id,
             result_status=result_status,
             error_message=error_message,
             cold_start=cold_start,
+            usage_tokens=usage_tokens,
         )
 
     def discard_request(self, request_id: str, result_status: str) -> None:

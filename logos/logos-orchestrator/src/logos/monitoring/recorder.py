@@ -79,6 +79,17 @@ def _sweep_stale_requests(now: float) -> None:
         )
 
 
+def _nonneg_int(value: Any) -> Optional[int]:
+    """A non-negative int token count, or None when the value is unusable.
+
+    ``bool`` is an ``int`` subclass but never a token count, so it is
+    excluded explicitly (same rule as ``extract_token_usage``).
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 def _resolve_label_names(model_id: Optional[int], provider_id: Optional[int]) -> tuple[str, str]:
     """Resolve the model/provider label values for completion metrics.
 
@@ -180,6 +191,7 @@ class MonitoringRecorder:
         request_id: str,
         result_status: ResultStatus | str,
         cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
     ) -> str:
         """Close out a request's metrics and return the status string.
 
@@ -187,6 +199,13 @@ class MonitoringRecorder:
         reached ``record_enqueue`` (a classification failure completes before
         it is ever enqueued), contributes no duration observation and cannot
         move the in-flight gauge.
+
+        ``usage_tokens`` is the ``extract_token_usage`` dict of a completed
+        request (``prompt_tokens`` / ``completion_tokens`` /
+        ``prompt_cached_tokens``). Token counters count what the provider
+        actually processed, so they are observed for every outcome — a
+        timeout that streamed most of the generation still consumed those
+        tokens.
         """
         status_value = result_status.value if isinstance(result_status, ResultStatus) else str(result_status)
 
@@ -213,7 +232,35 @@ class MonitoringRecorder:
 
         if cold_start:
             prom.COLD_STARTS_TOTAL.labels(model=model, provider=provider).inc()
+        if usage_tokens:
+            self._observe_token_usage(model, provider, usage_tokens)
         return status_value
+
+    @staticmethod
+    def _observe_token_usage(model: str, provider: str, usage_tokens: Dict[str, int]) -> None:
+        """Feed the token counters and the per-model context-window histogram.
+
+        ``extract_token_usage`` already stores ints only, but the recorder
+        must not break a request over a malformed dict, so each value is
+        coerced defensively and skipped when absent.
+        """
+        prompt_tokens = _nonneg_int(usage_tokens.get("prompt_tokens"))
+        completion_tokens = _nonneg_int(usage_tokens.get("completion_tokens"))
+        cached_tokens = _nonneg_int(usage_tokens.get("prompt_cached_tokens"))
+
+        if prompt_tokens is not None:
+            prom.PROMPT_TOKENS_TOTAL.labels(model=model, provider=provider).inc(prompt_tokens)
+        if completion_tokens is not None:
+            prom.GENERATION_TOKENS_TOTAL.labels(model=model, provider=provider).inc(completion_tokens)
+        if cached_tokens is not None:
+            prom.CACHED_PROMPT_TOKENS_TOTAL.labels(model=model, provider=provider).inc(cached_tokens)
+
+        context_tokens = (prompt_tokens or 0) + (completion_tokens or 0)
+        if context_tokens > 0:
+            # How much of the model's context window the request used — the
+            # signal for whether a deployment can be downsized or needs a
+            # bigger window.
+            prom.REQUEST_CONTEXT_TOKENS.labels(model=model).observe(context_tokens)
 
     def discard(self, request_id: str, result_status: ResultStatus | str) -> None:
         """Finalise a request whose terminal state was persisted elsewhere.
@@ -232,8 +279,9 @@ class MonitoringRecorder:
         result_status: ResultStatus | str,
         cold_start: Optional[bool] = None,
         error_message: Optional[str] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
     ) -> None:
-        status_value = self._settle(request_id, result_status, cold_start)
+        status_value = self._settle(request_id, result_status, cold_start, usage_tokens)
 
         payload = {
             "request_complete_ts": datetime.datetime.now(datetime.timezone.utc),
