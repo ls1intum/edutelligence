@@ -1244,6 +1244,22 @@ class CalibrationResult:
     # makes sleeping and the model cache compete for one pool. None when the
     # run skipped the sleep phases, or when /proc/meminfo was unreadable.
     host_ram_residual_mb: float | None = None
+    # Wall-clock seconds from the final measurement probe's spawn (the same
+    # configuration the serving lane runs with — final KV size, resolved
+    # max_model_len, ...) until the first request it served completed: the
+    # Phase 2.5 warmup 1-token completion. That is exactly what a client
+    # waiting for a cold lane experiences before its first token — vLLM
+    # startup, weight load, and the first-request overhead (CUDA graph
+    # capture, JIT, KV page allocation) all included. None when the warmup
+    # request did not serve: a value that never actually served a request
+    # must not pose as a cold-load measurement.
+    cold_load_time_s: float | None = None
+    # Wall-clock seconds from the Phase 5.5 /wake_up trigger until the
+    # post-wake test request completed — the same "trigger → first served
+    # request" interval as cold_load_time_s, for the path a lane takes when a
+    # request finds it asleep. None when the run skipped the sleep phases,
+    # the wake failed verification, or the post-wake request did not serve.
+    wake_from_sleep_time_s: float | None = None
     # Set when calibrate_model bails because the model itself can never
     # load on this worker (bad repo id, gated repo, unsupported architecture).
     # Caller persists the model into model_profiles.yml so the master's
@@ -1917,6 +1933,12 @@ def calibrate_model(
             return None
 
     proc: subprocess.Popen[str] | None = None
+    # perf_counter anchor for the cold-load measurement. Re-armed right
+    # before every final-measurement spawn attempt; only the attempt that
+    # actually spawns proceeds to Phase 2.5, so whatever is left here belongs
+    # to the live probe. None while no final spawn has been armed yet.
+    final_spawn_at: float | None = None
+    cold_load_time_s: float | None = None
 
     if kv_search:
         search_lo = _KV_CACHE_MIN_STEP_MB  # 1 GB floor
@@ -2247,6 +2269,7 @@ def calibrate_model(
             _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
             _final_fp = _cmd_fingerprint(_build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str))
             failed_commands.discard(_final_fp)
+            final_spawn_at = time.perf_counter()
             proc = _try_start(_final_kv, record_blacklist=False, allow_whitelist=False)
             if proc is not None:
                 kv_cache_sent_mb = _final_kv
@@ -2294,6 +2317,7 @@ def calibrate_model(
                 _fixed_kv_str,
             )
         explicit_probe_overrides: dict[str, Any] = {"_max_model_len_retry_count": 0, "_max_num_seqs_retry_count": 0}
+        final_spawn_at = time.perf_counter()
         proc = _try_start(kv_cache_sent_mb, plan_overrides=explicit_probe_overrides)
         if proc is None:
             partial.error = f"Model failed to start with KV cache " f"{_format_kv_mb(kv_cache_sent_mb)} on tp={tp}"
@@ -2356,6 +2380,17 @@ def calibrate_model(
                 "        warmup done in %.1fs — graphs/JIT/KV pools allocated",
                 warmup_dt,
             )
+            # The warmup IS the first request the probe served, so this point
+            # is the end of the cold load a client would experience for a lane
+            # spawned with this exact configuration: final_spawn_at → here
+            # spans vLLM startup, weight load, and the first-request overhead
+            # (CUDA graph capture, JIT, KV page allocation).
+            if final_spawn_at is not None:
+                cold_load_time_s = time.perf_counter() - final_spawn_at
+                logger.info(
+                    "        cold load (spawn → first served request) = %.1fs",
+                    cold_load_time_s,
+                )
         else:
             logger.warning(
                 "        warmup failed (%.1fs) — awake VRAM may underestimate peak",
@@ -2403,6 +2438,7 @@ def calibrate_model(
         sleep_transient_mb: float | None = None
         host_ram_residual_mb: float | None = None
         sleep_mode_disabled: bool | None = None
+        wake_from_sleep_time_s: float | None = None
         if sleep_level <= 0:
             logger.info(
                 "  [4/6 + 5/6 + 5.5/6] Sleep phases skipped (sleep mode disabled for this model) — "
@@ -2536,6 +2572,10 @@ def calibrate_model(
                     partial.error = "cancelled"
                     return partial
                 logger.info("  [5.5/6] Waking model and verifying it serves again...")
+                # Anchor for the wake measurement: from this trigger to the
+                # post-wake test request serving is exactly what a request
+                # queued on the sleeping lane waits for.
+                wake_t0 = time.perf_counter()
                 wake_status, _ = _post(f"{base_url}/wake_up", timeout_s=_SLEEP_TIMEOUT_S)
                 if wake_status not in (200, 204):
                     sleep_phase_failed = True
@@ -2568,6 +2608,15 @@ def calibrate_model(
                             "did not serve either — no evidence of a wake regression (the "
                             "request type may simply be unsupported by this model, e.g. an "
                             "embedding lane); accepting wake on /is_sleeping evidence"
+                        )
+                    else:
+                        # First request served after the wake completed — the
+                        # interval from the /wake_up trigger to here is the
+                        # awake-from-sleep time a queued request pays.
+                        wake_from_sleep_time_s = time.perf_counter() - wake_t0
+                        logger.info(
+                            "        wake (wake_up → first served request) = %.1fs",
+                            wake_from_sleep_time_s,
                         )
             if sleep_phase_failed:
                 # A residual measured for a sleep that cannot be reversed must
@@ -2612,6 +2661,20 @@ def calibrate_model(
                 "    host_ram_residual_mb = %.0f MB  (held on the host for the whole sleep)",
                 host_ram_residual_mb,
             )
+        if cold_load_time_s is None:
+            logger.info("    cold_load_time_s     = n/a  (first served request did not complete)")
+        else:
+            logger.info(
+                "    cold_load_time_s     = %.1fs  (spawn → first served request)",
+                cold_load_time_s,
+            )
+        if wake_from_sleep_time_s is None:
+            logger.info("    wake_from_sleep_time_s = n/a  (sleep phases skipped or post-wake request did not serve)")
+        else:
+            logger.info(
+                "    wake_from_sleep_time_s = %.1fs  (wake_up → first served request after wake)",
+                wake_from_sleep_time_s,
+            )
         logger.info(
             "    Scheduler uses base_residency directly — no KV added on top",
         )
@@ -2631,6 +2694,8 @@ def calibrate_model(
             sleep_l1_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 1 else None),
             sleep_l2_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 2 else None),
             host_ram_residual_mb=host_ram_residual_mb,
+            cold_load_time_s=cold_load_time_s,
+            wake_from_sleep_time_s=wake_from_sleep_time_s,
             min_kv_cache_mb=min_kv_observed_mb,
             max_kv_cache_mb=max_kv_observed_mb,
             max_model_len=partial.max_model_len,
@@ -2695,6 +2760,15 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
             round(r.sleep_l2_transient_host_ram_mb, 1) if r.sleep_l2_transient_host_ram_mb is not None else None
         ),
         "host_ram_residual_mb": (round(r.host_ram_residual_mb, 1) if r.host_ram_residual_mb is not None else None),
+        # Cold-load and wake timings (see CalibrationResult): what a client
+        # waits for when it finds the model cold or asleep. None when the run
+        # that produced this result did not complete the request each
+        # interval is anchored on — merge_profile then keeps the value an
+        # earlier calibration recorded, same as the other sleep fields.
+        "cold_load_time_s": (round(r.cold_load_time_s, 1) if r.cold_load_time_s is not None else None),
+        "wake_from_sleep_time_s": (
+            round(r.wake_from_sleep_time_s, 1) if r.wake_from_sleep_time_s is not None else None
+        ),
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
         # Discovered KV cache size for use by the lane manager at runtime
