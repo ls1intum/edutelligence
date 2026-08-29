@@ -80,6 +80,24 @@ class PipelineRequest:
     # Calling API key. Seeds the prefix-affinity hash so two keys never share
     # a stream identity, and so one key's parallel agent loops stay separate.
     api_key_id: Optional[int] = None
+    # Internal retry / stream resume (#815): when set, classification is
+    # skipped and this exact model is the only candidate — a retry keeps the
+    # model the request already had (or the caller already named) and only
+    # the placement may change, to another node serving the same model.
+    pinned_model_id: Optional[int] = None
+    # Overrides the resolved queue priority for this request. Used by the
+    # stream-resume path, which queues at ``Priority.RESUME`` — the absolute
+    # highest priority. Plain retries leave this unset and keep the original
+    # priority.
+    priority_override: Optional[int] = None
+    # Provider ids to keep out of this request's candidate set (nodes that
+    # already failed it). When the exclusion would leave no deployment of the
+    # pinned model, it is lifted and the same node is retried.
+    exclude_provider_ids: Optional[frozenset[int]] = None
+    # Bounds the execution-context (lane readiness) resolution for this
+    # request, tighter than the pipeline default when the retry deadline is
+    # running out.
+    context_resolve_timeout_s: Optional[float] = None
 
 
 @dataclass
@@ -161,8 +179,14 @@ class RequestPipeline:
 
         # 1. Classification. PROXY mode still runs the policy + token stages
         # (so policy thresholds remain enforced) but skips Laura's heavy ML
-        # ranking — the caller already named the model.
-        classification_result = self._classify(request)
+        # ranking — the caller already named the model. A pinned request
+        # (internal retry / stream resume, #815) skips classification
+        # entirely: the model is already fixed, only the placement may
+        # change, to another node serving the same model.
+        if request.pinned_model_id is not None:
+            classification_result = self._pinned_candidates(request)
+        else:
+            classification_result = self._classify(request)
         if not classification_result.candidates:
             self.record_completion(
                 request_id=request_id,
@@ -181,8 +205,23 @@ class RequestPipeline:
 
         sorted_candidates = sorted(classification_result.candidates, key=lambda x: x[1], reverse=True)
         target_model_id, _, priority_int = sorted_candidates[0]
+
+        # Deployments eligible for this request. A pinned request is limited
+        # to its model, and nodes that already failed it are excluded — the
+        # retry may land on another node serving the same model. When the
+        # exclusion would leave no node at all (single-node model), it is
+        # lifted and the same node is retried: that is the redeploy case,
+        # where the answer comes back from the very node that dropped.
+        deployments = request.deployments
+        if request.pinned_model_id is not None:
+            deployments = [d for d in deployments if d["model_id"] == request.pinned_model_id]
+            if request.exclude_provider_ids:
+                without_failed = [d for d in deployments if d["provider_id"] not in request.exclude_provider_ids]
+                if without_failed:
+                    deployments = without_failed
+
         target_deployment = next(
-            (d for d in request.deployments if d["model_id"] == target_model_id),
+            (d for d in deployments if d["model_id"] == target_model_id),
             None,
         )
 
@@ -201,7 +240,7 @@ class RequestPipeline:
         scheduling_request = SchedulingRequest(
             request_id=request_id,
             classified_models=classification_result.candidates,
-            deployments=request.deployments,
+            deployments=deployments,
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
@@ -284,6 +323,7 @@ class RequestPipeline:
             classification_result=classification_result,
             request_path=request.request_path,
             request_id=request_id,
+            context_resolve_timeout_s=request.context_resolve_timeout_s,
         )
         if not ctx_result.success:
             return ctx_result
@@ -327,9 +367,18 @@ class RequestPipeline:
         classification_result: "_ClassificationResult",
         request_id: str,
         request_path: Optional[str] = None,
+        context_resolve_timeout_s: Optional[float] = None,
     ) -> "PipelineResult":
-        """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
-        deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
+        """Resolve execution context, retrying for logosnode providers whose lane may still be starting.
+
+        ``context_resolve_timeout_s`` tightens the default bound for requests
+        whose overall retry deadline is running out (#815): a retry must not
+        spend the whole lane-readiness window when the budget is nearly gone.
+        """
+        timeout_s = self._CONTEXT_RESOLVE_TIMEOUT_S
+        if context_resolve_timeout_s is not None and context_resolve_timeout_s > 0:
+            timeout_s = min(timeout_s, context_resolve_timeout_s)
+        deadline = time.monotonic() + timeout_s
         first_attempt = True
 
         while True:
@@ -382,7 +431,7 @@ class RequestPipeline:
                     request_id,
                     scheduling_result.model_id,
                     scheduling_result.provider_id,
-                    self._CONTEXT_RESOLVE_TIMEOUT_S,
+                    timeout_s,
                 )
                 first_attempt = False
 
@@ -437,6 +486,27 @@ class RequestPipeline:
             classification_stats=classification_result.stats,
             scheduling_stats=self._scheduling_stats(scheduling_result, request_id),
             error=error,
+        )
+
+    def _pinned_candidates(self, request: PipelineRequest) -> "_ClassificationResult":
+        """Candidate list for a pinned (retry/resume) request.
+
+        Classification — policy and token screening — already ran when the
+        request first arrived; re-running it on a retry could only swap the
+        model out from under a request that must keep the one it had. The
+        pinned model is the sole candidate. The effective priority is the
+        override (``Priority.RESUME`` for a stream resume) or the request's
+        original resolved priority — plain retries keep it.
+        """
+        policy = request.policy or {}
+        priority = request.priority_override or resolve_queue_priority(request.default_priority, policy.get("priority"))
+        return _ClassificationResult(
+            candidates=[(request.pinned_model_id, 1.0, int(priority))],
+            stats={
+                "pinned_model_id": request.pinned_model_id,
+                "candidate_count": 1,
+                "candidates": [{"model_id": request.pinned_model_id, "weight": 1.0, "priority": int(priority)}],
+            },
         )
 
     def _classify(self, request: PipelineRequest) -> "_ClassificationResult":

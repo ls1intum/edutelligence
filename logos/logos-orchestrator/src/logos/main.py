@@ -12,7 +12,7 @@ import re
 import secrets
 import threading
 import time
-from contextlib import aclosing, asynccontextmanager, suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
@@ -50,11 +50,14 @@ from logos.logosnode_registry import (
     LogosNodeRuntimeRegistry,
     LogosNodeSessionConflictError,
 )
+from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
+from logos.pipeline.retry import RetryBudget, pipeline_error_is_retryable, status_is_retryable
+from logos.queue.models import Priority
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
     force_non_streaming_payload,
@@ -198,6 +201,35 @@ _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SEC
 # backoff so the lane finishes waking. Never retries once a token has streamed.
 _LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
 _LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = float(os.getenv("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", "1.0") or 1.0)
+# Internal retry (#815): a request that fails before its answer is complete —
+# wait-mode timeout, worker redeploy or crash, network hiccup — is re-dispatched
+# internally (same model, possibly another node serving it) instead of returning
+# the error raw to the caller. Bounded by both an attempt count and an overall
+# wall-clock deadline, so a persistently broken deployment degrades back to the
+# old behaviour, eventually. Set LOGOS_REQUEST_MAX_ATTEMPTS=1 to disable.
+_REQUEST_MAX_ATTEMPTS = _env_int("LOGOS_REQUEST_MAX_ATTEMPTS", 3)
+_REQUEST_RETRY_DEADLINE_S = float(
+    global_timeout_s(float(os.getenv("LOGOS_REQUEST_RETRY_DEADLINE_S", "1800") or "1800"))
+)
+_REQUEST_RETRY_BACKOFF_BASE_S = float(os.getenv("LOGOS_REQUEST_RETRY_BACKOFF_BASE_S", "1.0") or "1.0")
+_REQUEST_RETRY_BACKOFF_CAP_S = float(os.getenv("LOGOS_REQUEST_RETRY_BACKOFF_CAP_S", "15.0") or "15.0")
+# Mid-flight stream resume (#815, phase 2): a stream that already delivered
+# tokens is re-dispatched at the absolute highest queue priority (RESUME) and
+# continues generation after the partial answer, so the caller sees a pause
+# instead of a broken stream.
+_RESUME_ENABLED = os.getenv("LOGOS_RESUME_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _new_retry_budget() -> Optional[RetryBudget]:
+    """The internal-retry budget for one request, or None when disabled."""
+    if _REQUEST_MAX_ATTEMPTS < 2:
+        return None
+    return RetryBudget(
+        max_attempts=_REQUEST_MAX_ATTEMPTS,
+        deadline_s=_REQUEST_RETRY_DEADLINE_S,
+        backoff_base_s=_REQUEST_RETRY_BACKOFF_BASE_S,
+        backoff_cap_s=_REQUEST_RETRY_BACKOFF_CAP_S,
+    )
 
 
 def _record_azure_rate_limits(
@@ -1099,6 +1131,12 @@ def _record_log_failure(
 # emits content_block_start/stop and ping, which carry neither text nor usage.
 _MESSAGES_EVENT_TYPES = frozenset({"message_start", "message_delta", "message_stop", "content_block_delta"})
 
+# Chat-completion delta keys that carry non-text structure (tool calls,
+# function calls, audio). Their presence marks a stream a mid-flight resume
+# must not attempt: a resume continues from the accumulated text only, so it
+# would silently drop the structured part of the answer (#815).
+_STRUCTURED_DELTA_KEYS = ("tool_calls", "function_call", "audio")
+
 
 class _LiveStreamRegistry:
     """Token counts of the streams running right now, keyed by request id.
@@ -1212,6 +1250,10 @@ class _StreamingLogAccumulator:
     # terminal usage event, which is no help to anyone watching the request run
     # — so the delta count stands in for it until then. See streamed_tokens.
     delta_count: int = 0
+    # Set when a chat-completion delta carried non-text structure (see
+    # _STRUCTURED_DELTA_KEYS). A mid-flight resume is text-only and must not
+    # kick in for such a stream.
+    saw_structured_delta: bool = False
     _decoder: Any = field(
         default_factory=lambda: codecs.getincrementaldecoder("utf-8")(errors="replace"),
         repr=False,
@@ -1347,6 +1389,8 @@ class _StreamingLogAccumulator:
                 if content:
                     self.full_text += content
                     self.delta_count += 1
+                elif any(key in delta for key in _STRUCTURED_DELTA_KEYS):
+                    self.saw_structured_delta = True
 
     def _consume_responses_event(self, event_type: str, blob: Dict[str, Any]) -> None:
         """Consume one Responses-API SSE event (``{"type": "response.*", ...}``)."""
@@ -2959,6 +3003,120 @@ def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
     return headers or None
 
 
+async def _close_quietly(chunk_iter) -> None:
+    """Close an abandoned stream iterator so the worker learns promptly.
+
+    The registry's stream iterator sends the cancellation to the worker in
+    its cleanup; closing it here — rather than leaving it to the
+    async-generator GC hook — runs that cleanup while the failure is being
+    handled.
+    """
+    aclose = getattr(chunk_iter, "aclose", None)
+    if aclose is None:
+        return
+    with suppress(Exception):
+        await aclose()
+
+
+def _build_resume_payload(base_payload: Dict[str, Any], prefix_text: str) -> Optional[Dict[str, Any]]:
+    """Build the payload that continues a chat completion after ``prefix_text``.
+
+    A plain-text chat-completions request can be expressed as a continuation:
+    the partial answer is appended as a trailing assistant message, and the
+    engine keeps generating after it — to the caller the stream looks like it
+    paused. Parallel candidates and JSON-structured output cannot be
+    continued that way (the shape of the partial answer is not guaranteed to
+    extend), and non-chat payloads have no ``messages`` to append to — return
+    None so the caller falls back to the error frame. Streams that were
+    emitting tool calls are already excluded by the ``saw_structured_delta``
+    guard at the call site.
+    """
+    messages = base_payload.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return None
+    if not prefix_text:
+        return None
+    if (base_payload.get("n") or 1) > 1:
+        return None
+    if base_payload.get("response_format"):
+        return None
+    return {**base_payload, "messages": [*messages, {"role": "assistant", "content": prefix_text}]}
+
+
+async def _schedule_stream_resume(
+    *,
+    request_id: Optional[str],
+    model_id: int,
+    failed_provider_id: int,
+    deployments: list,
+    resume_payload: Dict[str, Any],
+    request_path: Optional[str],
+    policy: Optional[Dict[str, Any]],
+    default_priority: int,
+    api_key_id: Optional[int],
+    budget: RetryBudget,
+):
+    """Re-schedule a failed stream so it can be resumed (#815, phase 2).
+
+    The same model is re-queued at ``Priority.RESUME`` — the absolute highest
+    priority, jumping every other queued request — with the nodes that
+    already failed it excluded so a peer can take over immediately. Returns
+    the new execution context, or None when the resume cannot be honoured:
+    retry budget exhausted, no placement left, or the scheduler picked a
+    non-logosnode deployment, which would restart the answer rather than
+    continue it.
+    """
+    if not budget.can_retry():
+        return None
+    budget.record_failure(failed_provider_id)
+    prom.REQUEST_RETRIES_TOTAL.labels(kind="resume").inc()
+    logger.info(
+        "Resuming failed stream for request %s: model_id=%s failed provider=%s at RESUME priority",
+        request_id,
+        model_id,
+        failed_provider_id,
+    )
+    resume_request = PipelineRequest(
+        payload=resume_payload,
+        headers={},
+        allowed_models=[model_id],
+        deployments=deployments,
+        policy=policy,
+        request_id=request_id,
+        skip_laura=True,
+        request_path=request_path,
+        default_priority=default_priority,
+        api_key_id=api_key_id,
+        pinned_model_id=model_id,
+        priority_override=Priority.RESUME.value,
+        exclude_provider_ids=budget.excluded_providers() or None,
+        context_resolve_timeout_s=budget.remaining_s(),
+    )
+    try:
+        result = await _pipeline.process(resume_request)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Stream resume scheduling raised for request %s: %s", request_id, exc)
+        return None
+    if not result.success or result.execution_context is None:
+        logger.info("Stream resume not scheduled for request %s: %s", request_id, result.error)
+        return None
+    context = result.execution_context
+    if context.provider_type != "logosnode" or not context.lane_id:
+        # A cloud deployment would restart the answer from scratch; only a
+        # local lane can continue generation after the partial prefix.
+        try:
+            _pipeline.scheduler.release(
+                context.model_id,
+                context.provider_id,
+                context.provider_type,
+                request_id,
+            )
+        except Exception as _e:
+            logger.error(f"Failed to release scheduler resources after resume rejection: {_e}")
+        return None
+    return context
+
+
 async def _streaming_response(
     context,
     payload,
@@ -2971,6 +3129,10 @@ async def _streaming_response(
     request_path=None,
     rl_key=None,
     api_key_id: Optional[int] = None,
+    deployments: Optional[list] = None,
+    policy: Optional[Dict[str, Any]] = None,
+    default_priority: int = 0,
+    retry_budget: Optional[RetryBudget] = None,
 ):
     """Build streaming response using executor.
 
@@ -2979,6 +3141,13 @@ async def _streaming_response(
     status code. Returns a ``StreamingResponse`` for normal 2xx streams while
     preserving the upstream content type. Mid-stream errors append an
     OpenAI-spec error frame only for SSE responses.
+
+    LogosNode streams additionally resume mid-flight failures (#815, phase
+    2): the request is re-dispatched at RESUME priority on another node of
+    the same model and the generation continues after the partial answer, so
+    the caller sees a pause. ``deployments``, ``policy`` and
+    ``default_priority`` feed that re-schedule; ``retry_budget`` is the
+    request's internal-retry budget, shared with the phase-1 retries.
     """
     from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -3001,18 +3170,32 @@ async def _streaming_response(
         except Exception:
             pass
 
-    def _release():
-        """Release scheduler slot (called on early-return error paths)."""
+    # Scheduler slot(s) reserved for this request: the initial dispatch,
+    # plus — for a mid-flight stream resume (#815) — the slot of the node
+    # that takes over; the failed node's slot is released at takeover time.
+    # Every slot is released exactly once, here or in the streamer's finally.
+    slots = [(model_id, provider_id, scheduling_stats.get("provider_type") if scheduling_stats else None)]
+    # The node currently holding the stream. Rebound when a resume takeover
+    # is scheduled, so the log row attributes the answer to the node that
+    # actually delivered it.
+    active_node = {"model_id": model_id, "provider_id": provider_id}
+
+    def _release_slot(slot_model_id, slot_provider_id, slot_provider_type):
         if scheduling_stats and scheduling_stats.get("request_id"):
             try:
                 _pipeline.scheduler.release(
-                    model_id,
-                    provider_id,
-                    scheduling_stats.get("provider_type"),
+                    slot_model_id,
+                    slot_provider_id,
+                    slot_provider_type,
                     scheduling_stats.get("request_id"),
                 )
             except Exception as _e:
                 logger.error(f"Failed to release scheduler resources: {_e}")
+
+    def _release():
+        """Release this request's scheduler slots (idempotent via the facade)."""
+        while slots:
+            _release_slot(*slots.pop())
 
     def _pre_stream_error_response(status_code: int, body: Any, error_message: str):
         """Record an error that occurred before a streaming response was committed."""
@@ -3074,9 +3257,14 @@ async def _streaming_response(
         )
 
     # ── logosnode path ────────────────────────────────────────────────────
-    # LogosNode streams come via WebSocket; status errors are raised as
-    # LogosNodeOfflineError / LogosNodeCommandError *before* streaming starts
-    # (handled in _sync_response). Just wrap in StreamingResponse as before.
+    # LogosNode streams come via WebSocket. A pre-token failure (a just-woken
+    # lane whose engine is not serveable yet, a redeployed worker, a dropped
+    # connection) is raised *before* streaming starts — by pulling the first
+    # chunk before the StreamingResponse is committed (below) it surfaces as
+    # a proper JSON error that the outer retry loop can re-dispatch to
+    # another node (#815 phase 1). A mid-flight failure re-dispatches the
+    # request at RESUME priority on a peer node and continues the generation
+    # after the partial answer, so the caller sees a pause (#815 phase 2).
     if context.provider_type == "logosnode" and context.lane_id:
         stream_payload = set_payload_field(prepared_payload, "stream", True)
         if not is_audio_upload_path(request_path or ""):
@@ -3085,22 +3273,70 @@ async def _streaming_response(
                 "stream_options": {"include_usage": True},
             }
 
-        def _new_logosnode_chunk_iter():
+        def _new_logosnode_chunk_iter(exec_ctx, exec_payload):
             return _logosnode_registry.send_stream_command(
-                provider_id=provider_id,
+                provider_id=exec_ctx.provider_id,
                 action="infer_stream",
                 params={
-                    "lane_id": context.lane_id,
-                    "payload": stream_payload,
+                    "lane_id": exec_ctx.lane_id,
+                    "payload": exec_payload,
                     "request_path": request_path,
                 },
                 timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
             )
 
+        async def _open_logosnode_stream(exec_ctx, exec_payload):
+            """Open a logosnode stream and pull its first chunk.
+
+            Pulling *before* FastAPI commits a StreamingResponse is what
+            turns a pre-token failure into a proper JSON error (and thus a
+            retryable condition) instead of a committed stream that can
+            only end in an error frame. The same-lane pre-token retries are
+            preserved: a just-woken level-1 lane fails cleanly before
+            stream_start, and a fresh pull on the same lane is transparent.
+
+            Returns ``(first_chunk, chunk_iter, error)`` — exactly one of
+            ``first_chunk`` and ``error`` is non-None; ``first_chunk`` may
+            itself be None for a stream that ends before emitting a chunk.
+            """
+            attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
+            for attempt in range(attempts):
+                chunk_iter = _new_logosnode_chunk_iter(exec_ctx, exec_payload)
+                try:
+                    return await chunk_iter.__anext__(), chunk_iter, None
+                except StopAsyncIteration:
+                    return None, chunk_iter, None
+                except Exception as e:
+                    with suppress(Exception):
+                        await chunk_iter.aclose()
+                    if attempt < attempts - 1:
+                        logger.warning(
+                            "logosnode pre-token stream failure (attempt %d/%d), retrying: %s",
+                            attempt + 1,
+                            attempts,
+                            e,
+                        )
+                        await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
+                        continue
+                    return None, None, e
+
+        first_chunk, open_iter, open_error = await _open_logosnode_stream(context, stream_payload)
+        if open_error is not None:
+            logger.error(
+                "logosnode pre-token stream failed after %d attempt(s) (model_id=%s, provider_id=%s): %s",
+                _LOGOSNODE_PRETOKEN_RETRIES + 1,
+                model_id,
+                provider_id,
+                open_error,
+            )
+            return _pre_stream_error_response(502, {"error": str(open_error)}, str(open_error))
+
         async def logosnode_streamer():
+            nonlocal open_iter
             stream_log = _StreamingLogAccumulator()
             error_message = None
             ttft_recorded = False
+            resumed = False
             # Publish this request to the live view for as long as it runs. The
             # registry is dropped in the finally below, so a client that walks
             # away cannot leave an entry behind.
@@ -3114,55 +3350,141 @@ async def _streaming_response(
             # the clients that left *before* the first token.
             stream_completed = False
             try:
-                attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
-                for attempt in range(attempts):
-                    produced = False
+                if first_chunk is not None:
+                    # The first chunk was pulled before the response was
+                    # committed, so its time-to-first-token is recorded here
+                    # instead of in the loop below.
+                    if first_chunk:
+                        if log_id:
+                            with DBManager() as db:
+                                db.set_time_at_first_token(log_id)
+                        ttft_recorded = True
+                    yield first_chunk
+                    stream_log.feed(first_chunk)
+                    _live_streams.update(request_id, stream_log.streamed_tokens())
+                while True:
                     try:
-                        # `aclosing` is what makes an abandoned request reach
-                        # the worker promptly. When this generator is closed
-                        # mid-stream — a client that walked away — a bare
-                        # `async for` would leave the inner generator to the
+                        # Closing `open_iter` in the finally below is what
+                        # makes an abandoned request reach the worker
+                        # promptly: when this generator is closed mid-stream
+                        # — a client that walked away — a bare `async for`
+                        # would leave the inner generator to the
                         # async-generator GC hook, so its cleanup (which is
                         # what sends the cancellation) would run at some
-                        # unspecified later point. Closing it here runs that
-                        # cleanup while the disconnect is being handled.
-                        async with aclosing(_new_logosnode_chunk_iter()) as chunk_iter:
-                            async for chunk in chunk_iter:
-                                produced = True
-                                yield chunk
-                                if chunk and not ttft_recorded:
-                                    if log_id:
-                                        with DBManager() as db:
-                                            db.set_time_at_first_token(log_id)
-                                    ttft_recorded = True
-                                stream_log.feed(chunk)
-                                _live_streams.update(request_id, stream_log.streamed_tokens())
+                        # unspecified later point.
+                        async for chunk in open_iter:
+                            yield chunk
+                            if chunk and not ttft_recorded:
+                                if log_id:
+                                    with DBManager() as db:
+                                        db.set_time_at_first_token(log_id)
+                                ttft_recorded = True
+                            stream_log.feed(chunk)
+                            _live_streams.update(request_id, stream_log.streamed_tokens())
+                        stream_completed = True
+                        break  # stream completed without raising
                     except Exception as e:
-                        # Retry ONLY if nothing has been streamed to the client yet:
-                        # a pre-token failure (e.g. a just-woken level-1 lane whose
-                        # engine was not yet serveable — the worker fails cleanly
-                        # before stream_start). Nothing was sent downstream, so a
-                        # fresh dispatch is transparent. Once any chunk has gone to
-                        # the client we cannot un-send it, so re-raise.
-                        if not produced and attempt < attempts - 1:
-                            logger.warning(
-                                "logosnode pre-token stream failure (attempt %d/%d), retrying: %s",
-                                attempt + 1,
-                                attempts,
-                                e,
-                            )
-                            await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
-                            continue
-                        error_message = str(e)
-                        raise e
-                    stream_completed = True
-                    break  # stream completed without raising
+                        # Mid-flight failure: tokens already reached the
+                        # client, so the only recovery is continuing the
+                        # generation after the partial answer on a node that
+                        # can serve it (#815 phase 2). Anything that cannot
+                        # be expressed as a continuation — structured output,
+                        # tool calls, no plain-text prefix, exhausted retry
+                        # budget, no eligible node — ends in the error
+                        # frame below.
+                        resume_opened = False
+                        if not resumed and _RESUME_ENABLED and retry_budget is not None and deployments:
+                            prefix = stream_log.full_text
+                            if prefix and not stream_log.saw_structured_delta:
+                                resume_payload = _build_resume_payload(prepared_payload, prefix)
+                                if resume_payload is not None:
+                                    if not is_audio_upload_path(request_path or ""):
+                                        resume_payload = {
+                                            **resume_payload,
+                                            "stream": True,
+                                            "stream_options": {"include_usage": True},
+                                        }
+                                    resumed_ctx = await _schedule_stream_resume(
+                                        request_id=request_id,
+                                        model_id=model_id,
+                                        failed_provider_id=active_node["provider_id"],
+                                        deployments=deployments,
+                                        resume_payload=resume_payload,
+                                        request_path=request_path,
+                                        policy=policy,
+                                        default_priority=default_priority,
+                                        api_key_id=api_key_id,
+                                        budget=retry_budget,
+                                    )
+                                    if resumed_ctx is not None:
+                                        # The failed node no longer holds the
+                                        # lane: hand its slot back and track
+                                        # the takeover's.
+                                        _release_slot(*slots.pop())
+                                        slots.append(
+                                            (
+                                                resumed_ctx.model_id,
+                                                resumed_ctx.provider_id,
+                                                resumed_ctx.provider_type,
+                                            )
+                                        )
+                                        active_node["provider_id"] = resumed_ctx.provider_id
+                                        old_iter = open_iter
+                                        (
+                                            resumed_first,
+                                            resumed_iter,
+                                            resumed_error,
+                                        ) = await _open_logosnode_stream(resumed_ctx, resume_payload)
+                                        if resumed_error is None:
+                                            # Swap only once the takeover is
+                                            # open, so the finally below can
+                                            # always close *some* iterator.
+                                            open_iter = resumed_iter
+                                            await _close_quietly(old_iter)
+                                            resumed = True
+                                            resume_opened = True
+                                            if resumed_first is not None:
+                                                yield resumed_first
+                                                stream_log.feed(resumed_first)
+                                                _live_streams.update(request_id, stream_log.streamed_tokens())
+                                        else:
+                                            # The takeover could not open a
+                                            # stream either: release its slot
+                                            # and end in the error frame.
+                                            # `open_iter` still holds the
+                                            # failed stream; the finally closes it.
+                                            _release_slot(*slots.pop())
+                                            logger.warning(
+                                                "logosnode resume stream failed to open "
+                                                "(model_id=%s, provider_id=%s): %s",
+                                                model_id,
+                                                resumed_ctx.provider_id,
+                                                resumed_error,
+                                            )
+                                            error_message = f"Stream resume failed: {resumed_error}"
+                        if not resume_opened:
+                            # Once bytes have reached the client, only SSE can
+                            # carry the synthetic OpenAI error frame without
+                            # corrupting its protocol.
+                            if not is_audio_upload_path(request_path or ""):
+                                _, error_body = coerce_upstream_error(500, {"error": str(e)})
+                                # The last upstream chunk may have ended
+                                # inside an SSE event. Close it before
+                                # emitting recovery frames so clients can
+                                # parse the synthetic error independently.
+                                yield b"\n\n"
+                                yield f"data: {json.dumps(error_body)}\n\n".encode()
+                                yield b"data: [DONE]\n\n"
+                            if error_message is None:
+                                error_message = str(e)
+                            break
             finally:
                 if not stream_completed and error_message is None:
                     error_message = (
                         "Client disconnected mid-stream; upstream generation cancelled "
                         f"after {stream_log.streamed_tokens().get('completion_tokens', 0)} token(s)."
                     )
+                await _close_quietly(open_iter)
                 _live_streams.finish(request_id)
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
@@ -3172,7 +3494,7 @@ async def _streaming_response(
                         db.set_response_payload(
                             log_id,
                             response_payload,
-                            provider_id,
+                            active_node["provider_id"],
                             model_id,
                             usage_tokens,
                             policy_id,
@@ -3905,6 +4227,70 @@ async def _execute_proxy_mode(
     )
 
 
+def _arm_internal_retry(budget: RetryBudget, result, request_id: Optional[str], reason: str) -> None:
+    """Account for a failed attempt and announce the internal retry (#815).
+
+    The failed node is recorded for the exclusion list, so the next attempt
+    prefers a peer serving the same model.
+    """
+    budget.record_failure(result.provider_id)
+    prom.REQUEST_RETRIES_TOTAL.labels(kind="retry").inc()
+    logger.warning(
+        "Request %s failed (%s); internal retry attempt %d/%d in %.1fs (excluded nodes: %s)",
+        request_id,
+        reason,
+        budget.attempts + 1,
+        budget.max_attempts,
+        budget.backoff_s(),
+        sorted(budget.excluded_providers()),
+    )
+
+
+def _next_retry_request(base: PipelineRequest, result, budget: RetryBudget) -> PipelineRequest:
+    """Build the PipelineRequest for the next internal retry attempt (#815).
+
+    The model the request already had (or the caller already named) stays
+    pinned and the node that just failed is excluded — the pipeline lifts
+    the exclusion automatically when it would leave no deployment, which is
+    the single-node redeploy case. The queue wait and the lane-readiness
+    bound are clamped to whatever time is left in the retry deadline.
+    """
+    payload = dict(base.payload)
+    payload["timeout_s"] = budget.queue_wait_timeout_s(base.payload.get("timeout_s"))
+    return PipelineRequest(
+        payload=payload,
+        headers=base.headers,
+        request_id=base.request_id,
+        policy=base.policy,
+        allowed_models=base.allowed_models,
+        deployments=base.deployments,
+        skip_laura=base.skip_laura,
+        request_path=base.request_path,
+        default_priority=base.default_priority,
+        api_key_id=base.api_key_id,
+        pinned_model_id=result.model_id,
+        exclude_provider_ids=budget.excluded_providers() or None,
+        context_resolve_timeout_s=budget.remaining_s() or None,
+    )
+
+
+def _response_terminal_status(response) -> Optional[int]:
+    """The terminal HTTP status of a completed response.
+
+    None when the outcome is not settled yet — a committed
+    ``StreamingResponse`` only settles when its stream ends, which is also
+    why such a response is never retried here: its first bytes have already
+    left the process.
+    """
+    from fastapi.responses import StreamingResponse
+
+    if isinstance(response, dict):
+        return response.get("status_code")
+    if isinstance(response, StreamingResponse):
+        return None
+    return getattr(response, "status_code", None)
+
+
 async def _execute_resource_mode(
     deployments: list[Deployment],
     body: Dict[str, Any],
@@ -3975,172 +4361,215 @@ async def _execute_resource_mode(
         api_key_id=auth.api_key_id,
     )
 
-    # Process through classification and scheduling
-    result = await _pipeline.process(pipeline_req)
+    # Internal retry (#815): a request that fails before its answer is
+    # complete — no node had capacity in time, a worker crashed or was
+    # redeployed, the connection dropped — is re-dispatched here instead of
+    # being returned raw, bounded by an attempt count and an overall
+    # deadline, and possibly placed on another node serving the same model.
+    retry_budget = _new_retry_budget()
+    attempt = 0
+    rl_tpm_key: Optional[str] = None
+    while True:
+        attempt += 1
+        # Process through classification and scheduling
+        result = await _pipeline.process(pipeline_req)
 
-    if not result.success:
-        error_msg = result.error or "Pipeline processing failed"
-        _record_log_failure(
-            log_id,
-            result.scheduling_stats.get("request_id") or request_id,
-            error_msg,
-            model_id=result.model_id,
-            provider_id=result.provider_id,
-            classification_stats=result.classification_stats,
-            scheduling_stats=result.scheduling_stats,
-            result_status="timeout" if "timeout" in error_msg.lower() else "error",
-        )
-        if is_async_job:
-            return {"status_code": 503, "data": {"error": error_msg}}
-        else:
-            raise HTTPException(status_code=503, detail=error_msg)
-
-    provider_type = result.scheduling_stats.get("provider_type", "")
-
-    rl_tpm_key = None
-    if auth.cloud_rl is not None or auth.local_rl is not None:
-        from logos.rate_limiter import RateLimitConfig, get_rate_limiter
-
-        is_local = provider_type == "logosnode"
-        rl_info = auth.local_rl if is_local else auth.cloud_rl
-        rl_key = f"api_key:{auth.api_key_id}:{'local' if is_local else 'cloud'}"
-
-        if rl_info:
-            rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
-            allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
-            if not allowed:
-                try:
-                    _pipeline.scheduler.release(
-                        result.model_id,
-                        result.provider_id,
-                        provider_type,
-                        result.scheduling_stats.get("request_id") or request_id,
-                    )
-                except Exception:
-                    logger.warning("Failed to release scheduler slot after rate limit reject")
-                if is_async_job:
-                    return {
-                        "status_code": 429,
-                        "data": {"error": f"Rate limit exceeded: {reason}"},
-                    }
-                # Retry-After: the limiter uses a sliding 60s window, so the
-                # budget is guaranteed to have room again after one window.
-                raise HTTPException(
-                    status_code=429,
-                    detail=f"Rate limit exceeded: {reason}",
-                    headers={"Retry-After": str(RateLimitConfig.window_seconds)},
-                )
-
-            if rl_info.get("tpm") is not None:
-                rl_tpm_key = rl_key
-
-    with DBManager() as db:
-        try:
-            _check_budget_if_cloud(
-                db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
-            )
-        except Exception as e:
-            try:
-                _pipeline.scheduler.release(
-                    result.model_id,
-                    result.provider_id,
-                    provider_type,
-                    result.scheduling_stats.get("request_id") or request_id,
-                )
-            except Exception:
-                logger.warning("Failed to release scheduler slot after budget reject")
-            if isinstance(e, HTTPException) and is_async_job:
-                _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
-                _record_log_failure(
-                    log_id,
-                    result.scheduling_stats.get("request_id") or request_id,
-                    str(e.detail),
-                    model_id=result.model_id,
-                    provider_id=result.provider_id,
-                    classification_stats=result.classification_stats,
-                    scheduling_stats=result.scheduling_stats,
-                )
-                return {"status_code": e.status_code, "data": err_body}
-            raise
-
-    # Execute and Respond
-    try:
-        if is_async_job:
-            # Async jobs are always non-streaming - use helper
-            return await _sync_response(
-                result.execution_context,
-                body,
+        if not result.success:
+            error_msg = result.error or "Pipeline processing failed"
+            if retry_budget is not None and retry_budget.can_retry() and pipeline_error_is_retryable(error_msg):
+                _arm_internal_retry(retry_budget, result, request_id, error_msg)
+                pipeline_req = _next_retry_request(pipeline_req, result, retry_budget)
+                await asyncio.sleep(retry_budget.backoff_s())
+                continue
+            _record_log_failure(
                 log_id,
-                result.provider_id,
-                result.model_id,
-                -1,  # policy_id
-                result.classification_stats,
-                result.scheduling_stats,
-                is_async_job=True,
-                request_path=request_path,
-                rl_key=rl_tpm_key,
-                api_key_id=auth.api_key_id,
+                result.scheduling_stats.get("request_id") or request_id,
+                error_msg,
+                model_id=result.model_id,
+                provider_id=result.provider_id,
+                classification_stats=result.classification_stats,
+                scheduling_stats=result.scheduling_stats,
+                result_status="timeout" if "timeout" in error_msg.lower() else "error",
             )
-        else:
-            # Sync endpoints support streaming
-            # whisper-1 ignores stream=true and returns a normal JSON/text
-            # response. Keep it on the synchronous response path so Logos
-            # preserves the upstream content type instead of framing it as SSE.
-            resolved_model_name = getattr(result.execution_context, "model_name", "") or ""
-            resolved_whisper_model = "whisper" in resolved_model_name.lower()
-            if payload_requests_streaming(body) and not (is_whisper_payload(body) or resolved_whisper_model):
-                return await _streaming_response(
+            if is_async_job:
+                return {"status_code": 503, "data": {"error": error_msg}}
+            else:
+                raise HTTPException(status_code=503, detail=error_msg)
+
+        provider_type = result.scheduling_stats.get("provider_type", "")
+
+        # Rate limiting and the cloud budget check count this request once,
+        # not once per internal retry attempt: a retry is the same request,
+        # and re-checking would double-count its rate-limit hit — and a
+        # retry must never trip the caller's own limit.
+        if attempt == 1:
+            if auth.cloud_rl is not None or auth.local_rl is not None:
+                from logos.rate_limiter import RateLimitConfig, get_rate_limiter
+
+                is_local = provider_type == "logosnode"
+                rl_info = auth.local_rl if is_local else auth.cloud_rl
+                rl_key = f"api_key:{auth.api_key_id}:{'local' if is_local else 'cloud'}"
+
+                if rl_info:
+                    rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
+                    allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
+                    if not allowed:
+                        try:
+                            _pipeline.scheduler.release(
+                                result.model_id,
+                                result.provider_id,
+                                provider_type,
+                                result.scheduling_stats.get("request_id") or request_id,
+                            )
+                        except Exception:
+                            logger.warning("Failed to release scheduler slot after rate limit reject")
+                        if is_async_job:
+                            return {
+                                "status_code": 429,
+                                "data": {"error": f"Rate limit exceeded: {reason}"},
+                            }
+                        # Retry-After: the limiter uses a sliding 60s window, so the
+                        # budget is guaranteed to have room again after one window.
+                        raise HTTPException(
+                            status_code=429,
+                            detail=f"Rate limit exceeded: {reason}",
+                            headers={"Retry-After": str(RateLimitConfig.window_seconds)},
+                        )
+
+                    if rl_info.get("tpm") is not None:
+                        rl_tpm_key = rl_key
+
+            with DBManager() as db:
+                try:
+                    _check_budget_if_cloud(
+                        db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
+                    )
+                except Exception as e:
+                    try:
+                        _pipeline.scheduler.release(
+                            result.model_id,
+                            result.provider_id,
+                            provider_type,
+                            result.scheduling_stats.get("request_id") or request_id,
+                        )
+                    except Exception:
+                        logger.warning("Failed to release scheduler slot after budget reject")
+                    if isinstance(e, HTTPException) and is_async_job:
+                        _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
+                        _record_log_failure(
+                            log_id,
+                            result.scheduling_stats.get("request_id") or request_id,
+                            str(e.detail),
+                            model_id=result.model_id,
+                            provider_id=result.provider_id,
+                            classification_stats=result.classification_stats,
+                            scheduling_stats=result.scheduling_stats,
+                        )
+                        return {"status_code": e.status_code, "data": err_body}
+                    raise
+
+        # Execute and Respond
+        try:
+            if is_async_job:
+                # Async jobs are always non-streaming - use helper
+                response = await _sync_response(
                     result.execution_context,
                     body,
                     log_id,
                     result.provider_id,
                     result.model_id,
-                    -1,  # Policy ID not implemented
+                    -1,  # policy_id
                     result.classification_stats,
                     result.scheduling_stats,
+                    is_async_job=True,
                     request_path=request_path,
                     rl_key=rl_tpm_key,
                     api_key_id=auth.api_key_id,
                 )
             else:
-                return await _sync_response(
-                    result.execution_context,
-                    body,
-                    log_id,
-                    result.provider_id,
-                    result.model_id,
-                    -1,  # Policy ID not implemented
-                    result.classification_stats,
-                    result.scheduling_stats,
-                    request_path=request_path,
-                    rl_key=rl_tpm_key,
-                    api_key_id=auth.api_key_id,
+                # Sync endpoints support streaming
+                # whisper-1 ignores stream=true and returns a normal JSON/text
+                # response. Keep it on the synchronous response path so Logos
+                # preserves the upstream content type instead of framing it as SSE.
+                resolved_model_name = getattr(result.execution_context, "model_name", "") or ""
+                resolved_whisper_model = "whisper" in resolved_model_name.lower()
+                if payload_requests_streaming(body) and not (is_whisper_payload(body) or resolved_whisper_model):
+                    response = await _streaming_response(
+                        result.execution_context,
+                        body,
+                        log_id,
+                        result.provider_id,
+                        result.model_id,
+                        -1,  # Policy ID not implemented
+                        result.classification_stats,
+                        result.scheduling_stats,
+                        request_path=request_path,
+                        rl_key=rl_tpm_key,
+                        api_key_id=auth.api_key_id,
+                        deployments=deployments,
+                        policy=policy,
+                        default_priority=auth.default_priority,
+                        retry_budget=retry_budget,
+                    )
+                else:
+                    response = await _sync_response(
+                        result.execution_context,
+                        body,
+                        log_id,
+                        result.provider_id,
+                        result.model_id,
+                        -1,  # Policy ID not implemented
+                        result.classification_stats,
+                        result.scheduling_stats,
+                        request_path=request_path,
+                        rl_key=rl_tpm_key,
+                        api_key_id=auth.api_key_id,
+                    )
+        except Exception as e:
+            logger.error(f"Error in _execute_resource_mode: {e}", exc_info=True)
+            try:
+                _pipeline.record_completion(
+                    request_id=result.scheduling_stats.get("request_id"),
+                    result_status="error",
+                    error_message=str(e),
                 )
-    except Exception as e:
-        logger.error(f"Error in _execute_resource_mode: {e}", exc_info=True)
-        try:
-            _pipeline.record_completion(
-                request_id=result.scheduling_stats.get("request_id"),
-                result_status="error",
-                error_message=str(e),
+            except Exception as record_err:
+                logger.error(f"Failed to record completion: {record_err}")
+
+            _record_log_failure(
+                log_id,
+                result.scheduling_stats.get("request_id") or request_id,
+                str(e),
+                model_id=result.model_id,
+                provider_id=result.provider_id,
+                classification_stats=result.classification_stats,
+                scheduling_stats=result.scheduling_stats,
             )
-        except Exception as record_err:
-            logger.error(f"Failed to record completion: {record_err}")
 
-        _record_log_failure(
-            log_id,
-            result.scheduling_stats.get("request_id") or request_id,
-            str(e),
-            model_id=result.model_id,
-            provider_id=result.provider_id,
-            classification_stats=result.classification_stats,
-            scheduling_stats=result.scheduling_stats,
-        )
+            if is_async_job:
+                return {"status_code": 500, "data": {"error": str(e)}}
+            else:
+                raise e
 
-        if is_async_job:
-            return {"status_code": 500, "data": {"error": str(e)}}
-        else:
-            raise e
+        # A terminal failure whose status is transient (worker 5xx, queue wait
+        # surfaced as 503, upstream 429/408) is re-dispatched instead of being
+        # returned raw (#815). A committed StreamingResponse has no terminal
+        # status yet and is never retried here: a pre-token failure already
+        # comes back as the JSON error above, and a mid-flight failure
+        # recovers inside the stream (resume).
+        status_code = _response_terminal_status(response)
+        if (
+            retry_budget is not None
+            and status_code is not None
+            and status_code >= 400
+            and status_is_retryable(status_code)
+            and retry_budget.can_retry()
+        ):
+            _arm_internal_retry(retry_budget, result, request_id, f"HTTP {status_code}")
+            pipeline_req = _next_retry_request(pipeline_req, result, retry_budget)
+            await asyncio.sleep(retry_budget.backoff_s())
+            continue
+        return response
 
 
 async def route_and_execute(

@@ -264,9 +264,8 @@ async def test_hello_without_actions_leaves_the_known_set_intact():
 
 @pytest.mark.asyncio
 async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch):
-    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
-
     import logos as main
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
 
     closed = asyncio.Event()
 
@@ -295,7 +294,7 @@ async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1"),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -326,9 +325,8 @@ async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch
 async def test_an_abandoned_response_reaches_the_worker_as_a_cancellation(monkeypatch):
     """The whole chain, with the real registry behind the response: client
     goes away → response iterator closed → worker told to abort."""
-    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
-
     import logos as main
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
 
     registry, websocket = _registry_with_session()
 
@@ -343,29 +341,34 @@ async def test_an_abandoned_response_reaches_the_worker_as_a_cancellation(monkey
     pipeline, _completion_calls, _release_calls = _make_pipeline()
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
-    response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
-        {"messages": [{"role": "user", "content": "hi"}]},
-        42,
-        PROVIDER_ID,
-        27,
-        -1,
-        {"policy": "ok"},
-        {
-            "request_id": "req-abandoned",
-            "provider_type": "logosnode",
-            "queue_depth_at_arrival": 0,
-            "utilization_at_arrival": 1,
-            "is_cold_start": False,
-        },
+    # The first chunk is pulled before the response is committed (#815), so
+    # the stream command goes out as soon as the call starts — the worker
+    # frame has to be fed while the call is in flight, not after it returns.
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-abandoned",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
     )
-
-    body = response.body_iterator
-    first = asyncio.ensure_future(body.__anext__())
     await asyncio.sleep(0)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"data: {}\n\n"})
-    await first
+    response = await response_task
+
+    body = response.body_iterator
+    await body.__anext__()  # the pre-pulled first chunk
 
     await body.aclose()
     await _drain_pending_tasks()
@@ -447,9 +450,8 @@ async def test_a_worker_that_cannot_cancel_is_counted_separately():
 
 
 async def _run_streamer(monkeypatch, *, abandon_after: int | None):
-    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
-
     import logos as main
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
 
     chunks = [
         b'data: {"id":"c1","choices":[{"delta":{"content":"hel"}}]}\n\n',
@@ -479,7 +481,7 @@ async def _run_streamer(monkeypatch, *, abandon_after: int | None):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1"),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,

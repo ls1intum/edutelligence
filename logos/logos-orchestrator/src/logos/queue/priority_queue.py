@@ -25,7 +25,8 @@ class PriorityQueueManager:
     """Thread-safe priority queue manager keyed by ``model_id``.
 
     Maintains separate priority heaps per model:
-        queues[model_id][Priority.HIGH] = [(neg_priority, ts, entry_id, QueueEntry), ...]
+        queues[model_id][Priority.RESUME] = [(neg_priority, ts, entry_id, QueueEntry), ...]
+        queues[model_id][Priority.HIGH] = [...]
         queues[model_id][Priority.NORMAL] = [...]
         queues[model_id][Priority.LOW] = [...]
 
@@ -45,6 +46,7 @@ class PriorityQueueManager:
                 Priority.LOW: [],
                 Priority.NORMAL: [],
                 Priority.HIGH: [],
+                Priority.RESUME: [],
             }
         )
 
@@ -112,7 +114,7 @@ class PriorityQueueManager:
             if priority is not None:
                 task, _ = self._dequeue_from_priority(model_id, priority)
                 return task
-            for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
+            for p in [Priority.RESUME, Priority.HIGH, Priority.NORMAL, Priority.LOW]:
                 task, _ = self._dequeue_from_priority(model_id, p)
                 if task is not None:
                     return task
@@ -128,7 +130,7 @@ class PriorityQueueManager:
         with self._lock:
             if priority is not None:
                 return self._dequeue_from_priority(model_id, priority)
-            for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
+            for p in [Priority.RESUME, Priority.HIGH, Priority.NORMAL, Priority.LOW]:
                 task, entry = self._dequeue_from_priority(model_id, p)
                 if task is not None:
                     return task, entry
@@ -163,7 +165,7 @@ class PriorityQueueManager:
         ``provider_id`` is accepted but ignored.
         """
         with self._lock:
-            for priority in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
+            for priority in [Priority.RESUME, Priority.HIGH, Priority.NORMAL, Priority.LOW]:
                 queue = self._queues[model_id][priority]
                 if queue:
                     _, _, _, entry = queue[0]
@@ -226,6 +228,7 @@ class PriorityQueueManager:
                 low=len(self._queues[model_id][Priority.LOW]),
                 normal=len(self._queues[model_id][Priority.NORMAL]),
                 high=len(self._queues[model_id][Priority.HIGH]),
+                resume=len(self._queues[model_id][Priority.RESUME]),
             )
 
     def get_entries_for_priority(

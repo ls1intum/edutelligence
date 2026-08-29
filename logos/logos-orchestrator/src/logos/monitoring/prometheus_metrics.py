@@ -69,6 +69,13 @@ QUEUE_DEPTH = Gauge(
     registry=registry,
 )
 
+REQUEST_RETRIES_TOTAL = Counter(
+    "logos_request_retries_total",
+    "Internal re-dispatches of failed requests instead of returning the error raw (#815)",
+    ["kind"],  # retry (pre-completion), resume (mid-flight stream)
+    registry=registry,
+)
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------

@@ -20,7 +20,6 @@ from typing import Dict, List, Optional, Tuple
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
-from logos.timeouts import global_timeout_s
 
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
@@ -36,7 +35,7 @@ from .ettft_estimator import (
     estimate_ettft_local,
 )
 from .prefix_affinity import PrefixAffinityRouter
-from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
+from .scheduler_interface import DEFAULT_QUEUE_TIMEOUT_S, QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
 
@@ -792,9 +791,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 )
 
         try:
-            timeout = (
-                request.timeout_s if request.timeout_s else global_timeout_s(1200)
-            )  # 20 min queue wait (or LOGOS_TIMEOUT_S)
+            timeout = request.timeout_s if request.timeout_s else DEFAULT_QUEUE_TIMEOUT_S
             result = await asyncio.wait_for(future, timeout=timeout)
 
             # Attach ETTFT info to the dequeued result (decision-time values:

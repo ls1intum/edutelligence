@@ -19,6 +19,11 @@ class Priority(IntEnum):
     LOW = 1
     NORMAL = 5
     HIGH = 10
+    # Absolute top of the queue: a stream that already delivered tokens and
+    # must be resumed after its worker failed (#815). It jumps every queued
+    # request, regardless of the caller's own priority; plain retries of a
+    # failed request deliberately keep the original priority instead.
+    RESUME = 20
 
     @classmethod
     def from_int(cls, value: int) -> "Priority":
@@ -29,6 +34,7 @@ class Priority(IntEnum):
         - 1 → LOW
         - 5 → NORMAL
         - 10 → HIGH
+        - 20 → RESUME (mid-flight stream resume)
         - Other values → NORMAL (default)
         """
         try:
@@ -148,10 +154,16 @@ class QueueStatePerPriority:
     high: int = 0
     """Number of HIGH priority tasks queued."""
 
+    resume: int = 0
+    """Number of RESUME priority tasks queued (mid-flight stream resumes)."""
+
     @property
     def total(self) -> int:
         """Total number of tasks across all priority levels."""
-        return self.low + self.normal + self.high
+        return self.low + self.normal + self.high + self.resume
 
     def __repr__(self) -> str:
-        return f"QueueState(low={self.low}, normal={self.normal}, high={self.high}, total={self.total})"
+        return (
+            f"QueueState(low={self.low}, normal={self.normal}, high={self.high}, "
+            f"resume={self.resume}, total={self.total})"
+        )

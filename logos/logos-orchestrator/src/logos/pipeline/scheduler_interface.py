@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from logos.dbutils.types import Deployment
+from logos.timeouts import global_timeout_s
+
+# Default queue-wait bound for a request that did not set ``timeout_s`` — the
+# point where a wait-mode timeout is declared. Shared with the internal retry
+# policy, which clamps a re-queue to whatever time is left in its deadline.
+DEFAULT_QUEUE_TIMEOUT_S = global_timeout_s(1200.0)
 
 
 class QueueTimeoutError(Exception):
