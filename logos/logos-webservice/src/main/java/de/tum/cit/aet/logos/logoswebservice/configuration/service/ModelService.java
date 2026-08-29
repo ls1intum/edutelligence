@@ -25,7 +25,11 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelAliasR
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelWithPriceProjection;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProjection;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelHealthClient;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 @Service
@@ -36,16 +40,22 @@ public class ModelService {
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelCapabilitiesRepository modelCapabilitiesRepository;
     private final ModelAliasRepository modelAliasRepository;
+    private final OrchestratorModelHealthClient orchestratorModelHealthClient;
+    private final ApiKeyRepository apiKeyRepository;
 
     public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
                         OrchestratorNotificationService orchestratorNotificationService,
                         ModelCapabilitiesRepository modelCapabilitiesRepository,
-                        ModelAliasRepository modelAliasRepository) {
+                        ModelAliasRepository modelAliasRepository,
+                        OrchestratorModelHealthClient orchestratorModelHealthClient,
+                        ApiKeyRepository apiKeyRepository) {
         this.modelRepository = modelRepository;
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelCapabilitiesRepository = modelCapabilitiesRepository;
         this.modelAliasRepository = modelAliasRepository;
+        this.orchestratorModelHealthClient = orchestratorModelHealthClient;
+        this.apiKeyRepository = apiKeyRepository;
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
@@ -56,6 +66,38 @@ public class ModelService {
             ? modelRepository.findAllWithPricing()
             : modelRepository.findAllWithPricingForUser(auth.userId());
         return projections.stream().map(p -> toModelMap(p, includeLastUsed)).toList();
+    }
+
+    /**
+     * Current health of every model the given API key may access, as computed
+     * live by the orchestrator from its worker registry. Applications use this
+     * to check before sending traffic whether a model has a healthy/available
+     * deployment right now. Access follows the key's permissions exactly as
+     * the orchestrator resolves them for requests: the key's own model
+     * permissions when it uses custom permissions, otherwise its team's.
+     * Returns empty when the key is unknown or inactive.
+     */
+    public Optional<Map<String, Object>> getModelHealth(String keyValue) {
+        ApiKey key = apiKeyRepository.findByKeyValueAndIsActiveTrue(keyValue).orElse(null);
+        if (key == null) {
+            return Optional.empty();
+        }
+        Set<String> accessibleModels;
+        if (Boolean.TRUE.equals(key.getUseCustomPermissions())) {
+            accessibleModels = apiKeyRepository.findAccessibleModelsByKey(key.getId()).stream()
+                .map(ModelAccessProjection::getModelName)
+                .collect(Collectors.toSet());
+        } else if (key.getTeamId() != null) {
+            accessibleModels = apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId()).stream()
+                .map(ModelAccessProjection::getModelName)
+                .collect(Collectors.toSet());
+        } else {
+            accessibleModels = Set.of();
+        }
+        List<Map<String, Object>> visible = orchestratorModelHealthClient.getModelHealth().stream()
+            .filter(entry -> accessibleModels.contains(entry.get("name")))
+            .toList();
+        return Optional.of(Map.of("models", visible));
     }
 
     @Transactional

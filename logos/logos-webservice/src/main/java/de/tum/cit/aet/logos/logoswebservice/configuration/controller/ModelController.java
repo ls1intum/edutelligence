@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
@@ -23,6 +24,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilit
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorCalibrationLogsClient;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 @RestController
 @RequestMapping("/logosdb")
 public class ModelController {
@@ -45,6 +48,39 @@ public class ModelController {
     @PostMapping("/get_models")
     public ResponseEntity<?> getModels(@RequestAttribute("authContext") AuthContext auth) {
         return ResponseEntity.ok(modelService.getModels(auth));
+    }
+
+    /**
+     * Model-level health for applications, authenticated with a Logos API key
+     * (logos_key / logos-key header or Authorization: Bearer) — not a JWT —
+     * because the callers are the applications that send inference traffic,
+     * which hold API keys. Only models the key may access are reported.
+     */
+    @PostMapping("/get_model_health")
+    public ResponseEntity<?> getModelHealth(HttpServletRequest request) {
+        String apiKey = extractApiKey(request);
+        if (apiKey == null) {
+            return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
+        }
+        return modelService.getModelHealth(apiKey)
+            .map(ResponseEntity::ok)
+            .orElseGet(() -> ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key")));
+    }
+
+    static String extractApiKey(HttpServletRequest request) {
+        String key = request.getHeader("logos_key");
+        if (key == null || key.isBlank()) {
+            key = request.getHeader("logos-key");
+        }
+        if (key == null || key.isBlank()) {
+            String authorization = request.getHeader("Authorization");
+            if (authorization != null && authorization.toLowerCase(Locale.ROOT).startsWith("bearer ")) {
+                key = authorization.substring("bearer ".length());
+            }
+        }
+        if (key == null) return null;
+        key = key.strip();
+        return key.isEmpty() ? null : key;
     }
 
     @PostMapping("/add_model")
