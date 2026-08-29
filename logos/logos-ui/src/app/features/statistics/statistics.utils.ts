@@ -64,6 +64,45 @@ export function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
+// ── Token count scale ─────────────────────────────────────────────────────────
+
+/**
+ * The scale a token count is displayed on: the unit steps up the moment the
+ * value leaves its range — K at 1.000, M at 1.000.000, B at 1.000.000.000,
+ * T at 1.000.000.000.000.
+ */
+const TOKEN_COUNT_UNITS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 1_000, label: 'K' },
+  { value: 1_000_000, label: 'M' },
+  { value: 1_000_000_000, label: 'B' },
+  { value: 1_000_000_000_000, label: 'T' },
+];
+
+/**
+ * A token count on the K/M/B/T scale: always the highest applicable
+ * magnitude, a space between the value and the unit, and the value's decimal
+ * notation kept — the 2470.7M the statistics page used to show reads "2.4 B".
+ * Counts below 1.000 stay plain; input that is not a positive finite number
+ * reads "0".
+ *
+ * The value is truncated to one decimal, dropped when it is zero. One digit
+ * after the dot keeps the dot unambiguous — a thousands group is three
+ * digits, never one — and it keeps the abbreviation shorter than the number
+ * it replaces (262.1 K instead of 262,144).
+ */
+export function formatTokenCount(count: number | null | undefined): string {
+  if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) return '0';
+  if (count < 1_000) return String(Math.round(count));
+  // The early return guarantees count >= 1.000, so K always matches and the
+  // walk from K up ends on the highest unit the count reaches.
+  const unit = TOKEN_COUNT_UNITS.reduce(
+    (highest, u) => (count >= u.value ? u : highest),
+    TOKEN_COUNT_UNITS[0],
+  );
+  const tenths = Math.floor(count / (unit.value / 10));
+  return `${(tenths / 10).toFixed(1).replace(/\.0$/, '')} ${unit.label}`;
+}
+
 // ── X-axis labels (shared by request-volume and VRAM charts) ─────────────────
 
 export interface TimeAxisLabel {

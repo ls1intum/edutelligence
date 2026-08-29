@@ -10,6 +10,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { StatisticsService, ProviderModel } from '../../services/statistics.service';
 import { getLaneStateColor } from '../../statistics.constants';
+import { formatTokenCount } from '../../statistics.utils';
 import { LaneSignalData, VramProviderMeta } from '../../statistics.models';
 import { EmptyState } from '../empty-state/empty-state';
 
@@ -75,7 +76,7 @@ export interface LaneRow {
   kvColor: string | null;
   ttftColor: string | null;
   ttftLabel: string | null;
-  /** Served context window, abbreviated — "111k". Null when unreported. */
+  /** Served context window, abbreviated — "111.2 K". Null when unreported. */
   contextLabel: string | null;
   /** "2 / 11 (min. 8)" — see runningLabel(); null when the line is hidden. */
   runningLabel: string | null;
@@ -84,16 +85,17 @@ export interface LaneRow {
 }
 
 /**
- * Context window as a lane row shows it: thousands, rounded, no decimals.
+ * Context window as a lane row shows it: abbreviated on the shared K/M/B/T
+ * token scale.
  *
  * These sit in a dense row of stats where the exact token count is never the
  * point — an operator reads them to see which lane is the roomy one, and
- * "262,144" costs three times the width to say the same thing as "262k". Below
- * 1,000 there is nothing to abbreviate.
+ * "262,144" costs more width to say the same thing as "262.1 K". Below 1,000
+ * there is nothing to abbreviate.
  */
 export function formatContextWindow(tokens: number | null | undefined): string | null {
   if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens <= 0) return null;
-  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens);
+  return formatTokenCount(tokens);
 }
 
 /** Which manual sleep/wake action a lane row offers, if any. */

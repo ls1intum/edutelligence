@@ -97,10 +97,13 @@ describe('ActivityTabComponent', () => {
   describe('formatTokens', () => {
     it('shows nothing for a team that used nothing', () => {
       // The payload says zero and the server also sends null for a key whose
-      // requests recorded no usage — both must read as "0", never blank.
+      // requests recorded no usage — both must read as "0", never blank. The
+      // same goes for a NaN the server should never send but the tile must
+      // not render.
       expect(component.formatTokens(0)).toBe('0');
       expect(component.formatTokens(null)).toBe('0');
       expect(component.formatTokens(undefined)).toBe('0');
+      expect(component.formatTokens(Number.NaN)).toBe('0');
     });
 
     it('keeps exact counts while they fit on one screen', () => {
@@ -109,10 +112,11 @@ describe('ActivityTabComponent', () => {
 
     it('abbreviates the totals that run past it', () => {
       // A busy team clears nine figures over a quarter; the tile holds a
-      // figure plus a suffix, not ten digits.
-      expect(component.formatTokens(1_500)).toBe('1.5k');
-      expect(component.formatTokens(1_234_567)).toBe('1.2M');
-      expect(component.formatTokens(2_500_000_000)).toBe('2.5B');
+      // figure plus a suffix, not ten digits. The scale, the space and the
+      // decimal notation are the shared token-count rules.
+      expect(component.formatTokens(1_500)).toBe('1.5 K');
+      expect(component.formatTokens(1_234_567)).toBe('1.2 M');
+      expect(component.formatTokens(2_500_000_000)).toBe('2.5 B');
     });
   });
 
