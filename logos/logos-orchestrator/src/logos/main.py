@@ -1788,7 +1788,7 @@ _HEALTH_STATUS_RANK: Dict[str, int] = {"DOWN": 0, "DEGRADED": 1, "UP": 2}
 def _model_deployment_status(
     deployment: Dict[str, Any], provider_id: int, worker_ids: set[int], snapshots: Dict[int, Dict[str, Any]]
 ) -> str:
-    """Serveability of one model deployment for the /health model breakdown.
+    """Serveability of one model deployment for the per-model health breakdown.
 
     Deployments outside the local provider inventory are cloud — UP whenever
     configured, because Logos does not probe cloud providers (matching the
@@ -1836,15 +1836,77 @@ async def health():
     (Azure/cloud deployments). Cloud may still be serveable even while local is
     down, which the ``detail`` message makes explicit.
 
-    The ``models`` array adds the model-level view applications want before
-    sending traffic: the current overall status of every model that has at
-    least one deployment. A model is UP when any of its deployments can serve
-    right now, DEGRADED when it is only serveable after a cold load or from a
-    worker reporting an unhealthy node, and DOWN otherwise. Only model names
-    and statuses are exposed — no internal ids, no provider names.
+    This endpoint stays a lean liveness signal: it is public (its own Traefik
+    router on the secure entrypoint, and liveness probes call it), so it must
+    not carry the model catalogue. The per-model view applications need lives
+    on the secret-gated /internal/model_health endpoint instead.
     """
     local_ok = False
     cloud_ok = False
+    try:
+        with DBManager() as db:
+            inventory = db.list_local_providers()
+            deployments = db.get_all_deployments()
+        worker_ids: set[int] = set()
+        for provider in inventory:
+            provider_id = int(provider.get("provider_id") or 0)
+            if provider_id <= 0:
+                continue
+            worker_ids.add(provider_id)
+            snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+            if not _logosnode_snapshot_is_connected(snapshot):
+                continue
+            # Local is serveable if an online worker declares at least one capable model.
+            if snapshot.get("capabilities_models"):
+                local_ok = True
+        # Cloud is serveable if any deployment lives outside the local provider
+        # inventory — by type alone this would miscount legacy local worker
+        # types (ollama, node, ...) as cloud.
+        cloud_ok = any(int(d.get("provider_id") or 0) not in worker_ids for d in deployments)
+    except Exception:
+        logger.exception("Health check failed to evaluate provider state")
+        local_ok = False
+        cloud_ok = False
+
+    payload = {
+        "status": "UP" if local_ok else "DOWN",
+        "local_models": "UP" if local_ok else "DOWN",
+        "cloud_models": "UP" if cloud_ok else "DOWN",
+    }
+    if not local_ok:
+        payload["detail"] = "No local provider with a capable model is online." + (
+            " Cloud models may still be served." if cloud_ok else " No cloud models are configured."
+        )
+    return JSONResponse(status_code=200 if local_ok else 503, content=payload)
+
+
+@app.get("/internal/model_health", tags=["admin"])
+async def internal_model_health(request: Request):
+    """Current per-model health, for the Spring webservice.
+
+    Lane state, worker connection state, and node health exist only in the
+    orchestrator's worker registry, so the webservice's get_model_health
+    endpoint (API-key authenticated, permission filtered) is served from this
+    payload. It is secret-gated rather than part of /health because /health is
+    public: the full model catalogue must not be readable without a credential.
+
+    Status codes mirror /health — 503 while every local worker is down, whose
+    body still carries the breakdown (cloud models may be serveable) — and the
+    entries expose only model names and statuses, best across deployments
+    (see :func:`_model_deployment_status`).
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal model health endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    local_ok = False
     model_status: Dict[str, str] = {}
     try:
         with DBManager() as db:
@@ -1861,14 +1923,8 @@ async def health():
             if not _logosnode_snapshot_is_connected(snapshot):
                 continue
             snapshots[provider_id] = snapshot
-            # Local is serveable if an online worker declares at least one capable model.
             if snapshot.get("capabilities_models"):
                 local_ok = True
-        # Cloud is serveable if any deployment lives outside the local provider
-        # inventory — by type alone this would miscount legacy local worker
-        # types (ollama, node, ...) as cloud.
-        cloud_ok = any(int(d.get("provider_id") or 0) not in worker_ids for d in deployments)
-        # Model-level breakdown: best deployment status per model.
         for deployment in deployments:
             model_name = str(deployment.get("model_name") or "").strip()
             if not model_name:
@@ -1880,22 +1936,14 @@ async def health():
             if current is None or _HEALTH_STATUS_RANK[status] > _HEALTH_STATUS_RANK[current]:
                 model_status[model_name] = status
     except Exception:
-        logger.exception("Health check failed to evaluate provider state")
+        logger.exception("Model health check failed to evaluate provider state")
         local_ok = False
-        cloud_ok = False
         model_status = {}
 
-    payload = {
-        "status": "UP" if local_ok else "DOWN",
-        "local_models": "UP" if local_ok else "DOWN",
-        "cloud_models": "UP" if cloud_ok else "DOWN",
-        "models": [{"name": name, "status": model_status[name]} for name in sorted(model_status)],
-    }
-    if not local_ok:
-        payload["detail"] = "No local provider with a capable model is online." + (
-            " Cloud models may still be served." if cloud_ok else " No cloud models are configured."
-        )
-    return JSONResponse(status_code=200 if local_ok else 503, content=payload)
+    return JSONResponse(
+        status_code=200 if local_ok else 503,
+        content={"models": [{"name": name, "status": model_status[name]} for name in sorted(model_status)]},
+    )
 
 
 @app.get("/metrics", tags=["monitoring"])

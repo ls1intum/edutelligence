@@ -16,10 +16,13 @@ import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
 /**
- * Fetches the live model-level health check from the orchestrator's public
- * /health endpoint. Lane state, worker connection state, and node health
- * exist only in the orchestrator's worker registry, so the public
- * get_model_health endpoint is served from this client.
+ * Fetches the live model-level health check from the orchestrator's
+ * secret-gated /internal/model_health endpoint. Lane state, worker connection
+ * state, and node health exist only in the orchestrator's worker registry, so
+ * the public get_model_health endpoint is served from this client. The
+ * breakdown does not ride on the public /health on purpose: that endpoint is
+ * open, and the full model catalogue must not be readable without a
+ * credential.
  */
 @Service
 public class OrchestratorModelHealthClient {
@@ -33,6 +36,9 @@ public class OrchestratorModelHealthClient {
     @Value("${logos.orchestrator.url:}")
     private String orchestratorUrl;
 
+    @Value("${logos.orchestrator.internal-secret:}")
+    private String internalSecret;
+
     private volatile List<Map<String, Object>> cached = List.of();
     private volatile long cachedAtMs = 0;
 
@@ -42,28 +48,31 @@ public class OrchestratorModelHealthClient {
 
     /**
      * Model health entries (name, status) for every model the orchestrator
-     * knows. /health answers 503 while every local worker is down, but its
-     * body still carries the model breakdown (cloud models may be serveable),
-     * so that body is read as well. Any other error (empty 500, 4xx, ...) or
-     * an unusable 503 body keeps the last known state, so a transient failure
-     * never wipes a valid health result. Only when the orchestrator is
-     * unreachable at all is the last cached result (possibly empty) returned
-     * instead, so health serving never fails on the round trip.
+     * knows. The endpoint answers 503 while every local worker is down, but
+     * its body still carries the model breakdown (cloud models may be
+     * serveable), so that body is read as well. Any other error (empty 500,
+     * 4xx, ...) or an unusable 503 body keeps the last known state, so a
+     * transient failure never wipes a valid health result. Only when the
+     * orchestrator is unreachable at all is the last cached result (possibly
+     * empty) returned instead, so health serving never fails on the round
+     * trip.
      */
     public List<Map<String, Object>> getModelHealth() {
         long now = System.currentTimeMillis();
         if (now - cachedAtMs < CACHE_TTL_MS) {
             return cached;
         }
-        if (orchestratorUrl.isBlank()) {
+        if (orchestratorUrl.isBlank() || internalSecret == null || internalSecret.isBlank()) {
             return cached;
         }
         try {
             try {
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("Authorization", "Bearer " + internalSecret);
                 var response = restTemplate.exchange(
-                    orchestratorUrl + "/health",
+                    orchestratorUrl + "/internal/model_health",
                     HttpMethod.GET,
-                    new HttpEntity<Void>(new HttpHeaders()),
+                    new HttpEntity<Void>(headers),
                     Map.class);
                 // 200 is authoritative: the breakdown may legitimately be
                 // gone (older orchestrator without the models key) -> clear.

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -25,9 +26,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * The model breakdown rides on the orchestrator's public /health payload. A
- * webservice deployed against an older orchestrator (no "models" key) has to
- * keep working and simply report no models.
+ * The model breakdown rides on the orchestrator's secret-gated
+ * /internal/model_health payload. A webservice deployed against an older
+ * orchestrator (no "models" key) has to keep working and simply report no
+ * models.
  */
 class OrchestratorModelHealthClientTest {
 
@@ -36,14 +38,19 @@ class OrchestratorModelHealthClientTest {
         return (ResponseEntity<Map>) (ResponseEntity<?>) ResponseEntity.ok(body);
     }
 
+    private static OrchestratorModelHealthClient newClient(RestTemplate restTemplate) {
+        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
+        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+        ReflectionTestUtils.setField(client, "internalSecret", "secret");
+        return client;
+    }
+
     private OrchestratorModelHealthClient clientReturning(Map<String, Object> body) {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(
                 any(String.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
             .thenReturn(ok(body));
-        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
-        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
-        return client;
+        return newClient(restTemplate);
     }
 
     @Test
@@ -59,6 +66,23 @@ class OrchestratorModelHealthClientTest {
         assertThat(health).hasSize(2);
         assertThat(health.get(0)).containsEntry("name", "gpt-4").containsEntry("status", "UP");
         assertThat(health.get(1)).containsEntry("name", "llama-3.1-8b").containsEntry("status", "DEGRADED");
+    }
+
+    @Test
+    void sendsInternalSecretAndTargetsInternalPath() {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn(ok(Map.of("models", List.of(Map.of("name", "gpt-4", "status", "UP")))));
+        OrchestratorModelHealthClient client = newClient(restTemplate);
+
+        client.getModelHealth();
+
+        ArgumentCaptor<String> url = ArgumentCaptor.forClass(String.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<HttpEntity<Void>> entity = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(url.capture(), eq(HttpMethod.GET), entity.capture(), eq(Map.class));
+        assertThat(url.getValue()).isEqualTo("http://orchestrator/internal/model_health");
+        assertThat(entity.getValue().getHeaders().getFirst("Authorization")).isEqualTo("Bearer secret");
     }
 
     @Test
@@ -99,8 +123,7 @@ class OrchestratorModelHealthClientTest {
             .thenThrow(new HttpClientErrorException(
                 HttpStatusCode.valueOf(503), "Service Unavailable", new HttpHeaders(),
                 body.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8));
-        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
-        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+        OrchestratorModelHealthClient client = newClient(restTemplate);
 
         List<Map<String, Object>> health = client.getModelHealth();
 
@@ -115,8 +138,7 @@ class OrchestratorModelHealthClientTest {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(any(String.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
             .thenReturn(ok(withModels), ok(withoutModels));
-        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
-        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+        OrchestratorModelHealthClient client = newClient(restTemplate);
 
         assertThat(client.getModelHealth()).hasSize(1);
         ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
@@ -132,8 +154,7 @@ class OrchestratorModelHealthClientTest {
             .thenThrow(new HttpServerErrorException(
                 HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error", new HttpHeaders(),
                 new byte[0], StandardCharsets.UTF_8));
-        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
-        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+        OrchestratorModelHealthClient client = newClient(restTemplate);
 
         assertThat(client.getModelHealth()).hasSize(1);
         ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
@@ -149,8 +170,7 @@ class OrchestratorModelHealthClientTest {
             .thenThrow(new HttpClientErrorException(
                 HttpStatusCode.valueOf(503), "Service Unavailable", new HttpHeaders(),
                 "<html>nope</html>".getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8));
-        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
-        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+        OrchestratorModelHealthClient client = newClient(restTemplate);
 
         assertThat(client.getModelHealth()).hasSize(1);
         ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
@@ -166,8 +186,7 @@ class OrchestratorModelHealthClientTest {
             .thenThrow(new HttpServerErrorException(
                 HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error", new HttpHeaders(),
                 new byte[0], StandardCharsets.UTF_8));
-        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
-        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+        OrchestratorModelHealthClient client = newClient(restTemplate);
 
         assertThat(client.getModelHealth()).hasSize(1);
         ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
@@ -192,8 +211,7 @@ class OrchestratorModelHealthClientTest {
                 "{\"status\":\"DOWN\",\"models\":[\"not-a-map\"],\"detail\":\"No local provider with a capable model is online.\"}"
                     .getBytes(StandardCharsets.UTF_8),
                 StandardCharsets.UTF_8));
-        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
-        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+        OrchestratorModelHealthClient client = newClient(restTemplate);
 
         assertThat(client.getModelHealth()).hasSize(1);
         ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL
@@ -211,8 +229,7 @@ class OrchestratorModelHealthClientTest {
                 HttpStatusCode.valueOf(503), "Service Unavailable", new HttpHeaders(),
                 "{\"status\":\"DOWN\",\"models\":[]}".getBytes(StandardCharsets.UTF_8),
                 StandardCharsets.UTF_8));
-        OrchestratorModelHealthClient client = new OrchestratorModelHealthClient(restTemplate);
-        ReflectionTestUtils.setField(client, "orchestratorUrl", "http://orchestrator");
+        OrchestratorModelHealthClient client = newClient(restTemplate);
 
         assertThat(client.getModelHealth()).hasSize(1);
         ReflectionTestUtils.setField(client, "cachedAtMs", 0L); // bypass the cache TTL

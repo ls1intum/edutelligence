@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import datetime
 import json
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 import logos as main_mod
 
@@ -22,6 +24,9 @@ class _FakeDBManager:
 
     def __exit__(self, *args):
         return False
+
+    def get_all_deployments(self):
+        return list(type(self).deployments)
 
     def get_all_deployments_with_names(self):
         return list(type(self).deployments)
@@ -47,14 +52,24 @@ def fake_db(monkeypatch):
     _FakeDBManager.providers = []
     _FakeDBManager.raise_on_enter = False
     monkeypatch.setattr(main_mod, "DBManager", _FakeDBManager)
+    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "test-secret")
 
 
 def _body(response) -> dict:
     return json.loads(response.body)
 
 
+def _internal_request(authorization: str = "Bearer test-secret") -> SimpleNamespace:
+    return SimpleNamespace(headers={"authorization": authorization} if authorization else {})
+
+
+# ---------------------------------------------------------------------------
+# /health — public liveness signal, no model catalogue
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_local_up_returns_200_with_model_breakdown(monkeypatch):
+async def test_local_up_returns_200_lean_payload(monkeypatch):
     _FakeDBManager.providers = [
         {"provider_id": 1, "name": "node-a", "provider_type": "logosnode"},
     ]
@@ -72,7 +87,9 @@ async def test_local_up_returns_200_with_model_breakdown(monkeypatch):
     body = _body(response)
     assert body["status"] == "UP"
     assert body["local_models"] == "UP"
-    assert body["models"] == [{"name": "model-a", "status": "UP"}]
+    # /health stays a lean liveness signal — it is public, so the model
+    # catalogue lives on /internal/model_health instead.
+    assert "models" not in body
 
 
 @pytest.mark.asyncio
@@ -96,11 +113,7 @@ async def test_local_down_returns_503_and_keeps_cloud_breakdown(monkeypatch):
     assert body["local_models"] == "DOWN"
     assert body["cloud_models"] == "UP"
     assert "Cloud models may still be served" in body["detail"]
-    # The offline model is DOWN, the configured cloud model stays UP.
-    assert body["models"] == [
-        {"name": "model-a", "status": "DOWN"},
-        {"name": "model-d", "status": "UP"},
-    ]
+    assert "models" not in body
 
 
 @pytest.mark.asyncio
@@ -121,11 +134,90 @@ async def test_legacy_local_provider_is_not_counted_as_cloud(monkeypatch):
 
     response = await main_mod.health()
 
+    assert _body(response)["cloud_models"] == "DOWN"
+
+
+@pytest.mark.asyncio
+async def test_db_failure_reports_down(monkeypatch):
+    _FakeDBManager.raise_on_enter = True
+    registry = MagicMock()
+    registry.peek_runtime_snapshot = lambda pid: None
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    response = await main_mod.health()
+
+    assert response.status_code == 503
     body = _body(response)
-    assert body["cloud_models"] == "DOWN"
-    assert body["models"] == [
+    assert body["status"] == "DOWN"
+    assert "models" not in body
+
+
+# ---------------------------------------------------------------------------
+# /internal/model_health — secret-gated per-model breakdown
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_internal_model_health_requires_secret(monkeypatch):
+    registry = MagicMock()
+    registry.peek_runtime_snapshot = lambda pid: None
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    # No secret configured at all: the endpoint is disabled.
+    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", None)
+    with pytest.raises(HTTPException) as exc:
+        await main_mod.internal_model_health(_internal_request("Bearer anything"))
+    assert exc.value.status_code == 403
+
+    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "test-secret")
+    with pytest.raises(HTTPException) as exc:
+        await main_mod.internal_model_health(_internal_request("Bearer wrong"))
+    assert exc.value.status_code == 401
+    with pytest.raises(HTTPException) as exc:
+        await main_mod.internal_model_health(_internal_request(""))
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_internal_model_health_reports_200_with_model_breakdown(monkeypatch):
+    _FakeDBManager.providers = [
+        {"provider_id": 1, "name": "node-a", "provider_type": "logosnode"},
+    ]
+    _FakeDBManager.deployments = [
+        {"model_id": 1, "model_name": "model-a", "provider_id": 1, "provider_name": "node-a", "type": "logosnode"},
+    ]
+    snapshots = {1: _fresh_snapshot(capabilities=["model-a"], lanes=[{"model": "model-a", "runtime_state": "loaded"}])}
+    registry = MagicMock()
+    registry.peek_runtime_snapshot = snapshots.get
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    response = await main_mod.internal_model_health(_internal_request())
+
+    assert response.status_code == 200
+    assert _body(response)["models"] == [{"name": "model-a", "status": "UP"}]
+
+
+@pytest.mark.asyncio
+async def test_internal_model_health_returns_503_when_local_down(monkeypatch):
+    # 503 mirrors /health; the body still carries the breakdown, so cloud
+    # models that are still serveable stay visible to the webservice client.
+    _FakeDBManager.providers = [
+        {"provider_id": 1, "name": "node-a", "provider_type": "logosnode"},
+    ]
+    _FakeDBManager.deployments = [
+        {"model_id": 1, "model_name": "model-a", "provider_id": 1, "provider_name": "node-a", "type": "logosnode"},
+        {"model_id": 2, "model_name": "model-d", "provider_id": 2, "provider_name": "openai", "type": "cloud"},
+    ]
+    registry = MagicMock()
+    registry.peek_runtime_snapshot = lambda pid: None
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    response = await main_mod.internal_model_health(_internal_request())
+
+    assert response.status_code == 503
+    assert _body(response)["models"] == [
         {"name": "model-a", "status": "DOWN"},
-        {"name": "model-b", "status": "DOWN"},
+        {"name": "model-d", "status": "UP"},
     ]
 
 
@@ -170,7 +262,7 @@ async def test_models_report_overall_status_per_model(monkeypatch):
     registry.peek_runtime_snapshot = snapshots.get
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.health()
+    response = await main_mod.internal_model_health(_internal_request())
 
     body = _body(response)
     by_name = {model["name"]: model["status"] for model in body["models"]}
@@ -201,7 +293,7 @@ async def test_model_entries_expose_only_name_and_status(monkeypatch):
     registry.peek_runtime_snapshot = snapshots.get
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.health()
+    response = await main_mod.internal_model_health(_internal_request())
 
     for model in _body(response)["models"]:
         assert set(model) == {"name", "status"}
@@ -218,21 +310,19 @@ async def test_models_sorted_by_name(monkeypatch):
     registry.peek_runtime_snapshot = lambda pid: None
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.health()
+    response = await main_mod.internal_model_health(_internal_request())
 
     assert [model["name"] for model in _body(response)["models"]] == ["alpha", "zeta"]
 
 
 @pytest.mark.asyncio
-async def test_db_failure_reports_down_with_empty_models(monkeypatch):
+async def test_db_failure_reports_503_with_empty_models(monkeypatch):
     _FakeDBManager.raise_on_enter = True
     registry = MagicMock()
     registry.peek_runtime_snapshot = lambda pid: None
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.health()
+    response = await main_mod.internal_model_health(_internal_request())
 
     assert response.status_code == 503
-    body = _body(response)
-    assert body["status"] == "DOWN"
-    assert body["models"] == []
+    assert _body(response)["models"] == []
