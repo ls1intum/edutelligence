@@ -42,7 +42,7 @@ export function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
-// ── Token count scale (issue #816) ───────────────────────────────────────────
+// ── Token count scale ─────────────────────────────────────────────────────────
 
 /**
  * The scale a token count is displayed on: the unit steps up the moment the
@@ -50,27 +50,35 @@ export function formatElapsed(seconds: number): string {
  * T at 1.000.000.000.000.
  */
 const TOKEN_COUNT_UNITS: ReadonlyArray<{ value: number; label: string }> = [
-  { value: 1_000_000_000_000, label: 'T' },
-  { value: 1_000_000_000, label: 'B' },
-  { value: 1_000_000, label: 'M' },
   { value: 1_000, label: 'K' },
+  { value: 1_000_000, label: 'M' },
+  { value: 1_000_000_000, label: 'B' },
+  { value: 1_000_000_000_000, label: 'T' },
 ];
 
 /**
- * A token count on the K/M/B/T scale (issue #816): always the highest
- * applicable magnitude, a space between the value and the unit, and the
- * value's decimal notation kept — the 2470.7M the issue was filed against
- * reads "2.470 B", not "2.470,7 M". Counts below 1.000 stay plain.
+ * A token count on the K/M/B/T scale: always the highest applicable
+ * magnitude, a space between the value and the unit, and the value's decimal
+ * notation kept — the 2470.7M the statistics page used to show reads "2.4 B".
+ * Counts below 1.000 stay plain; input that is not a positive finite number
+ * reads "0".
  *
- * The value is truncated to three decimals rather than rounded, so the
- * digits shown are the digits the count actually has (2.4707 B reads 2.470,
- * not 2.471).
+ * The value is truncated to one decimal, dropped when it is zero. One digit
+ * after the dot keeps the dot unambiguous — a thousands group is three
+ * digits, never one — and it keeps the abbreviation shorter than the number
+ * it replaces (262.1 K instead of 262,144).
  */
-export function formatTokenCount(count: number): string {
+export function formatTokenCount(count: number | null | undefined): string {
+  if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) return '0';
   if (count < 1_000) return String(Math.round(count));
-  const unit = TOKEN_COUNT_UNITS.find((u) => count >= u.value) ?? TOKEN_COUNT_UNITS[0];
-  const thousandths = Math.floor(count / (unit.value / 1000));
-  return `${(thousandths / 1000).toFixed(3)} ${unit.label}`;
+  // The early return guarantees count >= 1.000, so K always matches and the
+  // walk from K up ends on the highest unit the count reaches.
+  const unit = TOKEN_COUNT_UNITS.reduce(
+    (highest, u) => (count >= u.value ? u : highest),
+    TOKEN_COUNT_UNITS[0],
+  );
+  const tenths = Math.floor(count / (unit.value / 10));
+  return `${(tenths / 10).toFixed(1).replace(/\.0$/, '')} ${unit.label}`;
 }
 
 // ── X-axis labels (shared by request-volume and VRAM charts) ─────────────────

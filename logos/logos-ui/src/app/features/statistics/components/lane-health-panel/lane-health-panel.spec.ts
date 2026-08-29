@@ -72,16 +72,16 @@ describe('messageIn', () => {
 /**
  * The context window a lane row shows.
  *
- * Abbreviated on the shared K/M/B/T token scale (issue #816), because the row
- * is a dense line of stats read to spot the roomy lane — the exact token
- * count is never what is being asked.
+ * Abbreviated on the shared K/M/B/T token scale, because the row is a dense
+ * line of stats read to spot the roomy lane — the exact token count is never
+ * what is being asked.
  */
 describe('formatContextWindow', () => {
   it('abbreviates on the token scale', () => {
-    expect(formatContextWindow(262144)).toBe('262.144 K');
-    expect(formatContextWindow(111200)).toBe('111.200 K');
-    expect(formatContextWindow(40960)).toBe('40.960 K');
-    expect(formatContextWindow(1000)).toBe('1.000 K');
+    expect(formatContextWindow(262144)).toBe('262.1 K');
+    expect(formatContextWindow(111200)).toBe('111.2 K');
+    expect(formatContextWindow(40960)).toBe('40.9 K');
+    expect(formatContextWindow(1000)).toBe('1 K');
   });
 
   it('leaves small windows alone', () => {

@@ -189,7 +189,6 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   /** Token totals run to nine figures; the exact digit is never the question. */
   formatTokens(value: number | null | undefined): string {
-    if (typeof value !== 'number' || value <= 0) return '0';
     return formatTokenCount(value);
   }
 

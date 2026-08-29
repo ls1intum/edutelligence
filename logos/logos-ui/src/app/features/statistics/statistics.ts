@@ -674,7 +674,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly totalTokens = computed(() => this.stats()?.totals.totalTokens ?? 0);
   readonly cloudCostMicroCents = computed(() => this.stats()?.totals.cloudCostMicroCents ?? 0);
 
-  /** Format a token count for the KPI card on the K/M/B/T scale (issue #816). */
+  /** Format a token count for the KPI card on the K/M/B/T scale. */
   formatTokenCount(v: number): string {
     return formatTokenCountValue(v);
   }
