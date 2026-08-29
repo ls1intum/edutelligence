@@ -1,11 +1,14 @@
 package de.tum.cit.aet.logos.logoswebservice.identity;
 
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
+import java.security.PrivateKey;
 import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.interfaces.ECPublicKey;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -70,6 +73,22 @@ class MePasskeysControllerTest {
     // alice (seeded user 1201) authenticates via her Keycloak token.
     private static final int ALICE_ID = 1201;
     private static final int BOB_ID = 1202;
+
+    // Self-signed P-256 attestation certificate (X.509 DER) and its private
+    // key (PKCS#8 DER), base64url-free standard base64. fido-u2f requires x5c
+    // per WebAuthn L2 §8.6, so the fixture signs with this key instead of the
+    // credential key.
+    private static final String FIDO_U2F_ATTESTATION_CERT_BASE64 =
+        "MIIBnzCCAUWgAwIBAgIUWJHXM/s/4IjFiPpsYOus9dtRyYIwCgYIKoZIzj0EAwIwJTEjMCEGA1UEAwwaTG9nb3MgVTJG"
+            + "IFRlc3QgQXR0ZXN0YXRpb24wHhcNMjYwODI5MTE0MzI0WhcNMzYwODI2MTE0MzI0WjAlMSMwIQYDVQQDDBpMb2dv"
+            + "cyBVMkYgVGVzdCBBdHRlc3RhdGlvbjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABME42oQlWkTWFfdavktUpcmQ"
+            + "3yCaBDk5GRzv4WY+1T2thYMJ/g+jM3xSO4eHsJIp2we3QiXpHKgs7bUruWLSoHWjUzBRMB0GA1UdDgQWBBTkgiVU"
+            + "GF4Y/MH+1HWJFBT64paAszAfBgNVHSMEGDAWgBTkgiVUGF4Y/MH+1HWJFBT64paAszAPBgNVHRMBAf8EBTADAQH/"
+            + "MAoGCCqGSM49BAMCA0gAMEUCIQDTk6SC0jofuf2WblmuoIbL6ZNQrU1xXrR8r1xQ718oNwIgKTRBAR2Yl1Zhx4ce"
+            + "foHhZvomQE9uq89RRELl0L6T2BY=";
+    private static final String FIDO_U2F_ATTESTATION_KEY_BASE64 =
+        "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgwjoWSipIoODafpHFFPLzAKzjey83nDq4m9X7yQ35jLSh"
+            + "RANCAATBONqEJVpE1hX3Wr5LVKXJkN8gmgQ5ORkc7+FmPtU9rYWDCf4PozN8UjuHh7CSKdsHt0Il6RyoLO21K7li0qB1";
 
     // GET /me/passkeys
 
@@ -168,6 +187,32 @@ class MePasskeysControllerTest {
         // (ES256/RS256).
         Registration registration = buildRegistration(challenge, "new-credential-alg-unsupported", RP_ID, 0x45,
             AttestationKind.PACKED_SELF, -35);
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void register_storesValidFidoU2fAttestation() throws Exception {
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        // x5c carries the self-signed P-256 attestation certificate; sig is
+        // its key's signature over the U2F registration response data.
+        Registration registration =
+            buildRegistration(challenge, "new-credential-u2f", RP_ID, 0x45, AttestationKind.FIDO_U2F);
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.passkey.credential_id").value(registration.credentialId()));
+    }
+
+    @Test
+    void register_rejectsFidoU2fWithoutX5c() throws Exception {
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        // WebAuthn L2 §8.6 makes x5c mandatory for the fido-u2f format —
+        // there is no self-attestation path for it.
+        Registration registration =
+            buildRegistration(challenge, "new-credential-u2f-nocert", RP_ID, 0x45,
+                AttestationKind.FIDO_U2F_WITHOUT_X5C);
 
         submitRegistration(ALICE_ID, "alice", registration, null)
             .andExpect(status().isBadRequest());
@@ -374,7 +419,9 @@ class MePasskeysControllerTest {
     private enum AttestationKind {
         NONE,
         PACKED_SELF,
-        PACKED_SELF_INVALID_SIGNATURE
+        PACKED_SELF_INVALID_SIGNATURE,
+        FIDO_U2F,
+        FIDO_U2F_WITHOUT_X5C
     }
 
     /** A complete, internally consistent WebAuthn registration response. */
@@ -426,15 +473,40 @@ class MePasskeysControllerTest {
         clientData.put("origin", ORIGIN);
         byte[] clientDataJson = JSON.writeValueAsBytes(clientData);
 
-        Signature signer = Signature.getInstance("SHA256withECDSA");
-        signer.initSign(keyPair.getPrivate());
-        if (kind == AttestationKind.PACKED_SELF_INVALID_SIGNATURE) {
-            // Sign different data: a valid DER signature that does not verify.
-            signer.update(concat(authData, sha256("not the clientDataJSON".getBytes(StandardCharsets.UTF_8))));
+        byte[] signature;
+        if (kind == AttestationKind.FIDO_U2F || kind == AttestationKind.FIDO_U2F_WITHOUT_X5C) {
+            // FIDO U2F signs 0x00 || rpIdHash || clientDataHash || credentialId
+            // || publicKeyU2F (WebAuthn L2 §8.6) with the attestation
+            // certificate key, not the credential key.
+            byte[] upk = new byte[65];
+            upk[0] = 0x04;
+            System.arraycopy(fixed32(publicKey.getW().getAffineX()), 0, upk, 1, 32);
+            System.arraycopy(fixed32(publicKey.getW().getAffineY()), 0, upk, 33, 32);
+            byte[] u2fSignedData = new byte[1 + 32 + 32 + credentialId.length + upk.length];
+            int u2fOffset = 0;
+            u2fSignedData[u2fOffset++] = 0x00;
+            System.arraycopy(sha256(rpId.getBytes(StandardCharsets.UTF_8)), 0, u2fSignedData, u2fOffset, 32);
+            u2fOffset += 32;
+            System.arraycopy(sha256(clientDataJson), 0, u2fSignedData, u2fOffset, 32);
+            u2fOffset += 32;
+            System.arraycopy(credentialId, 0, u2fSignedData, u2fOffset, credentialId.length);
+            u2fOffset += credentialId.length;
+            System.arraycopy(upk, 0, u2fSignedData, u2fOffset, upk.length);
+            Signature u2fSigner = Signature.getInstance("SHA256withECDSA");
+            u2fSigner.initSign(u2fAttestationKey());
+            u2fSigner.update(u2fSignedData);
+            signature = u2fSigner.sign();
         } else {
-            signer.update(concat(authData, sha256(clientDataJson)));
+            Signature signer = Signature.getInstance("SHA256withECDSA");
+            signer.initSign(keyPair.getPrivate());
+            if (kind == AttestationKind.PACKED_SELF_INVALID_SIGNATURE) {
+                // Sign different data: a valid DER signature that does not verify.
+                signer.update(concat(authData, sha256("not the clientDataJSON".getBytes(StandardCharsets.UTF_8))));
+            } else {
+                signer.update(concat(authData, sha256(clientDataJson)));
+            }
+            signature = signer.sign();
         }
-        byte[] signature = signer.sign();
 
         // attestationObject / attStmt use TEXT keys (WebAuthn L2 §6.2); only
         // the COSE key above uses integer labels.
@@ -448,6 +520,15 @@ class MePasskeysControllerTest {
                 }
                 attStmt.Add("sig", CBORObject.FromObject(signature));
                 attestationObject.Add("fmt", "packed");
+            }
+            case FIDO_U2F, FIDO_U2F_WITHOUT_X5C -> {
+                if (kind == AttestationKind.FIDO_U2F) {
+                    attStmt.Add("x5c", CBORObject.NewArray()
+                        .Add(CBORObject.FromObject(
+                            Base64.getDecoder().decode(FIDO_U2F_ATTESTATION_CERT_BASE64))));
+                }
+                attStmt.Add("sig", CBORObject.FromObject(signature));
+                attestationObject.Add("fmt", "fido-u2f");
             }
         }
         attestationObject.Add("attStmt", attStmt);
@@ -510,6 +591,11 @@ class MePasskeysControllerTest {
             System.arraycopy(bytes, bytes.length - 32, result, 0, 32);
         }
         return result;
+    }
+
+    private static PrivateKey u2fAttestationKey() throws Exception {
+        return KeyFactory.getInstance("EC").generatePrivate(new PKCS8EncodedKeySpec(
+            Base64.getDecoder().decode(FIDO_U2F_ATTESTATION_KEY_BASE64)));
     }
 
     private static byte[] sha256(byte[] input) throws Exception {

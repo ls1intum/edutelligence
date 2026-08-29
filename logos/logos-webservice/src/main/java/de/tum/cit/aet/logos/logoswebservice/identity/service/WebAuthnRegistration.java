@@ -38,7 +38,9 @@ import com.upokecenter.cbor.CBORType;
  * COSE public key must be well-formed and use a supported algorithm) and the
  * attestation statement. Supported attestation formats are {@code none} (no
  * signature — the credential key binding is then proven at first use),
- * {@code packed} (self-attestation or certificate-based) and {@code fido-u2f}.
+ * {@code packed} (self-attestation or certificate-based, honoring the
+ * optional attStmt.alg) and {@code fido-u2f} (certificate-based; x5c is
+ * required by the format).
  *
  * <p>Attestation certificate chains are not checked against a trust anchor
  * (FIDO MDS): the signature is verified against the leaf certificate, which
@@ -63,12 +65,6 @@ public final class WebAuthnRegistration {
             throw new IllegalStateException("P-256 unavailable", e);
         }
     }
-
-    // P-256 curve parameters, for the fido-u2f self-attestation point derivation.
-    private static final BigInteger P256_P =
-        new BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16);
-    private static final BigInteger P256_B =
-        new BigInteger("5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B", 16);
 
     /**
      * Upper bound for the COSE key bytes persisted as the public key. A
@@ -253,10 +249,22 @@ public final class WebAuthnRegistration {
                     offset += credentialId.length;
                     System.arraycopy(upk, 0, u2fSignedData, offset, upk.length);
 
-                    PublicKey key = hasX5c(attStmt)
-                        ? attestationCertificate(attStmt).getPublicKey()
-                        : u2fSelfAttestationKey(credentialId, coseKeyBytes);
-                    // No attStmt.alg for this format; U2F keys are always EC.
+                    // WebAuthn L2 §8.6: this format requires x5c with exactly
+                    // one certificate, and the signature is verified with the
+                    // certificate's public key — unlike packed, there is no
+                    // self-attestation path for fido-u2f.
+                    CBORObject x5c = attStmt.ContainsKey("x5c") ? attStmt.get("x5c") : null;
+                    if (x5c == null || x5c.getType() != CBORType.Array || x5c.size() != 1) {
+                        throw new IllegalArgumentException(
+                            "fido-u2f attestation requires exactly one x5c certificate");
+                    }
+                    PublicKey key = attestationCertificate(attStmt).getPublicKey();
+                    if (!(key instanceof java.security.interfaces.ECPublicKey)
+                            || !((java.security.interfaces.ECPublicKey) key).getParams().getCurve()
+                                .equals(P256.getCurve())) {
+                        throw new IllegalArgumentException(
+                            "fido-u2f attestation certificate key must be a P-256 EC key");
+                    }
                     verifyWithCertificateKey(key, u2fSignedData,
                         mapByteStringItem(attStmt, "sig", "attStmt", "sig"), null);
                 }
@@ -271,7 +279,8 @@ public final class WebAuthnRegistration {
 
     /**
      * FIDO U2F uncompressed public key ({@code 0x04 || X || Y}). U2F is EC-only,
-     * so a non-EC credential key is rejected for this attestation format.
+     * so a non-EC credential key is rejected for this attestation format, and
+     * WebAuthn L2 §8.6 requires the coordinates to be exactly 32 bytes.
      */
     private static byte[] u2fUncompressedKey(CBORObject coseKey) {
         if (mapIntItem(coseKey, 1, "COSE key", "kty") != 2) {
@@ -279,6 +288,9 @@ public final class WebAuthnRegistration {
         }
         byte[] x = mapByteStringItem(coseKey, -2, "COSE key", "x");
         byte[] y = mapByteStringItem(coseKey, -3, "COSE key", "y");
+        if (x.length != 32 || y.length != 32) {
+            throw new IllegalArgumentException("fido-u2f credential key coordinates must be 32 bytes");
+        }
         byte[] upk = new byte[1 + x.length + y.length];
         upk[0] = 0x04;
         System.arraycopy(x, 0, upk, 1, x.length);
@@ -367,25 +379,6 @@ public final class WebAuthnRegistration {
             return declaredAlg == -7 ? "SHA256withECDSA" : "SHA256withRSA";
         }
         return key instanceof java.security.interfaces.RSAPublicKey ? "SHA256withRSA" : "SHA256withECDSA";
-    }
-
-    /**
-     * fido-u2f self-attestation: the attestation key is a P-256 point derived
-     * from the credential id and public key (FIDO U2F, section 8.2).
-     */
-    private static PublicKey u2fSelfAttestationKey(byte[] credentialId, byte[] coseKeyBytes)
-            throws GeneralSecurityException {
-        BigInteger x = new BigInteger(1, sha256(concat(new byte[] { 0x00 }, credentialId, coseKeyBytes)));
-        // P-256 has p ≡ 3 (mod 4), so the square root is m^((p+1)/4) mod p.
-        BigInteger y = x.modPow(P256_P.add(BigInteger.ONE).divide(BigInteger.valueOf(4)), P256_P);
-        BigInteger rhs = x.modPow(BigInteger.valueOf(3), P256_P)
-            .subtract(BigInteger.valueOf(3).multiply(x))
-            .add(P256_B)
-            .mod(P256_P);
-        if (!y.modPow(BigInteger.valueOf(2), P256_P).equals(rhs)) {
-            y = P256_P.subtract(y);
-        }
-        return KeyFactory.getInstance("EC").generatePublic(new ECPublicKeySpec(new ECPoint(x, y), P256));
     }
 
     /** COSE key (CBOR) → JDK public key. ES256 (P-256) and RS256 are supported. */
@@ -522,10 +515,6 @@ public final class WebAuthnRegistration {
         System.arraycopy(a, 0, result, 0, a.length);
         System.arraycopy(b, 0, result, a.length, b.length);
         return result;
-    }
-
-    private static byte[] concat(byte[] a, byte[] b, byte[] c) {
-        return concat(concat(a, b), c);
     }
 
     /** WebAuthn base64url: standard alphabet, URL-safe characters, no padding. */
