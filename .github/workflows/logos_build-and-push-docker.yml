@@ -41,10 +41,21 @@ jobs:
       # GHA build cache. Without this the reusable workflow defaults to
       # cache=false, so every build re-runs every layer on a fresh runner
       # (apt toolchain, uv venv, full dependency install) even when only
-      # source files changed. A fixed scope lets all PRs/main/release builds
-      # share the same cached layers.
+      # source files changed.
+      #
+      # The GHA cache isolates entries by branch: builds on main populate
+      # the cache, PR builds read it, but PR branches never share caches
+      # with each other and never write into main's — the first build
+      # after a merge is the one that refreshes it. The fixed scope keeps
+      # all of a branch's builds on the same key.
+      #
+      # cache-mode: max — the expensive layers (apt toolchain, uv venv,
+      # full dependency install) live in the non-final `builder` stage;
+      # the default min mode only exports the resulting image's layers
+      # and would leave the builder stage cold on every fresh runner.
       cache: true
       cache-scope: logos-orchestrator
+      cache-mode: max
       sign: false
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos
       meta-tags: |
@@ -73,6 +84,12 @@ jobs:
       file: Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # Same cold-runner problem: the expensive mvn build runs in the
+      # non-final `builder` stage, so max mode is needed to export those
+      # layers (default min would only cache the final JRE stage).
+      cache: true
+      cache-scope: logos-webservice
+      cache-mode: max
       sign: false
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-webservice
       meta-tags: |
@@ -101,6 +118,12 @@ jobs:
       file: Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # Same cold-runner problem: `npm ci` and `ng build` run in the
+      # non-final `build` stage, so max mode is needed to export those
+      # layers (default min would only cache the final nginx stage).
+      cache: true
+      cache-scope: logos-ui
+      cache-mode: max
       sign: false
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-ui
       meta-tags: |
@@ -129,6 +152,10 @@ jobs:
       file: Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # min mode (the default) is sufficient: everything runs in the final
+      # stage, so the resulting image's layers are the whole cache.
+      cache: true
+      cache-scope: logos-db
       sign: false
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-db
       meta-tags: |
@@ -157,6 +184,13 @@ jobs:
       file: Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # min mode (the default) stays here: everything runs in the final
+      # stage, and this is by far the largest image — max mode would
+      # export every intermediate CUDA/vLLM layer and could consume the
+      # 10 GB per-repo GHA cache budget on its own, LRU-evicting the
+      # other caches.
+      cache: true
+      cache-scope: logos-workernode-vllm
       sign: false
       build-args: |
         BASE_IMAGE=ubuntu:24.04

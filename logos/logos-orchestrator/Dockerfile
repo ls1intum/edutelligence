@@ -45,14 +45,16 @@ RUN mkdir -p src/logos && echo '__version__ = "0.1.0"' > src/logos/__init__.py \
 # explicit index in pyproject.toml, so no extra install-time flags are needed
 # here to steer it away from PyPI's default CUDA build.
 #
-# --refresh: re-validate cached builds against the current source tree.
-# Without it, uv's build cache can serve a STALE wheel for the local `shared`
-# path dependency: the cache entry is keyed by path+version, not content, so
+# --refresh-package shared: rebuild the local `shared` path dependency from
+# current source. Without it, uv's build cache can serve a STALE wheel for
+# that dependency: the cache entry is keyed by path+version, not content, so
 # after a shared/ source change the (re-run) install layer would silently
 # install the previously built code. Reproduced with uv 0.11.3 and 0.12.5.
-# Registry wheels already in the cache are still reused (no re-download).
+# The narrow flag invalidates exactly that one build-cache entry — index
+# resolution and the cached registry wheels stay untouched, so two builds
+# of the same commit keep resolving to the same dependency versions.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --refresh .
+    uv pip install --refresh-package shared .
 
 # ──────────────────────────────────────────────────────────
 # Stage 2: Runtime – slim image without compilers or build tools
