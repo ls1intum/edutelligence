@@ -526,6 +526,31 @@ export const extractProviderVramMb = (
   return { totalMb, usedMb, freeMb };
 };
 
+/**
+ * Host RAM of one provider's latest sample, in MiB.
+ *
+ * Parallel to extractProviderVramMb, but the answer can be "not reported":
+ * the numbers travel on the runtime's host_memory summary, which older
+ * workers never sent and non-Linux hosts report all-zero. `reported` is the
+ * flag callers gate on, so a missing summary reads as no data instead of a
+ * machine with 0 MB of RAM.
+ */
+export const extractProviderHostRamMb = (
+  sample: VramV2Sample | null | undefined
+): { totalMb: number; usedMb: number; freeMb: number; reported: boolean } => {
+  const prov = sample?.scheduler_signals?.provider;
+  const totalMb = prov?.host_ram_total_mb ?? 0;
+  if (totalMb <= 0) {
+    return { totalMb: 0, usedMb: 0, freeMb: 0, reported: false };
+  }
+  return {
+    totalMb,
+    usedMb: prov?.host_ram_used_mb ?? 0,
+    freeMb: prov?.host_ram_available_mb ?? 0,
+    reported: true,
+  };
+};
+
 export const buildVramSignature = (
   providers: VramProviderPayload[]
 ): string =>

@@ -123,6 +123,12 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
                         "capacity": {
                             "total_effective_vram_mb": 6144,
                         },
+                        "host_memory": {
+                            "source": "proc-meminfo",
+                            "total_mb": 516096.0,
+                            "available_mb": 312048.0,
+                            "used_mb": 204048.0,
+                        },
                         "lanes": [
                             {
                                 "lane_id": "qwen-a",
@@ -189,6 +195,9 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
     assert local_provider["data"][0]["models_loaded"] == 1
     scheduler_signals = local_provider["data"][0]["scheduler_signals"]
     assert scheduler_signals["provider"]["nvidia_smi_available"] is True
+    assert scheduler_signals["provider"]["host_ram_total_mb"] == 516096.0
+    assert scheduler_signals["provider"]["host_ram_used_mb"] == 204048.0
+    assert scheduler_signals["provider"]["host_ram_available_mb"] == 312048.0
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["queue_waiting_current"] == 3.0
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["requests_running_current"] == 2.0
     assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["ttft_p95_seconds"] == pytest.approx(0.875)
@@ -546,6 +555,51 @@ def test_scheduler_signals_mtp_acceptance_none_without_spec_decode() -> None:
     signals = main._build_logosnode_scheduler_signals(runtime)
     assert signals["models"]["plain-model"]["mtp_acceptance_rate_avg"] is None
     assert signals["models"]["plain-model"]["prefix_cache_hit_rate_avg"] == pytest.approx(0.3)
+
+
+# ── Host RAM in the provider signals ─────────────────────────────────────────
+# The statistics page shows host RAM the same way it shows VRAM. The numbers
+# travel on the worker's runtime host_memory summary, present on every
+# heartbeat on Linux and all-zero with source="unavailable" elsewhere.
+
+
+def test_scheduler_signals_report_host_ram_from_the_runtime_summary() -> None:
+    runtime = {
+        "timestamp": "2026-03-16T18:00:00Z",
+        "transport": {"connected": True},
+        "devices": {},
+        "capacity": {},
+        "lanes": [],
+        "host_memory": {
+            "source": "proc-meminfo",
+            "total_mb": 516096.0,
+            "available_mb": 312048.0,
+            "used_mb": 204048.0,
+        },
+    }
+
+    signals = main._build_logosnode_scheduler_signals(runtime)
+    assert signals["provider"]["host_ram_total_mb"] == 516096.0
+    assert signals["provider"]["host_ram_used_mb"] == 204048.0
+    assert signals["provider"]["host_ram_available_mb"] == 312048.0
+
+
+def test_scheduler_signals_leave_host_ram_unset_without_a_summary() -> None:
+    """A runtime without host_memory (an older worker) must not fabricate
+    zeros — the UI has to tell "not reported" apart from a host that
+    genuinely measured 0 MB free."""
+    runtime = {
+        "timestamp": "2026-03-16T18:00:00Z",
+        "transport": {"connected": True},
+        "devices": {},
+        "capacity": {},
+        "lanes": [],
+    }
+
+    signals = main._build_logosnode_scheduler_signals(runtime)
+    assert signals["provider"]["host_ram_total_mb"] is None
+    assert signals["provider"]["host_ram_used_mb"] is None
+    assert signals["provider"]["host_ram_available_mb"] is None
 
 
 # ── Per-lane context window ──────────────────────────────────────────────────

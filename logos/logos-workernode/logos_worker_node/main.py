@@ -18,16 +18,16 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from logos_worker_node.cache_planner import CacheCandidate, plan_cache_order
+from logos_worker_node.cache_planner import CacheCandidate, CachePlan, plan_cache_order
 from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
 from logos_worker_node.config import get_state_dir, load_config
 from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
-from logos_worker_node.model_cache import create_model_cache
+from logos_worker_node.model_cache import ModelRamCache, _DisabledModelRamCache, create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
-from logos_worker_node.models import model_can_sleep
+from logos_worker_node.models import ProcessState, model_can_sleep
 from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary
 
 logging.basicConfig(
@@ -38,6 +38,20 @@ logging.basicConfig(
 logger = logging.getLogger("logos_worker_node")
 
 _LANE_MANAGER_SHUTDOWN_TIMEOUT = 90
+
+# Host-RAM safety buffer (MiB) the RAM cache plan must leave untouched: OS
+# page cache, malloc fragmentation, vLLM mm processor caches, monitoring
+# agents, and the spike during a single lane's cold load. Shared by startup
+# and the periodic re-plan so the cache's growth bound is computed identically
+# in both places.
+HOST_RAM_SAFETY_MARGIN_MB = 8192.0
+
+# How often (seconds) the RAM cache plan is re-derived from the live host RAM.
+# A tick is cheap — one /proc/meminfo read plus a metadata walk of the source
+# model trees — so this mostly trades log noise against reaction time. 60 s
+# answers a lane moving its weights into host RAM via sleep well within the
+# time scale on which host-RAM pressure becomes a problem.
+RAM_CACHE_REPLAN_INTERVAL_S = 60.0
 
 
 def _download_one_model(model_name: str, hf_home: str) -> None:
@@ -283,6 +297,172 @@ async def _auto_calibrate_if_needed(
         model_profiles._load_persisted()
 
 
+def _build_ram_cache_candidates(
+    cfg: AppConfig,
+    model_cache: ModelRamCache | _DisabledModelRamCache,
+    model_profiles: ModelProfileRegistry,
+    caps: list[str],
+) -> tuple[list[CacheCandidate], list[str]]:
+    """Cache-plan candidates for the capability models that have profile data.
+
+    Returns ``(candidates, uncalibrated)`` — the uncalibrated models are not
+    served at all, so they never enter the plan.
+
+    Each candidate carries the two numbers the planner balances:
+
+      * ``sleeping_host_ram_mb`` — the RAM this model holds *while asleep*.
+        The sleep reserve exists for these models being asleep at once, so the
+        sleeping residency is what it has to cover. Using the awake footprint
+        would double-count RAM an awake lane already holds regardless of the
+        cache, and leave the actual sleep cost out of the only calculation
+        that balances the two consumers of host RAM.
+      * ``size_bytes`` — the tmpfs cost (the weights on disk).
+    """
+    candidates: list[CacheCandidate] = []
+    uncalibrated: list[str] = []
+    for m in caps:
+        profile = model_profiles.get_profile(m)
+        if profile is None or (profile.base_residency_mb or 0) <= 0:
+            uncalibrated.append(m)
+            continue
+        sleeping_host_ram_mb = profile.estimate_sleeping_host_ram_mb()
+        if sleeping_host_ram_mb <= 0.0:
+            # Never measured asleep and no awake figure to fall back on
+            # either. On-disk size underestimates by ~tokenizer + compile
+            # cache overhead but is the right ballpark.
+            sleeping_host_ram_mb = model_cache.model_size_bytes(m) / (1024 * 1024)
+        candidates.append(
+            CacheCandidate(
+                name=m,
+                can_sleep=model_can_sleep(cfg, m),
+                sleeping_host_ram_mb=sleeping_host_ram_mb,
+                size_bytes=model_cache.model_size_bytes(m),
+            )
+        )
+    return candidates, uncalibrated
+
+
+def _apply_ram_cache_plan(
+    model_cache: ModelRamCache | _DisabledModelRamCache,
+    plan: CachePlan,
+    protected: set[str],
+) -> list[str]:
+    """Re-bind the cache to a plan: refresh the growth bound, evict the rest.
+
+    ``set_host_ram_floor_mb`` bounds every later copy against the plan's sleep
+    reserve plus safety margin, checked live against MemAvailable — so a lane
+    that puts weights in host RAM shrinks the cache's room immediately,
+    without anyone re-planning. ``reclaim`` drops what the plan no longer
+    covers, returning that RAM to the pool. *protected* models are spared even
+    when the plan skipped them: a lane that is live still reads its weights
+    from the HF_HOME it was started with, and a lane waking from sleep_l2
+    re-reads them — pulling that directory out would turn a wake into a
+    failed lane.
+
+    Returns the names of the models that were evicted.
+    """
+    model_cache.set_host_ram_floor_mb(plan.reserved_for_sleep_mb + plan.safety_margin_mb)
+    return model_cache.reclaim(keep=set(plan.order) | protected)
+
+
+def _lane_models_with_live_processes(lane_manager: LaneManager) -> set[str]:
+    """Models whose lane process is (or is becoming) live.
+
+    These are exactly the models the cache must not evict — see
+    ``_apply_ram_cache_plan``. ``status()`` only checks the child process's
+    return code, so this costs nothing the heartbeat does not already pay.
+    """
+    protected: set[str] = set()
+    for lane_id in lane_manager.lane_ids():
+        handle = lane_manager.get_handle(lane_id)
+        if handle is None or handle.lane_config is None:
+            continue
+        if handle.status().state in {ProcessState.RUNNING, ProcessState.STARTING}:
+            protected.add(handle.lane_config.model)
+    return protected
+
+
+async def _replan_ram_cache_once(app: FastAPI) -> None:
+    """Re-derive and apply the host-RAM-aware cache plan from live data.
+
+    The startup plan is a snapshot. In the hours since, lanes were put to
+    sleep and their weights now sit in host RAM (sleep_l1 keeps them there,
+    sleep_l2 keeps the lane process), or lanes were stopped and their RAM is
+    free again. Running the same arithmetic against the current MemAvailable
+    — and reclaiming what no longer fits — is what makes the cache give RAM
+    back instead of holding the bytes it grabbed at boot forever. The growth
+    bound is refreshed on the same tick, and models the plan newly admits are
+    queued for background re-caching so the cache flexes both ways.
+    """
+    cfg = app.state.config
+    model_cache = app.state.model_cache
+    if not model_cache.enabled:
+        return
+    model_profiles = app.state.model_profiles
+    lane_manager = app.state.lane_manager
+
+    caps = list(cfg.logos.capabilities_models) if cfg.logos else []
+    if not caps:
+        return
+    candidates, _uncalibrated = _build_ram_cache_candidates(cfg, model_cache, model_profiles, caps)
+    if not candidates:
+        # Nothing calibrated means an empty reserve and a plan that keeps
+        # exactly what it keeps — there is no arithmetic to re-run.
+        return
+
+    host_memory = _build_host_memory_summary()
+    plan = plan_cache_order(
+        candidates,
+        available_host_ram_mb=float(host_memory.available_mb or 0.0),
+        safety_margin_mb=HOST_RAM_SAFETY_MARGIN_MB,
+        # The cache's own footprint is part of the pool it is budgeted
+        # against — without it a full cache reports no room and stays full
+        # no matter what (see cache_planner.plan_cache_order).
+        cache_held_mb=model_cache.held_bytes() / (1024 * 1024),
+    )
+
+    reclaimed = _apply_ram_cache_plan(model_cache, plan, _lane_models_with_live_processes(lane_manager))
+    if reclaimed:
+        logger.info(
+            "Re-planned RAM cache: host_ram_available=%.0fMB, reserved_for_sleep=%.0fMB, "
+            "tmpfs_budget=%.0fMB — reclaimed %d model(s) for the sleep reserve: %s",
+            plan.available_host_ram_mb,
+            plan.reserved_for_sleep_mb,
+            plan.sleepable_tmpfs_budget_mb,
+            len(reclaimed),
+            reclaimed,
+        )
+
+    # RAM freed up and the plan admits models the cache no longer holds —
+    # queue them so a later wake or cold load finds them in RAM again.
+    # start_background_caching extends the queue; it does not replace it.
+    recache = [m for m in plan.order if not model_cache.is_cached(m)]
+    if recache:
+        logger.info(
+            "Re-planned RAM cache: re-caching %d model(s) now that host RAM allows: %s",
+            len(recache),
+            recache,
+        )
+        model_cache.start_background_caching(recache)
+
+
+async def _ram_cache_replan_loop(app: FastAPI) -> None:
+    """Periodically re-plan the RAM cache against the live host RAM.
+
+    A tick that fails is a missed re-plan, not a reason to stop trying — the
+    next tick re-runs the same cheap arithmetic. Cancellation is re-raised so
+    shutdown can observe it.
+    """
+    while True:
+        await asyncio.sleep(RAM_CACHE_REPLAN_INTERVAL_S)
+        try:
+            await _replan_ram_cache_once(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.debug("RAM cache re-plan failed", exc_info=True)
+
+
 def _log_storage_layout(cfg) -> None:
     """Log the resolved storage paths for HF + the four compilation/JIT caches.
 
@@ -386,16 +566,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if model_cache.enabled:
         caps = list(cfg.logos.capabilities_models) if cfg.logos else []
         if caps:
-
-            def _has_valid_profile(m: str) -> bool:
-                p = model_profiles.get_profile(m)
-                return p is not None and (p.base_residency_mb or 0) > 0
-
-            def _can_sleep(m: str) -> bool:
-                return model_can_sleep(cfg, m)
-
-            calibrated_caps = [m for m in caps if _has_valid_profile(m)]
-            caps_skipped = [m for m in caps if not _has_valid_profile(m)]
+            candidates, caps_skipped = _build_ram_cache_candidates(cfg, model_cache, model_profiles, caps)
             if caps_skipped:
                 logger.info(
                     "Skipping RAM cache for %d uncalibrated model(s) (no profile data — " "will not be served): %s",
@@ -417,34 +588,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # full algorithm in cache_planner.py.
             host_memory = _build_host_memory_summary()
             available_host_ram_mb = float(host_memory.available_mb or 0.0)
-            # 8 GiB host-RAM safety buffer for OS page cache, malloc
-            # fragmentation, vLLM mm processor caches, monitoring agents,
-            # and the spike during a single lane's cold load.
-            host_ram_safety_margin_mb = 8192.0
-
-            candidates: list[CacheCandidate] = []
-            for m in calibrated_caps:
-                profile = model_profiles.get_profile(m)
-                # The reserve is for these models being *asleep* at once, so
-                # it is the sleeping residency that belongs in it. Using the
-                # awake footprint reserved RAM an awake lane already holds
-                # regardless of the cache, and left the actual sleep cost —
-                # measured all along, and never read by anything — out of the
-                # only calculation that balances the two consumers.
-                sleeping_host_ram_mb = profile.estimate_sleeping_host_ram_mb() if profile else 0.0
-                if sleeping_host_ram_mb <= 0.0:
-                    # Never measured asleep and no awake figure to fall back
-                    # on either. On-disk size underestimates by ~tokenizer +
-                    # compile cache overhead but is the right ballpark.
-                    sleeping_host_ram_mb = model_cache.model_size_bytes(m) / (1024 * 1024)
-                candidates.append(
-                    CacheCandidate(
-                        name=m,
-                        can_sleep=_can_sleep(m),
-                        sleeping_host_ram_mb=sleeping_host_ram_mb,
-                        size_bytes=model_cache.model_size_bytes(m),
-                    )
-                )
 
             # What the cache already holds is part of the pool it is being
             # budgeted against — without it the plan reads MemAvailable after
@@ -456,7 +599,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             plan = plan_cache_order(
                 candidates,
                 available_host_ram_mb=available_host_ram_mb,
-                safety_margin_mb=host_ram_safety_margin_mb,
+                safety_margin_mb=HOST_RAM_SAFETY_MARGIN_MB,
                 cache_held_mb=cache_held_mb,
             )
             # Bound every later copy by the same arithmetic, checked against
@@ -464,9 +607,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # fixed 400G of a 503G host, so without this the cache's only
             # limit is four fifths of the machine; with it, a lane that puts
             # weights into host RAM shrinks the cache's room immediately and
-            # without anyone re-planning.
-            model_cache.set_host_ram_floor_mb(plan.reserved_for_sleep_mb + plan.safety_margin_mb)
-            reclaimed = model_cache.reclaim(keep=set(plan.order))
+            # without anyone re-planning. No lanes exist at this point, so
+            # nothing is protected.
+            reclaimed = _apply_ram_cache_plan(model_cache, plan, protected=set())
             if reclaimed:
                 logger.info(
                     "Reclaimed %d model(s) from the RAM cache — outside this plan's "
@@ -647,10 +790,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.logos_bridge = logos_bridge
     await logos_bridge.start()
 
+    # Re-plan the RAM cache against the live host RAM. The startup plan is a
+    # snapshot; from here on lanes sleep (weights → host RAM) and stop (RAM
+    # free) on the orchestrator's say-so, and the cache has to follow.
+    ram_cache_replan_task: asyncio.Task | None = None
+    if model_cache.enabled:
+        ram_cache_replan_task = asyncio.create_task(_ram_cache_replan_loop(app), name="ram-cache-replan")
+
     logger.info("LogosWorkerNode started on port %d", cfg.worker.port)
     yield
 
     logger.info("Shutting down LogosWorkerNode")
+    # First: stop the re-plan from touching the cache while lanes are being
+    # torn down. A tick mid-shutdown is harmless at worst, but there is no
+    # reason to take "worst" for free.
+    if ram_cache_replan_task is not None:
+        ram_cache_replan_task.cancel()
+        try:
+            await ram_cache_replan_task
+        except (asyncio.CancelledError, Exception):
+            pass
     try:
         await logos_bridge.stop()
     except Exception:

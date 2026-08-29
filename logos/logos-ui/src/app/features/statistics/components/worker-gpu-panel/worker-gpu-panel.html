@@ -97,6 +97,34 @@
           <div class="synthetic-free">{{ formatMb(syntheticFreeMb()) }} free</div>
         </div>
       }
+
+      <!-- Host RAM — the machine-level pool next to the per-GPU cards: sleeping
+           lanes park their weights here and the tmpfs model cache draws from it,
+           so it is the axis a VRAM-to-RAM sleep actually competes on. -->
+      @if (hasHostRam()) {
+        <div class="gpu-card">
+          <div class="gpu-card-header">
+            <div class="gpu-title">
+              <span class="gpu-index">Host</span>
+              <span class="gpu-name">RAM</span>
+            </div>
+          </div>
+
+          <div class="gpu-bars">
+            <div class="bar-section">
+              <div class="bar-header">
+                <span class="bar-label">Memory</span>
+                <span class="bar-value">{{ formatMb(hostRamUsedMb()) }} / {{ formatMb(hostRamTotalMb()) }} ({{ hostRamPct() | number: '1.0-0' }}%)</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill bar-fill--ram" [style.width.%]="hostRamPct()"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="synthetic-free">{{ formatMb(hostRamFreeMb()) }} available</div>
+        </div>
+      }
     </div>
   </div>
 }
