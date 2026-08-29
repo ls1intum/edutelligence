@@ -14,8 +14,8 @@ def _make_request(authorization: str = "") -> MagicMock:
     return request
 
 
-def _make_data(rebuild_classifier: bool = False) -> main_mod._RefreshPipelineRequest:
-    return main_mod._RefreshPipelineRequest(rebuild_classifier=rebuild_classifier)
+def _make_data(rebuild_classifier: bool = False) -> main_mod.RefreshPipelineRequest:
+    return main_mod.RefreshPipelineRequest(rebuild_classifier=rebuild_classifier)
 
 
 @pytest.fixture(autouse=True)

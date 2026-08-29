@@ -17,7 +17,7 @@ def _make_request(authorization: str = "") -> MagicMock:
 
 
 def _payload(provider_id: int = 1, lane: dict | None = None):
-    return main_mod._InternalAddLaneRequest(
+    return main_mod.InternalAddLaneRequest(
         provider_id=provider_id,
         lane={"model": "org/model-a"} if lane is None else lane,
     )

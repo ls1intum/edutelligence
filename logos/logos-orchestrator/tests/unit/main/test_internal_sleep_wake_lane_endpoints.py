@@ -40,11 +40,11 @@ def _registry(snap: dict | None = None, command_result: dict | None = None) -> M
 
 
 def _sleep_payload(provider_id: int = 1, lane_id: str = "lane-1"):
-    return main_mod._InternalSleepLaneRequest(provider_id=provider_id, lane_id=lane_id)
+    return main_mod.InternalSleepLaneRequest(provider_id=provider_id, lane_id=lane_id)
 
 
 def _wake_payload(provider_id: int = 1, lane_id: str = "lane-1"):
-    return main_mod._InternalWakeLaneRequest(provider_id=provider_id, lane_id=lane_id)
+    return main_mod.InternalWakeLaneRequest(provider_id=provider_id, lane_id=lane_id)
 
 
 # ── sleep ────────────────────────────────────────────────────────────────────

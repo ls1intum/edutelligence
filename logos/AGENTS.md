@@ -37,10 +37,13 @@ logos/
 │       ├── run_all_migrations.sh
 │       └── README.md
 ├── src/logos/
-│   ├── main.py                        # FastAPI app + ALL route definitions (~1690 lines)
+│   ├── main.py                        # FastAPI app + ALL route definitions
 │   ├── auth.py                        # Authentication & authorization
 │   ├── responses.py                   # Helper utilities (URL merging, token extraction)
 │   ├── model_string_parser.py         # logos-v* model string parser
+│   ├── live_stream.py                 # Live in-flight stream view + SSE log accumulator
+│   ├── logosnode_snapshot.py          # Pure shaping of worker runtime snapshots (signals, VRAM)
+│   ├── middleware.py                  # APIPrefixStripperMiddleware (/api prefix)
 │   ├── dbutils/
 │   │   ├── dbmanager.py               # All DB operations (~2170 lines) — context manager pattern
 │   │   ├── dbmodules.py               # SQLAlchemy ORM models
@@ -76,7 +79,7 @@ logos/
 ## Architecture & Key Patterns
 
 ### Monolithic main.py
-All FastAPI routes are defined directly in `src/logos/main.py`. There are NO separate router files. When adding new endpoints, add them to `main.py` or create a new router file and include it.
+All FastAPI routes are defined directly in `src/logos/main.py`. There are NO separate router files. When adding new endpoints, add them to `main.py` or create a new router file and include it. Pure helper logic lives in sibling modules (`live_stream.py`, `logosnode_snapshot.py`, `middleware.py`); endpoint request models live in `dbutils/dbrequest.py`.
 
 **Important**: The `/v1/{path:path}` catch-all route captures all `/v1/*` requests. Any new `/v1/...` routes (e.g., `/v1/models`) MUST be defined BEFORE the catch-all in the file, otherwise FastAPI will never match them.
 
@@ -362,7 +365,7 @@ ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name
 
 ## Important Notes for AI Agents
 
-1. **main.py is large** (~1690+ lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
+1. **main.py is large** (~5000+ lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
 3. **No Alembic** — migrations are plain SQL files. Apply via `run_all_migrations.sh` (uses `docker exec`) or run manually.
 4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances)
