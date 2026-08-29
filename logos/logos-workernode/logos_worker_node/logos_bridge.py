@@ -83,7 +83,10 @@ class LogosBridgeClient:
         self._app = app
         self._cfg = config
         self._task: asyncio.Task | None = None
-        self._command_tasks: set[asyncio.Task] = set()
+        # Keyed by cmd_id so a single in-flight command can be cancelled. An
+        # unkeyed set only allowed "cancel everything on disconnect", which
+        # left an abandoned request generating until it finished on its own.
+        self._command_tasks: dict[str, asyncio.Task] = {}
         self._stopping = asyncio.Event()
         self._send_lock = asyncio.Lock()
         self._connected = False
@@ -381,11 +384,19 @@ class LogosBridgeClient:
                 # derive that from the replayed event log alone, because the
                 # log is in-memory, capped, and only reaches the server a
                 # moment after the first status has already made this worker
-                # look plannable.
-                "calibrating": self._active_calibration_session is not None,
+                # look plannable. Asks the task, not the slot: a finished
+                # session lingers in _active_calibration_session until the next
+                # start clears it, and reporting that as live would exclude this
+                # worker from placement for as long as no new session begins.
+                "calibrating": self._calibration_session_is_live(),
                 "actions": [
                     "infer",
                     "infer_stream",
+                    # The server only sends cancellations to a worker that
+                    # lists this; an older worker keeps the previous
+                    # behaviour instead of being sent a command it would
+                    # answer with "Unsupported bridge command".
+                    "cancel_command",
                     "get_runtime",
                     "get_lanes",
                     "apply_lanes",
@@ -413,7 +424,20 @@ class LogosBridgeClient:
     async def _send_runtime_status(self, ws, force: bool = False) -> bool:
         runtime = await build_runtime_status(self._app)
         payload = runtime.model_dump(mode="json")
-        signature = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        # Every status repeats the live calibration state, so the server can
+        # settle it without depending on a lifecycle event arriving. An event
+        # is a one-shot signal: the one that ends a session can be dropped
+        # (post-connect replay filter, a connection that no longer exists) and
+        # the server is then left excluding this worker from lane placement
+        # with nothing to release it. Part of the dedupe signature because a
+        # session that starts and ends while the lanes are untouched changes
+        # nothing else in the payload, and the status would not be sent at all.
+        calibrating = self._calibration_session_is_live()
+        signature = json.dumps(
+            {"runtime": payload, "calibrating": calibrating},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         if not force and signature == self._last_runtime_signature:
             return False
         self._last_runtime_signature = signature
@@ -426,6 +450,7 @@ class LogosBridgeClient:
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
                 "configured_models": self._cfg.configured_models,
+                "calibrating": calibrating,
                 "runtime": payload,
             },
         )
@@ -453,10 +478,13 @@ class LogosBridgeClient:
             await ws.send(json.dumps(payload))
 
     def _track_command_task(self, task: asyncio.Task, *, action: str, cmd_id: str) -> None:
-        self._command_tasks.add(task)
+        self._command_tasks[cmd_id] = task
 
         def _cleanup(done_task: asyncio.Task) -> None:
-            self._command_tasks.discard(done_task)
+            # Only drop our own entry: a cmd_id is unique per command, but
+            # clearing blindly would race a same-key re-registration.
+            if self._command_tasks.get(cmd_id) is done_task:
+                self._command_tasks.pop(cmd_id, None)
             try:
                 done_task.result()
             except asyncio.CancelledError:
@@ -474,7 +502,7 @@ class LogosBridgeClient:
         task.add_done_callback(_cleanup)
 
     async def _cancel_command_tasks(self) -> None:
-        tasks = tuple(self._command_tasks)
+        tasks = tuple(self._command_tasks.values())
         if not tasks:
             return
 
@@ -491,6 +519,60 @@ class LogosBridgeClient:
                     exc_info=True,
                 )
         self._command_tasks.clear()
+
+    def cancel_command(self, target_cmd_id: str) -> bool:
+        """Cancel one in-flight command by its cmd_id.
+
+        Returns whether a live task was found. Cancelling the task unwinds
+        ``_execute_stream_command``'s ``finally``, which closes the httpx
+        stream to the lane — that closed connection is what makes vLLM abort
+        the sequence and free its KV blocks — and decrements the lane's
+        in-flight count.
+        """
+        task = self._command_tasks.get(target_cmd_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
+    async def _handle_cancel_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:
+        """Abort the command named by ``params["target_cmd_id"]``.
+
+        Sent when the client behind a request has gone away. Without it the
+        lane keeps generating a response nobody will read: the relay holds a
+        KV slot and burns GPU cycles for the full length of a generation that
+        was abandoned, which under retry storms compounds the overload that
+        caused the retries.
+
+        Answers with a normal ``command_result`` so the server can tell an
+        aborted stream from one that had already finished on its own.
+        """
+        target_cmd_id = str(params.get("target_cmd_id", "")).strip()
+        cancelled = self.cancel_command(target_cmd_id) if target_cmd_id else False
+        if cancelled:
+            logger.info(
+                "%s>> CMD cancel_command%s cmd_id=%s target=%s aborted",
+                _CYAN + _BOLD,
+                _RESET,
+                cmd_id[:8],
+                target_cmd_id[:8],
+            )
+        else:
+            # Not an error: a cancel racing a completing stream is normal.
+            logger.debug(
+                "cancel_command cmd_id=%s target=%s: no in-flight command",
+                cmd_id[:8],
+                target_cmd_id[:8],
+            )
+        await self._send_json(
+            ws,
+            {
+                "type": "command_result",
+                "cmd_id": cmd_id,
+                "success": True,
+                "result": {"cancelled": cancelled, "target_cmd_id": target_cmd_id},
+            },
+        )
 
     async def _execute_command_and_respond(self, ws, cmd_id: str, action: str, params: dict[str, Any]) -> None:
         if action != "infer":
@@ -555,6 +637,12 @@ class LogosBridgeClient:
         action = str(message.get("action", "")).strip()
         params = message.get("params") or {}
         if not cmd_id or not action:
+            return
+
+        # Cancellation must not queue behind the command it cancels — handle
+        # it inline on the receive loop rather than spawning a task.
+        if action == "cancel_command":
+            await self._handle_cancel_command(ws, cmd_id, params)
             return
 
         if action == "infer_stream":
@@ -865,7 +953,9 @@ class LogosBridgeClient:
                     "kv_cache_sent_mb": round(result.kv_cache_sent_mb, 1),
                     "base_residency_mb": round(result.base_residency_mb, 1),
                     "loaded_vram_mb": round(result.loaded_vram_mb, 1),
-                    "sleeping_residual_mb": round(result.sleeping_residual_mb, 1),
+                    "sleeping_residual_mb": (
+                        round(result.sleeping_residual_mb, 1) if result.sleeping_residual_mb is not None else None
+                    ),
                     "min_kv_cache_mb": round(result.min_kv_cache_mb, 1),
                     "max_kv_cache_mb": round(result.max_kv_cache_mb, 1),
                     "max_model_len": result.max_model_len,
@@ -879,15 +969,18 @@ class LogosBridgeClient:
 
         Mirrors the previous server-side selection logic so behaviour is
         unchanged — only the location of the decision moves to the worker.
-        Skips models with sleep_mode_disabled (only the sleep field would
-        be N/A) only when base_residency is already known, and models
-        flagged calibration_unsupported.
+        Models that cannot sleep on this worker are judged on their non-sleep
+        fields alone, because their sleep fields stay null by design; models
+        flagged calibration_unsupported are skipped entirely.
         """
         cfg = self._app.state.config
         model_profiles = self._app.state.model_profiles
         candidates = list(self._cfg.configured_models) or list(self._cfg.capabilities_models)
 
-        sleep_level = (
+        # A session at level 0 measures no sleep field for any model, so those
+        # fields must not count as missing — a run that cannot fill them would
+        # otherwise re-pick the same models every time.
+        session_sleep_level = (
             self._active_calibration_session.sleep_level if self._active_calibration_session is not None else 1
         )
 
@@ -899,9 +992,12 @@ class LogosBridgeClient:
             sleep_na = bool(profile is not None and profile.sleep_mode_disabled)
             # Worker-side knowledge: if config now forbids sleep but profile
             # still claims it's possible, picking this model is fine — the
-            # session driver re-checks model_can_sleep before each model
-            # and persists the new flag.
-            if sleep_level > 0 and not model_can_sleep(cfg, model_name):
+            # session driver re-checks model_can_sleep before each model,
+            # persists the new flag, and calibrates it at sleep_level 0. That
+            # run leaves the sleep fields null by design, so they must not
+            # count as missing here either. Mirrors
+            # main.py::_auto_calibrate_if_needed.
+            if session_sleep_level <= 0 or not model_can_sleep(cfg, model_name):
                 sleep_na = True
             collapsed_envelope = (
                 profile is not None
@@ -947,14 +1043,24 @@ class LogosBridgeClient:
 
         terminal_event = "calibration_session_finished"
         lane_manager = getattr(self._app.state, "lane_manager", None)
+        # Push a status carrying calibrating=True right away. The server holds
+        # its optimistic mark for a bounded window after dispatching the start,
+        # and this is what confirms the session inside it.
+        if lane_manager is not None:
+            try:
+                lane_manager._mark_status_dirty()  # noqa: SLF001
+            except Exception:  # noqa: BLE001
+                logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
         try:
             from logos_worker_node.calibration import (  # noqa: PLC0415
                 _CALIBRATION_PORT,
                 _DEFAULT_VLLM,
                 _READY_TIMEOUT_S,
+                ProfileStoreUnreadableError,
                 calibrate_with_tp_escalation,
                 is_model_unsupported,
                 load_existing_profiles,
+                merge_profile,
                 plans_from_config,
                 result_to_profile_dict,
                 save_profiles,
@@ -1034,25 +1140,25 @@ class LogosBridgeClient:
                     continue
 
                 # Pre-flight: sleep gate. If the worker config forbids sleep
-                # for this model (worker kill switch or per-model override)
-                # there is no point spawning a vLLM lane with sleep_level>0 —
-                # the POST /sleep at Phase 4 of calibration will fail and the
-                # whole probe is wasted. Persist the flag and skip; the model
-                # stays uncalibrated on this worker until config or sleep
-                # level changes.
-                if session.sleep_level > 0 and not model_can_sleep(cfg, model_name):
+                # for this model (worker kill switch or per-model override),
+                # probing with sleep_level>0 would fail at the POST /sleep in
+                # Phase 4 and waste the whole run. Calibrate it at level 0
+                # instead: the sleep phases are skipped, sleeping_residual_mb
+                # is recorded as null, and everything the planner places on —
+                # base_residency_mb — is measured exactly as for any other
+                # model. Skipping the model outright, as this used to, left it
+                # permanently uncalibrated: a nosleep model is never reported
+                # as a capability without a profile, and no later session could
+                # ever produce one either.
+                model_sleep_level = session.sleep_level
+                if not model_can_sleep(cfg, model_name):
                     model_profiles.mark_sleep_mode_disabled(model_name, True)
+                    model_sleep_level = 0
                     logger.info(
-                        "[Calibration] Skipping %s — sleep mode disabled on this worker",
+                        "[Calibration] %s cannot sleep on this worker — calibrating without the sleep phases",
                         model_name,
                     )
-                    self._record_calibration_event(
-                        "calibration_model_skipped",
-                        model=model_name,
-                        details="sleep_mode_disabled",
-                    )
-                    continue
-                if model_can_sleep(cfg, model_name):
+                else:
                     # Config now permits sleep — clear any stale flag so a
                     # config flip (true → false) is picked up immediately.
                     model_profiles.mark_sleep_mode_disabled(model_name, False)
@@ -1061,12 +1167,12 @@ class LogosBridgeClient:
                 self._record_calibration_event(
                     "calibration_model_started",
                     model=model_name,
-                    details=f"sleep_level={session.sleep_level}",
+                    details=f"sleep_level={model_sleep_level}",
                 )
                 logger.info(
                     "[Calibration] Starting model=%s sleep_level=%d",
                     model_name,
-                    session.sleep_level,
+                    model_sleep_level,
                 )
 
                 # Blocking calibration runs in the default thread executor so
@@ -1077,12 +1183,12 @@ class LogosBridgeClient:
                 try:
                     result = await loop.run_in_executor(
                         None,
-                        lambda p=plan: calibrate_with_tp_escalation(
+                        lambda p=plan, sl=model_sleep_level: calibrate_with_tp_escalation(
                             p,
                             vllm_binary=_DEFAULT_VLLM,
                             port=_CALIBRATION_PORT,
                             log_dir=log_dir,
-                            sleep_level=session.sleep_level,
+                            sleep_level=sl,
                             ready_timeout_s=_READY_TIMEOUT_S,
                             nccl_p2p_available=nccl_p2p,
                             model_cache=_mc,
@@ -1111,16 +1217,34 @@ class LogosBridgeClient:
                     break
 
                 if result.success:
-                    existing = load_existing_profiles(profiles_path)
-                    prior = existing.get(model_name) or {}
-                    new_profile = result_to_profile_dict(result)
-                    for _carry in (
-                        "sleep_l1_transient_host_ram_mb",
-                        "sleep_l2_transient_host_ram_mb",
-                    ):
-                        if new_profile.get(_carry) is None and prior.get(_carry) is not None:
-                            new_profile[_carry] = prior[_carry]
-                    existing[model_name] = new_profile
+                    # An unreadable store aborts the write: load_existing_profiles
+                    # used to answer with an empty dict, and saving that back
+                    # replaced every profile on the node with this one result.
+                    # Losing one measurement is recoverable; losing the file is
+                    # not, because a model without base_residency_mb is never
+                    # announced as a capability and a model that cannot sleep
+                    # here would keep failing to be re-measured.
+                    try:
+                        existing = load_existing_profiles(profiles_path)
+                    except ProfileStoreUnreadableError as exc:
+                        logger.error(
+                            "[Calibration] %s calibrated, but %s is unreadable (%s) — "
+                            "keeping the file untouched. Fix or remove it; this model "
+                            "re-calibrates on the next session.",
+                            model_name,
+                            profiles_path,
+                            exc,
+                        )
+                        self._record_calibration_event(
+                            "calibration_model_failed",
+                            model=model_name,
+                            details=f"profile store unreadable: {exc}",
+                        )
+                        continue
+                    existing[model_name] = merge_profile(
+                        existing.get(model_name),
+                        result_to_profile_dict(result),
+                    )
                     save_profiles(profiles_path, existing)
                     model_profiles._load_persisted()  # noqa: SLF001
                     # Models that were pruned from capabilities at startup
@@ -1516,6 +1640,22 @@ class LogosBridgeClient:
                 )
                 return
             await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": True})
+        except asyncio.CancelledError:
+            # The server cancelled this stream because its client went away.
+            # No terminal frame: nobody is reading, and the server already
+            # dropped the queue for this cmd_id. What matters is the `finally`
+            # below — closing the httpx stream is what tells vLLM to abort the
+            # sequence instead of generating into a socket nobody drains.
+            # CancelledError is a BaseException, so the handler below does not
+            # swallow it and no spurious stream_end is emitted.
+            logger.info(
+                "%s<< STREAM CANCELLED%s cmd_id=%s lane=%s — aborting generation",
+                _YELLOW,
+                _RESET,
+                cmd_id[:8],
+                lane_id,
+            )
+            raise
         except Exception as exc:  # noqa: BLE001
             await self._send_json(
                 ws,
@@ -1530,7 +1670,19 @@ class LogosBridgeClient:
             # Decrement before aclose() so that a client-side disconnect that
             # leaves httpx draining the upstream stream does not keep
             # worker_active > 0 and falsely trigger proxy_stuck detection.
-            await lane_manager.decrement_active_requests(lane_id)
+            #
+            # Guarded so a lane-manager failure cannot skip the aclose below:
+            # on the cancellation path that close is the whole point — it is
+            # what makes vLLM abort the sequence and release its KV blocks.
+            try:
+                await lane_manager.decrement_active_requests(lane_id)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to decrement in-flight count for lane=%s (cmd_id=%s)",
+                    lane_id,
+                    cmd_id[:8],
+                    exc_info=True,
+                )
             if upstream is not None:
                 try:
                     await asyncio.wait_for(upstream.aclose(), timeout=5.0)

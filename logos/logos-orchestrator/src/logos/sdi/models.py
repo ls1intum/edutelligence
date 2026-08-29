@@ -182,7 +182,7 @@ class LaneSchedulerSignals:
     ttft_p95_seconds: float  # computed from ttft_histogram, 0.0 if unavailable
     e2e_latency_p50_seconds: float  # p50 end-to-end request latency, 0.0 if unavailable
     effective_vram_mb: float
-    num_parallel: int  # Ollama: explicit, vLLM: 0 (continuous batching)
+    num_parallel: int  # Ollama: explicit; vLLM: worker-reported engine max concurrency (0 until the worker reports it)
     gpu_memory_utilization: Optional[float] = None  # vLLM planner target
     tensor_parallel_size: Optional[int] = None  # vLLM topology hint
     gpu_devices: Optional[str] = None  # GPU device indices e.g. "0,1"
@@ -205,6 +205,40 @@ class LaneSchedulerSignals:
             "gpu_memory_utilization": self.gpu_memory_utilization,
             "tensor_parallel_size": self.tensor_parallel_size,
             "gpu_devices": self.gpu_devices,
+        }
+
+
+@dataclass(frozen=True)
+class AdmissionDecision:
+    """Whether a worker should be given another request for a model right now.
+
+    Nothing outside the engine can predict whether vLLM will *start* a given
+    request or park it: that depends on whether the new sequence's KV blocks
+    fit against what the running sequences currently occupy, which is neither
+    exposed nor derivable. The engine reports the answer only afterwards, as
+    ``num_requests_waiting``. So admission is retrospective by necessity —
+    forward while nothing is observed waiting, stop as soon as something is.
+    That keeps the engine-side queue at roughly one request: enough to hand
+    the GPU its next piece of work without a round-trip, few enough that
+    almost everything stays re-prioritisable and re-routable.
+
+    ``batch_limit`` bounds how many queued requests a single dispatch pass
+    may release. It is a *step size*, not a capacity: the per-lane
+    ``num_parallel`` it derives from is the concurrency vLLM guarantees at
+    full context — a lower bound (production runs a lane at 8 concurrent
+    with ``num_parallel=1``), which is sound to add in one go and wrong to
+    treat as a ceiling. ``None`` means the worker reported nothing usable.
+    """
+
+    can_admit: bool
+    batch_limit: Optional[int] = None
+    reason: Optional[str] = None  # backend_queue | kv_cache_pressure
+
+    def to_dict(self) -> dict:
+        return {
+            "can_admit": self.can_admit,
+            "batch_limit": self.batch_limit,
+            "reason": self.reason,
         }
 
 
@@ -347,6 +381,15 @@ class ModelProfile:
     enforce_eager_at_calibration: Optional[bool] = None
     kv_per_token_bytes: Optional[int] = None
     max_context_length: Optional[int] = None
+    # Smallest share of the model's own context length a lane may be placed
+    # with, as a fraction in [0, 1]. Set per model by the operator under
+    # ``logos.capabilities_models`` in the worker's config.yml and reported here
+    # in the runtime snapshot; the worker's hardware is what decides which
+    # windows are reachable, so that is where the floor belongs.
+    #
+    # None means the worker sets no floor for this model — place it at any
+    # width, which is what happened before this field existed.
+    min_context_fraction: Optional[float] = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
     residency_source: Optional[str] = None
@@ -357,6 +400,15 @@ class ModelProfile:
     # weight-transfer size and is more predictive.
     sleep_l1_transient_host_ram_mb: Optional[float] = None
     sleep_l2_transient_host_ram_mb: Optional[float] = None
+    # Host RAM the lane keeps for the whole time it sleeps, as opposed to the
+    # peak during the call above. sleep_l1 relocates the weights to the host
+    # rather than dropping them, so a sleeping lane holds roughly its weight
+    # footprint until it wakes. The worker has measured this all along — from
+    # calibration and from lane telemetry — but never sent it, so the planner
+    # priced sleeping as free on the host axis and kept choosing it while the
+    # same RAM was also lent to the model cache. None from a worker that
+    # predates the field, or for a model that has never slept here.
+    host_ram_residual_mb: Optional[float] = None
     # Worker reports True when this model cannot sleep here (worker-wide
     # disable_sleep_mode kill switch or per-model enable_sleep_mode=false
     # override). The calibration orchestrator treats this as
@@ -418,11 +470,13 @@ class ModelProfile:
             "enforce_eager_at_calibration": self.enforce_eager_at_calibration,
             "kv_per_token_bytes": self.kv_per_token_bytes,
             "max_context_length": self.max_context_length,
+            "min_context_fraction": self.min_context_fraction,
             "measurement_count": self.measurement_count,
             "last_measured_epoch": self.last_measured_epoch,
             "residency_source": self.residency_source,
             "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
             "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "host_ram_residual_mb": self.host_ram_residual_mb,
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,
             "calibration_unsupported_reason": self.calibration_unsupported_reason,

@@ -16,6 +16,7 @@ import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelTimeSerie
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.QueueDepthProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLogTotalsProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.RuntimeByColdStartProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ScopeOptionProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.StatusCountProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TimeSeriesProjection;
 
@@ -30,7 +31,18 @@ public class RequestLogStatsService {
         this.logEntryRepository = logEntryRepository;
     }
 
-    public Map<String, Object> getRequestLogStats(String startDate, String endDate, int targetBuckets) {
+    /**
+     * Aggregates for one time range, optionally narrowed to a team or a single
+     * requester.
+     *
+     * {@code userId} / {@code teamId} are nullable and independent: null means
+     * "everyone", and the two combine (a user within a team). The scope reaches
+     * every aggregate below, because they are all drawn on the same page — a
+     * filter that moved only some of them would leave the page contradicting
+     * itself.
+     */
+    public Map<String, Object> getRequestLogStats(String startDate, String endDate, int targetBuckets,
+                                                  Integer userId, Integer teamId) {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         ZonedDateTime endDt = endDate != null ? ZonedDateTime.parse(endDate).withZoneSameInstant(ZoneOffset.UTC) : now;
         ZonedDateTime startDt = startDate != null
@@ -47,14 +59,14 @@ public class RequestLogStatsService {
         Timestamp startTs = Timestamp.from(startDt.toInstant());
         Timestamp endTs   = Timestamp.from(endDt.toInstant());
 
-        String lastEventTs = queryLastEventTs(startTs, endTs);
-        Map<String, Object> totals = queryTotals(startTs, endTs);
-        Map<String, Integer> statusCounts = queryStatusCounts(startTs, endTs);
-        List<Map<String, Object>> modelBreakdown = queryModelBreakdown(startTs, endTs);
-        List<Map<String, Object>> timeSeries = queryTimeSeries(startTs, endTs, bucketSeconds);
-        List<Map<String, Object>> modelTimeSeries = queryModelTimeSeries(startTs, endTs, bucketSeconds);
-        Map<String, Object> queueDepth = queryQueueDepth(startTs, endTs);
-        List<Map<String, Object>> runtimeByColdStart = queryRuntimeByColdStart(startTs, endTs);
+        String lastEventTs = queryLastEventTs(startTs, endTs, userId, teamId);
+        Map<String, Object> totals = queryTotals(startTs, endTs, userId, teamId);
+        Map<String, Integer> statusCounts = queryStatusCounts(startTs, endTs, userId, teamId);
+        List<Map<String, Object>> modelBreakdown = queryModelBreakdown(startTs, endTs, userId, teamId);
+        List<Map<String, Object>> timeSeries = queryTimeSeries(startTs, endTs, bucketSeconds, userId, teamId);
+        List<Map<String, Object>> modelTimeSeries = queryModelTimeSeries(startTs, endTs, bucketSeconds, userId, teamId);
+        Map<String, Object> queueDepth = queryQueueDepth(startTs, endTs, userId, teamId);
+        List<Map<String, Object>> runtimeByColdStart = queryRuntimeByColdStart(startTs, endTs, userId, teamId);
 
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("lastEventTs", lastEventTs);
@@ -77,14 +89,55 @@ public class RequestLogStatsService {
         return payload;
     }
 
-    private String queryLastEventTs(Timestamp start, Timestamp end) {
-        var result = logEntryRepository.findLastEventTs(start, end);
+    /**
+     * What the filter dropdowns should offer for this range.
+     *
+     * Its own call rather than part of the aggregates: those go out every few
+     * seconds to every open session, and these two lists change only when the
+     * range or the team does. Requesters are narrowed to {@code teamId} when one
+     * is picked — that is the whole point, since the platform's full user list
+     * runs long enough to be unusable without a search box, and most of it has
+     * never made a request at all.
+     */
+    public Map<String, Object> getScopeOptions(String startDate, String endDate, Integer teamId) {
+        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        ZonedDateTime endDt = endDate != null ? ZonedDateTime.parse(endDate).withZoneSameInstant(ZoneOffset.UTC) : now;
+        ZonedDateTime startDt = startDate != null
+                ? ZonedDateTime.parse(startDate).withZoneSameInstant(ZoneOffset.UTC)
+                : endDt.minusDays(30);
+        if (startDt.isAfter(endDt)) {
+            throw new IllegalArgumentException("start_date must be before end_date");
+        }
+        Timestamp startTs = Timestamp.from(startDt.toInstant());
+        Timestamp endTs = Timestamp.from(endDt.toInstant());
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("teams", toScopeOptions(logEntryRepository.findTeamsWithTraffic(startTs, endTs)));
+        payload.put("requesters",
+            toScopeOptions(logEntryRepository.findRequestersWithTraffic(startTs, endTs, teamId)));
+        return payload;
+    }
+
+    private static List<Map<String, Object>> toScopeOptions(List<ScopeOptionProjection> rows) {
+        return rows.stream()
+            .map(p -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", p.getId());
+                m.put("label", p.getLabel());
+                m.put("requestCount", p.getRequestCount());
+                return m;
+            })
+            .toList();
+    }
+
+    private String queryLastEventTs(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
+        var result = logEntryRepository.findLastEventTs(start, end, userId, teamId);
         java.time.Instant t = result != null ? result.getLastTs() : null;
         return t != null ? t.toString() : null;
     }
 
-    private Map<String, Object> queryTotals(Timestamp start, Timestamp end) {
-        RequestLogTotalsProjection p = logEntryRepository.findTotals(start, end);
+    private Map<String, Object> queryTotals(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
+        RequestLogTotalsProjection p = logEntryRepository.findTotals(start, end, userId, teamId);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("requests", p.getRequests());
         m.put("cloudRequests", p.getCloudRequests());
@@ -93,19 +146,21 @@ public class RequestLogStatsService {
         m.put("warmStarts", p.getWarmStarts());
         m.put("avgQueueSeconds", p.getAvgQueueSeconds());
         m.put("avgRunSeconds", p.getAvgRunSeconds());
+        m.put("totalTokens", p.getTotalTokens() != null ? p.getTotalTokens() : 0L);
+        m.put("cloudCostMicroCents", p.getCloudCostMicroCents() != null ? p.getCloudCostMicroCents() : 0L);
         return m;
     }
 
-    private Map<String, Integer> queryStatusCounts(Timestamp start, Timestamp end) {
+    private Map<String, Integer> queryStatusCounts(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
         Map<String, Integer> counts = new LinkedHashMap<>();
-        for (StatusCountProjection p : logEntryRepository.findStatusCounts(start, end)) {
+        for (StatusCountProjection p : logEntryRepository.findStatusCounts(start, end, userId, teamId)) {
             counts.put(p.getStatus().toLowerCase(), p.getCnt());
         }
         return counts;
     }
 
-    private List<Map<String, Object>> queryModelBreakdown(Timestamp start, Timestamp end) {
-        return logEntryRepository.findModelBreakdown(start, end).stream()
+    private List<Map<String, Object>> queryModelBreakdown(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
+        return logEntryRepository.findModelBreakdown(start, end, userId, teamId).stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("modelId", p.getModelId() != null ? p.getModelId() : -1);
@@ -121,8 +176,8 @@ public class RequestLogStatsService {
             .toList();
     }
 
-    private List<Map<String, Object>> queryTimeSeries(Timestamp start, Timestamp end, int bucketSeconds) {
-        return logEntryRepository.findTimeSeries(start, end, bucketSeconds).stream()
+    private List<Map<String, Object>> queryTimeSeries(Timestamp start, Timestamp end, int bucketSeconds, Integer userId, Integer teamId) {
+        return logEntryRepository.findTimeSeries(start, end, bucketSeconds, userId, teamId).stream()
             .filter(p -> p.getBucketTs() != null)
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
@@ -138,9 +193,9 @@ public class RequestLogStatsService {
             .toList();
     }
 
-    private List<Map<String, Object>> queryModelTimeSeries(Timestamp start, Timestamp end, int bucketSeconds) {
+    private List<Map<String, Object>> queryModelTimeSeries(Timestamp start, Timestamp end, int bucketSeconds, Integer userId, Integer teamId) {
         List<Map<String, Object>> result = new ArrayList<>();
-        for (ModelTimeSeriesProjection p : logEntryRepository.findModelTimeSeries(start, end, bucketSeconds)) {
+        for (ModelTimeSeriesProjection p : logEntryRepository.findModelTimeSeries(start, end, bucketSeconds, userId, teamId)) {
             if (p.getBucketTs() == null) continue;
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("timestamp", (long) (double) p.getBucketTs() * 1000L);
@@ -152,8 +207,8 @@ public class RequestLogStatsService {
         return result;
     }
 
-    private Map<String, Object> queryQueueDepth(Timestamp start, Timestamp end) {
-        QueueDepthProjection p = logEntryRepository.findQueueDepth(start, end);
+    private Map<String, Object> queryQueueDepth(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
+        QueueDepthProjection p = logEntryRepository.findQueueDepth(start, end, userId, teamId);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("avgEnqueueDepth", p != null ? p.getAvgEnqueue() : null);
         m.put("avgScheduleDepth", p != null ? p.getAvgSchedule() : null);
@@ -162,8 +217,8 @@ public class RequestLogStatsService {
         return m;
     }
 
-    private List<Map<String, Object>> queryRuntimeByColdStart(Timestamp start, Timestamp end) {
-        return logEntryRepository.findRuntimeByColdStart(start, end).stream()
+    private List<Map<String, Object>> queryRuntimeByColdStart(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
+        return logEntryRepository.findRuntimeByColdStart(start, end, userId, teamId).stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("type", p.getKind());

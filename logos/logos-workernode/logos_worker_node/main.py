@@ -425,32 +425,62 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             candidates: list[CacheCandidate] = []
             for m in calibrated_caps:
                 profile = model_profiles.get_profile(m)
-                host_ram_mb = profile.estimate_host_ram_mb() if profile else 0.0
-                if host_ram_mb <= 0.0:
-                    # Fall back to on-disk size when we've never measured the
-                    # awake footprint. Underestimates by ~tokenizer + compile
-                    # cache overhead but is the right ballpark.
-                    host_ram_mb = model_cache.model_size_bytes(m) / (1024 * 1024)
+                # The reserve is for these models being *asleep* at once, so
+                # it is the sleeping residency that belongs in it. Using the
+                # awake footprint reserved RAM an awake lane already holds
+                # regardless of the cache, and left the actual sleep cost —
+                # measured all along, and never read by anything — out of the
+                # only calculation that balances the two consumers.
+                sleeping_host_ram_mb = profile.estimate_sleeping_host_ram_mb() if profile else 0.0
+                if sleeping_host_ram_mb <= 0.0:
+                    # Never measured asleep and no awake figure to fall back
+                    # on either. On-disk size underestimates by ~tokenizer +
+                    # compile cache overhead but is the right ballpark.
+                    sleeping_host_ram_mb = model_cache.model_size_bytes(m) / (1024 * 1024)
                 candidates.append(
                     CacheCandidate(
                         name=m,
                         can_sleep=_can_sleep(m),
-                        host_ram_mb=host_ram_mb,
+                        sleeping_host_ram_mb=sleeping_host_ram_mb,
                         size_bytes=model_cache.model_size_bytes(m),
                     )
                 )
 
+            # What the cache already holds is part of the pool it is being
+            # budgeted against — without it the plan reads MemAvailable after
+            # the cache has spent it, concludes there is no room, and leaves
+            # a stale cache in place forever. This is what makes the budget
+            # able to come out below the current footprint, which is what
+            # produces the reclaim below.
+            cache_held_mb = model_cache.held_bytes() / (1024 * 1024)
             plan = plan_cache_order(
                 candidates,
                 available_host_ram_mb=available_host_ram_mb,
                 safety_margin_mb=host_ram_safety_margin_mb,
+                cache_held_mb=cache_held_mb,
             )
+            # Bound every later copy by the same arithmetic, checked against
+            # live MemAvailable rather than the tmpfs size. The mount is a
+            # fixed 400G of a 503G host, so without this the cache's only
+            # limit is four fifths of the machine; with it, a lane that puts
+            # weights into host RAM shrinks the cache's room immediately and
+            # without anyone re-planning.
+            model_cache.set_host_ram_floor_mb(plan.reserved_for_sleep_mb + plan.safety_margin_mb)
+            reclaimed = model_cache.reclaim(keep=set(plan.order))
+            if reclaimed:
+                logger.info(
+                    "Reclaimed %d model(s) from the RAM cache — outside this plan's "
+                    "budget, and the RAM is worth more to the sleep reserve: %s",
+                    len(reclaimed),
+                    reclaimed,
+                )
             logger.info(
-                "Cache plan: host_ram_available=%.0fMB, reserved_for_sleep=%.0fMB "
-                "(%d sleepable model(s)), safety_margin=%.0fMB → tmpfs_budget="
-                "%.0fMB. Caching %d unsleepable + %d sleepable, skipping %d "
-                "sleepable for headroom.",
+                "Cache plan: host_ram_available=%.0fMB + cache_held=%.0fMB, "
+                "reserved_for_sleep=%.0fMB (%d sleepable model(s)), "
+                "safety_margin=%.0fMB → tmpfs_budget=%.0fMB. Caching %d "
+                "unsleepable + %d sleepable, skipping %d sleepable for headroom.",
                 plan.available_host_ram_mb,
+                plan.cache_held_mb,
                 plan.reserved_for_sleep_mb,
                 sum(1 for c in candidates if c.can_sleep),
                 plan.safety_margin_mb,

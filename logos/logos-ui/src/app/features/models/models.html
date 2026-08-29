@@ -28,15 +28,18 @@
     'DESCRIPTION',
     ...(role() === 'logos_admin' ? ['TAGS'] : []),
     'CAPABILITIES',
-    ...(role() === 'logos_admin' ? ['WEIGHTS', ''] : [])
+    ...(role() === 'logos_admin' ? ['LAST USED', 'WEIGHTS', ''] : [])
   ]"
   [gridCols]="
     role() === 'logos_admin'
-      ? '220fr 260fr 160fr 220fr 180fr 72px'
+      ? '220fr 260fr 160fr 220fr 130fr 180fr 72px'
       : '220fr 260fr 220fr'
   "
   [loading]="loading()"
   [empty]="filteredModels().length === 0"
+  [sortableColumn]="role() === 'logos_admin' ? 4 : -1"
+  [sortDirection]="lastUsedSortDirection"
+  (sortToggle)="toggleLastUsedSort()"
   emptyMessage="No models match your search."
 >
   @for (model of filteredModels(); track model.id) {
@@ -158,6 +161,23 @@
           <span>-</span>
         }
       </div>
+
+      <!-- Last used: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-last-used last-used-cell"
+          role="cell"
+          data-label="Last used"
+        >
+          <span
+            class="last-used"
+            [class.last-used--stale]="isStaleModel(model.last_used_at)"
+            [attr.title]="lastUsedTooltip(model.last_used_at)"
+          >
+            {{ formatLastUsed(model.last_used_at) }}
+          </span>
+        </div>
+      }
 
       <!-- Weights: logos_admin only -->
       @if (role() === 'logos_admin') {
@@ -303,20 +323,6 @@
       />
     </div>
 
-    <p class="form-section-label form-section-label--mt">Routing</p>
-    <div class="form-field">
-      <label class="field-label" for="add-parallel">Parallelism</label>
-      <input
-        id="add-parallel"
-        class="field-input field-input--short"
-        type="number"
-        min="1"
-        [value]="addParallel()"
-        (input)="addParallel.set($any($event.target).value)"
-        [disabled]="addLoading()"
-      />
-    </div>
-
     <p class="form-section-label form-section-label--mt">Weights</p>
     <div class="form-row">
       <div class="form-field">
@@ -440,20 +446,6 @@
         (input)="editTags.set($any($event.target).value)"
         [disabled]="editLoading()"
         autocomplete="off"
-      />
-    </div>
-
-    <p class="form-section-label form-section-label--mt">Routing</p>
-    <div class="form-field">
-      <label class="field-label" for="edit-parallel">Parallelism</label>
-      <input
-        id="edit-parallel"
-        class="field-input field-input--short"
-        type="number"
-        min="1"
-        [value]="editParallel()"
-        (input)="editParallel.set($any($event.target).value)"
-        [disabled]="editLoading()"
       />
     </div>
 

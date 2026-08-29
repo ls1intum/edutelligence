@@ -1288,6 +1288,14 @@ class LaneManager:
         SM-specific workarounds (e.g. disable_custom_all_reduce, quantization: awq
         on Turing) without requiring changes to the Logos server.
 
+        Keys are split by the VllmConfig schema itself: real vLLM engine keys
+        are merged and validated strictly (a type error there still fails the
+        lane), while profile-level keys an operator misplaced here
+        (min_context_fraction, base_residency_mb, ...) are routed to the model
+        profile registry instead of aborting lane creation — a single misplaced
+        knob must not kill add_lane for the whole model. Their documented home
+        is an inline entry under logos.capabilities_models in config.yml.
+
         The worker-wide engines.vllm.disable_sleep_mode kill switch is applied
         last so it cannot be re-enabled by a per-model override or by what the
         Logos server sends.
@@ -1298,11 +1306,26 @@ class LaneManager:
         disable_sleep = self._vllm_engine_config.disable_sleep_mode
         if not overrides and not disable_sleep:
             return lane_config
-        merged = {**lane_config.vllm_config.model_dump(), **overrides}
+        engine_fields = VllmConfig.model_fields
+        engine_overrides = {k: v for k, v in overrides.items() if k in engine_fields}
+        profile_overrides = {k: v for k, v in overrides.items() if k not in engine_fields}
+        if profile_overrides:
+            logger.warning(
+                "engines.vllm.model_overrides for %s contains profile-level key(s) %s — "
+                "routing them to the model profile registry. Their documented home is an "
+                "inline entry under logos.capabilities_models in config.yml.",
+                lane_config.model,
+                sorted(profile_overrides),
+            )
+            if self._model_profiles is not None:
+                self._model_profiles.add_overrides({lane_config.model: profile_overrides})
+        merged = {**lane_config.vllm_config.model_dump(), **engine_overrides}
         if disable_sleep:
             merged["enable_sleep_mode"] = False
         new_vc = VllmConfig.model_validate(merged)
-        applied = list(overrides)
+        applied = list(engine_overrides)
+        if profile_overrides:
+            applied.append(f"routed to profile registry: {sorted(profile_overrides)}")
         if disable_sleep:
             applied.append("enable_sleep_mode=false (engines.vllm.disable_sleep_mode)")
         logger.info(
@@ -1316,7 +1339,16 @@ class LaneManager:
         """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
 
         Policy:
-        - TP=1 is the safe default when the model fits on one GPU.
+        - A calibrated profile's tensor_parallel_size is the single source of
+          truth — the profile's residency and KV data were measured under that
+          TP, so the lane must run at it. It wins over whatever TP the
+          incoming config carries, and even a calibrated TP=1 suppresses the
+          size heuristic below: a calibrated base_residency is the full awake
+          footprint (weights + KV, often most of a GPU), which the heuristic
+          misreads as "does not fit one GPU" and escalates to a higher TP,
+          silently overwriting the calibrated verdict with a split-brain
+          profile (see issue #616).
+        - Otherwise: TP=1 is the safe default when the model fits on one GPU.
         - If TP is explicitly set > 1, respect the operator's choice.
         - If TP is at default (1) and the model **provably** does not fit on
           a single GPU (based on model profile vs actual per-GPU VRAM), auto-
@@ -1328,6 +1360,38 @@ class LaneManager:
             return lane_config
         vc = lane_config.vllm_config
         gpu_count = self._gpu_device_count()
+
+        # Calibrated profile: the calibrator did a real probe and recorded the
+        # TP the model actually loaded at — use it as-is (capped at the
+        # available GPU count), overriding the incoming TP.
+        if self._model_profiles is not None:
+            profile = self._model_profiles.get_profile(lane_config.model)
+            if (
+                profile is not None
+                and profile.residency_source == "calibrated"
+                and profile.tensor_parallel_size is not None
+                and profile.tensor_parallel_size > 0
+            ):
+                needed_tp = min(int(profile.tensor_parallel_size), gpu_count)
+                if needed_tp < 1:
+                    # No GPU detected — nothing to cap to; leave the incoming
+                    # config alone (vLLM cannot start without a GPU anyway).
+                    return lane_config
+                if needed_tp != vc.tensor_parallel_size:
+                    new_vc = vc.model_copy(update={"tensor_parallel_size": needed_tp})
+                    new_config = lane_config.model_copy(update={"vllm_config": new_vc})
+                    logger.info(
+                        "\033[36mAuto-TP\033[0m lane '%s' model=%s: "
+                        "using calibrated tensor_parallel_size=%d (capped at %d GPU(s) available), "
+                        "incoming was %d",
+                        lane_config.model,
+                        lane_config.model,
+                        needed_tp,
+                        gpu_count,
+                        vc.tensor_parallel_size,
+                    )
+                    return new_config
+                return lane_config
 
         # Explicit TP > 1: respect the operator's choice, just validate
         if vc.tensor_parallel_size > 1:
@@ -1360,9 +1424,9 @@ class LaneManager:
         if profile is None:
             return lane_config
 
-        # Prefer the calibrated tp when present — the calibrator did a real
-        # probe (bin-search up to max GPUs) and recorded the minimum tp that
-        # actually loaded the model. That's a stronger signal than the
+        # Prefer the profile's known tp when present (calibrated profiles are
+        # handled above; this is a tp the runtime recorded for a measured
+        # profile) — a real load at that tp is a stronger signal than the
         # base_residency / per-GPU-VRAM ratio below, which is an estimate
         # that can pick a tp vLLM rejects (e.g. tp=3 fails the attention-
         # head divisibility check on many architectures, where the
@@ -1524,24 +1588,36 @@ class LaneManager:
         tp_size: int,
         per_gpu_threshold_mb: float,
         multi_gpu_indices: set[int] | None = None,
+        awake_lanes_by_gpu: dict[int, int] | None = None,
+        awake_used_mb_by_gpu: dict[int, float] | None = None,
     ) -> list[int] | None:
         feasible = [row for row in device_rows if float(row["free_mb"]) >= per_gpu_threshold_mb]
         if len(feasible) < tp_size:
             return None
 
         occupied = multi_gpu_indices or set()
+        awake_lanes = awake_lanes_by_gpu or {}
+        awake_used = awake_used_mb_by_gpu or {}
         best_indices: list[int] | None = None
-        best_score: tuple[int, float, float, float, tuple[int, ...]] | None = None
+        best_score: tuple[int, int, float, float, tuple[int, ...]] | None = None
         for combo in combinations(feasible, tp_size):
             indices = tuple(sorted(int(row["index"]) for row in combo))
             # Penalise combos that share GPUs with active TP>1 lane shards.
             # A non-collocated placement always beats a collocated one regardless
             # of free-memory leftover.
             collocated = int(bool(set(indices) & occupied))
-            leftover = sum(float(row["free_mb"]) - per_gpu_threshold_mb for row in combo)
-            utilization = sum(float(row["utilization"]) for row in combo)
-            widest_free = max(float(row["free_mb"]) for row in combo)
-            score = (collocated, leftover, utilization, widest_free, indices)
+            # Prefer GPUs that hold no awake lane. Lanes in sleep_l1 do not
+            # count: their weights sit in host RAM and their ~GB-sized VRAM
+            # residue must not anchor new lanes onto a GPU that is otherwise
+            # empty (deioma incident: an embedding lane was stacked next to a
+            # sleeping 27B while a fully free GPU sat unused).
+            awake_lane_count = sum(awake_lanes.get(i, 0) for i in indices)
+            awake_used_mb = sum(awake_used.get(i, 0.0) for i in indices)
+            # Among equally unoccupied combos take the most free VRAM
+            # (spread): it maximises headroom for the new lane and keeps the
+            # emptiest GPUs intact for larger models.
+            free_mb = sum(float(row["free_mb"]) for row in combo)
+            score = (collocated, awake_lane_count, awake_used_mb, -free_mb, indices)
             if best_score is None or score < best_score:
                 best_score = score
                 best_indices = list(indices)
@@ -1553,8 +1629,10 @@ class LaneManager:
         Strategy:
         - Respect explicit lane gpu_devices.
         - Preserve the current placement when it still fits.
-        - Otherwise choose the smallest feasible GPU subset by free-memory
-          leftover (best fit) within the worker's allowed GPU pool.
+        - Otherwise choose the feasible GPU subset in the worker's allowed
+          GPU pool that shares the least with awake lanes, breaking ties
+          toward the most free VRAM (spread, not best-fit packing: a GPU
+          whose only occupants are sleeping lanes is treated as empty).
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
             return lane_config
@@ -1657,7 +1735,14 @@ class LaneManager:
         # Collect GPU indices occupied by active TP>1 lanes so placement can
         # prefer GPUs that aren't already shared with multi-GPU model shards.
         multi_gpu_indices: set[int] = set()
-        for h in self._handles.values():
+        # Per-GPU occupancy of awake vLLM lanes, so the subset picker can keep
+        # one active model per GPU and ignore sleep_l1 residues (weights in
+        # host RAM are not VRAM occupancy).
+        awake_lanes_by_gpu: dict[int, int] = {}
+        awake_used_mb_by_gpu: dict[int, float] = {}
+        for other_id, h in self._handles.items():
+            if other_id == lane_id:
+                continue  # this lane's own (old) footprint is being replaced
             lc = h.lane_config
             if (
                 lc
@@ -1670,6 +1755,26 @@ class LaneManager:
                     s = s.strip()
                     if s.isdigit():
                         multi_gpu_indices.add(int(s))
+            if lc is None or not lc.vllm or not lc.gpu_devices:
+                continue
+            try:
+                if h.status().state != ProcessState.RUNNING:
+                    continue
+            except Exception:
+                continue
+            try:
+                if (await h.is_sleeping()) is True:
+                    continue
+            except Exception:
+                pass  # unknown sleep state — count the lane as awake
+            indices = [int(s) for s in lc.gpu_devices.split(",") if s.strip().isdigit()]
+            if not indices:
+                continue
+            est_mb = self._estimate_lane_vram_mb(lc)
+            share_mb = est_mb / len(indices)
+            for i in indices:
+                awake_lanes_by_gpu[i] = awake_lanes_by_gpu.get(i, 0) + 1
+                awake_used_mb_by_gpu[i] = awake_used_mb_by_gpu.get(i, 0.0) + share_mb
 
         current_handle = self._handles.get(lane_id)
         current_selector = ""
@@ -1690,6 +1795,8 @@ class LaneManager:
                 tp_size,
                 per_gpu_threshold_mb,
                 multi_gpu_indices,
+                awake_lanes_by_gpu,
+                awake_used_mb_by_gpu,
             )
         if selected_indices is None:
             # Fail fast: an unset gpu_devices makes vLLM default to cuda:0,
@@ -2523,10 +2630,19 @@ class LaneManager:
                 tensor_parallel_size=tensor_parallel_size,
                 kv_cache_sent_mb=kv_cache_sent_mb,
             )
+            # A GMU min recorded at a different TP than the calibrated one
+            # could let a later calibrated-TP lane start below its real
+            # minimum and OOM — same conflict record_loaded_vram guards
+            # against above.
+            _profile = self._model_profiles.get_profile(model)
+            _tp_conflicts = _profile is not None and ModelProfileRegistry._calibrated_tp_conflicts(
+                _profile, tensor_parallel_size
+            )
             if (
                 status.vllm
                 and observed_gpu_memory_utilization is not None
                 and previous_state not in {"loaded", "running", "sleeping"}
+                and not _tp_conflicts
             ):
                 self._model_profiles.record_successful_load_util(
                     model,

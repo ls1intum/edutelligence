@@ -370,6 +370,10 @@ class VllmProcessHandle:
         # is used for a TP>1 lane; _build_cmd then serves this directory with
         # --load-format sharded_state instead of the full checkpoint.
         self._sharded_model_dir: str | None = None
+        # Set for the retry after a sharded checkpoint was rejected by the
+        # loader, so the retry serves the full checkpoint instead of rebuilding
+        # the same unusable shards. Reset at the top of every spawn().
+        self._skip_sharded_checkpoint: bool = False
         # Consecutive liveness-probe failures observed by is_sleeping().
         # The lane manager reads this to escalate to a restart when the API
         # server is alive (/v1/models, /health) but the EngineCore RPC is
@@ -398,6 +402,11 @@ class VllmProcessHandle:
         pointing inside the compile cache directory (e.g. an AOT-compiled
         graph that was specialized on a stale shape profile), the caches are
         purged again and the spawn is retried once.
+
+        The same shape of recovery covers a sharded checkpoint the loader
+        rejects: the cached conversion is discarded and the lane retried once
+        against the full checkpoint. Both are one-shot — a second failure of
+        the same kind is a real fault and propagates.
         """
         if self._process is not None and self._process.returncode is None:
             logger.info(
@@ -410,12 +419,30 @@ class VllmProcessHandle:
         self._purge_compile_caches_if_versions_changed()
 
         purged_once = False
+        unsharded_once = False
+        self._skip_sharded_checkpoint = False
         while True:
             try:
                 status = await self._spawn_once(lane_config)
                 self._write_compile_cache_stamp()
                 return status
             except RuntimeError:
+                # Checked before the compile cache: a sharded-loader failure
+                # can name a file under the compile cache too, and purging
+                # that leaves the actual cause in place for the retry.
+                if not unsharded_once and self.has_broken_sharded_checkpoint:
+                    unsharded_once = True
+                    self._invalidate_sharded_checkpoint(lane_config)
+                    # Hold off the conversion for this lane's retry as well:
+                    # rebuilding it would only reproduce the same bad output.
+                    self._skip_sharded_checkpoint = True
+                    logger.warning(
+                        "[%s] vLLM rejected the pre-sharded checkpoint for %s; "
+                        "retrying once from the full checkpoint",
+                        self.lane_id,
+                        lane_config.model,
+                    )
+                    continue
                 if purged_once or not self.has_poisoned_compile_cache:
                     raise
                 purged = self._purge_compile_caches()
@@ -550,6 +577,56 @@ class VllmProcessHandle:
     )
 
     _COMPILE_CACHE_STAMP_FILENAME: ClassVar[str] = ".logos_compile_cache_stamp.json"
+
+    # Log fragments that mean the pre-sharded checkpoint is the thing vLLM
+    # could not load. Matched only while this lane is actually serving one, so
+    # the loader-module frame is enough on its own; the payload messages cover
+    # the ways the shards can be wrong without the frame appearing in the tail
+    # we captured (a shape that doesn't match the parameter, e.g. a
+    # quantization whose packed layout doesn't survive the conversion, or
+    # shards missing for a rank).
+    _BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = (
+        "sharded_state_loader.py",
+        "only pre-sharded checkpoints are currently supported",
+        "could not find checkpoint files",
+    )
+
+    @property
+    def has_broken_sharded_checkpoint(self) -> bool:
+        """True if this lane's pre-sharded checkpoint is what failed to load.
+
+        A conversion can finish successfully and still emit shards vLLM
+        rejects, and nothing about the produced files says so — the marker is
+        written, the shard files are there, and every subsequent spawn picks
+        the same directory up as ready. For a model the worker keeps warm that
+        is a permanent outage of that model, reported only as a failed
+        add_lane.
+        """
+        if not self._sharded_model_dir or not self._recent_logs:
+            return False
+        log_blob = "\n".join(self._recent_logs).lower()
+        return any(frag in log_blob for frag in self._BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS)
+
+    def _invalidate_sharded_checkpoint(self, lane_config: LaneConfig) -> bool:
+        """Remove the sharded checkpoint this lane just failed to load."""
+        directory = self._sharded_model_dir
+        if not directory:
+            return False
+        try:
+            from logos_worker_node import sharded_checkpoint as sc  # noqa: PLC0415
+
+            removed = sc.invalidate_sharded_checkpoint(Path(directory))
+        except Exception:  # noqa: BLE001
+            logger.exception("[%s] Failed to discard sharded checkpoint %s", self.lane_id, directory)
+            return False
+        if removed:
+            logger.warning(
+                "[%s] Discarded sharded checkpoint for %s: %s",
+                self.lane_id,
+                lane_config.model,
+                directory,
+            )
+        return removed
 
     @property
     def has_poisoned_compile_cache(self) -> bool:
@@ -1181,6 +1258,15 @@ class VllmProcessHandle:
         vc = lane_config.vllm_config
         if vc is None:
             return
+        if self._skip_sharded_checkpoint:
+            # Set by spawn() after the loader rejected the cached conversion.
+            # Rebuilding it here would reproduce the same unusable shards.
+            logger.info(
+                "[%s] serving %s from the full checkpoint — its sharded conversion was rejected",
+                self.lane_id,
+                lane_config.model,
+            )
+            return
         ec = self._vllm_engine_config
         if not getattr(ec, "sharded_checkpoint_enabled", True):
             return
@@ -1364,6 +1450,13 @@ class VllmProcessHandle:
             cmd.extend(["--attention-config.backend", attn_backend])
         if vc.enable_prefix_caching:
             cmd.append("--enable-prefix-caching")
+        # vLLM only reports usage.prompt_tokens_details (cached_tokens) when
+        # this server flag is set — its default is off, so without it local
+        # lanes omit the prefix-cache hit count that cloud providers include
+        # in usage natively, and consumers can't optimise cached-token usage
+        # per request (#813).
+        if vc.enable_prompt_tokens_details:
+            cmd.append("--enable-prompt-tokens-details")
         if vc.disable_custom_all_reduce:
             cmd.append("--disable-custom-all-reduce")
         if vc.enable_sleep_mode:

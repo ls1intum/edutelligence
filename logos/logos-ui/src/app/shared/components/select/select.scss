@@ -1,5 +1,17 @@
+// A custom element defaults to display:inline, which makes the host a box that
+// sizing does not apply to — a caller that constrains <app-select> (the stats
+// filters cap theirs at 200px) constrains nothing, and the select inside is free
+// to grow past it and sit on top of whatever comes next. Give the host a real
+// box and never let the control outgrow it.
+:host {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .app-select {
   width: 100%;
+  max-width: 100%;
   height: 36px;
   padding: 0 38px 0 14px;
   border-radius: 8px;

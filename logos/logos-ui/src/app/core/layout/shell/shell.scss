@@ -4,6 +4,7 @@
   position: relative;
   display: flex;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 
   background: rgb(var(--shell-background));
@@ -233,6 +234,7 @@
     top: 0;
     width: 220px;
     height: 100vh;
+    height: 100dvh;
     transform: translateX(-100%);
     transition: transform 0.3s ease;
     z-index: 25;

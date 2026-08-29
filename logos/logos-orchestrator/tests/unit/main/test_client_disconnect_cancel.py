@@ -153,7 +153,7 @@ async def test_streaming_requests_are_guarded_too(monkeypatch):
         auth.api_key_id = 88
         return {}, auth, {"stream": True}, "127.0.0.1", None
 
-    async def fake_filter(deployments):
+    async def fake_filter(deployments, payload=None):
         return deployments
 
     async def fake_guard(request, **kwargs):

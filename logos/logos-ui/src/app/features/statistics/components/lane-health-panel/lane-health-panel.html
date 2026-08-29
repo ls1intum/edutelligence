@@ -1,9 +1,15 @@
-@if (lanes.length === 0) {
+@if (!canAdd && lanes.length === 0) {
   <app-stats-empty-state message="No lane data available yet." />
 } @else {
   <div class="lane-panel">
     @if (unloadError()) {
       <div class="action-error">{{ unloadError() }}</div>
+    }
+    @if (sleepWakeError()) {
+      <div class="action-error">{{ sleepWakeError() }}</div>
+    }
+    @if (lanes.length === 0) {
+      <div class="lane-empty">No lanes loaded.</div>
     }
     @for (row of lanes; track row.laneId) {
       <div class="lane-row">
@@ -27,10 +33,56 @@
                   >
                     {{ unloadingLaneId() === row.laneId ? 'Unloading…' : 'Unload' }}
                   </button>
+                  <!-- Wake/Sleep reach the two states the capacity planner also
+                       reaches on its own — the tooltip says so outright, because
+                       a woken lane with no demand goes back to sleep on the next
+                       idle check, and a slept lane with queued demand is woken
+                       straight back up. -->
+                  @switch (sleepAction(row.lane)) {
+                    <!-- The handlers take only one wake/sleep at a time and drop a
+                         second silently, so while one is in flight the buttons of
+                         the other lanes are disabled instead of looking clickable.
+                         The spinner stays on the lane that was actually clicked. -->
+                    @case ('wake') {
+                      <button
+                        class="btn-lane-action"
+                        [disabled]="wakingLaneId() !== null"
+                        (click)="handleWake(row.laneId)"
+                        title="Wake this lane (weights stay resident, no cold load). The capacity planner decides on its own and may put it back to sleep once it goes idle."
+                      >
+                        {{ wakingLaneId() === row.laneId ? 'Waking…' : 'Wake' }}
+                      </button>
+                    }
+                    @case ('sleep') {
+                      <button
+                        class="btn-lane-action"
+                        [disabled]="sleepingLaneId() !== null"
+                        (click)="handleSleep(row.laneId)"
+                        title="Put this lane to sleep (weights stay resident, no cold load on wake). The capacity planner decides on its own and may wake it as soon as demand returns."
+                      >
+                        {{ sleepingLaneId() === row.laneId ? 'Sleeping…' : 'Sleep' }}
+                      </button>
+                    }
+                  }
                 }
               </div>
             </div>
-            <div class="lane-model">{{ row.lane.model }}</div>
+            <div class="lane-model">
+              {{ row.lane.model }}
+              @if (row.contextLabel) {
+                <!-- The window this lane is serving at, next to the model whose
+                     window it is not: two lanes of the same model can differ. -->
+                <span class="lane-context" title="Context window this lane is serving at">
+                  {{ row.contextLabel }} ctx
+                </span>
+              }
+            </div>
+            @if (gpuLabel(row.lane)) {
+              <div class="lane-gpu">
+                <i class="pi pi-microchip" aria-hidden="true"></i>
+                <span>{{ gpuLabel(row.lane) }}</span>
+              </div>
+            }
 
             @if (row.lane.vllm) {
               <div class="lane-stats">
@@ -62,8 +114,8 @@
                   @if (row.lane.queue_waiting != null) {
                     <span class="stat-label">Queue <span class="stat-value neutral">{{ row.lane.queue_waiting }}</span></span>
                   }
-                  @if (row.lane.requests_running != null) {
-                    <span class="stat-label">Running <span class="stat-value neutral">{{ row.lane.requests_running }}</span></span>
+                  @if (row.runningLabel != null) {
+                    <span class="stat-label" [attr.title]="row.runningTooltip">Running <span class="stat-value neutral">{{ row.runningLabel }}</span></span>
                   }
                 </div>
               </div>
@@ -74,6 +126,63 @@
             }
           </div>
         </div>
+      </div>
+    }
+
+    <!-- Manual lane load (counterpart to per-lane Unload) -->
+    @if (canAdd) {
+      <div class="lane-load">
+        @if (pickerOpen()) {
+          <div class="lane-load__row">
+            @if (modelsLoading()) {
+              <span class="lane-load__hint">
+                <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Loading models…
+              </span>
+            } @else if (loadableModels.length === 0) {
+              <span class="lane-load__hint">No models available to load.</span>
+            } @else {
+              <select
+                class="lane-load__select"
+                [value]="selectedModel() ?? ''"
+                (change)="selectModel($event)"
+                aria-label="Model to load"
+              >
+                <option value="" disabled>Select a model…</option>
+                @for (m of loadableModels; track m.model_name) {
+                  <option [value]="m.model_name">{{ m.model_name }}</option>
+                }
+              </select>
+              <button
+                class="btn-load"
+                [disabled]="selectedModel() == null || addingLane()"
+                (click)="handleAddLane()"
+              >
+                @if (addingLane()) {
+                  <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Loading…
+                } @else {
+                  Load
+                }
+              </button>
+            }
+            <button class="lane-load__close" type="button" (click)="closePicker()" aria-label="Close">
+              <i class="pi pi-times" aria-hidden="true"></i>
+            </button>
+          </div>
+          @if (addError()) {
+            <div class="action-error">{{ addError() }}</div>
+          }
+        } @else {
+          <button class="btn-load" type="button" (click)="openPicker()">
+            <i class="pi pi-plus" aria-hidden="true"></i> Load lane
+          </button>
+        }
+        @if (acceptedModel()) {
+          <div class="lane-load__pending" aria-live="polite">
+            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+            Loading <strong>{{ acceptedModel() }}</strong> — this can take minutes; the lane
+            appears here once the worker reports it.
+          </div>
+        }
       </div>
     }
   </div>

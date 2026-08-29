@@ -385,7 +385,7 @@ async def test_handle_message_runs_stream_command_in_background():
     assert len(client._command_tasks) == 1  # noqa: SLF001
     assert not finished.is_set()
 
-    background_tasks = tuple(client._command_tasks)  # noqa: SLF001
+    background_tasks = tuple(client._command_tasks.values())  # noqa: SLF001
     release.set()
     await asyncio.gather(*background_tasks)
 
@@ -439,7 +439,7 @@ async def test_handle_message_runs_infer_command_in_background():
     assert len(client._command_tasks) == 1  # noqa: SLF001
     assert sent_payloads == []
 
-    background_tasks = tuple(client._command_tasks)  # noqa: SLF001
+    background_tasks = tuple(client._command_tasks.values())  # noqa: SLF001
     release.set()
     await asyncio.gather(*background_tasks)
 
@@ -932,11 +932,11 @@ def test_list_uncalibrated_flags_calibrated_profile_missing_pairs(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkeypatch):
-    """Inside the session loop, a model that can't be slept on this worker
-    is recorded as skipped (with sleep_mode_disabled persisted on the
-    profile) and the loop moves on to the next model. The session must
-    not refuse the whole batch over one bad model."""
+async def test_session_calibrates_sleep_disabled_model_without_sleep(tmp_path, monkeypatch):
+    """A model that can't be slept on this worker is calibrated at
+    sleep_level 0 rather than skipped: base_residency is measurable without
+    sleep, and skipping left such a model permanently uncalibrated — and so
+    never announced as a capability — with no way back."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
 
@@ -954,7 +954,11 @@ async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkey
     client = LogosBridgeClient(app, cfg)
 
     # Mock the actual calibration so we don't spawn vLLM.
+    seen_sleep_levels: dict[str, int] = {}
+
     def _fake_calibrate(plan, **kwargs):
+        sleep_level = int(kwargs["sleep_level"])
+        seen_sleep_levels[plan["model"]] = sleep_level
         return CalibrationResult(
             model=plan["model"],
             tensor_parallel_size=1,
@@ -962,8 +966,8 @@ async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkey
             kv_cache_sent_mb=2048.0,
             success=True,
             base_residency_mb=12345.0,
-            sleeping_residual_mb=512.0,
-            sleep_l1_transient_host_ram_mb=4096.0,
+            sleeping_residual_mb=(512.0 if sleep_level > 0 else None),
+            sleep_l1_transient_host_ram_mb=(4096.0 if sleep_level > 0 else None),
         )
 
     monkeypatch.setattr(
@@ -980,14 +984,52 @@ async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkey
     await _drain_session(client)
 
     events = [(e.event, e.model) for e in app.state.lane_manager._event_log]
-    # gpt-oss skipped, phi-4 attempted and completed.
-    assert ("calibration_model_skipped", "openai/gpt-oss-120b") in events
+    assert ("calibration_model_skipped", "openai/gpt-oss-120b") not in events
+    assert ("calibration_model_completed", "openai/gpt-oss-120b") in events
     assert ("calibration_model_completed", "microsoft/Phi-4-reasoning") in events
     assert ("calibration_session_finished", "") in events
-    # sleep_mode_disabled persisted for the skipped model.
-    skipped_profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
-    assert skipped_profile is not None
-    assert skipped_profile.sleep_mode_disabled is True
+    # The nosleep model probed without sleep; the other one kept the session level.
+    assert seen_sleep_levels == {"openai/gpt-oss-120b": 0, "microsoft/Phi-4-reasoning": 1}
+    # sleep_mode_disabled persisted, and the measurement landed.
+    nosleep_profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
+    assert nosleep_profile is not None
+    assert nosleep_profile.sleep_mode_disabled is True
+    assert nosleep_profile.base_residency_mb == 12345.0
+    assert nosleep_profile.sleeping_residual_mb is None
+    # The model is announced to Logos now that it has a profile.
+    assert "openai/gpt-oss-120b" in client._cfg.capabilities_models  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_nosleep_model_with_profile_is_not_recalibrated(tmp_path, monkeypatch):
+    """A nosleep model calibrated at level 0 has null sleep fields by
+    design. Those nulls must not read as "incomplete", or every session
+    re-picks the model forever."""
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(
+        tmp_path,
+        per_model_overrides={"openai/gpt-oss-120b": {"enable_sleep_mode": False}},
+    )
+    app.state.model_profiles.seed_capabilities(["openai/gpt-oss-120b"])
+    profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
+    profile.base_residency_mb = 98945.0
+    profile.residency_source = "calibrated"
+    profile.sleeping_residual_mb = None
+    profile.sleep_l1_transient_host_ram_mb = None
+    profile.sleep_mode_disabled = True
+    profile.kv_cache_to_max_model_len_pairs = [{"kv_mb": 8192.0, "max_model_len": 32768}]
+
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["openai/gpt-oss-120b"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    assert client._list_uncalibrated_models() == []  # noqa: SLF001
 
 
 @pytest.mark.asyncio
@@ -1354,3 +1396,488 @@ def test_current_event_ids_snapshots_the_log():
 
     app.state.lane_manager = None
     assert client._current_event_ids() == frozenset()  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# The status carries the live calibration state
+#
+# The server excludes a calibrating worker from lane placement, and used to
+# learn when that ended from a single lifecycle event. An event that never
+# lands as a live one — dropped by the post-connect replay filter, belonging
+# to a connection that is gone — left the worker excluded with nothing to
+# release it. Observed in production as three workers holding no lanes for
+# over seven hours, recovered only by restarting the container.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_reports_the_live_calibration_state(tmp_path, monkeypatch):
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.build_runtime_status",
+        AsyncMock(return_value=SimpleNamespace(model_dump=lambda mode="json": {"lanes": []})),
+    )
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_runtime_status(object(), force=True)  # noqa: SLF001
+    assert sends[-1]["calibrating"] is False
+
+    client._active_calibration_session = _CalibrationSession(sleep_level=1)  # noqa: SLF001
+    await client._send_runtime_status(object(), force=True)  # noqa: SLF001
+    assert sends[-1]["calibrating"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_session_ending_is_pushed_even_when_nothing_else_changed(tmp_path, monkeypatch):
+    """A session that starts and ends without touching a lane changes nothing
+    else in the payload. Left out of the dedupe signature, the status carrying
+    calibrating=False would never be sent and the server would stay stuck."""
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.build_runtime_status",
+        AsyncMock(return_value=SimpleNamespace(model_dump=lambda mode="json": {"lanes": []})),
+    )
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    session = _CalibrationSession(sleep_level=1)
+    client._active_calibration_session = session  # noqa: SLF001
+    assert await client._send_runtime_status(object(), force=False) is True  # noqa: SLF001
+    assert await client._send_runtime_status(object(), force=False) is False  # noqa: SLF001
+
+    client._active_calibration_session = None  # noqa: SLF001
+    assert await client._send_runtime_status(object(), force=False) is True  # noqa: SLF001
+    assert [p["calibrating"] for p in sends] == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_hello_reports_a_finished_session_as_not_calibrating(tmp_path, monkeypatch):
+    """_active_calibration_session lingers until the next start clears it.
+    Reporting that as live at connect would exclude the worker from placement
+    for as long as no new session begins."""
+    app = _make_app_for_calibration(tmp_path)
+    app.state.lane_manager._static_lane_ids = set()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    async def _already_done():
+        return None
+
+    done = _CalibrationSession(sleep_level=1)
+    done.task = asyncio.create_task(_already_done())
+    await done.task
+    client._active_calibration_session = done  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+    await client._send_hello(object())  # noqa: SLF001
+
+    assert sends[-1]["calibrating"] is False
+
+
+# ---------------------------------------------------------------------------
+# A calibration result is merged into the store, never written over it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_profile_store_is_left_alone(tmp_path, monkeypatch):
+    """load_existing_profiles used to answer an unreadable store with an empty
+    dict, and saving that back replaced every profile on the node with this one
+    result. One lost measurement is recoverable; the file is not."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/model-a"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    profiles_path = tmp_path / "model_profiles.yml"
+    profiles_path.write_text("model_profiles:\n  org/other: {unterminated\n")
+    corrupt = profiles_path.read_text()
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=12345.0,
+            sleeping_residual_mb=512.0,
+        ),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    assert (await client._handle_start_calibration_session({"sleep_level": 1}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    assert profiles_path.read_text() == corrupt
+    events = [(e.event, e.details) for e in app.state.lane_manager._event_log]
+    assert any(e == "calibration_model_failed" and "unreadable" in d for e, d in events)
+    # The session still ends cleanly — the server must not be left waiting.
+    assert ("calibration_session_finished", "sleep_level=1") in events
+
+
+@pytest.mark.asyncio
+async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
+    """Fields the probe does not measure — here the sleep gate's flag and a
+    disk size recorded elsewhere — survive the write."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult, load_existing_profiles, save_profiles
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/model-a"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    profiles_path = tmp_path / "model_profiles.yml"
+    save_profiles(
+        profiles_path,
+        {
+            "org/model-a": {"base_residency_mb": 1.0, "disk_size_bytes": 42, "sleep_mode_disabled": True},
+            "org/untouched": {"base_residency_mb": 22545.0},
+        },
+    )
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=12345.0,
+            sleeping_residual_mb=512.0,
+        ),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    assert (await client._handle_start_calibration_session({"sleep_level": 1}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    stored = load_existing_profiles(profiles_path)
+    assert stored["org/model-a"]["base_residency_mb"] == 12345.0
+    assert stored["org/model-a"]["disk_size_bytes"] == 42
+    assert stored["org/model-a"]["sleep_mode_disabled"] is True
+    assert stored["org/untouched"]["base_residency_mb"] == 22545.0, "other models must be untouched"
+
+
+# ---------------------------------------------------------------------------
+# Cancelling an abandoned request (#735)
+#
+# Every request to a worker is multiplexed over one WebSocket, so there is no
+# per-request connection whose close tells vLLM to stop. When the client
+# behind a request goes away, the server sends `cancel_command`; cancelling
+# the task is what closes the httpx stream to the lane, and that closed
+# connection is what makes vLLM abort the sequence and free its KV blocks.
+# ---------------------------------------------------------------------------
+
+
+class _BlockingUpstream:
+    """An upstream that yields one chunk and then never produces another."""
+
+    def __init__(self) -> None:
+        self.status_code = 200
+        self.headers = {"content-type": "text/event-stream"}
+        self.closed = False
+        self.first_chunk_sent = asyncio.Event()
+
+    async def aiter_bytes(self):
+        yield b"tok1"
+        self.first_chunk_sent.set()
+        await asyncio.Event().wait()  # generate forever
+        yield b"unreachable"
+
+    async def aread(self) -> bytes:
+        return b""
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _stream_client_fixture(monkeypatch, upstream):
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _FakeStreamClient(upstream),
+    )
+    return client, lane_manager
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_stream_closes_the_upstream_and_frees_the_lane(monkeypatch):
+    """The point of the whole feature: aborting the relay must close the
+    connection to vLLM (which aborts generation) and release the in-flight
+    count that would otherwise keep the lane from ever sleeping."""
+    upstream = _BlockingUpstream()
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+
+    task = asyncio.create_task(
+        client._execute_stream_command(ws, "cmd-1", {"lane_id": "lane-a", "payload": {}})  # noqa: SLF001
+    )
+    await upstream.first_chunk_sent.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert upstream.closed is True, "vLLM never sees the abort unless the stream is closed"
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_sends_no_terminal_frame(monkeypatch):
+    """Nobody is reading: the server already dropped the queue for this
+    cmd_id. Emitting a stream_end failure would only be noise."""
+    upstream = _BlockingUpstream()
+    client, _lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+
+    task = asyncio.create_task(
+        client._execute_stream_command(ws, "cmd-1", {"lane_id": "lane-a", "payload": {}})  # noqa: SLF001
+    )
+    await upstream.first_chunk_sent.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [f["type"] for f in ws.frames] == ["stream_start", "stream_chunk"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_aborts_the_named_stream(monkeypatch):
+    """End-to-end through the message dispatcher, the way the server drives it."""
+    upstream = _BlockingUpstream()
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-stream",
+                "action": "infer_stream",
+                "params": {"lane_id": "lane-a", "payload": {}},
+            }
+        ),
+    )
+    await upstream.first_chunk_sent.wait()
+    assert "cmd-stream" in client._command_tasks  # noqa: SLF001
+    stream_task = client._command_tasks["cmd-stream"]  # noqa: SLF001
+
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-cancel",
+                "action": "cancel_command",
+                "params": {"target_cmd_id": "cmd-stream"},
+            }
+        ),
+    )
+
+    result = [f for f in ws.frames if f["type"] == "command_result"][-1]
+    assert result["result"] == {"cancelled": True, "target_cmd_id": "cmd-stream"}
+
+    with pytest.raises(asyncio.CancelledError):
+        await stream_task
+    await asyncio.sleep(0)  # let the done-callback deregister the task
+    assert upstream.closed is True
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+    assert "cmd-stream" not in client._command_tasks  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_for_an_unknown_id_is_not_an_error():
+    """A cancel racing a stream that just finished is normal traffic, not a
+    failure the server should have to special-case."""
+    app = _DummyApp()
+    app.state.lane_manager = object()
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    ws = _CollectWS()
+
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-cancel",
+                "action": "cancel_command",
+                "params": {"target_cmd_id": "long-gone"},
+            }
+        ),
+    )
+
+    assert ws.frames[-1]["success"] is True
+    assert ws.frames[-1]["result"]["cancelled"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_only_touches_its_target(monkeypatch):
+    """Two concurrent requests on one worker: cancelling one must not
+    disturb the other. This is what keying the task map by cmd_id buys."""
+    upstream_a = _BlockingUpstream()
+    upstream_b = _BlockingUpstream()
+    upstreams = iter([upstream_a, upstream_b])
+
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _FakeStreamClient(next(upstreams)),
+    )
+    ws = _CollectWS()
+
+    for cmd_id in ("cmd-a", "cmd-b"):
+        await client._handle_message(  # noqa: SLF001
+            ws,
+            json.dumps(
+                {
+                    "type": "command",
+                    "cmd_id": cmd_id,
+                    "action": "infer_stream",
+                    "params": {"lane_id": "lane-a", "payload": {}},
+                }
+            ),
+        )
+    await upstream_a.first_chunk_sent.wait()
+    await upstream_b.first_chunk_sent.wait()
+
+    task_a = client._command_tasks["cmd-a"]  # noqa: SLF001
+    assert client.cancel_command("cmd-a") is True
+    # The close happens in the task's finally, so wait for it rather than
+    # assuming one scheduler turn is enough.
+    with pytest.raises(asyncio.CancelledError):
+        await task_a
+
+    assert upstream_a.closed is True
+    assert upstream_b.closed is False
+    assert "cmd-b" in client._command_tasks  # noqa: SLF001
+
+    # Clean up the survivor so the test does not leak a task.
+    client.cancel_command("cmd-b")
+    await asyncio.gather(*client._command_tasks.values(), return_exceptions=True)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_hello_advertises_the_cancel_action():
+    """The server feature-gates on this list; without it, no cancellation is
+    ever sent to this worker."""
+    client = LogosBridgeClient(
+        _DummyApp(),
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    ws = _CollectWS()
+    await client._send_hello(ws)  # noqa: SLF001
+    assert "cancel_command" in ws.frames[0]["actions"]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
+    """The sync `infer` path is exposed the same way — a client that leaves
+    mid-request would otherwise keep the lane busy for the whole generation."""
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    posting = asyncio.Event()
+    state = {"closed": False}
+
+    class _BlockingHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            state["closed"] = True
+            return False
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            posting.set()
+            await asyncio.Event().wait()  # generation never finishes
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=None: _BlockingHttpClient(),
+    )
+
+    ws = _CollectWS()
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-infer",
+                "action": "infer",
+                "params": {"lane_id": "lane-a", "payload": {"messages": []}},
+            }
+        ),
+    )
+    await posting.wait()
+    task = client._command_tasks["cmd-infer"]  # noqa: SLF001
+
+    assert client.cancel_command("cmd-infer") is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert state["closed"] is True, "the relay connection to the lane stayed open"
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
