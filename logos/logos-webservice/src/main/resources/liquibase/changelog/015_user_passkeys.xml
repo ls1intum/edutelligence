@@ -8,8 +8,9 @@
     <!-- WebAuthn credentials (passkeys) managed by the webservice:
          a user may register several passkeys, each stored as the base64url
          credential id plus the COSE public key taken from the registration
-         attestation. One credential id per user (the authenticator generates
-         it), deleted with the user. -->
+         attestation. Credential ids are globally unique (the authenticator
+         generates a fresh random id per credential), so the same id can
+         never be registered by two users; rows are deleted with the user. -->
     <changeSet id="015-user-passkeys" author="tobiaswasner">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="user_passkeys"/></not>
@@ -40,8 +41,8 @@
         <addForeignKeyConstraint baseTableName="user_passkeys" baseColumnNames="user_id"
                                  referencedTableName="users" referencedColumnNames="id"
                                  constraintName="fk_user_passkeys_user" onDelete="CASCADE"/>
-        <addUniqueConstraint tableName="user_passkeys" columnNames="user_id, credential_id"
-                             constraintName="uq_user_passkeys_user_credential"/>
+        <addUniqueConstraint tableName="user_passkeys" columnNames="credential_id"
+                             constraintName="uq_user_passkeys_credential"/>
         <createIndex tableName="user_passkeys" indexName="idx_user_passkeys_user_id">
             <column name="user_id"/>
         </createIndex>

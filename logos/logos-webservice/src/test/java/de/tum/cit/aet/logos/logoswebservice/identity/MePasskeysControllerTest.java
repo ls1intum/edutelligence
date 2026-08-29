@@ -138,6 +138,42 @@ class MePasskeysControllerTest {
     }
 
     @Test
+    void register_storesPackedSelfAttestationWithoutDeclaredAlg() throws Exception {
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        // attStmt.alg is optional; without it the algorithm is derived from
+        // the (ES256) credential key.
+        Registration registration = buildRegistration(challenge, "new-credential-alg-absent", RP_ID, 0x45,
+            AttestationKind.PACKED_SELF, null);
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.passkey.credential_id").value(registration.credentialId()));
+    }
+
+    @Test
+    void register_rejectsPackedSelfAttestationWithMismatchedAlg() throws Exception {
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        // attStmt.alg declares RS256, but the credential key is ES256.
+        Registration registration = buildRegistration(challenge, "new-credential-alg-mismatch", RP_ID, 0x45,
+            AttestationKind.PACKED_SELF, -257);
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void register_rejectsPackedSelfAttestationWithUnsupportedAlg() throws Exception {
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        // ES384 is a valid WebAuthn algorithm but outside the supported set
+        // (ES256/RS256).
+        Registration registration = buildRegistration(challenge, "new-credential-alg-unsupported", RP_ID, 0x45,
+            AttestationKind.PACKED_SELF, -35);
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void register_storesValidNoneAttestation() throws Exception {
         String challenge = issueChallenge(ALICE_ID, "alice");
         Registration registration =
@@ -266,6 +302,19 @@ class MePasskeysControllerTest {
             .andExpect(status().isConflict());
     }
 
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = "INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) "
+        + "VALUES (12110, 1201, 'cGFzc2tleS1jcm9zcy11c2VyLWR1cA', '\\x09', 0, 'Cross-user', NOW())")
+    void register_rejectsCredentialAlreadyRegisteredToAnotherUser() throws Exception {
+        String challenge = issueChallenge(BOB_ID, "bob");
+        Registration registration =
+            buildRegistration(challenge, "passkey-cross-user-dup", RP_ID, 0x45, AttestationKind.NONE);
+
+        submitRegistration(BOB_ID, "bob", registration, null)
+            .andExpect(status().isConflict());
+    }
+
     // DELETE /me/passkeys/{id}
 
     @Test
@@ -334,6 +383,16 @@ class MePasskeysControllerTest {
 
     private static Registration buildRegistration(String challenge, String credentialIdText, String rpId,
             int flags, AttestationKind kind) throws Exception {
+        // Browsers declare the attestation algorithm; the default mirrors that.
+        return buildRegistration(challenge, credentialIdText, rpId, flags, kind, -7);
+    }
+
+    /**
+     * As {@link #buildRegistration}, with a declared attStmt.alg for the packed
+     * attestations; {@code null} omits the field (it is optional).
+     */
+    private static Registration buildRegistration(String challenge, String credentialIdText, String rpId,
+            int flags, AttestationKind kind, Integer attStmtAlg) throws Exception {
         byte[] credentialId = credentialIdText.getBytes(StandardCharsets.UTF_8);
 
         KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
@@ -384,7 +443,9 @@ class MePasskeysControllerTest {
         switch (kind) {
             case NONE -> attestationObject.Add("fmt", "none");
             case PACKED_SELF, PACKED_SELF_INVALID_SIGNATURE -> {
-                attStmt.Add("alg", -7);
+                if (attStmtAlg != null) {
+                    attStmt.Add("alg", attStmtAlg);
+                }
                 attStmt.Add("sig", CBORObject.FromObject(signature));
                 attestationObject.Add("fmt", "packed");
             }

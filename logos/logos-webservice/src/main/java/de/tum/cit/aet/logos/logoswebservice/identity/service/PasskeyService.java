@@ -109,7 +109,9 @@ public class PasskeyService {
             WebAuthnRegistration.base64UrlDecode(challenge),
             requestOrigin(request),
             resolveRpId(request));
-        if (userPasskeyRepository.existsByUserIdAndCredentialId(userId, result.credentialIdBase64Url())) {
+        // Credential ids are globally unique, so this also rejects a credential
+        // registered by another user — without disclosing which one.
+        if (userPasskeyRepository.existsByCredentialId(result.credentialIdBase64Url())) {
             throw new ConflictException("This passkey is already registered.");
         }
         UserPasskey passkey = new UserPasskey();

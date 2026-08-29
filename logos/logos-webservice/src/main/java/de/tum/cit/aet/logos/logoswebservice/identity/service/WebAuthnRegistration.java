@@ -5,6 +5,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.AlgorithmParameters;
 import java.security.GeneralSecurityException;
+import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -221,11 +222,18 @@ public final class WebAuthnRegistration {
                 }
                 case "packed" -> {
                     byte[] signature = mapByteStringItem(attStmt, "sig", "attStmt", "sig");
+                    Integer declaredAlg = declaredAttestationAlg(attStmt);
                     if (hasX5c(attStmt)) {
-                        verifyWithCertificate(attestationCertificate(attStmt), signedData, signature);
+                        verifyWithCertificate(attestationCertificate(attStmt), signedData, signature,
+                            declaredAlg);
                     } else {
-                        // Self-attestation: signed with the credential key.
-                        verifyWithKey(coseKey, signedData, signature);
+                        // Self-attestation: signed with the credential key, so a
+                        // declared algorithm must be the credential key's own.
+                        if (declaredAlg != null && declaredAlg != mapIntItem(coseKey, 3, "COSE key", "alg")) {
+                            throw new IllegalArgumentException(
+                                "attStmt.alg does not match the credential key algorithm");
+                        }
+                        verifyWithKey(coseKey, signedData, signature, declaredAlg);
                     }
                 }
                 case "fido-u2f" -> {
@@ -248,7 +256,9 @@ public final class WebAuthnRegistration {
                     PublicKey key = hasX5c(attStmt)
                         ? attestationCertificate(attStmt).getPublicKey()
                         : u2fSelfAttestationKey(credentialId, coseKeyBytes);
-                    verifyWithCertificateKey(key, u2fSignedData, mapByteStringItem(attStmt, "sig", "attStmt", "sig"));
+                    // No attStmt.alg for this format; U2F keys are always EC.
+                    verifyWithCertificateKey(key, u2fSignedData,
+                        mapByteStringItem(attStmt, "sig", "attStmt", "sig"), null);
                 }
                 default -> throw new IllegalArgumentException("Unsupported attestation format: " + format);
             }
@@ -290,11 +300,11 @@ public final class WebAuthnRegistration {
             .generateCertificate(new ByteArrayInputStream(der));
     }
 
-    private static void verifyWithKey(CBORObject coseKey, byte[] signedData, byte[] signature) {
+    private static void verifyWithKey(CBORObject coseKey, byte[] signedData, byte[] signature,
+            Integer declaredAlg) {
         try {
             PublicKey key = toJavaPublicKey(coseKey);
-            Signature verifier = Signature.getInstance(
-                mapIntItem(coseKey, 1, "COSE key", "kty") == 2 ? "SHA256withECDSA" : "SHA256withRSA");
+            Signature verifier = Signature.getInstance(signatureAlgorithm(declaredAlg, key));
             verifier.initVerify(key);
             verifier.update(signedData);
             if (!verifier.verify(signature)) {
@@ -307,14 +317,15 @@ public final class WebAuthnRegistration {
         }
     }
 
-    private static void verifyWithCertificate(X509Certificate certificate, byte[] signedData, byte[] signature) {
-        verifyWithCertificateKey(certificate.getPublicKey(), signedData, signature);
+    private static void verifyWithCertificate(X509Certificate certificate, byte[] signedData, byte[] signature,
+            Integer declaredAlg) {
+        verifyWithCertificateKey(certificate.getPublicKey(), signedData, signature, declaredAlg);
     }
 
-    private static void verifyWithCertificateKey(PublicKey key, byte[] signedData, byte[] signature) {
+    private static void verifyWithCertificateKey(PublicKey key, byte[] signedData, byte[] signature,
+            Integer declaredAlg) {
         try {
-            Signature verifier = Signature.getInstance(
-                key instanceof java.security.interfaces.RSAPublicKey ? "SHA256withRSA" : "SHA256withECDSA");
+            Signature verifier = Signature.getInstance(signatureAlgorithm(declaredAlg, key));
             verifier.initVerify(key);
             verifier.update(signedData);
             if (!verifier.verify(signature)) {
@@ -325,6 +336,37 @@ public final class WebAuthnRegistration {
         } catch (GeneralSecurityException e) {
             throw new IllegalArgumentException("Attestation verification failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * The algorithm a packed attestation statement declares for {@code sig},
+     * or {@code null} when the statement carries none (it is optional). Only
+     * the SHA-256 algorithms of the supported credential keys can be
+     * verified, so anything else is rejected up front.
+     */
+    private static Integer declaredAttestationAlg(CBORObject attStmt) {
+        if (!attStmt.ContainsKey("alg")) {
+            return null;
+        }
+        int alg = mapIntItem(attStmt, "alg", "attStmt", "alg");
+        if (alg != -7 && alg != -257) {
+            throw new IllegalArgumentException("Unsupported attestation algorithm: " + alg);
+        }
+        return alg;
+    }
+
+    /**
+     * Signature algorithm for an attestation signature: the declared
+     * attStmt.alg when present, otherwise derived from the key type. A
+     * declared algorithm that contradicts the key type (e.g. RS256 declared
+     * but an EC key) fails in {@link Signature#initVerify} with an
+     * {@link InvalidKeyException}.
+     */
+    private static String signatureAlgorithm(Integer declaredAlg, PublicKey key) {
+        if (declaredAlg != null) {
+            return declaredAlg == -7 ? "SHA256withECDSA" : "SHA256withRSA";
+        }
+        return key instanceof java.security.interfaces.RSAPublicKey ? "SHA256withRSA" : "SHA256withECDSA";
     }
 
     /**
@@ -430,6 +472,14 @@ public final class WebAuthnRegistration {
             throw new IllegalArgumentException(what + "." + field + " is not a string");
         }
         return item.AsString();
+    }
+
+    private static int mapIntItem(CBORObject map, String key, String what, String field) {
+        CBORObject item = mapItem(map, key, what, field);
+        if (item.getType() != CBORType.Integer && item.getType() != CBORType.Number) {
+            throw new IllegalArgumentException(what + "." + field + " is not an integer");
+        }
+        return item.AsInt32Value();
     }
 
     private static byte[] mapByteStringItem(CBORObject map, String key, String what, String field) {
