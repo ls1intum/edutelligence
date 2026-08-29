@@ -5,6 +5,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from iris.common.logging_config import get_logger
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.config import settings
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
 )
@@ -20,6 +21,10 @@ from iris.pipeline.shared.confidence_scoring import (
     logprob_confidence,
     model_supports_logprobs,
     parse_confidence_response,
+)
+from iris.pipeline.shared.organizational_guard import (
+    classify_organizational_question,
+    has_organizational_evidence,
 )
 from iris.pipeline.shared.uncertainty_scoring import (
     DEFAULT_TOP_LOGPROBS,
@@ -371,6 +376,7 @@ class AutonomousTutorPipeline(
             return ""
 
         confidence = self._estimate_confidence(state)
+        confidence = self._cap_unsupported_organizational_confidence(state, confidence)
         state.result = self._strip_author_label(state.result)
 
         logger.info("Generated response: %s", state.result)
@@ -382,6 +388,64 @@ class AutonomousTutorPipeline(
             confidence=confidence,
         )
         return state.result
+
+    def _cap_unsupported_organizational_confidence(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+        confidence: float,
+    ) -> float:
+        """Hold back an organizational answer that no tool could support.
+
+        Exam scope, dates, rooms, deadlines, grading and registration are facts about
+        this one course. They cannot be derived from what the course teaches, so an
+        answer to such a question is only worth publishing when a course FAQ entry or
+        a tutor-verified prior answer actually stated it.
+
+        Neither confidence strategy catches this on its own. The verbalized prompt
+        asks the model to score itself low and it often does not; the logprob
+        strategies measure how sure the model is of its own *wording*, and an invented
+        exam scope is worded very fluently — it scores high. So the check is made
+        here, on facts the pipeline knows: what was asked, and what the tools returned.
+
+        The score is only ever lowered, and only to the review band, so the reply
+        reaches a tutor instead of a student. See
+        ``iris.pipeline.shared.organizational_guard`` for why the two sources are the
+        only ones that count as support.
+        """
+        guard = settings.autonomous_tutor.organizational_evidence_guard
+        if not guard.enabled:
+            return confidence
+
+        _, target_message = self._target_message(state.dto.post)
+        category = classify_organizational_question(target_message)
+        if category is None:
+            return confidence
+
+        faq_hits = getattr(state, "faq_storage", {}).get("faqs")
+        memory_hits = getattr(state, "memory_storage", {}).get("memories")
+        if has_organizational_evidence(faq_hits, memory_hits):
+            logger.info(
+                "Organizational question (%s) is supported by retrieved evidence | "
+                "faqs=%d memories=%d",
+                category,
+                len(faq_hits or []),
+                len(memory_hits or []),
+            )
+            return confidence
+
+        if confidence <= guard.confidence_cap:
+            return confidence
+
+        logger.info(
+            "Capping confidence for unsupported organizational question | "
+            "category=%s confidence=%.4f cap=%.4f",
+            category,
+            confidence,
+            guard.confidence_cap,
+        )
+        return guard.confidence_cap
 
     def _strip_author_label(self, result: str) -> str:
         """Drop a role label the model copied from the thread onto its own answer.

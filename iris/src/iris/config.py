@@ -95,6 +95,38 @@ class CourseMemorySettings(BaseModel):
     )
 
 
+class OrganizationalEvidenceGuardSettings(BaseModel):
+    """Confidence cap for organizational answers no tool could support.
+
+    Artemis publishes an Iris reply on its own at >= 0.85, holds it for tutor review
+    in [0.70, 0.85) and discards it below 0.70. Capping inside the review band means
+    an ungrounded exam/deadline/grading answer is never posted without a human
+    looking at it, while still reaching a tutor who can correct it — and that
+    correction is what course memory ingests, so the same question is grounded the
+    next time it is asked.
+    """
+
+    enabled: bool = Field(default=True)
+    confidence_cap: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Highest confidence an organizational answer may carry when no FAQ entry "
+            "and no course-memory entry supported it. Keep it below Artemis's "
+            "auto-publish threshold (0.85); the guard only ever lowers a score."
+        ),
+    )
+
+
+class AutonomousTutorSettings(BaseModel):
+    """Settings for the autonomous tutor pipeline."""
+
+    organizational_evidence_guard: OrganizationalEvidenceGuardSettings = Field(
+        default_factory=OrganizationalEvidenceGuardSettings
+    )
+
+
 class LangfuseSettings(BaseModel):
     """Settings for LangFuse observability integration."""
 
@@ -189,6 +221,9 @@ class Settings(BaseModel):
     weaviate: WeaviateSettings
     memiris: MemirisSettings
     course_memory: CourseMemorySettings = Field(default_factory=CourseMemorySettings)
+    autonomous_tutor: AutonomousTutorSettings = Field(
+        default_factory=AutonomousTutorSettings
+    )
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)

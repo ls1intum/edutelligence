@@ -42,6 +42,15 @@ course_memory:
   query_rewrite_enabled: true # Rewrite context-poor questions before retrieval
   context_message_limit: 20 # Preceding thread messages used for context
 
+autonomous_tutor:
+  organizational_evidence_guard:
+    # Organizational/exam facts (dates, rooms, scope, deadlines, grading, registration) can only
+    # come from the course FAQ or a tutor-verified prior answer. When neither returned anything,
+    # the reply's confidence is capped so Artemis routes it to tutor review instead of publishing
+    # it. Artemis publishes at >= 0.85, reviews in [0.70, 0.85), discards below 0.70.
+    enabled: true
+    confidence_cap: 0.75
+
 local_llm_enabled: true # Set to false to disable local LLM support entirely
 
 langfuse:
