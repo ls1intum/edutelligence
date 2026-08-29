@@ -32,7 +32,7 @@ public class RequestLogService {
 
     /** Unfiltered newest page of the range, without a row count — the live push. */
     public Map<String, Object> getLatestRequests(String startDate, String endDate) {
-        return getLatestRequests(startDate, endDate, null, null, null, null,
+        return getLatestRequests(startDate, endDate, null, null, null, null, null,
                                  LATEST_REQUESTS_PAGE_SIZE, false);
     }
 
@@ -56,6 +56,9 @@ public class RequestLogService {
      *                  defaults to now
      * @param userId    restrict to this requester, or {@code null} for all
      * @param teamId    restrict to this team, or {@code null} for all
+     * @param status    restrict to one lifecycle bucket — {@code queued},
+     *                  {@code running}, {@code error} or {@code finished} — or
+     *                  {@code null} for all states
      * @param cursorTs  {@code timestamp_request} of the last row already seen;
      *                  {@code null} starts at the newest
      * @param cursorId  {@code request_id} of that row, breaking timestamp ties
@@ -63,6 +66,7 @@ public class RequestLogService {
      */
     public Map<String, Object> getLatestRequests(String startDate, String endDate,
                                                  Integer userId, Integer teamId,
+                                                 String status,
                                                  String cursorTs, String cursorId,
                                                  int limit, boolean withTotal) {
         ZonedDateTime endDt = parseInstantOrNow(endDate);
@@ -88,7 +92,7 @@ public class RequestLogService {
         // One row beyond the page: its presence is the has_more answer, and it is
         // dropped before the rows go out.
         List<Map<String, Object>> fetched = logEntryRepository
-            .findLatestRequests(startTs, endTs, userId, teamId, cursor, cursorRequestId, pageSize + 1)
+            .findLatestRequests(startTs, endTs, userId, teamId, status, cursor, cursorRequestId, pageSize + 1)
             .stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
@@ -138,13 +142,39 @@ public class RequestLogService {
             result.put("next_cursor", null);
         }
         if (withTotal) {
-            Long total = logEntryRepository.countRequestsInRange(startTs, endTs, userId, teamId);
+            Long total = logEntryRepository.countRequestsInRange(startTs, endTs, userId, teamId, status);
             // The feed shows a window onto the range, so it has to say how big
             // the range is — "1-10 of 4,312" is the difference between a capped
             // list and a list the operator reads as complete.
             result.put("total", total != null ? total : 0L);
         }
         return result;
+    }
+
+    /**
+     * How many requests the range holds under the given filters — the "of N"
+     * figure for a request feed narrowed to one lifecycle bucket.
+     *
+     * The live push serves its newest page without a count (counting is a scan
+     * of the range, and the push runs every two seconds per open session), so
+     * it borrows the statistics aggregates for the total. That total is only as
+     * narrow as the user/team scope, not the feed's status filter — so a
+     * status-filtered live page counts itself, and only when it is filtered.
+     *
+     * @param status one of the feed's lifecycle buckets, or {@code null} for
+     *               no status narrowing
+     */
+    public long countFeedRows(String startDate, String endDate,
+                              Integer userId, Integer teamId, String status) {
+        ZonedDateTime endDt = parseInstantOrNow(endDate);
+        ZonedDateTime startDt = parseInstantOrNull(startDate);
+        if (startDt == null || startDt.isAfter(endDt)) {
+            startDt = endDt.minusDays(30);
+        }
+        Timestamp startTs = Timestamp.from(startDt.toInstant());
+        Timestamp endTs = Timestamp.from(endDt.toInstant());
+        Long total = logEntryRepository.countRequestsInRange(startTs, endTs, userId, teamId, status);
+        return total != null ? total : 0L;
     }
 
     private static ZonedDateTime parseInstantOrNow(String iso) {

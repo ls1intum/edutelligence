@@ -92,7 +92,7 @@ public class TeamActivityService {
         // that follows within seconds of the first one.
         Map<String, Object> requests = requestLogService.getLatestRequests(
             since.toInstant().toString(), now.toString(),
-            userId, teamId, cursorTs, cursorId, REQUEST_PAGE_SIZE, true);
+            userId, teamId, null, cursorTs, cursorId, REQUEST_PAGE_SIZE, true);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("team_id", teamId);

@@ -73,6 +73,12 @@ export class RecentRequests implements OnChanges, OnDestroy {
    */
   @Input() filterUserId: number | null = null;
   @Input() filterTeamId: number | null = null;
+  /**
+   * The lifecycle bucket the feed is narrowed to (queued/running/error/
+   * finished), or null for all states. Like the user/team inputs it is owned
+   * by the page — the live push and every fetched page must agree on it.
+   */
+  @Input() filterStatus: string | null = null;
 
   /** Shared ticker: ms since epoch, updated by setInterval. */
   now = signal(Date.now());
@@ -86,11 +92,24 @@ export class RecentRequests implements OnChanges, OnDestroy {
   private readonly _totalInRange = signal(0);
   private readonly _filterUserId = signal<number | null>(null);
   private readonly _filterTeamId = signal<number | null>(null);
+  private readonly _filterStatus = signal<string | null>(null);
 
   /** Only for the empty state, which reads differently once a filter is on. */
   readonly filterActive = computed(
     () => this._filterUserId() !== null || this._filterTeamId() !== null,
   );
+
+  /**
+   * The empty state, worded for the filters that are on. A state filter alone
+   * names the state; a team/user scope keeps its own wording, with the state
+   * folded in when both are active.
+   */
+  readonly emptyMessage = computed(() => {
+    const state = this._filterStatus() ? `${this._filterStatus()} ` : '';
+    return this.filterActive()
+      ? `No ${state}requests from this requester or team in the selected range.`
+      : `No ${state}requests in this time range.`;
+  });
 
   // ── Paging ─────────────────────────────────────────────────────────────────
 
@@ -162,12 +181,14 @@ export class RecentRequests implements OnChanges, OnDestroy {
     if (changes['totalInRange']) this._totalInRange.set(this.totalInRange ?? 0);
     if (changes['filterUserId']) this._filterUserId.set(this.filterUserId);
     if (changes['filterTeamId']) this._filterTeamId.set(this.filterTeamId);
+    if (changes['filterStatus']) this._filterStatus.set(this.filterStatus);
     // A new range or a new scope invalidates every page cut out of the previous
     // one. No fetch follows: page 0 is the live feed either way, and the
     // websocket is already sending it for the new scope.
     const scopeChanged =
       (changes['filterUserId'] && !changes['filterUserId'].firstChange) ||
-      (changes['filterTeamId'] && !changes['filterTeamId'].firstChange);
+      (changes['filterTeamId'] && !changes['filterTeamId'].firstChange) ||
+      (changes['filterStatus'] && !changes['filterStatus'].firstChange);
     if ((changes['range'] && !changes['range'].firstChange) || scopeChanged) {
       this.resetToFirstPage();
     }
@@ -238,7 +259,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
         range.startIso,
         range.endIso,
         PAGE_SIZE,
-        { userId: this._filterUserId(), teamId: this._filterTeamId() },
+        { userId: this._filterUserId(), teamId: this._filterTeamId(), status: this._filterStatus() },
         cursor,
       );
       const rows = page.requests ?? [];

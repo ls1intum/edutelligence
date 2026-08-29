@@ -46,12 +46,16 @@ public class RequestLogController {
         String end = body.get("end") instanceof String s ? s : null;
         Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
         Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
+        // One of queued/running/error/finished; anything else (or nothing)
+        // matches no bucket, which is the same fail-closed answer an unknown
+        // user_id gives.
+        String status = body.get("status") instanceof String s && !s.isBlank() ? s : null;
         String cursorTs = body.get("cursor_ts") instanceof String s ? s : null;
         String cursorId = body.get("cursor_id") instanceof String s ? s : null;
         int limit = body.get("limit") instanceof Number n
             ? n.intValue() : RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
         return ResponseEntity.ok(requestLogService.getLatestRequests(
-            start, end, userId, teamId, cursorTs, cursorId, limit, true));
+            start, end, userId, teamId, status, cursorTs, cursorId, limit, true));
     }
 
     @PostMapping("/request_logs")

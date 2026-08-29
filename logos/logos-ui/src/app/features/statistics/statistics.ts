@@ -24,6 +24,9 @@ import {
   chooseDynamicTargetBuckets,
   extractProviderVramMb,
   formatRangeLabel,
+  normalizeFeedStatus,
+  resolveFeedTotal,
+  REQUEST_STATUS_FILTERS,
   BYTES_PER_GIB,
   BYTES_PER_MIB,
   toGb,
@@ -180,6 +183,42 @@ export class Statistics implements OnInit, OnDestroy {
     }
     return parts.join(' · ');
   });
+
+  // ── Request feed state filter ───────────────────────────────────────────────
+  // One lifecycle bucket the recent-requests list is narrowed to; null shows
+  // every state. Deliberately not part of the page scope: a state filter only
+  // makes sense for the list of individual requests, not for the KPI cards and
+  // charts above it, which must keep summarising the whole team/user selection.
+  readonly feedStatus = signal<string | null>(null);
+
+  readonly feedStatusOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'All states' },
+    ...REQUEST_STATUS_FILTERS.map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) })),
+  ]);
+
+  readonly selectedFeedStatusValue = computed(() => this.feedStatus() ?? '');
+
+  /**
+   * The feed's own total, reported by the live push while a state filter is on.
+   * The unfiltered page borrows the statistics aggregate instead, so this stays
+   * null then and `requestFeedTotal` falls back to that total.
+   */
+  readonly liveFeedTotal = signal<number | null>(null);
+
+  /** Total the feed header shows: the status-filtered count, else the KPI total. */
+  readonly requestFeedTotal = computed(() =>
+    resolveFeedTotal(this.feedStatus(), this.liveFeedTotal(), this.totalRequests()),
+  );
+
+  setFeedStatusFilter(value: string | null): void {
+    const next = normalizeFeedStatus(value);
+    if (next === this.feedStatus()) return;
+    this.feedStatus.set(next);
+    // Only the feed changes, so only it is marked loading — the KPI cards and
+    // charts keep their current (unaffected) numbers.
+    this.requestsPending.set(true);
+    this.statsWs.setFeedStatus(next);
+  }
 
   // ── Raw WS signals ────────────────────────────────────────────────────────────
   readonly stats = signal<RequestLogStats | null>(null);
@@ -836,6 +875,7 @@ export class Statistics implements OnInit, OnDestroy {
       // events of the initial load and then never moves again.
       timelineDeltas: true,
       scope: { userId: this.filterUserId(), teamId: this.filterTeamId() },
+      feedStatus: this.feedStatus(),
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
         onVramDelta: (p) => this.handleVramWsDeltaV2(p),
@@ -1059,11 +1099,17 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── WS handlers ───────────────────────────────────────────────────────────────
 
-  private handleRequestsWsData(payload: { requests?: RequestItem[] }): void {
+  private handleRequestsWsData(payload: { requests?: RequestItem[]; total?: number }): void {
     if (payload.requests) {
       this.latestRequests.set(payload.requests);
       this.requestsPending.set(false);
     }
+    // A status-filtered feed carries its own total (the page's KPI total is only
+    // as narrow as the team/user scope, not the state bucket). An unfiltered
+    // push has no total, so the borrowed aggregate stays in force.
+    this.liveFeedTotal.set(
+      this.feedStatus() && typeof payload.total === 'number' ? payload.total : null,
+    );
   }
 
   private handleVramWsInitV2(payload: VramV2Payload): void {

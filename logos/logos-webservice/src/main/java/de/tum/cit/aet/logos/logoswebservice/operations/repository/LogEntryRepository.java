@@ -300,6 +300,24 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          -- One of the four lifecycle buckets the feed can be narrowed to:
+          -- queued (not yet scheduled), running (scheduled, not answered),
+          -- error (answered with a failure), finished (answered otherwise).
+          -- A null status leaves the feed unfiltered.
+          AND (CAST(:status AS TEXT) IS NULL
+               OR (CAST(:status AS TEXT) = 'queued'
+                   AND le.timestamp_forwarding IS NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'running'
+                   AND le.timestamp_forwarding IS NOT NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'error'
+                   AND le.timestamp_response IS NOT NULL
+                   AND (le.result_status = 'error' OR le.result_status = 'timeout'))
+               OR (CAST(:status AS TEXT) = 'finished'
+                   AND le.timestamp_response IS NOT NULL
+                   AND le.result_status IS DISTINCT FROM 'error'
+                   AND le.result_status IS DISTINCT FROM 'timeout'))
           -- Keyset cursor: everything strictly older than the last row handed
           -- out. Unlike OFFSET this neither re-walks the skipped rows nor slides
           -- when new requests arrive at the top while the operator pages.
@@ -325,6 +343,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("endTs") Timestamp endTs,
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
+        @Param("status") String status,
         @Param("cursorTs") Timestamp cursorTs,
         @Param("cursorId") String cursorId,
         @Param("limitN") int limitN);
@@ -343,12 +362,29 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          -- Identical to the predicate in {@link #findLatestRequests} (minus the
+          -- cursor): the count and the rows must describe the same set.
+          AND (CAST(:status AS TEXT) IS NULL
+               OR (CAST(:status AS TEXT) = 'queued'
+                   AND le.timestamp_forwarding IS NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'running'
+                   AND le.timestamp_forwarding IS NOT NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'error'
+                   AND le.timestamp_response IS NOT NULL
+                   AND (le.result_status = 'error' OR le.result_status = 'timeout'))
+               OR (CAST(:status AS TEXT) = 'finished'
+                   AND le.timestamp_response IS NOT NULL
+                   AND le.result_status IS DISTINCT FROM 'error'
+                   AND le.result_status IS DISTINCT FROM 'timeout'))
         """, nativeQuery = true)
     Long countRequestsInRange(
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs,
         @Param("userId") Integer userId,
-        @Param("teamId") Integer teamId);
+        @Param("teamId") Integer teamId,
+        @Param("status") String status);
 
     @Transactional(readOnly = true)
     @Query(value = """

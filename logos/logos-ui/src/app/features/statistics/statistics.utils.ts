@@ -42,6 +42,47 @@ export function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
+// ── Recent-requests state filter ──────────────────────────────────────────────
+
+/**
+ * The lifecycle buckets the request feed can be narrowed to, in the order the
+ * filter offers them. `queued` and `running` are the in-flight states; `error`
+ * and `finished` split the settled ones by outcome (a timeout counts as an
+ * error, matching how the row border colours timeouts as a failure).
+ */
+export const REQUEST_STATUS_FILTERS = ['queued', 'running', 'error', 'finished'] as const;
+
+export type RequestStatusFilter = (typeof REQUEST_STATUS_FILTERS)[number];
+
+/**
+ * Normalise the state-filter dropdown's value to the bucket the feed is
+ * narrowed by. The empty selection means "all states" (null); anything that is
+ * not one of the four buckets is treated the same, so a stale or tampered value
+ * widens back to the full feed instead of matching nothing.
+ */
+export function normalizeFeedStatus(value: string | null): string | null {
+  if (!value) return null;
+  return (REQUEST_STATUS_FILTERS as readonly string[]).includes(value) ? value : null;
+}
+
+/**
+ * The "of N" total the feed header shows.
+ *
+ * An unfiltered feed borrows the statistics aggregate (the page's KPI total),
+ * which it already matches. A status-filtered feed must show the count of that
+ * bucket instead — the aggregate is only as narrow as the team/user scope, not
+ * the state — so it uses the total the live push reports for the bucket, and
+ * falls back to the aggregate only while that push is still in flight.
+ */
+export function resolveFeedTotal(
+  status: string | null,
+  pushedTotal: number | null,
+  aggregateTotal: number,
+): number {
+  if (!status) return aggregateTotal;
+  return pushedTotal ?? aggregateTotal;
+}
+
 // ── X-axis labels (shared by request-volume and VRAM charts) ─────────────────
 
 export interface TimeAxisLabel {

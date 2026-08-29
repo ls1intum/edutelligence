@@ -53,13 +53,7 @@
   @if (pending && onLivePage()) {
     <app-stats-skeleton variant="rows" />
   } @else if (displayItems().length === 0) {
-    <div class="rr-empty">
-      @if (filterActive()) {
-        No requests from this requester or team in the selected range.
-      } @else {
-        No requests in this time range.
-      }
-    </div>
+    <div class="rr-empty">{{ emptyMessage() }}</div>
   } @else {
     <div class="rr-list">
       @for (item of displayItems(); track trackById($index, item)) {

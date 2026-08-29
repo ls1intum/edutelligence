@@ -68,6 +68,14 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile Integer scopeUserId = null;
         volatile Integer scopeTeamId = null;
 
+        // One lifecycle bucket the request feed is narrowed to (queued, running,
+        // error, finished); null shows all states. Deliberately not part of the
+        // scope above: the scope is who the whole page looks at, and it narrows
+        // the aggregates and the volume chart too. A state filter only makes
+        // sense for the request feed, so it must not drag the KPI cards and
+        // charts into a slice of the log they are meant to summarise in full.
+        volatile String feedStatus = null;
+
         volatile String prevReqSig = "";
         volatile String prevVramMetaSig = "";
 
@@ -166,6 +174,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             case "set_vram_day" -> handleSetVramDay(session, state, msg);
             case "set_timeline_range" -> handleSetTimelineRange(session, state, msg);
             case "set_scope" -> handleSetScope(session, state, msg);
+            case "set_feed_status" -> handleSetFeedStatus(session, state, msg);
             case "ping" -> send(session, Map.of("type", "pong"));
         }
     }
@@ -185,6 +194,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // the filter the page is showing instead of silently widening back to
         // the whole platform under an unchanged pair of dropdowns.
         applyScope(state, msg);
+        applyFeedStatus(state, msg);
 
         Map<String, Object> tl = msg.get("timeline") instanceof Map<?,?> m
             ? (Map<String, Object>) m : Map.of();
@@ -226,6 +236,24 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private static void applyScope(SessionState state, Map<String, Object> msg) {
         state.scopeUserId = msg.get("user_id") instanceof Number n ? n.intValue() : null;
         state.scopeTeamId = msg.get("team_id") instanceof Number n ? n.intValue() : null;
+    }
+
+    /** The feed's state bucket, read from {@code init} and {@code set_feed_status}. */
+    private static void applyFeedStatus(SessionState state, Map<String, Object> msg) {
+        state.feedStatus = msg.get("status") instanceof String s && !s.isBlank() ? s : null;
+    }
+
+    /**
+     * Narrow the request feed to one lifecycle bucket.
+     *
+     * Unlike {@link #handleSetScope} this re-pushes only the feed, not the
+     * aggregates: the KPI cards and the volume chart summarise the whole scope,
+     * and a state filter does not change what they describe. A forced feed push
+     * is enough — no delta turns the unfiltered rows into the filtered ones.
+     */
+    private void handleSetFeedStatus(WebSocketSession session, SessionState state, Map<String, Object> msg) {
+        applyFeedStatus(state, msg);
+        pushRequests(session, state, true);
     }
 
     private void handleSetVramDay(WebSocketSession session, SessionState state, Map<String, Object> msg) {
@@ -440,15 +468,26 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
             Map<String, Object> payload = requestLogService.getLatestRequests(
                 state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
-                null, null, LATEST_REQUESTS_PUSH_SIZE, false);
+                state.feedStatus, null, null, LATEST_REQUESTS_PUSH_SIZE, false);
             mergeLiveStreams(payload);
             String sig = requestsSig(payload);
-            if (!sig.equals(state.prevReqSig)) {
+            boolean changed = !sig.equals(state.prevReqSig);
+            if (changed) {
                 // A request arrived, finished, or grew its usage — whatever the
                 // aggregates summarise has moved with it.
                 state.statsDirty = true;
             }
-            if (force || !sig.equals(state.prevReqSig)) {
+            if (force || changed) {
+                // A status-filtered feed counts itself: the total an unfiltered
+                // page borrows from the statistics aggregates is only as narrow
+                // as the user/team scope, not the state bucket, so the "of N"
+                // would promise rows the filter has hidden. Counting is a range
+                // scan, so it runs only when a push actually goes out.
+                if (state.feedStatus != null) {
+                    payload.put("total", requestLogService.countFeedRows(
+                        state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                        state.feedStatus));
+                }
                 state.prevReqSig = sig;
                 send(session, Map.of("type", "requests", "payload", payload));
             }
