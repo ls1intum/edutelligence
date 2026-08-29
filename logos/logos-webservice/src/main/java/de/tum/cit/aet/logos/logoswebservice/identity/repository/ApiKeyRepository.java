@@ -149,9 +149,20 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
      * actually served on ({@code logosnode} is local, everything else
      * cloud).
      *
-     * Requests that have no provider yet (still queued, or rejected before
-     * scheduling) are not counted by the limiter either, so they are left
-     * out here. Token sums read the same {@code total_tokens} rows the
+     * The window is cut on {@code timestamp_forwarding}, not
+     * {@code timestamp_request}: the limiter charges a request when it is
+     * admitted (i.e. scheduled, see {@code check_and_record} in the
+     * orchestrator's main.py), and {@code timestamp_forwarding} is written
+     * at exactly that moment. {@code timestamp_request} is when the request
+     * *arrived*, which under queue wait can be long before admission —
+     * cutting on it would drop exactly the requests that waited in the queue
+     * from the figure, so the display would under-report precisely when
+     * developers look at it to understand a 429. Requests that never reached
+     * admission (still queued, or rejected before scheduling) have no
+     * {@code timestamp_forwarding} and are left out of the window, matching
+     * the limiter, which does not count them either.
+     *
+     * Token sums read the same {@code total_tokens} rows the
      * limiter records on completion; request counts use DISTINCT ids because
      * the usage_tokens join fans one request out to one row per token type.
      */
@@ -168,7 +179,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         LEFT JOIN token_types tt ON tt.id = ut.type_id
         WHERE ak.user_id = :userId
           AND ak.is_active = true
-          AND le.timestamp_request >= :since
+          AND le.timestamp_forwarding >= :since
         GROUP BY le.api_key_id
         """, nativeQuery = true)
     List<RateLimitUsageProjection> findRateLimitUsageForUser(

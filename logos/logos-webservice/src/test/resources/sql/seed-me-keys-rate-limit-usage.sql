@@ -3,9 +3,13 @@
 -- traffic inside the 60s window for alice's key 3101:
 --   2 cloud requests (providers.provider_type = 'cloud') with 1000 + 1500 tokens
 --   1 local request  (providers.provider_type = 'logosnode') with 700 tokens
+--   9307: cloud request with 100 tokens that arrived 70s ago but was only
+--         forwarded (admitted) 10s ago after 60s of queue wait — the limiter
+--         charges it in the current window, so the figure must count it
+--         (cutting the window on timestamp_request would miss it)
 -- traffic that must NOT be counted:
 --   9304: outside the window (5 minutes old)
---   9305: still queued, no provider resolved yet
+--   9305: still queued, no provider resolved yet, no timestamp_forwarding
 --   9306: inside the window but bob's key 3102, not alice's
 INSERT INTO providers (id, name, base_url, provider_type, cloud_provider_type,
                        privacy_level, auth_name, auth_format)
@@ -35,7 +39,10 @@ VALUES
    false, 0, 1101, 2101, NULL),
   (9306, 'req-rl-6', 3102, 5101, 6102, 'success',
    NOW() - INTERVAL '15 seconds', NOW() - INTERVAL '14 seconds', NOW() - INTERVAL '13 seconds',
-   false, 0, 1102, 2101, NULL);
+   false, 0, 1102, 2101, NULL),
+  (9307, 'req-rl-7', 3101, 5101, 6102, 'success',
+   NOW() - INTERVAL '70 seconds', NOW() - INTERVAL '10 seconds', NOW() - INTERVAL '8 seconds',
+   false, 6, 1101, 2101, NULL);
 
 INSERT INTO usage_tokens (type_id, log_entry_id, token_count)
 VALUES
@@ -43,4 +50,5 @@ VALUES
   ((SELECT id FROM token_types WHERE name = 'total_tokens'), 9302, 1500),
   ((SELECT id FROM token_types WHERE name = 'total_tokens'), 9303, 700),
   ((SELECT id FROM token_types WHERE name = 'total_tokens'), 9304, 9999),
-  ((SELECT id FROM token_types WHERE name = 'total_tokens'), 9306, 4242);
+  ((SELECT id FROM token_types WHERE name = 'total_tokens'), 9306, 4242),
+  ((SELECT id FROM token_types WHERE name = 'total_tokens'), 9307, 100);

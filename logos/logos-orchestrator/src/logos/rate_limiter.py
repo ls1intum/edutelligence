@@ -11,6 +11,12 @@ from typing import Optional, Tuple
 class RateLimitConfig:
     rpm: Optional[int] = None
     tpm: Optional[int] = None
+    # Sliding window the rpm/tpm limits are enforced over. This default is
+    # the source of truth: the webservice keeps a copy of it in
+    # logos/logos-webservice/.../identity/service/MeKeysService.java
+    # (RATE_LIMIT_WINDOW_SECONDS) so its usage figures come from the same
+    # window. Change both together — the webservice test
+    # RateLimitWindowConsistencyTest fails if the two drift.
     window_seconds: int = 60
 
 
