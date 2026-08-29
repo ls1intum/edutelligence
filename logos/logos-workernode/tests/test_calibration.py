@@ -2548,6 +2548,52 @@ def test_cold_load_time_measured_from_spawn_to_first_served_request():
     assert result.cold_load_time_s < 10.0
 
 
+def test_cold_load_anchor_excludes_failed_retry_attempts():
+    """The anchor is the successful attempt's spawn, not the moment before
+    the first attempt: _try_start's internal retries (max_model_len /
+    max_num_seqs) typically fail only AFTER loading the weights, and those
+    near-full loads must not be billed to cold_load_time_s."""
+    patches = _patch_calibration_infra()
+
+    def wait_ready_side_effect(*args, **kwargs):
+        if not wait_ready_side_effect.attempts:
+            wait_ready_side_effect.attempts.append(time.perf_counter())
+            # The rejected attempt loads the weights and is only refused at
+            # the very end — simulate that cost before raising.
+            deadline = time.perf_counter() + 0.2
+            while time.perf_counter() < deadline:
+                pass
+            raise RuntimeError("vLLM exited (code=1)")
+        return None
+
+    wait_ready_side_effect.attempts = []
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    # The one failure's log parses to a --max-model-len suggestion, which
+    # drives the retry recursion; nothing else in this run parses to one.
+    suggested = {"done": False}
+
+    def suggest_side_effect(log_tail):
+        if suggested["done"]:
+            return None
+        suggested["done"] = True
+        return 65536
+
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion",
+        side_effect=suggest_side_effect,
+    )
+
+    result, mocks = _run_calibrate(patches)
+
+    assert result.success, result.error
+    # One rejected attempt, one successful retry.
+    assert mocks["spawn"].call_count == 2
+    assert result.cold_load_time_s is not None
+    # The rejected attempt's ~0.2s weight load is NOT in the measured
+    # interval — only the successful attempt (startup → warmup) is.
+    assert result.cold_load_time_s < 0.1
+
+
 def test_cold_load_time_none_when_first_request_does_not_serve():
     """A value that never actually served a request must not pose as one."""
     post, _ = _capturing_post(**{"/v1/completions": (500, {})})
