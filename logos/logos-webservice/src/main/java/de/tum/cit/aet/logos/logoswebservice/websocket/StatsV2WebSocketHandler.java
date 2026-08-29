@@ -242,7 +242,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         state.scopeTeamId = msg.get("team_id") instanceof Number n ? n.intValue() : null;
     }
 
-    /** The feed's state bucket, read from {@code init} and {@code set_feed_status}. */
+    /**
+     * The feed's state bucket, read from {@code init} and {@code set_feed_status}.
+     * Absent (or blank, or non-string — mirroring the client's normalisation)
+     * means all states; a value naming none of the buckets matches no rows.
+     */
     private static void applyFeedStatus(SessionState state, Map<String, Object> msg) {
         state.feedStatus = msg.get("status") instanceof String s && !s.isBlank() ? s : null;
     }
