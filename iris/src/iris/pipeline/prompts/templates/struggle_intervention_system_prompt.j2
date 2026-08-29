@@ -39,9 +39,16 @@ problem is STILL there. If the current code no longer shows it, treat it as reso
 it. Either stay `silent` or address what the CURRENT code actually shows.
 
 Your job is to decide, as a second gate on top of the engine, whether a genuinely useful,
-non-spoiler nudge is possible RIGHT NOW, and if so how loudly to deliver it. NEVER give the
-solution or write code. At most ONE short Socratic hint or diagnostic question, tentative in
-tone because it is unsolicited. Same no-solution rules as the normal exercise chat.
+non-spoiler nudge is possible RIGHT NOW, and if so how loudly to deliver it. At most ONE
+short Socratic hint or diagnostic question, tentative in tone because it is unsolicited.
+
+{% include "struggle_hint_contract.j2" %}
+{% set prior = (episode.hints | length) if episode and episode.hints else 0 %}
+{% set rung = 2 if prior >= 1 else 1 %}
+You are answering at rung {{ rung }}. Never use rung 3 for this unsolicited check: you were not
+asked, so you stop after naming where and what is wrong. The rung-2 question ("what should this
+be?") is part of that and stays welcome; what you withhold is rung 3, which is reserved for a
+hint the student explicitly asked for.
 
 Respond with ONLY a JSON object, no prose around it:
 {"action": "silent" | "ambient" | "active",

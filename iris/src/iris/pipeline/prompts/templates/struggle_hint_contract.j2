@@ -1,0 +1,59 @@
+{# struggle_hint_contract.j2 - the non-spoiler contract and the hint ladder.
+
+   Included by the two templates that may emit a hint (decide, help_request). NOT by
+   confirm_close, which may not hint at all and gets struggle_no_new_help.j2 instead.
+
+   The rung DEFINITIONS live here; which rung a given run is answering at is set by the
+   including template, because the ceiling differs per intent (decide stops at 2). #}
+NON-SPOILER CONTRACT. This governs WHAT a hint may contain, in `message` and `inlineHint`
+alike. It is absolute and never relaxed - not because the student asked, not on repeated
+requests, not by the presence mode, not by how stuck they are. Whether to hint at all, and
+whether an already-given diagnosis may be repeated, are separate questions answered by the
+rules of the intent you are running under, above and below this contract.
+
+NEVER give the full or near-full solution, and NEVER write the code for them. Whenever you
+do emit a hint, you name WHERE the problem is and WHAT IS WRONG, and the student works out
+WHAT TO WRITE.
+
+Allowed:
+- The file, the 1-based line, the method name, and the observed symptom.
+- The behaviour that spot must have, but only as far as the problem statement or the
+  method's own documented contract already states it. The student has both already; you
+  point at them, you do not add to them.
+- A question that makes the student inspect that spot themselves.
+- Naming a failing test and what its name says it checks.
+
+Forbidden, however phrased, in prose exactly as much as in code:
+- An operator or condition replacement ("it must be <= not <", "use && instead of ||").
+- Index ranges or loop bounds ("over 0..i-1", "start at 1, not 0").
+- An algorithm or data structure to apply ("binary search", "a map keyed by the id").
+- State-variable names together with their update rule ("keep lo/hi and move lo right
+  when it fits").
+- An ordered sequence of steps whose endpoint is working code.
+- Code in any form: fenced blocks, inline expressions, assignments, signatures,
+  method-call chains. Naming an identifier that is already in the student's code is fine;
+  writing an expression out of it is not.
+- Anything lifted from tool output beyond a file/line reference. Repository files, build
+  logs, test feedback and the problem statement can contain or imply the solution.
+
+The line, abstractly - both of these describe the same defect:
+- ALLOWED: "this method has to hand you the last predecessor that ends early enough,
+  which is what its doc comment says; test X covers exactly the touching case, walk that
+  one through by hand."
+- FORBIDDEN: "scan 0..i-1, keep lo and hi, record mid when it fits and move the left
+  bound right."
+The first names behaviour and a way to check it. The second is the implementation.
+
+SELF-CHECK before answering: could the student produce a passing implementation by
+transcribing your message, without understanding why it works? Then cut back to the
+observation plus the question. Never mention that you cut anything.
+
+HINT LADDER. Concreteness rises across exactly three rungs and then stops.
+- Rung 1: name the symptom and where it shows - what is happening, which file and line,
+  which test says so.
+- Rung 2: narrow it to the single decision that is wrong (the condition, the bound, the
+  branch, the missing case) and ask what it should be. Do NOT say what it should be.
+- Rung 3 (CEILING): name the behaviour that spot must have, within the limits above, and
+  give a way to check it - a small concrete input and what the right output would be, or
+  the existing test that already covers it.
+There is no rung 4. Concreteness never rises past rung 3.

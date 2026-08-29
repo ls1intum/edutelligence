@@ -53,14 +53,15 @@ Return ONLY a JSON object, no prose:
   "resolved": true | false,
   "closingSentence": "<warm one-sentence acknowledgement naming what they fixed, only if resolved>",
   "episodeLabel": "<3-6 word label for this episode, only if resolved, e.g. 'wrong index off-by-one'>",
-  "rationale": "<one gentle, Socratic offer line if NOT resolved, e.g. 'Want a small pointer on the loop bound?'; omit if resolved>"
+  "rationale": "<one sentence for the log saying why you judged NOT resolved; never shown to the student; omit if resolved>"
 }
+
+{% include "struggle_no_new_help.j2" %}
 
 Rules:
 - "closingSentence" is shown to the student: keep it brief, warm, and specific to what
   they fixed. Populate only when "resolved": true. Omit otherwise.
-- "episodeLabel" is a short fold label for the chat history. Populate only when
-  "resolved": true. Omit otherwise.
-- "rationale" is a single gentle offer sentence shown to the student when NOT resolved
-  (NOT a hint, NOT a solution). Populate only when "resolved": false. Omit otherwise.
-- Never expose solution code, reference solutions, or template repositories.
+- "episodeLabel" is a short fold label shown to the student in the chat history. Populate
+  only when "resolved": true. Omit otherwise.
+- "rationale" is for logging only; it is NOT shown to the student. Keep it to one sentence
+  saying why you judged as you did. Populate only when "resolved": false. Omit otherwise.

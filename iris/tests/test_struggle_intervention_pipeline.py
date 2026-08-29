@@ -436,3 +436,160 @@ def test_build_system_message_selects_help_request_template():
         episode=None,
         proactivity_mode="push",
     )
+
+
+# ---------------------------------------------------------------------------
+# Non-spoiler contract + hint ladder
+#
+# Regression for a live spoiler: after three escalating follow-ups the gate returned
+# the implementation in prose ("scan 0..i-1, keep lo/hi, record mid when it fits...").
+# The old help-request prompt asked for "one notch MORE concrete than the last" with no
+# absolute ceiling, and none of the three struggle prompts defined what a spoiler is --
+# the decide prompt only pointed at "the same no-solution rules as the normal exercise
+# chat", which the struggle pipeline never loads.
+# ---------------------------------------------------------------------------
+
+
+def _episode_with(n_hints: int) -> EpisodeDTO:
+    """An episode carrying n already-delivered hints."""
+    return EpisodeDTO(
+        episodeId="ep-1",
+        isNew=False,
+        hints=[
+            EpisodeHintDTO(level="ambient", text=f"hint {i}", atSessionS=float(i))
+            for i in range(n_hints)
+        ],
+    )
+
+
+def _render(template, episode=None):
+    return template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: STATE; severity sBase=0.90; path=e6.",
+        episode=episode,
+        proactivity_mode="push",
+    )
+
+
+def test_hint_contract_reaches_the_two_hinting_prompts_only():
+    """
+    decide and help_request may emit a hint, so both carry the contract and the ladder.
+    confirm_close may not hint at all, so it carries the narrow no-new-help block
+    instead -- giving it the hint contract would license exactly the rung-3 output it
+    must never produce.
+    """
+    pipeline = StruggleInterventionPipeline()
+
+    for template in (pipeline.system_prompt_template, pipeline.help_request_template):
+        rendered = _render(template, _episode_with(0))
+        assert "NON-SPOILER CONTRACT" in rendered
+        assert "HINT LADDER" in rendered
+        assert "NO NEW HELP" not in rendered
+
+    close = _render(pipeline.confirm_close_template, _episode_with(0))
+    assert "NO NEW HELP" in close
+    assert "NON-SPOILER CONTRACT" not in close
+    assert "HINT LADDER" not in close
+
+
+def test_contract_names_the_prose_spoiler_classes():
+    """
+    The observed spoiler carried no code fence: it was an algorithm plus its bounds and
+    state variables, written as prose. A generic "never give the solution" does not catch
+    that, so the contract has to name those classes explicitly.
+    """
+    pipeline = StruggleInterventionPipeline()
+    rendered = _render(pipeline.help_request_template, _episode_with(1))
+
+    assert "operator or condition replacement" in rendered
+    assert "Index ranges or loop bounds" in rendered
+    assert "algorithm or data structure to apply" in rendered
+    assert "State-variable names together with their update rule" in rendered
+    assert "ordered sequence of steps whose endpoint is working code" in rendered
+    assert "Code in any form" in rendered
+    # The blanket rule the old help-request guardrails carried, kept verbatim so it does not
+    # depend on a reader stitching the individual classes above together.
+    assert "NEVER give the full or near-full solution" in rendered
+    assert "NEVER write the code for them" in rendered
+    # The contract governs the inline gutter cue too, not just the chat message.
+    assert "in `message` and `inlineHint`" in rendered
+
+
+def test_help_request_ladder_rises_to_three_and_then_stops():
+    """
+    The ceiling is the whole point: concreteness rises to rung 3 and never past it,
+    however often the student asks. The count is every delivered hint (an unsolicited
+    ambient->active escalation appends one too, slotManager.escalate), so prior>=2
+    clamps rather than continuing to climb.
+    """
+    pipeline = StruggleInterventionPipeline()
+    for prior, expected in ((0, 1), (1, 2), (2, 3), (5, 3)):
+        rendered = _render(pipeline.help_request_template, _episode_with(prior))
+        assert f"You are answering at rung {expected}." in rendered
+        assert "There is no rung 4." in rendered
+
+    # No episode at all still renders a valid rung rather than blowing up.
+    assert "You are answering at rung 1." in _render(pipeline.help_request_template)
+
+
+def test_help_request_keeps_never_silent_with_a_way_out_at_the_ceiling():
+    """
+    NEVER SILENT and the ceiling pull in opposite directions at rung 3. If the model has
+    to resolve that tension itself it resolves it by spoiling, so the prompt has to hand
+    it explicit non-spoiler exits.
+    """
+    pipeline = StruggleInterventionPipeline()
+    rendered = _render(pipeline.help_request_template, _episode_with(2))
+
+    assert "NEVER SILENT" in rendered
+    assert "including at rung 3" in rendered
+    assert "counter-example" in rendered
+    assert "ask a human tutor" in rendered
+    # The tutor referral is the one exit that is not itself a hint, so the prompt has to say
+    # it counts as an answer -- otherwise NEVER SILENT pushes the model past the ceiling.
+    assert "satisfies NEVER SILENT" in rendered
+    # The retired unbounded-escalation instruction must not come back.
+    assert "one notch MORE concrete than the last" not in rendered
+
+
+def test_decide_is_capped_at_rung_two_and_drops_the_dead_chat_reference():
+    """
+    An unsolicited nudge stops at rung 2; rung 3 is reserved for a hint the student asked
+    for. The old pointer at the exercise-chat rules was dead: the struggle pipeline builds
+    its own system message and never loads chat_system_prompt.j2.
+    """
+    pipeline = StruggleInterventionPipeline()
+    for prior, expected in ((0, 1), (1, 2), (2, 2), (5, 2)):
+        rendered = _render(pipeline.system_prompt_template, _episode_with(prior))
+        assert f"You are answering at rung {expected}." in rendered
+        assert "Never use rung 3 for this unsolicited check" in rendered
+
+    rendered = _render(pipeline.system_prompt_template, _episode_with(0))
+    assert "Same no-solution rules as the normal exercise chat" not in rendered
+    # decide may legitimately stay silent and help_request may never be silent, so the
+    # shared contract must bind only the content of a hint, never whether one is emitted.
+    assert "do emit a hint, you name WHERE the problem is" in rendered
+    assert 'respond with action "silent"' in rendered
+
+    # The same contract text must not push help_request toward silence, which is forbidden there.
+    help_rendered = _render(pipeline.help_request_template, _episode_with(0))
+    assert "do emit a hint, you name WHERE the problem is" in help_rendered
+    assert "return `silent`" not in help_rendered
+
+
+def test_confirm_close_constrains_both_student_visible_fields():
+    """
+    closingSentence is not the only text the student sees: episodeLabel is forwarded on a
+    resolved close and rendered as the fold label (serverFrameHandler -> foldEpisode), so
+    both need the same what-not-how limit. rationale, by contrast, never leaves Pyris --
+    Artemis' StruggleInterventionEventDTO has no such field -- so the prompt must not
+    describe it as student-facing.
+    """
+    pipeline = StruggleInterventionPipeline()
+    rendered = _render(pipeline.confirm_close_template, _episode_with(1))
+
+    assert "`closingSentence` and" in rendered
+    assert "`episodeLabel` are the only student-visible fields" in rendered
+    assert "never restate HOW it works or" in rendered
+    assert "for logging only; it is NOT shown to the student" in rendered
+    assert "shown to the student when NOT resolved" not in rendered
