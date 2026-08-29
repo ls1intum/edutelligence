@@ -502,9 +502,10 @@ async def test_logosnode_pre_token_failure_comes_back_as_json_error(retry_env):
     a pre-token failure a proper JSON error the outer loop can retry
     cross-node, instead of a broken 200 stream that can only end in an error
     frame."""
+    from tests.unit.main.test_request_logging import _make_dummy_db
+
     from logos.logosnode_registry import LogosNodeOfflineError
     from logos.pipeline.retry import status_is_retryable
-    from tests.unit.main.test_request_logging import _make_dummy_db
 
     async def broken_send_stream_command(**kwargs):  # noqa: ARG001
         raise LogosNodeOfflineError("worker session dropped")

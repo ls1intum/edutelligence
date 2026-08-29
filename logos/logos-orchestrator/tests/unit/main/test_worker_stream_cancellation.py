@@ -264,8 +264,9 @@ async def test_hello_without_actions_leaves_the_known_set_intact():
 
 @pytest.mark.asyncio
 async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch):
-    import logos as main
     from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
 
     closed = asyncio.Event()
 
@@ -325,8 +326,9 @@ async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch
 async def test_an_abandoned_response_reaches_the_worker_as_a_cancellation(monkeypatch):
     """The whole chain, with the real registry behind the response: client
     goes away → response iterator closed → worker told to abort."""
-    import logos as main
     from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
 
     registry, websocket = _registry_with_session()
 
@@ -450,8 +452,9 @@ async def test_a_worker_that_cannot_cancel_is_counted_separately():
 
 
 async def _run_streamer(monkeypatch, *, abandon_after: int | None):
-    import logos as main
     from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
 
     chunks = [
         b'data: {"id":"c1","choices":[{"delta":{"content":"hel"}}]}\n\n',
