@@ -25,6 +25,7 @@ class StatsV2WebSocketHandlerSigTest {
         r.put("request_id", requestId);
         r.put("status", "pending");
         r.put("provider_name", provider);
+        r.put("model_name", "model-a");
         r.put("is_cloud", false);
         r.put("scheduled_ts", scheduledTs);
         r.put("request_complete_ts", null);
@@ -64,6 +65,19 @@ class StatsV2WebSocketHandlerSigTest {
         // fills it in moments later. That is a change too, not a repeat.
         assertThat(StatsV2WebSocketHandler.requestsSig(page(row("r-1", "gpu-01", null))))
             .isNotEqualTo(StatsV2WebSocketHandler.requestsSig(page(row("r-1", null, null))));
+    }
+
+    @Test
+    void aModelChangeAloneChangesTheSignature() {
+        // Scheduling re-resolves the model together with the provider, so a
+        // re-routed request changes its model while every timestamp on the row
+        // stays put. Without the model in the signature the push is skipped and
+        // the row keeps naming the model the request was enqueued for.
+        Map<String, Object> rerouted = row("r-1", "gpu-01", null);
+        rerouted.put("model_name", "model-b");
+
+        assertThat(StatsV2WebSocketHandler.requestsSig(page(rerouted)))
+            .isNotEqualTo(StatsV2WebSocketHandler.requestsSig(page(row("r-1", "gpu-01", null))));
     }
 
     @Test
