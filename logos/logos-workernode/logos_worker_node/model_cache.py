@@ -555,6 +555,9 @@ class ModelRamCache:
         ``apply_lanes`` immediately instead of blocking the lifespan
         startup hook on a multi-minute rsync sweep.
 
+        Called at startup, and again by the RAM-cache re-plan whenever host
+        RAM frees up (admitted models are extended onto the same queue).
+
         Subsequent calls extend the queue rather than replacing it — safe
         to invoke from anywhere once the worker is running.
         """
@@ -590,7 +593,11 @@ class ModelRamCache:
                 self._cache_queue.appendleft(model_name)
                 logger.info("RAM cache: bumped %s to front of queue", model_name)
             return event
-        # Fresh enqueue.
+        # Fresh enqueue. The completion event may still be set from a
+        # *released* attempt (the re-plan dropped a queue entry and woke
+        # its waiters) — clear it so this attempt's waiters wait for the
+        # real completion, not the stale release.
+        event.clear()
         if priority:
             self._cache_queue.appendleft(model_name)
         else:
@@ -701,7 +708,7 @@ class ModelRamCache:
                 total += _tree_size_bytes(target)
         return total
 
-    def reclaim(self, keep: set[str]) -> list[str]:
+    async def reclaim(self, keep: set[str]) -> list[str]:
         """Drop cached models outside *keep*, returning what was removed.
 
         The cache and vLLM's sleep_l1 both hold model weights in host RAM,
@@ -715,14 +722,64 @@ class ModelRamCache:
         waking from sleep_l2 re-reads its weights from whatever HF_HOME it
         was started with, and pulling that directory out from under it turns
         a wake into a failed lane.
+
+        Coordination with the background copy worker (reclaim now runs on a
+        60 s tick next to in-flight copies, not once at startup before any):
+
+        * the model being copied right now (``_caching_now``) is skipped —
+          the worker owns its tree, and a concurrent ``rmtree`` would tear a
+          half-written copy. The next pass sees the finished copy in
+          ``_cached_models`` and drops it then.
+        * each evicted model's per-model lock — the same one
+          ``ensure_cached`` holds during a copy — is held while its tree is
+          removed, so no copy of the same model can interleave with the
+          ``rmtree``.
+        * queue entries the plan no longer wants are dropped, and their
+          completion events released (a waiter then sees ``is_cached`` False
+          and falls back to disk immediately). Without this the worker would
+          finish copying a model the plan just rejected, and the next pass
+          would evict it again — evict/recopy thrash of tens of GB.
         """
         removed: list[str] = []
         for model_name in sorted(self._cached_models):
             if model_name in keep:
                 continue
-            self.evict(model_name)
+            if model_name == self._caching_now:
+                continue
+            lock = await self._get_model_lock(model_name)
+            async with lock:
+                self._release_queue_entry(model_name)
+                self.evict(model_name)
             removed.append(model_name)
+        for model_name in [m for m in self._cache_queue if m not in keep]:
+            self._release_queue_entry(model_name)
         return removed
+
+    def _release_queue_entry(self, model_name: str) -> None:
+        """Drop *model_name* from the copy queue and release its waiters.
+
+        A released event means "the caching attempt finished"; ``is_cached``
+        is still False, so a waiter proceeds from disk instead of waiting
+        out its timeout.
+        """
+        if model_name in self._cache_queue:
+            self._cache_queue.remove(model_name)
+        event = self._completion_events.get(model_name)
+        if event is not None and not event.is_set():
+            event.set()
+
+    def pending_or_caching(self) -> set[str]:
+        """Models the background worker already owns: queued or in flight.
+
+        A model in here is on its way into the cache — re-queueing it is a
+        no-op and re-logging it is noise. The re-plan uses this to keep its
+        "re-caching N model(s)" line truthful while a copy is in flight
+        (``is_cached`` is False until the copy lands).
+        """
+        pending = set(self._cache_queue)
+        if self._caching_now is not None:
+            pending.add(self._caching_now)
+        return pending
 
     def get_effective_hf_home(self, model_name: str) -> str:
         """Return tmpfs-based HF_HOME if cached, else source HF_HOME."""
@@ -1041,8 +1098,11 @@ class _DisabledModelRamCache:
     def held_bytes(self) -> int:
         return 0
 
-    def reclaim(self, keep: set[str]) -> list[str]:  # noqa: ARG002
+    async def reclaim(self, keep: set[str]) -> list[str]:  # noqa: ARG002
         return []
+
+    def pending_or_caching(self) -> set[str]:
+        return set()
 
     def set_host_ram_floor_mb(self, floor_mb: float) -> None:  # noqa: ARG002
         pass

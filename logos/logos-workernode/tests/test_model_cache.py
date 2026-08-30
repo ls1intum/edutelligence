@@ -571,7 +571,7 @@ async def test_reclaim_drops_what_the_plan_no_longer_wants(ram_cache_env):
     await cache.ensure_cached(model)
     assert model in cache.cached_models()
 
-    removed = cache.reclaim(keep=set())
+    removed = await cache.reclaim(keep=set())
 
     assert removed == [model]
     assert cache.cached_models() == []
@@ -592,7 +592,42 @@ async def test_reclaim_keeps_what_it_is_told_to(ram_cache_env):
     model = ram_cache_env["model_name"]
     await cache.ensure_cached(model)
 
-    assert cache.reclaim(keep={model}) == []
+    assert await cache.reclaim(keep={model}) == []
+    assert model in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_reclaim_coordinates_with_the_copy_worker(ram_cache_env) -> None:
+    """reclaim now runs on a 60 s tick next to in-flight copies: a copy in
+    flight is left alone (the worker owns its tree — a concurrent rmtree
+    would tear it), and queue entries the plan rejected are dropped, with
+    their completion events released, so the worker does not copy a model
+    the plan just threw away and a waiting lane falls back to disk
+    immediately instead of waiting out its timeout."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    await cache.ensure_cached(model)
+
+    # A second model is queued for a copy that has not started yet; the
+    # plan no longer wants it.
+    queued = "org/not-in-the-plan"
+    event = cache._enqueue(queued, priority=False)  # noqa: SLF001
+    assert queued in cache._cache_queue  # noqa: SLF001
+
+    removed = await cache.reclaim(keep={model})
+
+    assert removed == []  # the kept model survives, the queued one was not cached
+    assert queued not in cache._cache_queue  # noqa: SLF001
+    assert event.is_set()  # the waiter is released and falls back to disk
+    assert cache.is_cached(queued) is False
+
+    # A copy in flight (model marked _caching_now) is spared this pass.
+    cache._caching_now = model  # noqa: SLF001
+    assert await cache.reclaim(keep=set()) == []
     assert model in cache.cached_models()
 
 

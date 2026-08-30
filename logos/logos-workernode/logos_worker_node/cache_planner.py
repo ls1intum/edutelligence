@@ -19,7 +19,15 @@ Why this rule exists:
 The algorithm is deterministic — same inputs always produce the same output:
 
   1. Compute ``reserve_mb = sum(sleeping host_ram of every sleepable
-     capability)`` — what those lanes hold while asleep, not while awake.
+     capability that is NOT already asleep)`` — what those lanes will hold
+     when they sleep, not what they hold while awake. A model that is asleep
+     right now is already paying for itself: its sleeping weights sit in
+     host RAM and are therefore already subtracted from
+     ``available_host_ram_mb``. Reserving its footprint on top of that would
+     count the same RAM twice and shrink the budget by the size of every
+     sleeping model — exactly the over-correction a re-plan must not do.
+     At boot nobody is asleep (``asleep`` is empty) and the full reserve
+     applies, as before.
   2. ``budget_mb = (available_host_ram_mb + cache_held_mb) − reserve_mb −
      safety_margin_mb``. The cache's own footprint is added back because it
      is reclaimable: a budget measured from ``MemAvailable`` alone is a
@@ -77,6 +85,7 @@ class CachePlan:
     cached_unsleepable: list[str]
     cached_sleepable: list[str]
     skipped_sleepable: list[str]
+    asleep: frozenset[str] = frozenset()
 
 
 def plan_cache_order(
@@ -85,6 +94,7 @@ def plan_cache_order(
     available_host_ram_mb: float,
     safety_margin_mb: float,
     cache_held_mb: float = 0.0,
+    asleep: frozenset[str] = frozenset(),
 ) -> CachePlan:
     """Decide which models to pre-cache and in what order.
 
@@ -93,11 +103,15 @@ def plan_cache_order(
         about, with its sleep capability, sleeping host-RAM footprint, and
         tmpfs cost.
       - ``available_host_ram_mb``: worker's current MemAvailable.
-      - ``safety_margin_mb``: fixed host-RAM buffer for OS file cache,
-        malloc fragmentation, vLLM mm processor caches, etc.
+      - ``safety_margin_mb``: host-RAM buffer for OS file cache, malloc
+        fragmentation, vLLM mm processor caches, the cold-load spike, etc.
       - ``cache_held_mb``: what the tmpfs cache already holds. Added back
         into the pool because it is reclaimable — see the module docstring.
         Zero reproduces the original from-scratch behaviour.
+      - ``asleep``: sleepable models whose lane is asleep right now. They
+        are left out of the reserve — see the module docstring (their
+        sleeping RAM is already out of ``available_host_ram_mb``, so
+        reserving it again would double-count).
 
     Returns a CachePlan describing the ordering and the budget arithmetic
     used to derive it. ``order`` is the list to pass to
@@ -113,7 +127,10 @@ def plan_cache_order(
         key=lambda c: c.size_bytes,
     )
 
-    reserved_for_sleep_mb = sum(c.sleeping_host_ram_mb for c in sleepable)
+    # Models that are already asleep are not reserved: their sleeping RAM is
+    # already out of MemAvailable (see the module docstring), so reserving it
+    # again would double-count by the size of every sleeping model.
+    reserved_for_sleep_mb = sum(c.sleeping_host_ram_mb for c in sleepable if c.name not in asleep)
     pool_mb = available_host_ram_mb + max(cache_held_mb, 0.0)
     sleepable_tmpfs_budget_mb = pool_mb - reserved_for_sleep_mb - safety_margin_mb
 
@@ -148,4 +165,5 @@ def plan_cache_order(
         cached_unsleepable=cached_unsleepable,
         cached_sleepable=cached_sleepable,
         skipped_sleepable=skipped_sleepable,
+        asleep=frozenset(asleep),
     )
