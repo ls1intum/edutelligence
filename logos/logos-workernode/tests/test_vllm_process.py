@@ -2169,6 +2169,57 @@ async def test_spawn_does_not_retry_on_unrelated_startup_failure(tmp_path: Path,
     assert paths["inductor"].exists()
 
 
+@pytest.mark.asyncio
+async def test_spawn_does_not_widen_worker_wide_on_fingerprint_only(tmp_path: Path, monkeypatch) -> None:
+    """A fingerprint match whose traceback names no compile-cache file, on a
+    lane with an empty per-lane dir, must NOT widen to the worker-wide purge —
+    that would force every other model on the node to recompile on a
+    heuristic match. The failure propagates instead."""
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    import json as _json
+
+    # Stamp matches so the proactive purge stays out of the way.
+    (paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME).write_text(
+        _json.dumps({"vllm": "0.22.0", "torch": "2.11.0"})
+    )
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="org/brand-new-model", vllm=True, vllm_config=VllmConfig())
+    calls: list[int] = []
+
+    async def _fake_spawn_once(_lc):  # noqa: ANN001
+        calls.append(1)
+        # copy_misaligned_inputs fingerprint, but the traceback names only
+        # torch internals — no compile-cache path, so no strong signal.
+        handle._recent_logs.extend(
+            [
+                '  File "/opt/venv/lib/python3.12/site-packages/torch/_inductor/utils.py", '
+                "line 3442, in copy_misaligned_inputs",
+                "AssertionError: Expected tensors only, but got: <class 'int'>",
+            ]
+        )
+        raise RuntimeError("Engine core init failed")
+
+    monkeypatch.setattr(handle, "_spawn_once", _fake_spawn_once)
+
+    with pytest.raises(RuntimeError, match="Engine core init failed"):
+        await handle.spawn(lane)
+    # No retry: the fingerprint-only match on an empty per-lane dir did not
+    # widen to the worker-wide cache.
+    assert len(calls) == 1
+    # The shared compile cache is untouched.
+    assert (paths["vllm"] / "torch_compile_cache").exists()
+    assert (paths["vllm"] / "rank_0_0").exists()
+    assert paths["inductor"].exists()
+
+
 # Fingerprint matching — failures that die inside torch/vllm library code,
 # where no frame of the traceback points into the cache directory.
 
@@ -2237,13 +2288,48 @@ def test_matched_cache_poisoning_fingerprints(fingerprint: str, log_lines: list[
 def test_matched_cache_poisoning_fingerprint_requires_all_fragments() -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     # A KeyError that is not from the compilation cache module, and a
-    # FileNotFoundError that is not from torch/_inductor, must not match.
+    # FileNotFoundError whose path is not under the compile cache, must not
+    # match.
     handle._recent_logs.extend(
         [
             '  File ".../vllm/config.py", line 10, in load',
             "KeyError: 'model'",
             '  File ".../vllm/worker/worker.py", line 5, in init_device',
             "FileNotFoundError: '/models/weights.safetensors'",
+        ]
+    )
+    assert handle._matched_cache_poisoning_fingerprint() is None
+    assert handle.has_poisoned_compile_cache is False
+
+
+def test_inductor_artifact_missing_matches_cache_path_file_not_found() -> None:
+    """A FileNotFoundError under a compile-cache path is a genuinely missing
+    cache artifact. The path uses a custom cache root so it is not one of the
+    generic path fragments — only the tightened fingerprint can match it."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(
+        [
+            '  File ".../torch/_inductor/standalone_compile.py", line 122, in _compiled_fn',
+            "FileNotFoundError: [Errno 2] No such file or directory: "
+            "'/mnt/custom-root/vllm/torch_compile_cache/deadbeef/ol/frag.py'",
+        ]
+    )
+    assert handle._matched_cache_poisoning_fingerprint() == "inductor_artifact_missing"
+    assert handle.has_poisoned_compile_cache is True
+
+
+def test_inductor_artifact_missing_ignores_unrelated_file_not_found() -> None:
+    """The false positive from review: a brand-new model that fails to load
+    (mistyped repo id, gated repo) raises FileNotFoundError, and ordinary
+    torch.compile output logs torch/_inductor frames in the same window. The
+    missing file is a HuggingFace path, not a compile-cache artifact, so the
+    fingerprint must NOT match."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(
+        [
+            '  File "/opt/venv/lib/python3.12/site-packages/torch/_inductor/runtime/' "triton_heuristics.py",
+            " line 12, in run",
+            "FileNotFoundError: [Errno 2] No such file or directory: " "'/models/org__typo-model/weights.safetensors'",
         ]
     )
     assert handle._matched_cache_poisoning_fingerprint() is None
@@ -2413,7 +2499,11 @@ async def test_spawn_reactive_recovery_is_capped_per_model_hour(tmp_path: Path, 
     monkeypatch.setattr("logos_worker_node.vllm_process._last_reactive_cache_recovery", {})
 
     lane = LaneConfig(model="zai-org/GLM-OCR", vllm=True, vllm_config=VllmConfig())
+    # A strong-signal poisoning: the traceback names a compile-cache file
+    # (path fragment), so the worker-wide fallback fires on this empty
+    # per-lane (legacy shared-location) fixture.
     poisoned_logs = [
+        '  File "/tmp/x/.cache/vllm/torch_compile_cache/abc/inductor_cache/ol/frag.py", line 1, in call',
         '  File ".../torch/_inductor/utils.py", line 3442, in copy_misaligned_inputs',
         "AssertionError: Expected tensors only, but got: <class 'int'>",
     ]
@@ -2477,8 +2567,12 @@ async def test_spawn_logs_structured_auto_recovery_line(tmp_path: Path, monkeypa
     async def _fake_spawn_once(_lc):  # noqa: ANN001
         attempts.append(1)
         if len(attempts) == 1:
+            # Strong signal (cache path in the traceback) so the worker-wide
+            # fallback fires on this empty per-lane fixture, plus the
+            # copy_misaligned_inputs fingerprint the assertion checks for.
             handle._recent_logs.extend(
                 [
+                    '  File "/tmp/x/.cache/vllm/torch_compile_cache/abc/inductor_cache/ol/frag.py", line 1, in call',
                     '  File ".../torch/_inductor/utils.py", line 3442, in copy_misaligned_inputs',
                     "AssertionError: Expected tensors only, but got: <class 'int'>",
                 ]

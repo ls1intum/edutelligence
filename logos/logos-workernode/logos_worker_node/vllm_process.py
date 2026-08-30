@@ -493,11 +493,27 @@ class VllmProcessHandle:
                     raise
                 purged = self._purge_compile_caches(lane_config.model)
                 if not purged:
-                    # This model's own per-lane cache dir holds nothing — its
-                    # artifacts live in the legacy shared location (or a
-                    # user-overridden --compilation-config we can't resolve),
-                    # so fall back to the worker-wide set for the retry.
-                    purged = self._purge_compile_caches()
+                    # The per-lane purge removed nothing, so the poisoned
+                    # artifact (if any) lives in the shared location. Widening
+                    # to the worker-wide set forces every other model on the
+                    # node to recompile, so it is only justified when the
+                    # traceback actually names a file under the compile cache
+                    # (the strong signal). A fingerprint-only match on an
+                    # empty per-lane dir is not: a brand-new lane has no cache
+                    # to be poisoned by, and the fingerprint is a heuristic,
+                    # so widening would risk wiping every model's cache on an
+                    # unrelated startup failure (a mistyped repo id, a gated
+                    # repo). Propagate instead.
+                    if self._logs_reference_compile_cache():
+                        purged = self._purge_compile_caches()
+                    else:
+                        logger.warning(
+                            "[%s] Cache poisoning detected (fingerprint=%s) but the traceback "
+                            "names no compile-cache file and this lane has no per-lane cache — "
+                            "not widening to the worker-wide cache; propagating",
+                            self.lane_id,
+                            fingerprint,
+                        )
                 purged_once = True
                 if not purged:
                     raise
@@ -640,12 +656,16 @@ class VllmProcessHandle:
 
     # Known cache-poisoning failure fingerprints, matched against the captured
     # startup logs. Each fingerprint is a tuple of fragments that must ALL
-    # appear in the recent log buffer; the pair is specific enough that no
-    # other startup failure matches it. They complement the stack-trace
-    # path-fragment detector above: a cached AOT artifact can also die deep
-    # inside torch/vllm library code, where no frame of the traceback points
-    # into the cache directory (the GLM-OCR incident: the artifact asserts
-    # in copy_misaligned_inputs on a stale input signature).
+    # appear in the recent log buffer; each is specific enough that an
+    # unrelated startup failure (a missing HF file, a bad module import) does
+    # not match it. Where a fragment is generic (FileNotFoundError,
+    # AssertionError), the tuple pairs it with a compile-cache path marker so
+    # the match only fires when the failure actually involves the cache. They
+    # complement the stack-trace path-fragment detector above: a cached AOT
+    # artifact can also die deep inside torch/vllm library code, where no
+    # frame of the traceback points into the cache directory (the GLM-OCR
+    # incident: the artifact asserts in copy_misaligned_inputs on a stale
+    # input signature).
     _CACHE_POISONING_FINGERPRINTS: ClassVar[tuple[tuple[str, tuple[str, ...]], ...]] = (
         # Stale AOT graph: a Python int arrives where the cached artifact
         # expects a torch.Tensor.
@@ -653,8 +673,12 @@ class VllmProcessHandle:
         # A cached AOT artifact raises on load/invocation.
         ("aot_artifact_assertion", ("CacheCompiledArtifact", "AssertionError")),
         # A previous startup was killed mid-AOT-write, leaving a truncated
-        # artifact the next startup cannot read.
-        ("inductor_artifact_missing", ("torch/_inductor", "FileNotFoundError")),
+        # artifact the next startup cannot read. The compile-cache path is
+        # required alongside FileNotFoundError so this only matches a file
+        # that is actually under the cache — not an unrelated missing-file
+        # error (a mistyped model id, a gated repo) that merely co-occurs
+        # with ordinary torch/_inductor compilation output in the same log.
+        ("inductor_artifact_missing", ("FileNotFoundError", "torch_compile_cache")),
         # Cache-key lookup hits an entry that no longer matches.
         ("compilation_cache_key_error", ("vllm/compilation/caching.py", "KeyError")),
     )
@@ -709,6 +733,21 @@ class VllmProcessHandle:
             )
         return removed
 
+    def _logs_reference_compile_cache(self) -> bool:
+        """True if the recent logs name a file under the torch.compile cache.
+
+        This is the strong signal of poisoning: the traceback actually reached
+        into a cached artifact, so whatever the originating exception is, the
+        artifact is implicated. Weaker than that is a fingerprint match (a
+        known error signature that may co-occur with an unrelated failure),
+        which ``has_poisoned_compile_cache`` accepts on its own but the
+        worker-wide purge must not be widened on (see ``spawn``).
+        """
+        if not self._recent_logs:
+            return False
+        log_blob = "\n".join(self._recent_logs)
+        return any(frag in log_blob for frag in self._POISONED_COMPILE_CACHE_PATH_FRAGMENTS)
+
     @property
     def has_poisoned_compile_cache(self) -> bool:
         """True if recent logs implicate the on-disk torch.compile cache.
@@ -723,8 +762,7 @@ class VllmProcessHandle:
         """
         if not self._recent_logs:
             return False
-        log_blob = "\n".join(self._recent_logs)
-        if any(frag in log_blob for frag in self._POISONED_COMPILE_CACHE_PATH_FRAGMENTS):
+        if self._logs_reference_compile_cache():
             return True
         return self._matched_cache_poisoning_fingerprint() is not None
 
