@@ -52,6 +52,18 @@ export function isPasskeyCancellation(error: unknown): boolean {
 }
 
 export function passkeyErrorMessage(error: unknown, fallback = 'Passkey sign-in failed.'): string {
+  // HTTP error from the webservice: the server's message is in the response
+  // body (validation failures arrive as `detail`; older endpoints as
+  // `error` — read both). Without this, an HttpClient error surfaces as the
+  // generic "Http failure response for …" instead of the specific reason.
+  const body = (error as { error?: { detail?: unknown; error?: unknown } } | null)?.error;
+  const serverMessage =
+    typeof body?.detail === 'string' && body.detail
+      ? body.detail
+      : typeof body?.error === 'string' && body.error
+        ? body.error
+        : null;
+  if (serverMessage) return serverMessage;
   if (error instanceof DOMException) {
     if (isPasskeyCancellation(error)) return 'Passkey sign-in was cancelled.';
     if (error.name === 'InvalidStateError') return 'This passkey is already registered.';

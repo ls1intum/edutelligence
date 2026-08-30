@@ -1,7 +1,11 @@
 <div class="passkeys">
 
   <h1 class="page-title">Passkeys</h1>
-  <p class="page-subtitle">Manage the passkeys you use to sign in to Logos.</p>
+  <p class="page-subtitle">Manage the WebAuthn credentials stored in the Logos service.</p>
+  <p class="page-subtitle">
+    These credentials are not used for sign-in yet — signing in uses the passkeys registered
+    with your Keycloak account.
+  </p>
 
   <div class="toolbar">
     @if (supported()) {
@@ -36,7 +40,7 @@
   }
 
   @if (!loading() && !loadError() && passkeys().length === 0) {
-    <p class="empty-state">No passkeys yet. Add one to sign in without a password.</p>
+    <p class="empty-state">No passkeys yet.</p>
   }
 
   @if (!loading() && !loadError() && passkeys().length > 0) {
@@ -62,7 +66,7 @@
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || closeDeleteModal()"
   [title]="'Remove passkey \'' + (deleteTarget()?.label ?? 'Unnamed device') + '\'?'"
-  message="You will no longer be able to sign in with this passkey. Other passkeys of yours are not affected."
+  message="This passkey will be removed from the Logos service. Other passkeys of yours are not affected."
   icon="pi-trash"
   confirmLabel="Remove"
   [loading]="deleteLoading()"

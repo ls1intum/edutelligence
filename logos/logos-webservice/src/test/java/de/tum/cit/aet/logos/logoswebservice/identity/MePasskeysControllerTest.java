@@ -10,8 +10,10 @@ import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.interfaces.ECPublicKey;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -137,6 +139,30 @@ class MePasskeysControllerTest {
            .andExpect(jsonPath("$.excludeCredentials[1].id").value("cGFzc2tleS1hbGljZS0y"));
     }
 
+    @Test
+    void registrationOptions_evictsOldestChallengeBeyondPerUserCap() throws Exception {
+        // Five outstanding challenges fill the per-user cap; the sixth issue
+        // evicts the first one, which must then be rejected while the newest
+        // is still usable.
+        List<String> issued = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            issued.add(issueChallenge(ALICE_ID, "alice"));
+        }
+        String evicted = issued.get(0);
+        issued.add(issueChallenge(ALICE_ID, "alice"));
+
+        Registration stale = buildRegistration(evicted, "new-credential-evicted", RP_ID, 0x45,
+            AttestationKind.NONE);
+        submitRegistration(ALICE_ID, "alice", stale, null)
+            .andExpect(status().isBadRequest());
+
+        Registration fresh = buildRegistration(issued.get(5), "new-credential-fresh", RP_ID, 0x45,
+            AttestationKind.NONE);
+        submitRegistration(ALICE_ID, "alice", fresh, null)
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.passkey.credential_id").value(fresh.credentialId()));
+    }
+
     // POST /me/passkeys
 
     @Test
@@ -157,16 +183,30 @@ class MePasskeysControllerTest {
     }
 
     @Test
-    void register_storesPackedSelfAttestationWithoutDeclaredAlg() throws Exception {
+    void register_rejectsPackedSelfAttestationWithoutDeclaredAlg() throws Exception {
         String challenge = issueChallenge(ALICE_ID, "alice");
-        // attStmt.alg is optional; without it the algorithm is derived from
-        // the (ES256) credential key.
+        // WebAuthn L2 §8.2 makes attStmt.alg a required member of the packed
+        // statement, so a statement without it is rejected — there is no
+        // key-type fallback.
         Registration registration = buildRegistration(challenge, "new-credential-alg-absent", RP_ID, 0x45,
             AttestationKind.PACKED_SELF, null);
 
         submitRegistration(ALICE_ID, "alice", registration, null)
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.passkey.credential_id").value(registration.credentialId()));
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void register_rejectsPackedSelfAttestationWithDerEncodedSignature() throws Exception {
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        // A packed ES256 signature is IEEE P1363 (raw r||s). This fixture
+        // signs with ASN.1 DER — a well-formed signature in the wrong
+        // encoding, which must be rejected (this is what a plain
+        // SHA256withECDSA verifier would wrongly accept).
+        Registration registration = buildRegistration(challenge, "new-credential-der-sig", RP_ID, 0x45,
+            AttestationKind.PACKED_SELF_DER_SIGNATURE);
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -256,6 +296,23 @@ class MePasskeysControllerTest {
 
         submitRegistration(BOB_ID, "bob", registration, null)
             .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void register_keepsChallengeUsableByOwnerAfterRejectingAnotherUser() throws Exception {
+        // Bob submits a registration carrying alice's challenge. The
+        // ownership check must fail before the challenge is consumed, so
+        // alice's in-flight registration still works with the same challenge.
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        Registration registration = buildRegistration(challenge, "new-credential-ownership",
+            RP_ID, 0x45, AttestationKind.NONE);
+
+        submitRegistration(BOB_ID, "bob", registration, null)
+            .andExpect(status().isBadRequest());
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.passkey.credential_id").value(registration.credentialId()));
     }
 
     @Test
@@ -360,6 +417,55 @@ class MePasskeysControllerTest {
             .andExpect(status().isConflict());
     }
 
+    // Per-user passkey cap (10). alice has 2 seeded passkeys, so the
+    // boundary tests seed up to 9 and 10.
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = """
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12111, 1201, 'cGFzc2tleS1jYXAtMQ', '\\x09', 0, 'Cap 3', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12112, 1201, 'cGFzc2tleS1jYXAtMg', '\\x09', 0, 'Cap 4', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12113, 1201, 'cGFzc2tleS1jYXAtMw', '\\x09', 0, 'Cap 5', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12114, 1201, 'cGFzc2tleS1jYXAtNA', '\\x09', 0, 'Cap 6', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12115, 1201, 'cGFzc2tleS1jYXAtNQ', '\\x09', 0, 'Cap 7', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12116, 1201, 'cGFzc2tleS1jYXAtNg', '\\x09', 0, 'Cap 8', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12117, 1201, 'cGFzc2tleS1jYXAtNw', '\\x09', 0, 'Cap 9', NOW());
+        """)
+    void register_allowsRegistrationUpToPerUserCap() throws Exception {
+        // 2 seeded + 7 here = 9, one below the cap of 10: the 10th
+        // registration is still allowed.
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        Registration registration =
+            buildRegistration(challenge, "passkey-cap-boundary", RP_ID, 0x45, AttestationKind.NONE);
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = """
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12118, 1201, 'cGFzc2tleS1jYXAtOA', '\\x09', 0, 'Cap 10', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12119, 1201, 'cGFzc2tleS1jYXAtOQ', '\\x09', 0, 'Cap 11', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12120, 1201, 'cGFzc2tleS1jYXAtMTA', '\\x09', 0, 'Cap 12', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12121, 1201, 'cGFzc2tleS1jYXAtMTE', '\\x09', 0, 'Cap 13', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12122, 1201, 'cGFzc2tleS1jYXAtMTI', '\\x09', 0, 'Cap 14', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12123, 1201, 'cGFzc2tleS1jYXAtMTM', '\\x09', 0, 'Cap 15', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12124, 1201, 'cGFzc2tleS1jYXAtMTQ', '\\x09', 0, 'Cap 16', NOW());
+        INSERT INTO user_passkeys (id, user_id, credential_id, public_key, sign_count, label, created_at) VALUES (12125, 1201, 'cGFzc2tleS1jYXAtMTU', '\\x09', 0, 'Cap 17', NOW());
+        """)
+    void register_rejectsRegistrationBeyondPerUserCap() throws Exception {
+        // 2 seeded + 8 here = the cap of 10 already reached.
+        String challenge = issueChallenge(ALICE_ID, "alice");
+        Registration registration =
+            buildRegistration(challenge, "passkey-cap-exceeded", RP_ID, 0x45, AttestationKind.NONE);
+
+        submitRegistration(ALICE_ID, "alice", registration, null)
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.detail").value(
+                "This account already has the maximum of 10 passkeys. Remove one first."));
+    }
+
     // DELETE /me/passkeys/{id}
 
     @Test
@@ -420,6 +526,8 @@ class MePasskeysControllerTest {
         NONE,
         PACKED_SELF,
         PACKED_SELF_INVALID_SIGNATURE,
+        // A well-formed packed signature in the wrong (DER) encoding.
+        PACKED_SELF_DER_SIGNATURE,
         FIDO_U2F,
         FIDO_U2F_WITHOUT_X5C
     }
@@ -436,7 +544,8 @@ class MePasskeysControllerTest {
 
     /**
      * As {@link #buildRegistration}, with a declared attStmt.alg for the packed
-     * attestations; {@code null} omits the field (it is optional).
+     * attestations; {@code null} omits the field (a spec violation per WebAuthn
+     * L2 §8.2 — used by the rejection test).
      */
     private static Registration buildRegistration(String challenge, String credentialIdText, String rpId,
             int flags, AttestationKind kind, Integer attStmtAlg) throws Exception {
@@ -497,10 +606,18 @@ class MePasskeysControllerTest {
             u2fSigner.update(u2fSignedData);
             signature = u2fSigner.sign();
         } else {
-            Signature signer = Signature.getInstance("SHA256withECDSA");
+            // A packed ES256 signature is IEEE P1363 (raw r||s) per COSE /
+            // WebAuthn L2 — not the DER encoding plain SHA256withECDSA
+            // produces. Signing with the P1363 variant is what makes the
+            // test exercise the verifier's encoding choice instead of
+            // confirming it against itself (the U2F branch above keeps DER,
+            // which is correct for FIDO U2F).
+            boolean der = kind == AttestationKind.PACKED_SELF_DER_SIGNATURE;
+            Signature signer =
+                Signature.getInstance(der ? "SHA256withECDSA" : "SHA256withECDSAinP1363Format");
             signer.initSign(keyPair.getPrivate());
             if (kind == AttestationKind.PACKED_SELF_INVALID_SIGNATURE) {
-                // Sign different data: a valid DER signature that does not verify.
+                // Sign different data: a valid P1363 signature that does not verify.
                 signer.update(concat(authData, sha256("not the clientDataJSON".getBytes(StandardCharsets.UTF_8))));
             } else {
                 signer.update(concat(authData, sha256(clientDataJson)));

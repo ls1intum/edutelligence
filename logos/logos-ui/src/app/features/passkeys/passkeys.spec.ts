@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
 import { PasskeysService } from '../../core/services/passkeys.service';
-import { getDeviceName } from '../../core/auth/passkey';
+import { getDeviceName, passkeyErrorMessage } from '../../core/auth/passkey';
 import { Passkey } from '../../shared/models/passkey.model';
 import { Passkeys } from './passkeys';
 
@@ -121,5 +121,32 @@ describe('Passkeys', () => {
     fresh.detectChanges();
     expect(fresh.componentInstance.supported()).toBe(false);
     expect(fresh.nativeElement.querySelector('.btn-primary')).toBeNull();
+  });
+});
+
+describe('passkeyErrorMessage', () => {
+  // An HttpClient error carries the server body in `.error`; the message
+  // must be rendered from there, not the generic "Http failure response…".
+  it('prefers the webservice message from the body detail field', () => {
+    const httpError = {
+      status: 400,
+      message: 'Http failure response for http://localhost/api/me/passkeys: 400, UNKNOWN',
+      error: { detail: 'authenticator did not set the User Verified flag' },
+    };
+    expect(passkeyErrorMessage(httpError)).toBe('authenticator did not set the User Verified flag');
+  });
+
+  it('falls back to the body error field for legacy responses', () => {
+    const httpError = { status: 400, error: { error: 'legacy message' } };
+    expect(passkeyErrorMessage(httpError)).toBe('legacy message');
+  });
+
+  it('keeps plain error messages', () => {
+    expect(passkeyErrorMessage(new Error('Registration rejected by server')))
+      .toBe('Registration rejected by server');
+  });
+
+  it('uses the fallback when nothing is extractable', () => {
+    expect(passkeyErrorMessage({ status: 500 })).toBe('Passkey sign-in failed.');
   });
 });

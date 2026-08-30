@@ -32,6 +32,14 @@ public class PasskeyService {
 
     private static final int MAX_LABEL_LENGTH = 255;
 
+    /**
+     * Upper bound of passkeys per user. Passkeys are personal credentials
+     * (typically one per device/browser); the cap keeps the per-user row
+     * count — and the {@code excludeCredentials} list sent with every
+     * registration — bounded.
+     */
+    private static final int MAX_PASSKEYS_PER_USER = 10;
+
     private final UserPasskeyRepository userPasskeyRepository;
     private final UserRepository userRepository;
     private final PasskeyChallengeStore challengeStore;
@@ -101,6 +109,13 @@ public class PasskeyService {
     @Transactional
     public PasskeyDTO register(int userId, String credentialId, String clientDataJson,
             String attestationObject, String challenge, String label, HttpServletRequest request) {
+        // Bound the per-user count up front — before consuming the challenge,
+        // so an over-cap rejection leaves the issued challenge usable.
+        if (userPasskeyRepository.countByUserId(userId) >= MAX_PASSKEYS_PER_USER) {
+            throw new ConflictException(
+                "This account already has the maximum of " + MAX_PASSKEYS_PER_USER
+                    + " passkeys. Remove one first.");
+        }
         challengeStore.consume(challenge, userId);
         WebAuthnRegistration.Result result = WebAuthnRegistration.verify(
             WebAuthnRegistration.base64UrlDecode(credentialId),

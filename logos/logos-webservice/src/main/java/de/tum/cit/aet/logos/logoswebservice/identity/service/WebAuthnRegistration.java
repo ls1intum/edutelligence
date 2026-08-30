@@ -5,7 +5,6 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.AlgorithmParameters;
 import java.security.GeneralSecurityException;
-import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -38,9 +37,14 @@ import com.upokecenter.cbor.CBORType;
  * COSE public key must be well-formed and use a supported algorithm) and the
  * attestation statement. Supported attestation formats are {@code none} (no
  * signature — the credential key binding is then proven at first use),
- * {@code packed} (self-attestation or certificate-based, honoring the
- * optional attStmt.alg) and {@code fido-u2f} (certificate-based; x5c is
- * required by the format).
+ * {@code packed} (self-attestation or certificate-based, with the mandatory
+ * attStmt.alg per WebAuthn L2 §8.2) and {@code fido-u2f} (certificate-based;
+ * x5c is required by the format).
+ *
+ * <p>EC signature encodings differ by format: a packed attestation signature
+ * for an ES256 key is a raw IEEE P1363 {@code r || s} pair (COSE / WebAuthn
+ * L2), verified with {@code SHA256withECDSAinP1363Format}; a FIDO U2F
+ * signature is ASN.1 DER, verified with plain {@code SHA256withECDSA}.
  *
  * <p>Attestation certificate chains are not checked against a trust anchor
  * (FIDO MDS): the signature is verified against the leaf certificate, which
@@ -218,18 +222,18 @@ public final class WebAuthnRegistration {
                 }
                 case "packed" -> {
                     byte[] signature = mapByteStringItem(attStmt, "sig", "attStmt", "sig");
-                    Integer declaredAlg = declaredAttestationAlg(attStmt);
+                    int declaredAlg = declaredAttestationAlg(attStmt);
                     if (hasX5c(attStmt)) {
                         verifyWithCertificate(attestationCertificate(attStmt), signedData, signature,
-                            declaredAlg);
+                            declaredAlg, true);
                     } else {
                         // Self-attestation: signed with the credential key, so a
                         // declared algorithm must be the credential key's own.
-                        if (declaredAlg != null && declaredAlg != mapIntItem(coseKey, 3, "COSE key", "alg")) {
+                        if (declaredAlg != mapIntItem(coseKey, 3, "COSE key", "alg")) {
                             throw new IllegalArgumentException(
                                 "attStmt.alg does not match the credential key algorithm");
                         }
-                        verifyWithKey(coseKey, signedData, signature, declaredAlg);
+                        verifyWithKey(coseKey, signedData, signature, declaredAlg, true);
                     }
                 }
                 case "fido-u2f" -> {
@@ -265,8 +269,9 @@ public final class WebAuthnRegistration {
                         throw new IllegalArgumentException(
                             "fido-u2f attestation certificate key must be a P-256 EC key");
                     }
+                    // U2F signatures are DER-encoded (not P1363 like COSE/WebAuthn).
                     verifyWithCertificateKey(key, u2fSignedData,
-                        mapByteStringItem(attStmt, "sig", "attStmt", "sig"), null);
+                        mapByteStringItem(attStmt, "sig", "attStmt", "sig"), null, false);
                 }
                 default -> throw new IllegalArgumentException("Unsupported attestation format: " + format);
             }
@@ -313,10 +318,10 @@ public final class WebAuthnRegistration {
     }
 
     private static void verifyWithKey(CBORObject coseKey, byte[] signedData, byte[] signature,
-            Integer declaredAlg) {
+            int declaredAlg, boolean p1363) {
         try {
             PublicKey key = toJavaPublicKey(coseKey);
-            Signature verifier = Signature.getInstance(signatureAlgorithm(declaredAlg, key));
+            Signature verifier = Signature.getInstance(signatureAlgorithm(declaredAlg, key, p1363));
             verifier.initVerify(key);
             verifier.update(signedData);
             if (!verifier.verify(signature)) {
@@ -330,14 +335,14 @@ public final class WebAuthnRegistration {
     }
 
     private static void verifyWithCertificate(X509Certificate certificate, byte[] signedData, byte[] signature,
-            Integer declaredAlg) {
-        verifyWithCertificateKey(certificate.getPublicKey(), signedData, signature, declaredAlg);
+            int declaredAlg, boolean p1363) {
+        verifyWithCertificateKey(certificate.getPublicKey(), signedData, signature, declaredAlg, p1363);
     }
 
     private static void verifyWithCertificateKey(PublicKey key, byte[] signedData, byte[] signature,
-            Integer declaredAlg) {
+            Integer declaredAlg, boolean p1363) {
         try {
-            Signature verifier = Signature.getInstance(signatureAlgorithm(declaredAlg, key));
+            Signature verifier = Signature.getInstance(signatureAlgorithm(declaredAlg, key, p1363));
             verifier.initVerify(key);
             verifier.update(signedData);
             if (!verifier.verify(signature)) {
@@ -351,15 +356,14 @@ public final class WebAuthnRegistration {
     }
 
     /**
-     * The algorithm a packed attestation statement declares for {@code sig},
-     * or {@code null} when the statement carries none (it is optional). Only
-     * the SHA-256 algorithms of the supported credential keys can be
-     * verified, so anything else is rejected up front.
+     * The algorithm a packed attestation statement declares for {@code sig}.
+     * WebAuthn L2 §8.2 makes {@code alg} a required member of the packed
+     * statement (real authenticators always send it), so a statement without
+     * it is rejected rather than falling back to the key type. Only the
+     * SHA-256 algorithms of the supported credential keys can be verified,
+     * so anything else is rejected up front.
      */
-    private static Integer declaredAttestationAlg(CBORObject attStmt) {
-        if (!attStmt.ContainsKey("alg")) {
-            return null;
-        }
+    private static int declaredAttestationAlg(CBORObject attStmt) {
         int alg = mapIntItem(attStmt, "alg", "attStmt", "alg");
         if (alg != -7 && alg != -257) {
             throw new IllegalArgumentException("Unsupported attestation algorithm: " + alg);
@@ -369,16 +373,32 @@ public final class WebAuthnRegistration {
 
     /**
      * Signature algorithm for an attestation signature: the declared
-     * attStmt.alg when present, otherwise derived from the key type. A
-     * declared algorithm that contradicts the key type (e.g. RS256 declared
-     * but an EC key) fails in {@link Signature#initVerify} with an
-     * {@link InvalidKeyException}.
+     * attStmt.alg when present (packed), otherwise derived from the key type
+     * (fido-u2f). A declared algorithm that contradicts the key type (e.g.
+     * RS256 declared but an EC key) is rejected here.
+     *
+     * <p>{@code p1363} selects the EC encoding: COSE/WebAuthn signatures
+     * (packed) are raw {@code r || s} and need
+     * {@code SHA256withECDSAinP1363Format}; FIDO U2F signatures are DER and
+     * need plain {@code SHA256withECDSA}.
      */
-    private static String signatureAlgorithm(Integer declaredAlg, PublicKey key) {
+    private static String signatureAlgorithm(Integer declaredAlg, PublicKey key, boolean p1363) {
+        boolean rsa = key instanceof java.security.interfaces.RSAPublicKey;
         if (declaredAlg != null) {
-            return declaredAlg == -7 ? "SHA256withECDSA" : "SHA256withRSA";
+            if (declaredAlg == -257) {
+                if (!rsa) {
+                    throw new IllegalArgumentException(
+                        "attStmt.alg does not match the credential key type");
+                }
+                return "SHA256withRSA";
+            }
+            if (rsa) {
+                throw new IllegalArgumentException(
+                    "attStmt.alg does not match the credential key type");
+            }
+            return p1363 ? "SHA256withECDSAinP1363Format" : "SHA256withECDSA";
         }
-        return key instanceof java.security.interfaces.RSAPublicKey ? "SHA256withRSA" : "SHA256withECDSA";
+        return rsa ? "SHA256withRSA" : "SHA256withECDSA";
     }
 
     /** COSE key (CBOR) → JDK public key. ES256 (P-256) and RS256 are supported. */

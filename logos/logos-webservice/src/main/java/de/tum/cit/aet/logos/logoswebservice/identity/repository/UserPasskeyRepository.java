@@ -11,4 +11,6 @@ public interface UserPasskeyRepository extends JpaRepository<UserPasskey, Long> 
     List<UserPasskey> findByUserIdOrderByCreatedAtAsc(Integer userId);
 
     boolean existsByCredentialId(String credentialId);
+
+    long countByUserId(Integer userId);
 }

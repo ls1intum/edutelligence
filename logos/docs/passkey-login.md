@@ -6,8 +6,9 @@ WebAuthn ceremony directly in the app and signs the user in.
 
 ## How it works
 
-Login is handled by `logos-ui/lib/auth/passkey.ts` and surfaced in
-`components/main.tsx`. The flow:
+Login is handled by `loginWithPasskey()` in
+`logos-ui/src/app/core/auth/passkey.ts` and surfaced on the login page
+(`logos-ui/src/app/core/auth/pages/login/login.ts`). The flow:
 
 1. `GET {issuer}/passkey/{clientId}/challenge` — fetch a WebAuthn challenge.
 2. `navigator.credentials.get(...)` — the browser prompts for a discoverable
@@ -19,8 +20,9 @@ Login is handled by `logos-ui/lib/auth/passkey.ts` and surfaced in
    `silent-check-sso.html` obtains an authorization code against the fresh
    session, which is exchanged for tokens. No login page is shown.
 
-Registration (`registerPasskey`) mirrors this with `challenge` →
-`navigator.credentials.create(...)` → `POST .../save`.
+Passkeys for this login are registered against the Keycloak passkey provider
+itself (`challenge` → `navigator.credentials.create(...)` → `POST .../save`) —
+outside this app, so there is no in-UI registration flow for them here.
 
 ## Keycloak prerequisites
 
@@ -43,15 +45,19 @@ These live on the Keycloak side, not in this repo:
 
 ## Managing passkeys
 
-Beyond the in-page login above, users can **manage their passkeys** — list,
-add multiple, delete — from the **Passkeys** page (`/passkeys`, Personal
-section) in the Logos UI. Passkey storage and verification live in the
-webservice, which acts as a WebAuthn relying party for registration:
+Beyond the in-page login above, the webservice also runs its own passkey store
+that users can manage — list, add multiple, delete — from the **Passkeys** page
+(`/passkeys`) in the Logos UI. The page is reachable by URL but deliberately
+not linked from the navigation while the sign-in wiring below is still a
+follow-up, so the menu does not advertise a capability that is not usable
+yet. Passkey storage and verification live in the webservice, which acts as a
+WebAuthn relying party for registration:
 
 - `GET /me/passkeys` — list the caller's passkeys (label, credential id,
   creation date; the public key is never exposed).
 - `POST /me/passkeys/options` — server-issued WebAuthn registration options:
-  a single-use 5-minute challenge bound to the user, the relying party
+  a single-use 5-minute challenge bound to the user (at most 5 outstanding
+  per user; issuing beyond the cap evicts the oldest), the relying party
   (id from `logos.auth.passkey.rp-id`, falling back to the request host; name
   from `logos.auth.passkey.rp-name`, default "Logos"), the user entity,
   `residentKey` + `userVerification` required, and the existing credentials
@@ -62,8 +68,12 @@ webservice, which acts as a WebAuthn relying party for registration:
   match (and that it was issued to the caller), `clientDataJSON.origin` equal
   to the request `Origin`, `rpIdHash`, UP/UV flags, credential id match, a
   supported COSE key (ES256 or RS256) and the attestation statement
-  (`none`, `packed` incl. self-attestation and x5c, `fido-u2f`). Duplicate
-  credentials are rejected with 409.
+  (`none`, `packed` incl. self-attestation and x5c, `fido-u2f`) — `packed`
+  requires `attStmt.alg` (WebAuthn L2 §8.2) and its ES256 signature is
+  verified as IEEE P1363, while `fido-u2f` keeps the DER encoding. A
+  rejected submission does not consume the challenge, and each account is
+  limited to 10 passkeys (409 beyond the cap). Duplicate credentials are
+  rejected with 409.
 - `DELETE /me/passkeys/{id}` — delete one of the caller's passkeys (404 if
   unknown, 403 if it belongs to someone else).
 

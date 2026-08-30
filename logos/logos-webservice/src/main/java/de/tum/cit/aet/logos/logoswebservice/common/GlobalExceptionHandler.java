@@ -9,9 +9,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    // Like every other handler here, the message goes into "detail" so that
+    // clients (e.g. the passkeys page) can read one field for all 4xx bodies.
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException ex) {
-        return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        return ResponseEntity.badRequest().body(Map.of("detail", ex.getMessage()));
     }
 
     @ExceptionHandler(NotFoundException.class)

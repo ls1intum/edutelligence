@@ -17,7 +17,10 @@ export const MENU_ITEMS: MenuItem[] = [
   { label: 'Teams',      path: '/team-management', piIcon: 'sitemap',        group: 'management', roles: ADMIN_AND_ABOVE },
   // Personal (all roles)
   { label: 'My Workspace', path: '/my-workspace',  piIcon: 'objects-column', group: 'personal',   roles: ALL_ROLES },
-  { label: 'Passkeys',    path: '/passkeys',       piIcon: 'key',            group: 'personal',   roles: ALL_ROLES },
+  // Passkeys (/passkeys) is deliberately not linked from the navigation yet:
+  // the credentials stored there are not used for sign-in (that still goes
+  // through Keycloak's passkey provider), so the nav would advertise a
+  // capability that does not exist. The route stays reachable by URL.
   { label: 'AI Tools',    path: '/ai-tools',       piIcon: 'code',           group: 'personal',   roles: ALL_ROLES },
 ];
 
