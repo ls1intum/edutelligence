@@ -10,7 +10,7 @@
          models, scheduler signals) that LogosNode workers report over the
          persistent WebSocket session. Rename it to the engine-neutral name;
          the data and all indexes are untouched. -->
-    <changeSet id="015-rename-ollama-provider-snapshots" author="wasnertobias">
+    <changeSet id="018-rename-provider-snapshots" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <tableExists tableName="ollama_provider_snapshots"/>
         </preConditions>

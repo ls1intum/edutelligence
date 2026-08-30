@@ -788,3 +788,48 @@ def test_add_overrides_before_record_creation_lands_on_seeded_record():
     profile = registry.get_profile("org/model-7b")
     assert profile is not None
     assert profile.min_context_fraction == 1.0
+
+
+def test_calibrated_timing_fields_reload_and_serialize(tmp_path):
+    """Cold-load / wake timings persist in model_profiles.yml and come back on reload."""
+    import yaml
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    profiles_path = state_dir / "model_profiles.yml"
+
+    calibrated_data = {
+        "model_profiles": {
+            "org/model": {
+                "base_residency_mb": 5000.0,
+                "engine": "vllm",
+                "residency_source": "calibrated",
+                "measurement_count": 1,
+                "last_measured_epoch": time.time(),
+                "cold_load_time_s": 91.5,
+                "wake_from_sleep_time_s": 12.25,
+            }
+        }
+    }
+    profiles_path.write_text(yaml.safe_dump(calibrated_data))
+
+    registry = ModelProfileRegistry(state_dir=state_dir)
+    profile = registry.get_profile("org/model")
+    assert profile is not None
+    assert profile.cold_load_time_s == pytest.approx(91.5)
+    assert profile.wake_from_sleep_time_s == pytest.approx(12.25)
+    # The runtime snapshot the server planner reads must carry them too.
+    dumped = registry.get_all_profiles()["org/model"]
+    assert dumped["cold_load_time_s"] == pytest.approx(91.5)
+    assert dumped["wake_from_sleep_time_s"] == pytest.approx(12.25)
+
+
+def test_timing_fields_default_to_none_on_legacy_records():
+    """Profiles written before the fields existed load with None, not 0.0."""
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model-7b", 8000.0, engine="vllm")
+
+    profile = registry.get_profile("org/model-7b")
+    assert profile is not None
+    assert profile.cold_load_time_s is None
+    assert profile.wake_from_sleep_time_s is None

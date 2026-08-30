@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -688,6 +688,11 @@ def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_o
     lane_manager._MAX_EVENT_LOG = 500
     lane_manager._mark_status_dirty = lambda: None
     lane_manager.destroy_all = AsyncMock(return_value=None)
+    # Calibration-session GPU-slice guard (issue #592): the session holds a
+    # power-of-two slice and frees only the lanes on it, keeping leftover lanes.
+    lane_manager.begin_calibration_session = MagicMock(return_value=frozenset({0, 1}))
+    lane_manager.destroy_lanes_on_gpus = AsyncMock(return_value=1)
+    lane_manager.end_calibration_session = MagicMock()
     app.state.lane_manager = lane_manager
     return app
 
@@ -725,9 +730,11 @@ async def test_start_calibration_session_returns_ok_and_runs_in_background(tmp_p
     events = [e.event for e in app.state.lane_manager._event_log]
     assert "calibration_session_started" in events
     assert "calibration_session_finished" in events
-    # destroy_all is only called when there is at least one model to calibrate;
-    # an empty configured_models list ends the session before that step.
+    # The slice is only held and freed when there is at least one model to
+    # calibrate; an empty configured_models list ends the session before that.
     app.state.lane_manager.destroy_all.assert_not_awaited()
+    app.state.lane_manager.begin_calibration_session.assert_not_called()
+    app.state.lane_manager.destroy_lanes_on_gpus.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1030,9 +1037,11 @@ async def test_nosleep_model_with_profile_is_not_recalibrated(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_session_destroys_lanes_before_calibrating(tmp_path, monkeypatch):
-    """Live lanes hold VRAM. The session must free everything up front or
-    the kv-cache search OOMs and blacklists every probe size."""
+async def test_session_frees_calibrating_slice_before_calibrating(tmp_path, monkeypatch):
+    """Live lanes on the calibration's GPU slice hold VRAM. The session must
+    free that slice up front (issue #592) or the kv-cache search OOMs and
+    blacklists every probe size — but it must NOT free the whole node: lanes
+    on the leftover GPUs keep serving during the session."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
 
@@ -1071,7 +1080,12 @@ async def test_session_destroys_lanes_before_calibrating(tmp_path, monkeypatch):
     assert response["ok"] is True
     await _drain_session(client)
 
-    app.state.lane_manager.destroy_all.assert_awaited_once()
+    # The session holds the slice and frees only the lanes on it — never the
+    # whole node (which would idle the leftover GPUs for the session).
+    app.state.lane_manager.begin_calibration_session.assert_called_once()
+    app.state.lane_manager.destroy_lanes_on_gpus.assert_awaited_once_with(frozenset({0, 1}))
+    app.state.lane_manager.destroy_all.assert_not_awaited()
+    app.state.lane_manager.end_calibration_session.assert_called_once()
 
 
 # ── Streaming: defer stream_start until first token byte (wake-readiness fix) ──

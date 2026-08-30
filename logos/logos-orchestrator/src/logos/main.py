@@ -33,7 +33,7 @@ from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
 from logos.context_budget import estimate_prompt_tokens, required_context_tokens
-from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.dbutils.types import (
@@ -819,8 +819,12 @@ def _capture_logosnode_provider_snapshot(
                 try:
                     db.upsert_model_profiles(provider_id, model_profiles)
                 except Exception:
-                    logger.debug(
-                        "Failed to upsert model profiles for provider %s",
+                    db.session.rollback()
+                    logger.warning(
+                        "Failed to upsert model profiles for provider %s, the "
+                        "entire row update (base_residency_mb, loaded_vram_mb, "
+                        "kv_budget_mb, measurement_count, last_measured_at) is "
+                        "lost until this recovers",
                         _resolve_provider_name(provider_id),
                         exc_info=True,
                     )
@@ -5588,29 +5592,66 @@ def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
 def _profile_native_context_length(profile: dict) -> int:
     """Largest context window a model could ever be served with here.
 
-    The model's own architectural limit (``max_context_length``) when the
-    worker reported it, otherwise the widest window any calibrated KV point
-    reached. This is the "all-time maximum" — what the model offers when a
-    lane gets all the KV cache it wants — as opposed to the window a lane
-    happens to run with right now.
+    The widest window the model's profile reports — its own architectural
+    limit (``max_context_length``), the ``--max-model-len`` calibration settled
+    on (``calibration_max_model_len``), or the widest point of the calibrated
+    KV sweep — whichever is largest. This is the "all-time maximum" the model
+    offers, as opposed to the window a lane happens to run with right now.
+
+    Reading ``calibration_max_model_len`` matters on its own: a model
+    calibration capped its ``--max-model-len`` to fit the pinned KV budget and
+    recorded no wider KV point, so the calibrated cap is the only context the
+    profile reports. Ignoring it made such a model look context-unknown (and
+    the client fall back to a guessed window) while its worker sat connected
+    and ready to serve it at exactly that width (#829).
     """
-    if not isinstance(profile, dict):
-        return 0
+    return derived_reported_context_length(profile)
 
-    def _as_len(value) -> int:
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            return 0
-        return value if value > 0 else 0
 
-    native = _as_len(profile.get("max_context_length"))
-    pairs = profile.get("kv_cache_to_max_model_len_pairs")
-    if isinstance(pairs, list):
-        for item in pairs:
-            if isinstance(item, dict):
-                native = max(native, _as_len(item.get("max_model_len")))
-    return native
+# The high-water mark only changes when a worker snapshot arrives (a few to a
+# dozen seconds per node), and every model endpoint calls into this, so the
+# lookup result is cached for a short TTL instead of opening a fresh
+# DBManager session per call — /v1/models took two connections where it
+# previously took one. A failed lookup is never cached, so a broken database
+# recovers on the very next call. No lock is needed: every caller runs on the
+# asyncio event loop.
+_HISTORIC_MAX_CONTEXT_TTL_SECONDS = 10.0
+_historic_max_context_cache: tuple[float, dict[str, int]] | None = None
+
+
+def _clear_historic_max_context_cache() -> None:
+    """Drop the cached historic maxima (used by the tests; production never needs it)."""
+    global _historic_max_context_cache
+    _historic_max_context_cache = None
+
+
+def _historic_max_context_by_model() -> dict[str, int]:
+    """Model name -> widest context ever reported for it, from the database.
+
+    The durable counterpart of the live runtime snapshots: ``upsert_model_profiles``
+    keeps a high-water mark per (provider, model) in ``model_profiles`` on every
+    worker snapshot, so this is still what a model's context is when no
+    workernode is connected to say otherwise. Returns an empty mapping when the
+    database cannot be reached — the live figures then stand on their own, as
+    before. The result is cached for a short TTL (see above) because the value
+    only changes when a worker snapshot arrives.
+    """
+    global _historic_max_context_cache
+    now = time.monotonic()
+    cached = _historic_max_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
+    try:
+        with DBManager() as db:
+            historic = db.get_historic_max_context_by_model()
+    except Exception:
+        # Fail open — the live snapshots still stand on their own — but say so:
+        # a persistently broken lookup must not look like "no model has a
+        # historic context".
+        logger.warning("Failed to load the historic max context by model", exc_info=True)
+        return {}
+    _historic_max_context_cache = (now, historic)
+    return historic
 
 
 def _served_context_window_stats() -> dict[str, dict[str, int]]:
@@ -5629,13 +5670,18 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
                      runs at once it gets all the KV cache it asks for.
                      Independent of what is loaded at the moment, so it is
                      known even for a model with no live lane, and it is the
-                     ceiling ``current_max`` can grow to.
+                     ceiling ``current_max`` can grow to. The live snapshots
+                     only say this while a workernode is connected, so the
+                     number is topped up from the historic maximum the
+                     database keeps per model (#829): when every workernode
+                     is offline, that — not a client-side guess — is what the
+                     clients size the session from.
     """
     stats: dict[str, dict[str, int]] = {}
     try:
         provider_ids = _logosnode_registry.active_provider_ids()
     except Exception:
-        return stats
+        provider_ids = []
 
     def _record(model: str, field: str, value: int, *, keep_smallest: bool = False) -> None:
         entry = stats.setdefault(model, {})
@@ -5671,6 +5717,16 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
             model = lane["model"]
             _record(model, "current_min", window, keep_smallest=True)
             _record(model, "current_max", window)
+
+    # The live snapshots above only exist while workernodes are connected.
+    # Top the "overall" figure up with the historic maximum the database keeps
+    # per model, so it is still known when every node is offline (#829) and so
+    # a wider window reported on another node (or by an earlier calibration)
+    # is not lost while this node runs the model narrower.
+    for model, value in _historic_max_context_by_model().items():
+        entry = stats.setdefault(model, {})
+        if value > entry.get("overall", 0):
+            entry["overall"] = value
     return stats
 
 

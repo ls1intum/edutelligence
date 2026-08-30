@@ -52,6 +52,13 @@
   max-width: 200px;
 }
 
+// The feed's state filter, in the recent-requests panel header. Its entries are
+// short, so a cap only guards against the title wrapping on a narrow panel.
+.stats-feed-status {
+  min-width: 0;
+  max-width: 160px;
+}
+
 .stats-scope__note {
   font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-500));

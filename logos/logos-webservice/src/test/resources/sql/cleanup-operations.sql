@@ -1,4 +1,4 @@
 DELETE FROM token_prices WHERE id IN (92001);
 DELETE FROM token_types WHERE id IN (91001, 91002);
 DELETE FROM provider_snapshots WHERE id IN (4001, 4002, 4003, 4004);
-DELETE FROM log_entry WHERE id IN (9001, 9002);
+DELETE FROM log_entry WHERE id IN (9001, 9002, 9010, 9011, 9012, 9013);
