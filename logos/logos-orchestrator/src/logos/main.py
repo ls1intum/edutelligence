@@ -50,11 +50,7 @@ from logos.logosnode_registry import (
     LogosNodeSessionConflictError,
 )
 from logos.logosnode_snapshot import (
-    _LOGOSNODE_INFER_TIMEOUT_SECONDS,
-    _LOGOSNODE_PRETOKEN_RETRIES,
-    _LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S,
     _LOGOSNODE_STATS_STALE_AFTER_SECONDS,
-    _LOGOSNODE_STREAM_TIMEOUT_SECONDS,
     _build_live_local_provider_sample,
     _is_today_or_all_utc,
     _lane_served_context_window,
@@ -106,6 +102,12 @@ from logos.terminal_logging import (
     style_duration,
     style_model,
     style_request_id,
+)
+from logos.timeouts import (
+    _LOGOSNODE_INFER_TIMEOUT_SECONDS,
+    _LOGOSNODE_PRETOKEN_RETRIES,
+    _LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S,
+    _LOGOSNODE_STREAM_TIMEOUT_SECONDS,
 )
 
 _SERVER_START_TIME = int(time.time())

@@ -17,6 +17,8 @@
 
 ## Repository Structure
 
+The tree below is an **illustrative overview of the key modules, not an authoritative listing** — it is not kept in sync with the directory (some files it shows have moved, some current files are missing). For the current layout, look at the actual `src/logos/` tree.
+
 ```
 logos/
 ├── AGENTS.md                          # This file
@@ -78,8 +80,15 @@ logos/
 
 ## Architecture & Key Patterns
 
-### Monolithic main.py
-All FastAPI routes are defined directly in `src/logos/main.py`. There are NO separate router files. When adding new endpoints, add them to `main.py` or create a new router file and include it. Pure helper logic lives in sibling modules (`live_stream.py`, `logosnode_snapshot.py`, `middleware.py`); endpoint request models live in `dbutils/dbrequest.py`.
+### main.py and where new code goes
+`src/logos/main.py` currently still defines all FastAPI routes; there are no separate router files yet. That is the state the project is actively breaking up, so new code must move toward the target state, not extend the monolith:
+
+- **New endpoints** go in a router module under `src/logos/routers/` (create the package when adding the first new router) and are included on the app — never into `main.py`.
+- **New helpers** go in a domain module (`live_stream.py`, `logosnode_snapshot.py`, `middleware.py`, ...) — never into `main.py`.
+- A module approaching ~1000 lines is a signal to split it — a soft guideline, not a gate.
+- The guideline applies to the whole orchestrator, not just `main.py`: `capacity/capacity_planner.py` is currently 7716 lines, larger than `main.py` itself.
+
+Endpoint request models live in `dbutils/dbrequest.py`.
 
 **Important**: The `/v1/{path:path}` catch-all route captures all `/v1/*` requests. Any new `/v1/...` routes (e.g., `/v1/models`) MUST be defined BEFORE the catch-all in the file, otherwise FastAPI will never match them.
 
@@ -137,7 +146,7 @@ The `process.settings` JSONB field can store per-process configuration (e.g., ra
 ## Adding New Features — Checklist
 
 ### Adding a new API endpoint
-1. Add the route handler to `src/logos/main.py` (or create a new router and include it)
+1. Add the route handler to a router module under `src/logos/routers/` and include it on the app — not into `main.py` (see "main.py and where new code goes")
 2. Add any new Pydantic request models to `src/logos/dbutils/dbrequest.py`
 3. Add DB operations to `src/logos/dbutils/dbmanager.py`
 4. Write unit tests in `tests/unit/`
@@ -365,7 +374,7 @@ ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name
 
 ## Important Notes for AI Agents
 
-1. **main.py is large** (~5000+ lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
+1. **main.py is large** (~5000+ lines) — the symptom of the monolith that is being broken down (see "main.py and where new code goes": new code goes into router/domain modules and existing clusters are extracted, so the file should shrink over time). Until it is small enough to hold in one read, read specific sections rather than the whole file and use grep to find relevant routes/functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
 3. **No Alembic** — migrations are plain SQL files. Apply via `run_all_migrations.sh` (uses `docker exec`) or run manually.
 4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances)
