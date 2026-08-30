@@ -55,6 +55,23 @@ def resolve_queue_priority(default_priority: Optional[int], policy_priority: Opt
     return 0
 
 
+def is_background_app(headers: Dict[str, str]) -> bool:
+    """True when the caller marked the request as background app traffic.
+
+    Claude Code sends ``x-app: cli`` for interactive sessions and
+    ``x-app: cli-bg`` for its background agents; only the latter is
+    flagged. Those background calls (e.g. the auto-permission classifier)
+    are latency-sensitive — they block the agent's next step — so the queue
+    dispatches them ahead of other traffic at the same priority level
+    (``SchedulingRequest.background_app``). The comparison is
+    case-insensitive in both name and value, as HTTP headers are.
+    """
+    for name, value in headers.items():
+        if name.lower() == "x-app" and value.strip().lower() == "cli-bg":
+            return True
+    return False
+
+
 @dataclass
 class PipelineRequest:
     """Input to the pipeline."""
@@ -210,6 +227,7 @@ class RequestPipeline:
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
+            background_app=is_background_app(request.headers),
         )
 
         # Record enqueue

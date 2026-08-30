@@ -9,12 +9,13 @@ For backward compatibility every public method that previously took a
 ``provider_id`` still accepts it (positional or kwarg) and silently ignores
 it. The kwarg pattern lets callers be migrated gradually.
 
-Within one priority level entries are ordered by their ``work_estimate``
-(tokens the request occupies, 0 = could not estimate) before arrival time:
-a short request must not wait behind a long-running one for a freed slot,
-which is what starves latency-sensitive traffic (small classifier-style
-requests) when the queue fills with large ones. Unknown work sorts after
-every estimate so an unmeasurable request is never assumed short.
+Within one priority level entries flagged ``background_app`` dispatch before
+all others, which keep plain arrival order (FIFO). The flag marks the
+``x-app: cli-bg`` traffic — an agent's background calls, e.g. its
+auto-permission classifier — that a full queue of interactive traffic would
+otherwise starve for the whole wait window. Anything the flag does not name
+sorts exactly as it always has, so the reordering only touches the traffic it
+recognises.
 """
 
 import heapq
@@ -28,22 +29,20 @@ from typing import Dict, List, Optional, Tuple, Union
 from logos.queue.models import Priority, QueueEntry, QueueStatePerPriority
 
 
-def _work_sort_key(work_estimate: int) -> float:
-    """Heap key for the work-aware ordering inside one priority level.
+def _bg_sort_key(background_app: bool) -> int:
+    """Heap key for the background-app ordering inside one priority level.
 
-    Shorter estimated work sorts first so a latency-sensitive request
-    (small prompt, capped output) is dispatched before a long-running one
-    when capacity frees up. 0 means "could not estimate" and sorts after
-    every estimate: an unknown-sized request must not be assumed short.
+    0 sorts before 1: flagged entries dispatch first, everything else keeps
+    its arrival order among itself.
     """
-    return float(work_estimate) if work_estimate > 0 else float("inf")
+    return 0 if background_app else 1
 
 
 class PriorityQueueManager:
     """Thread-safe priority queue manager keyed by ``model_id``.
 
     Maintains separate priority heaps per model:
-        queues[model_id][Priority.HIGH] = [(-priority, work_key, ts, entry_id, QueueEntry), ...]
+        queues[model_id][Priority.HIGH] = [(-priority, bg_key, ts, entry_id, QueueEntry), ...]
         queues[model_id][Priority.NORMAL] = [...]
         queues[model_id][Priority.LOW] = [...]
 
@@ -54,13 +53,13 @@ class PriorityQueueManager:
       from the same queue (release path picks via lane_comparator).
     - Backward-compatible: every method that previously accepted
       ``provider_id`` still accepts it and ignores it.
-    - Within a priority level: shorter estimated work first, then arrival
-      time (unknown work last, see ``_work_sort_key``).
+    - Within a priority level: background-app entries first, then arrival
+      time (FIFO for the rest, see ``_bg_sort_key``).
     """
 
     def __init__(self):
-        # queues[model_id][priority] = heap of (-priority, ts, entry_id, QueueEntry)
-        self._queues: Dict[int, Dict[Priority, List[Tuple[int, float, str, QueueEntry]]]] = defaultdict(
+        # queues[model_id][priority] = heap of (-priority, bg_key, ts, entry_id, QueueEntry)
+        self._queues: Dict[int, Dict[Priority, List[Tuple[int, int, float, str, QueueEntry]]]] = defaultdict(
             lambda: {
                 Priority.LOW: [],
                 Priority.NORMAL: [],
@@ -83,17 +82,17 @@ class PriorityQueueManager:
         provider_id: int = None,  # Ignored — kept for back-compat.
         priority: Priority = Priority.NORMAL,
         is_cold_at_queue: bool = False,
-        work_estimate: int = 0,
+        background_app: bool = False,
     ) -> str:
         """Add a task to the priority queue for ``model_id``.
 
         ``provider_id`` is accepted but ignored (back-compat). Any provider
         with capability for ``model_id`` can later dispatch this task.
 
-        ``work_estimate`` (tokens the request occupies, 0 = unknown) orders
-        entries within the priority level: shorter work dispatches first, so
-        a small request arriving while the queue holds large ones is not
-        made to wait for all of them.
+        ``background_app`` marks the ``x-app: cli-bg`` traffic (see
+        ``logos.pipeline.pipeline.is_background_app``): the entry dispatches
+        before non-background entries of the same priority level, which keep
+        plain arrival order.
         """
         with self._lock:
             self._entry_counter += 1
@@ -107,12 +106,12 @@ class PriorityQueueManager:
                 current_priority=priority,
                 enqueue_time=datetime.now(),
                 is_cold_at_queue=is_cold_at_queue,
-                work_estimate=work_estimate,
+                background_app=background_app,
             )
 
             heap_entry = (
                 -int(priority),
-                _work_sort_key(work_estimate),
+                _bg_sort_key(background_app),
                 datetime.now().timestamp(),
                 entry_id,
                 entry,
@@ -172,7 +171,7 @@ class PriorityQueueManager:
         if not queue:
             return None, None
 
-        _neg_pri, _work_key, _ts, entry_id, entry = heapq.heappop(queue)
+        _neg_pri, _bg_key, _ts, entry_id, entry = heapq.heappop(queue)
         del self._entry_lookup[entry_id]
 
         logging.debug(
@@ -227,7 +226,7 @@ class PriorityQueueManager:
 
             heap_entry = (
                 -int(new_priority),
-                _work_sort_key(entry_to_move.work_estimate),
+                _bg_sort_key(entry_to_move.background_app),
                 datetime.now().timestamp(),
                 entry_id,
                 entry_to_move,
@@ -293,7 +292,7 @@ class PriorityQueueManager:
                 return None
             model_id, priority = self._entry_lookup[entry_id]
             queue = self._queues[model_id][priority]
-            for _, _, _work_key, eid, entry in queue:
+            for _, _, _ts, eid, entry in queue:
                 if eid == entry_id:
                     return entry
             return None
@@ -343,7 +342,7 @@ class PriorityQueueManager:
             if not model_queues:
                 return False
             for queue in model_queues.values():
-                for _neg_pri, _work_key, _ts, _eid, entry in queue:
+                for _neg_pri, _bg_key, _ts, _eid, entry in queue:
                     if entry.is_cold_at_queue:
                         return True
             return False

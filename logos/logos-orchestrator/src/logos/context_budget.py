@@ -138,20 +138,3 @@ def required_context_tokens(payload: Any) -> Optional[int]:
     if prompt_tokens <= 0:
         return None
     return prompt_tokens + reserved_output_tokens(payload) + SAFETY_MARGIN_TOKENS
-
-
-def estimated_work_tokens(payload: Any) -> int:
-    """Tokens ``payload`` will occupy on its lane, 0 when that cannot be read.
-
-    Prompt plus the output the request reserves for itself: together they
-    drive how long the request holds its queue slot and how much KV pressure
-    it adds, which is what the scheduler queue orders by when capacity is
-    scarce. Like the other estimates here this is deliberately coarse — it
-    ranks requests, it does not bill them. 0 means "no opinion" (unreadable
-    prompt, e.g. a multipart audio upload) and callers keep the arrival
-    order for such requests rather than assuming they are short.
-    """
-    prompt_tokens = estimate_prompt_tokens(payload)
-    if prompt_tokens <= 0:
-        return 0
-    return prompt_tokens + reserved_output_tokens(payload)

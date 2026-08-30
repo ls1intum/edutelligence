@@ -56,12 +56,12 @@ Response, logging, completion recording, and scheduler.release()
 
 1.  **Scheduling**: If eligible local candidates are busy, cold, sleeping, or otherwise unavailable:
     *   The scheduler creates an `asyncio.Future`.
-    *   It enqueues the future into `PriorityQueueManager` (HIGH/NORMAL/LOW), together with the request's estimated work in tokens (`estimated_work_tokens()` in `context_budget.py` — prompt plus reserved output, 0 when unreadable).
-    *   It `await`s the future, pausing the request execution.
-2.  **Waiting**: The request remains suspended until a slot opens up. Queues use strict HIGH, then NORMAL, then LOW priority ordering; priorities are not automatically promoted. **Within one priority level, shorter estimated work dispatches before longer work** (then arrival time, FIFO), and requests whose work could not be estimated (0) keep the arrival order but sort after the estimated ones. This is what keeps small latency-sensitive requests — e.g. Claude Code's auto-permission classifier requests (#828) — from waiting for every long-running request that arrived before them when the queue fills under load. The estimate is derived from the payload the server already holds, so it cannot be gamed by the client.
+    *   It enqueues the future into `PriorityQueueManager` (HIGH/NORMAL/LOW), flagging the entry when the request carried the `x-app: cli-bg` header (background app traffic; `is_background_app()` in `pipeline.py`).
+    *   It `await`s the future, pausing the request execution. The wait is bounded to `DEFAULT_QUEUE_WAIT_TIMEOUT_S` (or `LOGOS_TIMEOUT_S` / the request's `timeout_s`): the window is chosen so the queue-timeout 429 + `Retry-After` reaches a caller that is still connected, instead of holding a slot for minutes after the client gave up.
+2.  **Waiting**: The request remains suspended until a slot opens up. Queues use strict HIGH, then NORMAL, then LOW priority ordering; priorities are not automatically promoted. **Within one priority level, background-app entries (the `x-app: cli-bg` header) dispatch before all others**, which keep plain arrival order (FIFO). This is what keeps latency-sensitive background calls — e.g. Claude Code's auto-permission classifier requests — from waiting for every interactive request that arrived before them when the queue fills under load. Only traffic that explicitly identifies itself as background app traffic is re-ordered; everything else sorts exactly as before.
 3.  **Wake Up**: When another request finishes:
     *   `scheduler.release()` calls `queue_mgr.dequeue_with_entry()`.
-    *   It finds the highest priority waiting future (shortest work first within the level).
+    *   It finds the highest priority waiting future (background-app entries first within the level).
     *   It calls `future.set_result()`, waking up the suspended request.
 4.  **Resumption**: The `await` returns, and the request proceeds to **Execution**.
 
@@ -122,7 +122,7 @@ pipeline/
 - Manages SDI facades (`LogosNodeSchedulingDataFacade`, `AzureSchedulingDataFacade`)
 - Tracks per-model provider and deployment types (LogosNode/cloud)
 - Provides helper methods for queue management and metrics collection
-- Uses strict HIGH → NORMAL → LOW dequeue ordering for queued requests (shorter estimated work first within a level)
+- Uses strict HIGH → NORMAL → LOW dequeue ordering for queued requests (background-app entries first within a level)
 - Uses the model-only `PriorityQueueManager`; its compatibility `provider_id` arguments are ignored
 
 ### `fcfs_scheduler.py` - FcfScheduler
@@ -176,7 +176,7 @@ The pipeline integrates several modules together
 ### Priority Queue (`../queue/`)
 - `PriorityQueueManager`: Per-model priority queues
 - `Priority` enum: LOW, NORMAL, HIGH
-- Strict HIGH → NORMAL → LOW dequeue ordering (no automatic promotion); within a level, shorter estimated work first, then arrival time (work of 0 = unreadable payload sorts last among known work)
+- Strict HIGH → NORMAL → LOW dequeue ordering (no automatic promotion); within a level, background-app entries (`x-app: cli-bg`) first, then arrival time (FIFO)
 
 ### Monitoring (`../monitoring/`)
 - `MonitoringRecorder`: Logs request lifecycle events and performance metrics

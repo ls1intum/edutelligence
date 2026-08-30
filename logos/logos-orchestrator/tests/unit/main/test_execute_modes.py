@@ -71,7 +71,7 @@ async def test_execute_resource_mode_failure_records_error(monkeypatch):
 
 
 async def test_execute_resource_mode_queue_timeout_returns_429_with_retry_after(monkeypatch):
-    """A queue-wait timeout is overload, not unavailability (#828).
+    """A queue-wait timeout is overload, not unavailability.
 
     The client spent its wait window without a lane, so the answer is a
     retryable 429 + Retry-After — the signal a retry policy (including
@@ -81,13 +81,13 @@ async def test_execute_resource_mode_queue_timeout_returns_429_with_retry_after(
 
     class Result:
         success = False
-        error = "Queue wait timeout after 1200s"
+        error = "Queue wait timeout after 280s"
         execution_context = None
         provider_id = None
         model_id = 10
         classification_stats = {}
         scheduling_stats = {"request_id": "req-1"}
-        queue_timeout_s = 1200.0
+        queue_timeout_s = 280.0
 
     monkeypatch.setattr(
         main,
@@ -123,13 +123,13 @@ async def test_execute_resource_mode_queue_timeout_job_gets_retryable_body(monke
 
     class Result:
         success = False
-        error = "Queue wait timeout after 1200s"
+        error = "Queue wait timeout after 280s"
         execution_context = None
         provider_id = None
         model_id = 10
         classification_stats = {}
         scheduling_stats = {"request_id": "req-1"}
-        queue_timeout_s = 1200.0
+        queue_timeout_s = 280.0
 
     monkeypatch.setattr(
         main,

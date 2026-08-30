@@ -196,7 +196,10 @@ _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SEC
 # that happens, so the hint is a modest backoff rather than a computed drain
 # time; clients with a retry policy (including Claude Code's auto-mode
 # classifier, which honours overload-retry since v2.1.243) get a bounded
-# wait-and-retry instead of an opaque 503.
+# wait-and-retry instead of an opaque 503. It only helps callers that are
+# still connected when the timeout fires — a caller that already disconnected
+# never sees it, which is why the wait window itself is bounded to something a
+# client will actually wait for (DEFAULT_QUEUE_WAIT_TIMEOUT_S).
 _QUEUE_TIMEOUT_RETRY_AFTER_S = 30
 # Transparent retry for a logosnode stream that fails BEFORE the first token is
 # forwarded to the client (e.g. a just-woken level-1 lane whose vLLM engine was
@@ -4105,7 +4108,11 @@ async def _execute_resource_mode(
             # window. Answer 429 + Retry-After so a client with a retry
             # policy retries with a bounded backoff instead of surfacing an
             # opaque 503 (the failure mode that makes Claude Code's
-            # auto-classifier block tool execution, #828).
+            # auto-classifier block tool execution). The hint reaches only
+            # callers still connected when the window closes — the rest gave
+            # up earlier and the bounded window (see
+            # DEFAULT_QUEUE_WAIT_TIMEOUT_S) exists so as few as possible are
+            # in that second group.
             if is_async_job:
                 _, err_body = coerce_upstream_error(429, {"error": error_msg})
                 return {"status_code": 429, "data": err_body}

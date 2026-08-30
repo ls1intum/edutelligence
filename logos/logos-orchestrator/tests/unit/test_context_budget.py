@@ -8,7 +8,6 @@ from logos.context_budget import (
     SAFETY_MARGIN_TOKENS,
     _iter_text,
     estimate_prompt_tokens,
-    estimated_work_tokens,
     required_context_tokens,
     reserved_output_tokens,
 )
@@ -148,34 +147,3 @@ class TestRequiredContextTokens:
         """
         assert required_context_tokens({"model": "m"}) is None
         assert required_context_tokens(None) is None
-
-
-class TestEstimatedWorkTokens:
-    def test_sums_prompt_and_reserved_output_without_margin(self):
-        payload = {"messages": [{"role": "user", "content": "x" * 3000}], "max_tokens": 1000}
-        assert estimated_work_tokens(payload) == estimate_prompt_tokens(payload) + 1000
-
-    def test_falls_back_to_the_default_reserve_when_uncapped(self):
-        payload = {"messages": [{"role": "user", "content": "x" * 3000}]}
-        assert estimated_work_tokens(payload) == estimate_prompt_tokens(payload) + DEFAULT_OUTPUT_RESERVE_TOKENS
-
-    def test_a_capped_small_request_ranks_below_an_agent_loop_turn(self):
-        """The ordering the queue relies on: a small capped classification
-        request must estimate to less work than a large uncapped agent turn,
-        regardless of which one arrived first."""
-        classifier = {
-            "messages": [{"role": "user", "content": "x" * 3000}],
-            "max_tokens": 1000,
-        }
-        agent_turn = {
-            "system": "s" * 30000,
-            "messages": [{"role": "user", "content": "x" * 60000}],
-            "tools": [{"name": f"t{i}", "description": "d" * 100} for i in range(30)],
-        }
-        assert estimated_work_tokens(classifier) < estimated_work_tokens(agent_turn)
-
-    def test_zero_means_no_opinion(self):
-        """Callers keep the arrival order for unreadable payloads rather than
-        assuming they are short."""
-        assert estimated_work_tokens({"model": "m"}) == 0
-        assert estimated_work_tokens(None) == 0

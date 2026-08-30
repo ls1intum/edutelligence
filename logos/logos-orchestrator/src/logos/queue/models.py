@@ -102,11 +102,13 @@ class QueueEntry:
     schedules the request, the lane is loaded — `status.is_loaded` no
     longer reflects whether the request actually triggered a cold load."""
 
-    work_estimate: int = 0
-    """Estimated tokens the request occupies (prompt + reserved output),
-    0 when it could not be estimated. Within one priority level the queue
-    orders by this before arrival time so short requests are not held up
-    behind long ones (see PriorityQueueManager)."""
+    background_app: bool = False
+    """True when the request arrived with the ``x-app: cli-bg`` header:
+    background app traffic (e.g. an agent's auto-permission classifier call)
+    that is latency-sensitive and must not wait out a full queue of
+    interactive traffic. Within one priority level such entries dispatch
+    before the rest, which keep plain arrival order (see
+    PriorityQueueManager)."""
 
     @property
     def wait_time_seconds(self) -> float:

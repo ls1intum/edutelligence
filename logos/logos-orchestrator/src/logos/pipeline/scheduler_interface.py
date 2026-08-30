@@ -76,6 +76,10 @@ class SchedulingRequest:
     # (api key + actual prompt prefix), deepest block first. Used for
     # prefix-cache-aware placement; empty/None means "route as before".
     affinity_keys: Optional[List[str]] = None
+    # True when the request carried the ``x-app: cli-bg`` header: background
+    # app traffic (e.g. an agent's auto-permission classifier call) that the
+    # queue dispatches ahead of other traffic at the same priority level.
+    background_app: bool = False
 
 
 class SchedulerInterface(ABC):

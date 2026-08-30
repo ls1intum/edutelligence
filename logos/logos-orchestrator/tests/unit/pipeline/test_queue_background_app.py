@@ -1,19 +1,19 @@
-"""Queued requests carry their payload's work estimate into the queue.
+"""The background-app flag travels from the request headers to the queue.
 
-The queue orders by priority, then by estimated work (short first), so a
-small latency-sensitive request is not made to wait for every long-running
-request that arrived before it when the queue fills under load — the failure
-mode behind Claude Code auto-classifier timeouts (#828). The estimate is
-derived from the payload itself (prompt plus reserved output) and never from
-anything the client claims.
+Claude Code's background agents mark their traffic with the ``x-app: cli-bg``
+header. The pipeline derives ``SchedulingRequest.background_app`` from it and
+the queue dispatches flagged entries ahead of other traffic at the same
+priority level — latency-sensitive calls (an agent's auto-permission
+classifier) must not wait out a full queue of interactive traffic — while
+unrecognised traffic keeps plain arrival order.
 """
 
 import asyncio
 from unittest.mock import MagicMock
 
 from logos import EttftEstimate, ReadinessTier, SchedulingRequest, SchedulingResult
-from logos.context_budget import estimated_work_tokens
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.pipeline import is_background_app
 from logos.queue import PriorityQueueManager
 from logos.queue.priority_queue import Priority
 
@@ -41,12 +41,13 @@ def _make_scheduler():
     return scheduler
 
 
-def _make_request(request_id: str, payload: dict) -> SchedulingRequest:
+def _make_request(request_id: str, payload: dict, background_app: bool = False) -> SchedulingRequest:
     return SchedulingRequest(
         request_id=request_id,
         payload=payload,
         deployments=[{"model_id": MODEL_ID, "provider_id": PROVIDER_ID, "type": "logosnode"}],
         classified_models=[(MODEL_ID, 1.0, 5)],
+        background_app=background_app,
     )
 
 
@@ -76,50 +77,64 @@ async def _queue_request(scheduler, request, min_depth: int = 1) -> asyncio.Task
     raise AssertionError("request never reached the queue")
 
 
-async def test_queued_entry_carries_the_payload_work_estimate():
+def test_is_background_app_only_flags_the_cli_bg_header():
+    assert is_background_app({"x-app": "cli-bg"}) is True
+    # HTTP headers are case-insensitive in name; compare the value the same
+    # way.
+    assert is_background_app({"X-App": "CLI-BG"}) is True
+    # Interactive Claude Code sessions and anything unrecognised stay plain.
+    assert is_background_app({"x-app": "cli"}) is False
+    assert is_background_app({"x-app": "other-app"}) is False
+    assert is_background_app({"user-agent": "claude-cli/1.0"}) is False
+    assert is_background_app({}) is False
+
+
+async def test_background_app_flag_reaches_the_queue():
     scheduler = _make_scheduler()
-    payload = {"messages": [{"role": "user", "content": "x" * 3000}], "max_tokens": 1000}
-    wait = await _queue_request(scheduler, _make_request("req-1", payload))
+    wait = await _queue_request(scheduler, _make_request("req-1", {"model": "m"}, background_app=True))
 
     entries = scheduler._queue_mgr.get_entries_for_priority(MODEL_ID, Priority.NORMAL)
     assert len(entries) == 1
-    assert entries[0].work_estimate == estimated_work_tokens(payload) > 0
+    assert entries[0].background_app is True
 
     entries[0].task.set_result(_dispatched_result())
     assert (await wait).model_id == MODEL_ID
 
 
-async def test_unreadable_payload_queues_with_no_work_estimate():
-    """0 = no opinion: audio-style payloads keep the arrival order."""
+async def test_unflagged_request_queues_as_plain_traffic():
     scheduler = _make_scheduler()
-    wait = await _queue_request(scheduler, _make_request("req-1", {"model": "whisper-1"}))
+    wait = await _queue_request(scheduler, _make_request("req-1", {"model": "m"}))
 
     entries = scheduler._queue_mgr.get_entries_for_priority(MODEL_ID, Priority.NORMAL)
     assert len(entries) == 1
-    assert entries[0].work_estimate == 0
+    assert entries[0].background_app is False
 
     entries[0].task.set_result(_dispatched_result())
     await wait
 
 
-async def test_the_dispatcher_hands_out_small_requests_first():
-    """A big request that arrived first must not be dispatched ahead of a
-    small one: capacity going free goes to the short wait, not the old wait."""
+async def test_the_dispatcher_hands_out_background_app_first():
+    """An interactive request that arrived first must not be dispatched ahead
+    of a flagged one: capacity going free goes to the background call, not
+    the old wait."""
     scheduler = _make_scheduler()
-    small_payload = {"messages": [{"role": "user", "content": "x" * 100}], "max_tokens": 50}
-    big_payload = {"messages": [{"role": "user", "content": "x" * 60_000}], "max_tokens": 8000}
-
-    big_wait = await _queue_request(scheduler, _make_request("req-big", big_payload))
-    small_wait = await _queue_request(scheduler, _make_request("req-small", small_payload), min_depth=2)
+    interactive_wait = await _queue_request(
+        scheduler, _make_request("req-interactive", {"messages": [{"role": "user", "content": "x" * 10_000}]})
+    )
+    bg_wait = await _queue_request(
+        scheduler,
+        _make_request("req-bg", {"messages": [{"role": "user", "content": "x" * 500}]}, background_app=True),
+        min_depth=2,
+    )
 
     # What the release/dispatch path pops next:
     _task, first_out = scheduler._queue_mgr.dequeue_with_entry(MODEL_ID, PROVIDER_ID)
-    assert first_out.work_estimate == estimated_work_tokens(small_payload)
+    assert first_out.background_app is True
 
     first_out.task.set_result(_dispatched_result())
     _task, second_out = scheduler._queue_mgr.dequeue_with_entry(MODEL_ID, PROVIDER_ID)
-    assert second_out.work_estimate == estimated_work_tokens(big_payload)
+    assert second_out.background_app is False
     second_out.task.set_result(_dispatched_result())
 
-    assert (await small_wait).model_id == MODEL_ID
-    assert (await big_wait).model_id == MODEL_ID
+    assert (await bg_wait).model_id == MODEL_ID
+    assert (await interactive_wait).model_id == MODEL_ID
