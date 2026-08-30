@@ -302,6 +302,88 @@ def test_calibrated_profile_not_overwritten_by_subsequent_load(tmp_path):
     assert profile.residency_source == "calibrated"
 
 
+def _write_calibrated_profile(tmp_path, tp: int) -> ModelProfileRegistry:
+    """Registry holding a calibrated profile with TP-dependent KV data."""
+    import yaml
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    profiles_path = state_dir / "model_profiles.yml"
+    calibrated_data = {
+        "model_profiles": {
+            "org/model": {
+                "loaded_vram_mb": 7000.0,
+                "sleeping_residual_mb": 4500.0,
+                "disk_size_bytes": None,
+                "base_residency_mb": 5000.0,
+                "kv_budget_mb": 2048.0,
+                "engine": "vllm",
+                "tensor_parallel_size": tp,
+                "residency_source": "calibrated",
+                "measurement_count": 1,
+                "last_measured_epoch": time.time(),
+                "observed_gpu_memory_utilization": None,
+                "min_gpu_memory_utilization_to_load": None,
+                "kv_per_token_bytes": None,
+                "max_context_length": None,
+                "kv_cache_to_max_model_len_pairs": [{"kv_mb": 2048.0, "max_model_len": 5232}],
+            }
+        }
+    }
+    profiles_path.write_text(yaml.safe_dump(calibrated_data))
+    return ModelProfileRegistry(state_dir=state_dir)
+
+
+def test_calibrated_tp_not_clobbered_by_mismatched_lane(tmp_path):
+    """A serving lane that ran at a TP different from the calibrated TP must
+    not overwrite the profile (issue #616): the calibrated TP is the single
+    source of truth, and the lane's measurements describe a different
+    configuration. The whole profile — tp, residency, KV data — stays intact.
+    """
+    registry = _write_calibrated_profile(tmp_path, tp=1)
+    registry.record_loaded_vram(
+        "org/model",
+        9000.0,
+        engine="vllm",
+        tensor_parallel_size=2,
+        kv_cache_sent_mb=2048.0,
+    )
+
+    profile = registry.get_profile("org/model")
+    assert profile.tensor_parallel_size == 1
+    assert profile.base_residency_mb == 5000.0
+    assert profile.residency_source == "calibrated"
+    assert profile.loaded_vram_mb == 7000.0  # untouched, not EMA-blended
+    assert profile.kv_cache_to_max_model_len_pairs == [{"kv_mb": 2048.0, "max_model_len": 5232}]
+    assert profile.measurement_count == 1  # the mismatched measurement was discarded
+
+
+def test_calibrated_tp_not_clobbered_by_mismatched_sleep(tmp_path):
+    """Same guard on the sleep path: a mismatched-TP residual records nothing."""
+    registry = _write_calibrated_profile(tmp_path, tp=1)
+    registry.record_sleeping_vram("org/model", 300.0, engine="vllm", tensor_parallel_size=2)
+
+    profile = registry.get_profile("org/model")
+    assert profile.tensor_parallel_size == 1
+    assert profile.sleeping_residual_mb == 4500.0  # untouched
+    assert profile.residency_source == "calibrated"
+
+
+def test_calibrated_profile_matching_tp_records_measurements(tmp_path):
+    """A lane that runs at the calibrated TP records as usual — the guard only
+    fires on a TP mismatch."""
+    registry = _write_calibrated_profile(tmp_path, tp=1)
+    registry.record_loaded_vram("org/model", 7200.0, engine="vllm", tensor_parallel_size=1, kv_cache_sent_mb=2048.0)
+
+    profile = registry.get_profile("org/model")
+    assert profile.tensor_parallel_size == 1
+    # EMA-blended with the calibrated 7000: 0.3 * 7200 + 0.7 * 7000 = 7060
+    assert profile.loaded_vram_mb == pytest.approx(7060.0)
+    assert profile.base_residency_mb == 5000.0  # calibrated value stays pinned
+    assert profile.residency_source == "calibrated"
+    assert profile.measurement_count == 2
+
+
 def test_persist_no_state_dir():
     """No state dir → persist is a no-op."""
     registry = ModelProfileRegistry(state_dir=None)
@@ -669,3 +751,79 @@ def test_kv_max_model_len_pairs_persist_across_restart(tmp_path):
         {"kv_mb": 1024.0, "max_model_len": 1000},
         {"kv_mb": 2048.0, "max_model_len": 2000},
     ]
+
+
+def test_add_overrides_reapplies_to_existing_record():
+    """Overrides arriving after a record exists must reach the live record.
+
+    Records loaded from the persisted model_profiles.yml are otherwise never
+    revisited after startup, so a late override would stay in the store but
+    not on the record — and the runtime snapshot the server planner reads
+    would miss it.
+    """
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model-27b", 50000.0, engine="vllm", kv_cache_sent_mb=8000.0)
+    profile = registry.get_profile("org/model-27b")
+    assert profile is not None
+    assert profile.min_context_fraction is None
+
+    registry.add_overrides({"org/model-27b": {"min_context_fraction": 0.5}})
+
+    profile = registry.get_profile("org/model-27b")
+    assert profile.min_context_fraction == 0.5
+
+
+def test_add_overrides_before_record_creation_lands_on_seeded_record():
+    """Overrides registered before the record exists apply at seed time."""
+    registry = ModelProfileRegistry()
+    registry.add_overrides({"org/model-7b": {"min_context_fraction": 1.0}})
+    registry.seed_capabilities(["org/model-7b"], engine="vllm")
+
+    profile = registry.get_profile("org/model-7b")
+    assert profile is not None
+    assert profile.min_context_fraction == 1.0
+
+
+def test_calibrated_timing_fields_reload_and_serialize(tmp_path):
+    """Cold-load / wake timings persist in model_profiles.yml and come back on reload."""
+    import yaml
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    profiles_path = state_dir / "model_profiles.yml"
+
+    calibrated_data = {
+        "model_profiles": {
+            "org/model": {
+                "base_residency_mb": 5000.0,
+                "engine": "vllm",
+                "residency_source": "calibrated",
+                "measurement_count": 1,
+                "last_measured_epoch": time.time(),
+                "cold_load_time_s": 91.5,
+                "wake_from_sleep_time_s": 12.25,
+            }
+        }
+    }
+    profiles_path.write_text(yaml.safe_dump(calibrated_data))
+
+    registry = ModelProfileRegistry(state_dir=state_dir)
+    profile = registry.get_profile("org/model")
+    assert profile is not None
+    assert profile.cold_load_time_s == pytest.approx(91.5)
+    assert profile.wake_from_sleep_time_s == pytest.approx(12.25)
+    # The runtime snapshot the server planner reads must carry them too.
+    dumped = registry.get_all_profiles()["org/model"]
+    assert dumped["cold_load_time_s"] == pytest.approx(91.5)
+    assert dumped["wake_from_sleep_time_s"] == pytest.approx(12.25)
+
+
+def test_timing_fields_default_to_none_on_legacy_records():
+    """Profiles written before the fields existed load with None, not 0.0."""
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model-7b", 8000.0, engine="vllm")
+
+    profile = registry.get_profile("org/model-7b")
+    assert profile is not None
+    assert profile.cold_load_time_s is None
+    assert profile.wake_from_sleep_time_s is None

@@ -3,14 +3,28 @@ package de.tum.cit.aet.logos.logoswebservice.operations.controller;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsService;
 
+/**
+ * The aggregates behind the statistics page.
+ *
+ * <p>Restricted to Logos admins like the rest of the platform's request data:
+ * an unscoped call returns the whole platform, and the scope narrows to
+ * <em>any</em> team or requester the caller names — there is no per-user
+ * fallback to hide behind. The {@code /ws/stats/v2} handshake and
+ * {@code /logosdb/latest_requests} apply the same rule to the same rows;
+ * leaving these two open would let a caller read one team's spend that the
+ * team activity endpoint (issue #776) refuses them. Team owners get their
+ * slice there, scoped and checked.
+ */
 @RestController
 public class RequestLogStatsController {
 
@@ -21,6 +35,7 @@ public class RequestLogStatsController {
     }
 
     @PostMapping("/logosdb/request_log_stats")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> requestLogStats(@RequestAttribute("authContext") AuthContext auth,
                                              @RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = Map.of();
@@ -50,6 +65,7 @@ public class RequestLogStatsController {
      * or the selected team moves.
      */
     @PostMapping("/logosdb/request_log_scope_options")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> requestLogScopeOptions(@RequestAttribute("authContext") AuthContext auth,
                                                     @RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = Map.of();

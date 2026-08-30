@@ -6,6 +6,7 @@ from logos.context_budget import (
     CHARS_PER_TOKEN,
     DEFAULT_OUTPUT_RESERVE_TOKENS,
     SAFETY_MARGIN_TOKENS,
+    _iter_text,
     estimate_prompt_tokens,
     required_context_tokens,
     reserved_output_tokens,
@@ -39,9 +40,49 @@ class TestEstimatePromptTokens:
         assert with_tools > without_tools + 400
 
     def test_reads_responses_api_and_legacy_completions(self):
-        assert estimate_prompt_tokens({"input": "a" * 90}) == 31
-        assert estimate_prompt_tokens({"prompt": "a" * 90}) == 31
-        assert estimate_prompt_tokens({"instructions": "a" * 90}) == 31
+        expected = int(90 / CHARS_PER_TOKEN) + 1
+        assert estimate_prompt_tokens({"input": "a" * 90}) == expected
+        assert estimate_prompt_tokens({"prompt": "a" * 90}) == expected
+        assert estimate_prompt_tokens({"instructions": "a" * 90}) == expected
+
+    def test_agent_traffic_stays_close_to_the_measured_tokenization_rate(self):
+        """A tool-heavy assistant payload must not overshoot the true count.
+
+        Measured against the Qwen tokenizer, a large Claude Code-style
+        conversation (hundreds of tool_use/tool_result blocks, repeated JSON
+        framing) tokenizes at ~3.7 chars per token. At the old 3.0 rate the
+        estimate ran ~20 % above the truth — enough to push a request that fit
+        its 256k window over the limit and 404 the model out of routing
+        (#810). This pins the rate so the estimate stays within a hair of the
+        measured truth for that traffic shape.
+        """
+        tool_block = {"type": "tool_result", "tool_use_id": "toolu_01", "content": "ok " * 40}
+        agent_messages = []
+        for i in range(200):
+            agent_messages.append(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": f"t{i}",
+                            "name": "Bash",
+                            "input": {"command": "ls -la " * 20},
+                        }
+                    ],
+                }
+            )
+            agent_messages.append({"role": "user", "content": [tool_block]})
+        agent_messages.append({"role": "user", "content": [{"type": "text", "text": "run the tests"}]})
+        payload = {
+            "system": "You are an assistant. " * 50,
+            "messages": agent_messages,
+            "tools": [
+                {"name": f"tool_{i}", "description": "d " * 30, "input_schema": {"type": "object"}} for i in range(30)
+            ],
+        }
+        true_tokens = sum(len(t) for t in _iter_text(payload)) / 3.7
+        assert estimate_prompt_tokens(payload) <= true_tokens * 1.10
 
     def test_ignores_base64_attachments(self):
         """An encoded image is ~1.4 chars per byte of nothing readable.

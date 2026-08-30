@@ -117,6 +117,29 @@
   }
 }
 
+// Wake/Sleep: unlike Unload they are not destructive, so they share one
+// neutral treatment — the labels (and tooltips) carry the semantics.
+.btn-lane-action {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-500));
+  background: transparent;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+  border-radius: 8px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
 .lane-model {
   font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));

@@ -10,8 +10,16 @@
       @if (displayItems().length > 0) {
         <span class="rr-pager__count">
           <strong>{{ formatCount(firstRowNumber()) }}-{{ formatCount(lastRowNumber()) }}</strong>
-          of <strong>{{ formatCount(totalCount()) }}</strong>
+          of <strong>{{ totalInRangeLabel() }}</strong>
         </span>
+      }
+      <!-- Left of the buttons on purpose: the badge and the spinner appear
+           and disappear, and the buttons must stay anchored at the right
+           edge whatever happens to their left. -->
+      @if (loading()) {
+        <i class="pi pi-spin pi-spinner rr-pager__spinner" aria-hidden="true"></i>
+      } @else if (onLivePage()) {
+        <span class="rr-pager__live" title="Page 1 updates as requests arrive">live</span>
       }
       <button
         class="rr-pager__btn"
@@ -31,11 +39,6 @@
       >
         <i class="pi pi-angle-right" aria-hidden="true"></i>
       </button>
-      @if (loading()) {
-        <i class="pi pi-spin pi-spinner rr-pager__spinner" aria-hidden="true"></i>
-      } @else if (onLivePage()) {
-        <span class="rr-pager__live" title="Page 1 updates as requests arrive">live</span>
-      }
     </div>
 
   </div>
@@ -50,13 +53,7 @@
   @if (pending && onLivePage()) {
     <app-stats-skeleton variant="rows" />
   } @else if (displayItems().length === 0) {
-    <div class="rr-empty">
-      @if (filterActive()) {
-        No requests from this requester or team in the selected range.
-      } @else {
-        No requests in this time range.
-      }
-    </div>
+    <div class="rr-empty">{{ emptyMessage() }}</div>
   } @else {
     <div class="rr-list">
       @for (item of displayItems(); track trackById($index, item)) {
@@ -72,7 +69,7 @@
               <span class="rr-card__age">{{ timeAgoOf(item) }}</span>
             </div>
             <div class="rr-card__bottom-row">
-              <span class="rr-card__provider">{{ item.provider_name }}</span>
+              <span class="rr-card__provider">{{ providerLabelOf(item) }}</span>
               <span
                 class="rr-badge"
                 [class.rr-badge--cloud]="item.is_cloud"
