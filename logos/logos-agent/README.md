@@ -136,7 +136,7 @@ COMPOSE_PROFILES=agent docker compose up -d logos-agent
 ```
 
 Schema changes ship with the webservice's Liquibase changelog
-(`019_agent_sessions.xml`), so the tables exist as soon as the webservice has
+(`020_agent_sessions.xml`), so the tables exist as soon as the webservice has
 run its migrations.
 
 The UI lives at **Agents** in the sidebar (`logos_admin` only): capacity, all
