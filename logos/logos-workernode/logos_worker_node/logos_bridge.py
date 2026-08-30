@@ -1105,18 +1105,26 @@ class LogosBridgeClient:
             all_plans = plans_from_config(config_path) if config_path.exists() else []
             plan_by_model = {p["model"]: p for p in all_plans}
 
-            # Free all VRAM up front. Live lanes compete with the calibration
-            # probe for GPU memory: the kv-cache search starts against an
-            # already-loaded model, every probe size OOMs, and the blacklist
-            # fills up with bogus entries even though the model could have
-            # calibrated on a clean GPU. The Logos server re-spawns lanes via
-            # the normal apply_lanes path once the session ends.
+            # Free the calibration's GPU slice up front — but only that slice
+            # (issue #592). The probe is pinned to the slice (CUDA_VISIBLE_DEVICES),
+            # so it only competes for the slice's VRAM; lanes on the leftover
+            # GPUs keep serving for the rest of the session instead of sitting
+            # idle. Without the pin the kv-cache search would start against an
+            # already-loaded model on the measured GPUs and OOM at sizes that
+            # would otherwise fit. The Logos server re-spawns the stopped slice
+            # lanes via the normal apply_lanes path once the session ends.
             if lane_manager is not None:
                 try:
-                    await lane_manager.destroy_all()
-                    logger.info("[Calibration] Stopped all lanes to free VRAM for calibration session")
+                    calibration_gpus = lane_manager.begin_calibration_session()
+                    stopped = await lane_manager.destroy_lanes_on_gpus(calibration_gpus)
+                    logger.info(
+                        "[Calibration] Calibration holds GPU(s) %s — stopped %d lane(s) on them; "
+                        "leftover lanes kept serving",
+                        sorted(calibration_gpus),
+                        stopped,
+                    )
                 except Exception:  # noqa: BLE001
-                    logger.exception("[Calibration] destroy_all failed — continuing anyway")
+                    logger.exception("[Calibration] calibration slice setup failed — continuing anyway")
 
             for model_name in models:
                 if session.cancel_event.is_set():
@@ -1335,6 +1343,10 @@ class LogosBridgeClient:
                 details=f"sleep_level={session.sleep_level}",
             )
             if lane_manager is not None:
+                try:
+                    lane_manager.end_calibration_session()
+                except Exception:  # noqa: BLE001
+                    logger.debug("[Calibration] end_calibration_session failed", exc_info=True)
                 try:
                     lane_manager._mark_status_dirty()  # noqa: SLF001
                 except Exception:  # noqa: BLE001

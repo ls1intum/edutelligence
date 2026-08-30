@@ -11,6 +11,7 @@ from itertools import combinations
 from typing import Any, Awaitable, Callable, Iterable
 
 from logos_worker_node import prometheus_metrics as prom
+from logos_worker_node.calibration import calibration_gpu_slice
 from logos_worker_node.host_ram import measure_process_tree_host_ram_mb
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import (
@@ -348,6 +349,11 @@ class LaneManager:
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
         self._static_lane_ids: set[str] = set()
+        # GPUs held by a running calibration session (issue #592). Non-None while
+        # a session is live: auto-placement must not put new lanes on these GPUs
+        # and an explicit lane targeting them is refused, so the calibration's
+        # probe keeps the slice's VRAM to itself. Leftover GPUs stay placeable.
+        self._calibration_gpu_subset: frozenset[int] | None = None
 
     def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
         """Check which capabilities_models are available locally.
@@ -395,6 +401,37 @@ class LaneManager:
     def is_static_lane(self, lane_id: str) -> bool:
         """Return True if the given lane_id is a static lane."""
         return lane_id in self._static_lane_ids
+
+    # ------------------------------------------------------------------
+    # Calibration session (issue #592)
+    # ------------------------------------------------------------------
+
+    @property
+    def calibration_gpu_subset(self) -> frozenset[int] | None:
+        """GPUs held by a running calibration session, or ``None`` when idle."""
+        return self._calibration_gpu_subset
+
+    def begin_calibration_session(self) -> frozenset[int]:
+        """Hold the node's largest power-of-two GPU slice for a calibration run.
+
+        Returns the held slice (GPUs ``0..slice_size-1``). While it is held,
+        auto-placement excludes these GPUs and any new lane targeting them is
+        refused, so the calibration probe keeps the slice's VRAM to itself.
+        Lanes on the leftover GPUs (``slice_size..N-1``) are unaffected and keep
+        serving during the session.
+        """
+        self._calibration_gpu_subset = frozenset(calibration_gpu_slice(self._gpu_device_count()))
+        if self._calibration_gpu_subset:
+            logger.info(
+                "Calibration session holds GPU(s) %s — new lanes on these are refused; "
+                "leftover GPU(s) stay placeable",
+                sorted(self._calibration_gpu_subset),
+            )
+        return self._calibration_gpu_subset
+
+    def end_calibration_session(self) -> None:
+        """Release the calibration GPU slice held by :meth:`begin_calibration_session`."""
+        self._calibration_gpu_subset = None
 
     def _validate_vllm_runtime_requirements(self, lanes: Iterable[LaneConfig]) -> None:
         vllm_lane_ids = [_lane_id_from_config(lane) for lane in lanes if lane.vllm]
@@ -1278,6 +1315,43 @@ class LaneManager:
             return_exceptions=False,
         )
 
+    async def destroy_lanes_on_gpus(self, gpu_set: set[int]) -> int:
+        """Stop only the vLLM lanes that occupy a GPU in *gpu_set* (issue #592).
+
+        Used at the start of a calibration session to free the held GPU slice
+        for the probe without touching lanes on the leftover GPUs, which keep
+        serving for the rest of the session. The server re-spawns the stopped
+        slice lanes via the normal apply_lanes path once the session ends.
+        Returns the number of lanes stopped.
+        """
+        if not gpu_set:
+            return 0
+        async with self._lock:
+            detached: list[tuple[str, ProcessHandle, int | None]] = []
+            for lid in list(self._handles.keys()):
+                handle = self._handles[lid]
+                lc = handle.lane_config
+                if lc is None or not lc.vllm:
+                    continue
+                if self._lane_touches_gpus(lc.gpu_devices, gpu_set):
+                    h, port = self._detach_lane_unlocked(lid)
+                    if h is not None:
+                        detached.append((lid, h, port))
+
+        if not detached:
+            return 0
+
+        logger.info(
+            "Calibration: stopping %d lane(s) on GPU(s) %s (leftover lanes kept serving)",
+            len(detached),
+            sorted(gpu_set),
+        )
+        await asyncio.gather(
+            *(self._finalize_detached_lane(lid, handle, port) for lid, handle, port in detached),
+            return_exceptions=False,
+        )
+        return len(detached)
+
     async def close(self) -> None:
         """Release HTTP clients for all handles."""
         for handle in self._handles.values():
@@ -1519,6 +1593,30 @@ class LaneManager:
             result.append(index)
         return result
 
+    @staticmethod
+    def _lane_gpu_set(gpu_devices: str | None) -> frozenset[int] | None:
+        """Return the GPU indices a lane occupies, or ``None`` for "all".
+
+        ``None`` means the lane spans every GPU (the "all"/blank selector — an
+        unplaced vLLM lane defaults to cuda:0, so it must be treated as
+        occupying the slice). An empty frozenset means the lane holds no GPU
+        ("none").
+        """
+        raw = (gpu_devices or "").strip().replace(" ", "")
+        lowered = raw.lower()
+        if lowered in {"", "all"}:
+            return None
+        if lowered == "none":
+            return frozenset()
+        return frozenset(int(part) for part in raw.split(",") if part.isdigit())
+
+    def _lane_touches_gpus(self, gpu_devices: str | None, gpu_set: set[int]) -> bool:
+        """True when a lane's GPU set intersects *gpu_set* (issue #592 guard)."""
+        lanes = self._lane_gpu_set(gpu_devices)
+        if lanes is None:
+            return True  # spans all GPUs → intersects any non-empty set
+        return bool(lanes & gpu_set)
+
     def _estimate_lane_vram_mb(self, lane_config: LaneConfig) -> float:
         """Estimate total lane VRAM footprint for placement decisions."""
         if self._model_profiles is None:
@@ -1698,8 +1796,22 @@ class LaneManager:
             return lane_config
 
         allowed_rows = [row for row in device_rows if int(row["index"]) in set(allowed_indices)]
+        if self._calibration_gpu_subset:
+            # A running calibration holds its slice's VRAM for the probe — a new
+            # lane may only take the leftover GPUs (issue #592).
+            held = set(self._calibration_gpu_subset)
+            allowed_rows = [row for row in allowed_rows if int(row["index"]) not in held]
         tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
         if len(allowed_rows) < tp_size:
+            if self._calibration_gpu_subset:
+                # Fail fast rather than fall back to cuda:0 (a held slice GPU):
+                # the lane simply cannot be placed until the session ends.
+                raise RuntimeError(
+                    f"Auto-placement: no leftover GPU subset for lane '{lane_id}' "
+                    f"model={lane_config.model} (tp={tp_size}) — a calibration session "
+                    f"holds GPU(s) {sorted(self._calibration_gpu_subset)}. "
+                    "The lane is placed once the session ends."
+                )
             logger.warning(
                 "Auto-placement skipped for lane '%s': only %d allowed GPU(s) for tp=%d",
                 lane_id,
@@ -1993,6 +2105,19 @@ class LaneManager:
         lane_config = self._apply_model_vllm_overrides(lane_config)
         lane_config = self._auto_tensor_parallel(lane_config)
         lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
+        # Last line of defence at the resource itself: an operator-explicit
+        # gpu_devices pin that lands on the calibration's held slice is refused
+        # (auto-placement already avoids the slice). Leftover GPUs are allowed.
+        if (
+            self._calibration_gpu_subset
+            and lane_config.vllm
+            and self._lane_touches_gpus(lane_config.gpu_devices, self._calibration_gpu_subset)
+        ):
+            raise ValueError(
+                f"Lane '{lane_id}' would run on GPU(s) {lane_config.gpu_devices or 'all'} held by a "
+                f"running calibration session (slice {sorted(self._calibration_gpu_subset)}). "
+                "Placement is refused until the session ends; leftover GPU(s) remain available."
+            )
         await self._wait_for_vram_headroom(lane_id, lane_config)
         port = self._port_alloc.allocate(lane_id)
         handle = _create_handle(

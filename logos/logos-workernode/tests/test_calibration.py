@@ -36,16 +36,20 @@ from logos_worker_node.calibration import (
     _load_unsupported_models,
     _max_tp_for_plan,
     _parse_kv_to_mb,
+    _plan_needs_gpu_pin,
     _record_unsupported_model,
     _remove_unsupported_model,
     auto_calibrate_models,
     calibrate_model,
+    calibration_gpu_slice,
     is_model_unsupported,
     load_existing_profiles,
     merge_profile,
     parse_gpu_indices,
+    pin_plan_gpu_devices,
     plans_from_config,
     result_to_profile_dict,
+    sample_vram_mb,
     save_profiles,
 )
 from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
@@ -662,6 +666,54 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
     assert not results["big-model"].success
 
 
+def test_escalation_pins_plan_to_gpu_slice_on_heterogeneous_node(tmp_path):
+    """On a 3-GPU host the probe is pinned to the power-of-two slice "0,1", so
+    GPU 2 stays free for production and the baseline never sums it (#592). The
+    TP escalation itself is unchanged: max-first from tp=2, then down to tp=1.
+    """
+    config_path = _write_config(tmp_path, ["big-model"])
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        if tp == 1:
+            return _fail_result("big-model", error="OOM on tp=1")
+        return _success_result("big-model", tensor_parallel_size=tp)
+
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(3)),
+    ):
+        mock_cm.side_effect = side_effect
+        results = auto_calibrate_models(["big-model"], config_path, state_dir)
+
+    assert results["big-model"].success
+    assert results["big-model"].tensor_parallel_size == 2
+    # Every probe attempt is pinned to the slice, not "all" / every GPU.
+    for call in mock_cm.call_args_list:
+        passed_plan = call[0][0]
+        assert passed_plan["gpu_devices"] == "0,1"
+
+
+def test_escalation_respects_an_explicit_plan_pin(tmp_path):
+    """An operator-pinned gpu_devices is passed through to the probe untouched."""
+    cfg = {"logos": {"capabilities_models": [{"model": "big-model", "gpu_devices": "1,2"}]}}
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(yaml.safe_dump(cfg))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(3)),
+    ):
+        mock_cm.return_value = _success_result("big-model", tensor_parallel_size=2)
+        auto_calibrate_models(["big-model"], config_path, state_dir)
+
+    assert mock_cm.call_args[0][0]["gpu_devices"] == "1,2"
+
+
 def test_max_tp_for_plan():
     # Power-of-2 rounding: 4 GPUs → tp=4, 3 GPUs → tp=2, 5 → 4, 7 → 4
     assert _max_tp_for_plan({"model": "x"}, available_gpus=4) == 4
@@ -676,6 +728,78 @@ def test_max_tp_for_plan():
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=4) == 4
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=3) == 2
     assert _max_tp_for_plan({"model": "x", "gpu_devices": ""}, available_gpus=4) == 4
+
+
+def test_calibration_gpu_slice_power_of_two_prefix():
+    assert calibration_gpu_slice(3) == [0, 1]
+    assert calibration_gpu_slice(5) == [0, 1, 2, 3]
+    assert calibration_gpu_slice(6) == [0, 1, 2, 3]
+    assert calibration_gpu_slice(7) == [0, 1, 2, 3]
+    assert calibration_gpu_slice(8) == [0, 1, 2, 3, 4, 5, 6, 7]
+    assert calibration_gpu_slice(1) == [0]
+
+
+def test_calibration_gpu_slice_no_gpus_is_empty():
+    assert calibration_gpu_slice(0) == []
+    assert calibration_gpu_slice(None) == []
+    assert calibration_gpu_slice(-2) == []
+
+
+def test_pin_plan_uses_slice_only_when_gpu_devices_blank_or_all():
+    assert pin_plan_gpu_devices({"model": "x"}, 3)["gpu_devices"] == "0,1"
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "all"}, 3)["gpu_devices"] == "0,1"
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": ""}, 3)["gpu_devices"] == "0,1"
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "none"}, 3) == {"model": "x", "gpu_devices": "none"}
+
+
+def test_pin_plan_keeps_operator_specific_gpu_set():
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "1,2"}, 3) == {
+        "model": "x",
+        "gpu_devices": "1,2",
+    }
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "  2  "}, 3) == {
+        "model": "x",
+        "gpu_devices": "  2  ",
+    }
+
+
+def test_pin_plan_no_gpus_leaves_blank_plan_alone():
+    assert pin_plan_gpu_devices({"model": "x"}, 0) == {"model": "x"}
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "all"}, None) == {
+        "model": "x",
+        "gpu_devices": "all",
+    }
+
+
+def test_pin_needs_gpu_pin_only_for_blank_and_all():
+    assert _plan_needs_gpu_pin("")
+    assert _plan_needs_gpu_pin("all")
+    assert _plan_needs_gpu_pin("  ALL  ")
+    assert _plan_needs_gpu_pin(None)
+    assert not _plan_needs_gpu_pin("1,2")
+    assert not _plan_needs_gpu_pin("none")
+
+
+def test_calibration_baseline_ignores_leftover_gpu_lane(monkeypatch):
+    """Pinned slice [0,1] on a 3-GPU host: a leftover lane on GPU 2 must not
+    inflate the calibration baseline — only the slice's own GPUs are summed."""
+    snap = {
+        0: {"total_mb": 24000.0, "used_mb": 100.0, "free_mb": 23900.0},
+        1: {"total_mb": 24000.0, "used_mb": 200.0, "free_mb": 23800.0},
+        2: {"total_mb": 24000.0, "used_mb": 9999.0, "free_mb": 14001.0},
+    }
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda gpu_indices=None: {k: v for k, v in snap.items() if gpu_indices is None or k in gpu_indices},
+    )
+    monkeypatch.setattr("logos_worker_node.calibration._VRAM_SAMPLE_COUNT", 1)
+    monkeypatch.setattr("logos_worker_node.calibration.time.sleep", lambda _s: None)
+
+    plan = pin_plan_gpu_devices({"model": "x"}, 3)
+    gpu_indices = parse_gpu_indices(plan["gpu_devices"])
+    assert gpu_indices == [0, 1]
+    assert sample_vram_mb(gpu_indices) == 300.0  # 100 + 200, never the 9999 on GPU 2
 
 
 # ═══════════════════════════════════════════════════════════════════════

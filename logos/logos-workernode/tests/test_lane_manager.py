@@ -2634,3 +2634,219 @@ def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
     merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
 
     assert merged.vllm_config is not None
+
+
+# ---------------------------------------------------------------------------
+# Calibration GPU-slice guard (issue #592)
+# ---------------------------------------------------------------------------
+
+
+def test_begin_end_calibration_session_holds_power_of_two_slice() -> None:
+    manager = LaneManager(OllamaConfig(), gpu_device_count=lambda: 3)
+    assert manager.calibration_gpu_subset is None
+
+    held = manager.begin_calibration_session()
+    assert held == frozenset({0, 1})  # 3 GPUs → largest power-of-two slice
+    assert manager.calibration_gpu_subset == frozenset({0, 1})
+
+    manager.end_calibration_session()
+    assert manager.calibration_gpu_subset is None
+
+
+def test_calibration_session_slice_on_power_of_two_node_holds_all_gpus() -> None:
+    manager = LaneManager(OllamaConfig(), gpu_device_count=lambda: 4)
+    assert manager.begin_calibration_session() == frozenset({0, 1, 2, 3})
+
+
+def test_lane_gpu_set_parses_selectors() -> None:
+    assert LaneManager._lane_gpu_set("all") is None
+    assert LaneManager._lane_gpu_set("") is None
+    assert LaneManager._lane_gpu_set(None) is None
+    assert LaneManager._lane_gpu_set("none") == frozenset()
+    assert LaneManager._lane_gpu_set("0,1") == frozenset({0, 1})
+    assert LaneManager._lane_gpu_set(" 2 ") == frozenset({2})
+
+
+def test_lane_touches_gpus_intersection() -> None:
+    manager = LaneManager(OllamaConfig())
+    # "all"/blank spans every GPU → intersects any non-empty slice.
+    assert manager._lane_touches_gpus("all", {2}) is True
+    assert manager._lane_touches_gpus("", {2}) is True
+    assert manager._lane_touches_gpus("0,1", {0, 1}) is True
+    assert manager._lane_touches_gpus("2", {0, 1}) is False
+    assert manager._lane_touches_gpus("none", {0, 1}) is False
+
+
+class _StubHandle:
+    def __init__(self, lane_config: LaneConfig) -> None:
+        self.lane_config = lane_config
+        self.destroyed = False
+        self.closed = False
+
+    async def destroy(self) -> None:
+        self.destroyed = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _manager_with_handles(handles: dict) -> LaneManager:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15200, lane_port_end=15210)
+    manager._handles.update(handles)  # noqa: SLF001
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_destroy_lanes_on_gpus_stops_only_slice_vllm_lanes() -> None:
+    slice_lane = _StubHandle(LaneConfig(model="m-slice", vllm=True, gpu_devices="0,1"))
+    leftover_lane = _StubHandle(LaneConfig(model="m-left", vllm=True, gpu_devices="2"))
+    ollama_lane = _StubHandle(LaneConfig(model="m-ollama", vllm=False, gpu_devices="0"))
+
+    manager = _manager_with_handles({"a": slice_lane, "b": leftover_lane, "c": ollama_lane})
+    stopped = await manager.destroy_lanes_on_gpus({0, 1})
+
+    assert stopped == 1
+    assert slice_lane.destroyed is True
+    assert "a" not in manager._handles  # noqa: SLF001
+    # Leftover and non-vLLM lanes are untouched and keep serving.
+    assert leftover_lane.destroyed is False
+    assert "b" in manager._handles  # noqa: SLF001
+    assert "c" in manager._handles  # noqa: SLF001
+
+
+def _snapshot_3gpu(free: dict) -> DeviceSummary:
+    return DeviceSummary(
+        timestamp=datetime.now(timezone.utc),
+        mode="nvidia",
+        nvidia_smi_available=True,
+        devices=[
+            DeviceInfo(
+                device_id=f"gpu{i}",
+                kind="nvidia",
+                memory_total_mb=24576.0,
+                memory_free_mb=free[i],
+                extra={"index": i},
+            )
+            for i in range(3)
+        ],
+        total_memory_mb=3 * 24576.0,
+        free_memory_mb=sum(free.values()),
+    )
+
+
+def _placement_manager(snapshot, n_gpus: int) -> LaneManager:
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=6000.0,
+        engine="vllm",
+    )
+    return LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15200,
+        lane_port_end=15210,
+        model_profiles=profiles,
+        gpu_device_count=lambda: n_gpus,
+        gpu_snapshot=snapshot,
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_place_excludes_calibrating_slice() -> None:
+    """GPUs 0,1 are the emptiest but held by a calibration — a tp=1 lane must
+    land on the leftover GPU 2 instead (#592)."""
+
+    async def _snapshot() -> DeviceSummary:
+        return _snapshot_3gpu({0: 20000.0, 1: 19000.0, 2: 13000.0})
+
+    manager = _placement_manager(_snapshot, 3)
+    manager.begin_calibration_session()  # holds {0, 1}
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    assert placed.gpu_devices == "2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_raises_when_calibration_holds_all_gpus() -> None:
+    """On a 2-GPU node the slice is the whole node — no leftover, so a new lane
+    cannot be placed rather than silently defaulting to a held GPU."""
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(
+                    device_id=f"gpu{i}",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=20000.0,
+                    extra={"index": i},
+                )
+                for i in range(2)
+            ],
+            total_memory_mb=2 * 24576.0,
+            free_memory_mb=40000.0,
+        )
+
+    manager = _placement_manager(_snapshot, 2)
+    manager.begin_calibration_session()  # holds {0, 1} = the whole node
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    with pytest.raises(RuntimeError, match="calibration session"):
+        await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_add_lane_refuses_explicit_slice_gpu(monkeypatch) -> None:
+    """An operator-pinned gpu_devices that lands on the held slice is refused."""
+    manager = LaneManager(OllamaConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
+    manager.begin_calibration_session()  # holds {0, 1}
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    lane = LaneConfig(
+        model="org/slice-model",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+        gpu_devices="0,1",
+    )
+
+    with pytest.raises(ValueError, match="calibration session"):
+        await manager._add_lane_unlocked("org_slice-model", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
+    """The same explicit pin on a leftover GPU is allowed to proceed."""
+
+    class _RunningHandle(_StubHandle):
+        async def init(self) -> None:
+            return None
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.RUNNING)
+
+    manager = LaneManager(OllamaConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
+    manager.begin_calibration_session()  # holds {0, 1}, leftover = {2}
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *a, **k: _RunningHandle(a[4]))
+    lane = LaneConfig(
+        model="org/left-model",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+        gpu_devices="2",
+    )
+
+    await manager._add_lane_unlocked("org_left-model", lane)  # noqa: SLF001
+    assert "org_left-model" in manager._handles  # noqa: SLF001
+    manager.end_calibration_session()

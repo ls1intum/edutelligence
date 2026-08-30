@@ -3005,6 +3005,53 @@ def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
     return 1 << (n.bit_length() - 1)
 
 
+def calibration_gpu_slice(available_gpus: int) -> list[int]:
+    """Return the GPU indices a calibration run should be pinned to.
+
+    The largest power-of-two slice of the node's GPUs, starting at index 0
+    (3 GPUs → ``[0, 1]``, 5 → ``[0, 1, 2, 3]``, 8 → ``[0..7]``). The slice
+    length equals the maximum tensor-parallel size the node supports, so the
+    existing max-first TP escalation fits inside it unchanged.
+
+    Pinning the calibration to this concrete slice (issue #592) leaves the
+    leftover GPUs (``slice_size..N-1``) free for production lanes, which would
+    otherwise sit idle for the entire calibration window, and makes the VRAM
+    baseline a well-defined sum over exactly the GPUs the probe uses.
+    """
+    n = int(available_gpus) if available_gpus else 0
+    if n < 1:
+        return []
+    slice_size = 1 << (n.bit_length() - 1)
+    return list(range(slice_size))
+
+
+def _plan_needs_gpu_pin(gpu_devices: str) -> bool:
+    """True when a plan's ``gpu_devices`` is still the 'use every GPU' default.
+
+    Blank and "all" mean the plan has not been pinned yet, so the calibration
+    slice may be filled in. A specific set ("0,1") or "none" is an explicit
+    operator choice and is never overridden.
+    """
+    return (gpu_devices or "").strip().lower() in {"", "all"}
+
+
+def pin_plan_gpu_devices(plan: dict[str, Any], available_gpus: int) -> dict[str, Any]:
+    """Return *plan* with a concrete ``gpu_devices`` slice.
+
+    A plan that already names a specific GPU set — or "none" — is returned
+    unchanged: the operator's choice is authoritative. A plan left at
+    "all"/blank is pinned to the node's calibration slice so the probe only
+    touches that slice (``CUDA_VISIBLE_DEVICES``) and its VRAM baseline is
+    measured over a well-defined set of GPUs (issue #592).
+    """
+    if not _plan_needs_gpu_pin(str(plan.get("gpu_devices") or "")):
+        return plan
+    slice_ = calibration_gpu_slice(available_gpus)
+    if not slice_:
+        return plan
+    return {**plan, "gpu_devices": ",".join(str(i) for i in slice_)}
+
+
 def _reset_calibration_log(log_dir: Path, model_name: str) -> None:
     log_path = log_dir / f"{model_name.replace('/', '__')}.log"
     try:
@@ -3090,6 +3137,12 @@ def calibrate_with_tp_escalation(
             available_gpus = len(query_gpu_vram())
         except Exception:
             available_gpus = 1
+
+    # Pin the run to a concrete GPU slice before any probe: with "all"/blank
+    # the probe sees every GPU and its VRAM baseline sums them all, so a
+    # production lane on a leftover GPU silently inflates base_residency_mb.
+    # The slice length equals the max TP below, so the escalation is unchanged.
+    plan = pin_plan_gpu_devices(plan, available_gpus)
 
     original_tp = int(plan.get("tensor_parallel_size", 1))
     max_tp = _max_tp_for_plan(plan, available_gpus)
