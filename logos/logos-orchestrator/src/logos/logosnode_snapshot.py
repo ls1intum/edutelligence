@@ -9,47 +9,25 @@ logs.
 
 They deliberately take snapshots as arguments instead of reading the registry
 or the database, so they stay unit-testable without a live worker.
+
+One naming trap for tests: ``_logosnode_snapshot_is_connected`` reads
+``_LOGOSNODE_STATS_STALE_AFTER_SECONDS`` from *this* module's namespace, not
+from ``main``. ``main`` re-imports the same name (it passes it to the
+statistics endpoints), so a future ``monkeypatch.setattr(main,
+"_LOGOSNODE_STATS_STALE_AFTER_SECONDS", ...)`` would resolve fine and silently
+not affect connectedness — patch
+``logos.logosnode_snapshot._LOGOSNODE_STATS_STALE_AFTER_SECONDS`` instead.
 """
 
 import datetime
-import os
 from typing import Any, Dict, Optional
 
-from logos.timeouts import global_timeout_s
+from logos.timeouts import _env_int
 
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or not str(raw).strip():
-        return default
-    try:
-        return max(1, int(raw))
-    except (TypeError, ValueError):
-        return default
-
-
-# max(1, ...): a fractional LOGOS_TIMEOUT_S (e.g. 0.5) must not floor to 0 and
-# cause immediate timeouts — clamp to at least 1 second.
-_LOGOSNODE_INFER_TIMEOUT_SECONDS = max(1, int(global_timeout_s(_env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120))))
-_LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
-    1,
-    int(
-        global_timeout_s(
-            _env_int(
-                "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
-                _LOGOSNODE_INFER_TIMEOUT_SECONDS,
-            )
-        )
-    ),
-)
+# Kept here (rather than in ``timeouts.py`` with the other ``_LOGOSNODE_*``
+# settings) because the snapshot helpers — not the ``main.py`` execution path —
+# read it. See the docstring for the monkeypatch trap that creates.
 _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
-# Transparent retry for a logosnode stream that fails BEFORE the first token is
-# forwarded to the client (e.g. a just-woken level-1 lane whose vLLM engine was
-# not yet serveable — the worker now fails cleanly before stream_start). Safe to
-# re-dispatch because nothing has been sent downstream yet; bounded, with a small
-# backoff so the lane finishes waking. Never retries once a token has streamed.
-_LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
-_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = float(os.getenv("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", "1.0") or 1.0)
 
 
 def _parse_iso_datetime(raw: Any) -> Optional[datetime.datetime]:
