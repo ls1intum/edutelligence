@@ -75,7 +75,7 @@
               <span class="rr-card__age">{{ timeAgoOf(item) }}</span>
             </div>
             <div class="rr-card__bottom-row">
-              <span class="rr-card__provider">{{ item.provider_name }}</span>
+              <span class="rr-card__provider">{{ providerLabelOf(item) }}</span>
               <span
                 class="rr-badge"
                 [class.rr-badge--cloud]="item.is_cloud"

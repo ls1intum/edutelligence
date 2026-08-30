@@ -134,8 +134,40 @@
         >
           <i class="pi pi-angle-right" aria-hidden="true"></i>
         </button>
+        <!-- Request trace export (issue #667): every request of the window
+             comes back; the full-logging ones — the ones whose content was
+             stored because the requester opted in — carry it with them.
+             Follows the period and requester filter above. -->
+        <span class="ac-export">
+          <app-select
+            class="ac-control"
+            [options]="exportFormatOptions"
+            [value]="selectedExportFormatValue()"
+            [compact]="true"
+            ariaLabel="Trace export format"
+            (valueChange)="setExportFormat($event)"
+          />
+          <button
+            class="ac-pager__btn"
+            type="button"
+            [disabled]="exporting()"
+            (click)="exportTraces()"
+            title="Download this team's requests — the full-logging ones carry their stored content"
+            aria-label="Export request traces"
+          >
+            <i class="pi pi-download" aria-hidden="true"></i>
+          </button>
+        </span>
       </div>
     </div>
+
+    @if (exportError()) {
+      <p class="ac-error">{{ exportError() }}</p>
+    }
+
+    @if (fullLoggingHint()) {
+      <p class="ac-note ac-note--quiet">{{ fullLoggingHint() }}</p>
+    }
 
     @if (requests().length === 0) {
       <p class="ac-note ac-note--quiet">

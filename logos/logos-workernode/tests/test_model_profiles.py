@@ -302,6 +302,88 @@ def test_calibrated_profile_not_overwritten_by_subsequent_load(tmp_path):
     assert profile.residency_source == "calibrated"
 
 
+def _write_calibrated_profile(tmp_path, tp: int) -> ModelProfileRegistry:
+    """Registry holding a calibrated profile with TP-dependent KV data."""
+    import yaml
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    profiles_path = state_dir / "model_profiles.yml"
+    calibrated_data = {
+        "model_profiles": {
+            "org/model": {
+                "loaded_vram_mb": 7000.0,
+                "sleeping_residual_mb": 4500.0,
+                "disk_size_bytes": None,
+                "base_residency_mb": 5000.0,
+                "kv_budget_mb": 2048.0,
+                "engine": "vllm",
+                "tensor_parallel_size": tp,
+                "residency_source": "calibrated",
+                "measurement_count": 1,
+                "last_measured_epoch": time.time(),
+                "observed_gpu_memory_utilization": None,
+                "min_gpu_memory_utilization_to_load": None,
+                "kv_per_token_bytes": None,
+                "max_context_length": None,
+                "kv_cache_to_max_model_len_pairs": [{"kv_mb": 2048.0, "max_model_len": 5232}],
+            }
+        }
+    }
+    profiles_path.write_text(yaml.safe_dump(calibrated_data))
+    return ModelProfileRegistry(state_dir=state_dir)
+
+
+def test_calibrated_tp_not_clobbered_by_mismatched_lane(tmp_path):
+    """A serving lane that ran at a TP different from the calibrated TP must
+    not overwrite the profile (issue #616): the calibrated TP is the single
+    source of truth, and the lane's measurements describe a different
+    configuration. The whole profile — tp, residency, KV data — stays intact.
+    """
+    registry = _write_calibrated_profile(tmp_path, tp=1)
+    registry.record_loaded_vram(
+        "org/model",
+        9000.0,
+        engine="vllm",
+        tensor_parallel_size=2,
+        kv_cache_sent_mb=2048.0,
+    )
+
+    profile = registry.get_profile("org/model")
+    assert profile.tensor_parallel_size == 1
+    assert profile.base_residency_mb == 5000.0
+    assert profile.residency_source == "calibrated"
+    assert profile.loaded_vram_mb == 7000.0  # untouched, not EMA-blended
+    assert profile.kv_cache_to_max_model_len_pairs == [{"kv_mb": 2048.0, "max_model_len": 5232}]
+    assert profile.measurement_count == 1  # the mismatched measurement was discarded
+
+
+def test_calibrated_tp_not_clobbered_by_mismatched_sleep(tmp_path):
+    """Same guard on the sleep path: a mismatched-TP residual records nothing."""
+    registry = _write_calibrated_profile(tmp_path, tp=1)
+    registry.record_sleeping_vram("org/model", 300.0, engine="vllm", tensor_parallel_size=2)
+
+    profile = registry.get_profile("org/model")
+    assert profile.tensor_parallel_size == 1
+    assert profile.sleeping_residual_mb == 4500.0  # untouched
+    assert profile.residency_source == "calibrated"
+
+
+def test_calibrated_profile_matching_tp_records_measurements(tmp_path):
+    """A lane that runs at the calibrated TP records as usual — the guard only
+    fires on a TP mismatch."""
+    registry = _write_calibrated_profile(tmp_path, tp=1)
+    registry.record_loaded_vram("org/model", 7200.0, engine="vllm", tensor_parallel_size=1, kv_cache_sent_mb=2048.0)
+
+    profile = registry.get_profile("org/model")
+    assert profile.tensor_parallel_size == 1
+    # EMA-blended with the calibrated 7000: 0.3 * 7200 + 0.7 * 7000 = 7060
+    assert profile.loaded_vram_mb == pytest.approx(7060.0)
+    assert profile.base_residency_mb == 5000.0  # calibrated value stays pinned
+    assert profile.residency_source == "calibrated"
+    assert profile.measurement_count == 2
+
+
 def test_persist_no_state_dir():
     """No state dir → persist is a no-op."""
     registry = ModelProfileRegistry(state_dir=None)
