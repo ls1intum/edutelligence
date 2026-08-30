@@ -46,12 +46,23 @@ public class RequestLogController {
         String end = body.get("end") instanceof String s ? s : null;
         Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
         Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
+        // The feed's state bucket; absent means all states. A supplied value
+        // that names none of the four buckets matches no rows — the same
+        // fail-closed answer an unknown user_id gives. Blank and non-string
+        // values collapse to the all-states sentinel. The client's
+        // normalizeFeedStatus widens on *any* value outside the four buckets —
+        // including an unknown non-blank string this one keeps and fails
+        // closed on. The two sides deliberately differ: a picker that stops
+        // showing everything reads as broken, so the feed widens there, while
+        // a value aimed straight at this admin-only endpoint must not
+        // silently widen it to the whole platform.
+        String status = body.get("status") instanceof String s && !s.isBlank() ? s : null;
         String cursorTs = body.get("cursor_ts") instanceof String s ? s : null;
         String cursorId = body.get("cursor_id") instanceof String s ? s : null;
         int limit = body.get("limit") instanceof Number n
             ? n.intValue() : RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
         return ResponseEntity.ok(requestLogService.getLatestRequests(
-            start, end, userId, teamId, cursorTs, cursorId, limit, true));
+            start, end, userId, teamId, status, cursorTs, cursorId, limit, true));
     }
 
     @PostMapping("/request_logs")

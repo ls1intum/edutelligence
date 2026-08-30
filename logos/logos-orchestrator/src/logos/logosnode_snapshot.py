@@ -22,6 +22,7 @@ not affect connectedness — patch
 import datetime
 from typing import Any, Dict, Optional
 
+from logos.dbutils.dbmanager import derived_reported_context_length
 from logos.timeouts import _env_int
 
 # Kept here (rather than in ``timeouts.py`` with the other ``_LOGOSNODE_*``
@@ -260,29 +261,20 @@ def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
 def _profile_native_context_length(profile: dict) -> int:
     """Largest context window a model could ever be served with here.
 
-    The model's own architectural limit (``max_context_length``) when the
-    worker reported it, otherwise the widest window any calibrated KV point
-    reached. This is the "all-time maximum" — what the model offers when a
-    lane gets all the KV cache it wants — as opposed to the window a lane
-    happens to run with right now.
+    The widest window the model's profile reports — its own architectural
+    limit (``max_context_length``), the ``--max-model-len`` calibration settled
+    on (``calibration_max_model_len``), or the widest point of the calibrated
+    KV sweep — whichever is largest. This is the "all-time maximum" the model
+    offers, as opposed to the window a lane happens to run with right now.
+
+    Reading ``calibration_max_model_len`` matters on its own: a model
+    calibration capped its ``--max-model-len`` to fit the pinned KV budget and
+    recorded no wider KV point, so the calibrated cap is the only context the
+    profile reports. Ignoring it made such a model look context-unknown (and
+    the client fall back to a guessed window) while its worker sat connected
+    and ready to serve it at exactly that width (#829).
     """
-    if not isinstance(profile, dict):
-        return 0
-
-    def _as_len(value) -> int:
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            return 0
-        return value if value > 0 else 0
-
-    native = _as_len(profile.get("max_context_length"))
-    pairs = profile.get("kv_cache_to_max_model_len_pairs")
-    if isinstance(pairs, list):
-        for item in pairs:
-            if isinstance(item, dict):
-                native = max(native, _as_len(item.get("max_model_len")))
-    return native
+    return derived_reported_context_length(profile)
 
 
 def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any]:
