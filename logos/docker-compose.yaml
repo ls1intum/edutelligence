@@ -82,6 +82,10 @@ services:
       # model to load (can exceed 120s), so it timed out before being served.
       LOGOSNODE_INFER_TIMEOUT_SECONDS: "${LOGOSNODE_INFER_TIMEOUT_SECONDS:-600}"
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "${LOGOSNODE_STREAM_TIMEOUT_SECONDS:-600}"
+      # Kill switch for prefix-cache-aware placement (keeping one stream, i.e.
+      # api key + prompt prefix, on the worker that already holds its KV
+      # blocks). Off restores the previous random tie-break placement.
+      LOGOS_PREFIX_AFFINITY_ENABLED: "${LOGOS_PREFIX_AFFINITY_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
@@ -262,11 +266,17 @@ services:
       - "traefik.http.routers.webservice-config.middlewares=strip-api"
       - "traefik.http.routers.webservice-config.priority=200"
 
-      # === Routing: /api/logosdb/providers/logosnode/calibrate_uncalibrated and /lanes/delete ===
-      # These two admin actions require JWT auth, so they go through Spring (priority 202 beats
-      # the orchestrator's logosnode catch-all at 201). Spring validates the token and proxies
+      # === Routing: the operator-facing logosnode admin actions ===
+      # These require JWT auth, so they go through Spring (priority 202 beats the
+      # orchestrator's logosnode catch-all at 201). Spring validates the token and proxies
       # to the orchestrator via internal secret.
-      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`)"
+      #
+      # Every such action has to be named here. The rule is an exact-Path list
+      # standing in front of a PathPrefix catch-all, so an action added to the UI
+      # and to both services but not to this line is still routed straight to the
+      # orchestrator — which does not serve Spring's paths and answers 404. That
+      # is what happened to lanes/add: present end to end, unreachable in prod.
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
       - "traefik.http.routers.webservice-logosnode-admin.entrypoints=websecure"
       - "traefik.http.routers.webservice-logosnode-admin.tls=true"
       - "traefik.http.routers.webservice-logosnode-admin.tls.certresolver=letsencrypt"

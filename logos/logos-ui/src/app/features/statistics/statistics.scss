@@ -34,6 +34,60 @@
   min-width: 0;
 }
 
+// ── Scope (team / requester) ──────────────────────────────────────────────────
+
+.stats-scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+// Capped, because team and user names run long and two dropdowns sized by their
+// longest entry would push the time range off the row. The select inside stops
+// at the host's width rather than overflowing it (see the select component).
+.stats-scope__select {
+  min-width: 0;
+  max-width: 200px;
+}
+
+// The feed's state filter, in the recent-requests panel header. Its entries are
+// short, so a cap only guards against the title wrapping on a narrow panel.
+.stats-feed-status {
+  min-width: 0;
+  max-width: 160px;
+}
+
+.stats-scope__note {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  white-space: nowrap;
+}
+
+.stats-scope__clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  background: transparent;
+  border: 1px solid rgb(var(--glass-stroke) / 0.2);
+  border-radius: 8px;
+  cursor: pointer;
+
+  .pi {
+    font-size: var(--font-size-2xs);
+  }
+
+  &:hover {
+    color: rgb(var(--color-typography-100));
+    background: rgb(var(--glass-fill) / var(--opacity-faint));
+  }
+}
+
 // ── Fatal error ───────────────────────────────────────────────────────────────
 .stats-fatal-error {
   display: flex;

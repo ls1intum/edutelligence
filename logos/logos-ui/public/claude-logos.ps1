@@ -412,6 +412,16 @@ try {
         }
         if ($ContextTokens -le 0) { $ContextTokens = $ContextGuaranteed }
         if ($ContextTokens -gt 0) { $ContextOrigin = $ContextSource }
+        # Nothing is serving the model right now: the current_* pair only exists
+        # while a lane is up, so both are empty and the cascade above has nothing
+        # to hand back. max_model_len_overall comes from the model profile instead
+        # and survives that, so it is still known — and it beats the blind fallback
+        # constant, which is a guess for every model at once and is wrong in both
+        # directions (way under a 262144-token model, way over a 32768-token one).
+        if ($ContextTokens -le 0 -and $ContextMax -gt 0) {
+            $ContextTokens = $ContextMax
+            $ContextOrigin = 'cold'
+        }
     } else {
         $KnownModelIds = @($listing.data | ForEach-Object { $_.id })
     }
@@ -480,6 +490,10 @@ function Write-ContextReport {
     Write-Host ("logos    : {0}" -f $LogosUrl)
     if ($ContextOrigin -eq 'estimate') {
         Write-Host ("context  : {0:N0} tokens (an estimate — Logos reports no size for this model)" -f $ContextTokens)
+    } elseif ($ContextOrigin -eq 'cold') {
+        Write-Host ("context  : {0:N0} tokens, the maximum this model is served with" -f $ContextTokens)
+        Write-Host '           (no lane is up yet, so Logos reports no current size — the first'
+        Write-Host '            request brings one up and it is sized against this number)'
     } else {
         Write-Host ("context  : {0:N0} tokens, using ""{1}"" of what Logos offers" -f $ContextTokens, $ContextOrigin)
         Write-Host ("           (guaranteed {0:N0} / available now {1:N0} / model max {2:N0})" -f `

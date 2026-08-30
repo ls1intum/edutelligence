@@ -26,6 +26,69 @@ logger = logging.getLogger(__name__)
 # "unknown" is only the pre-selection fallback.
 _request_states: Dict[str, tuple[float, str, str]] = {}
 
+# Age past which a tracked request is assumed to be a bookkeeping leak rather
+# than a slow request. Deliberately far beyond anything legitimate: the queue
+# wait alone is bounded at 1200s and a cold load plus generation can add to
+# that, so an hour of headroom keeps the sweep from ever touching a live
+# request. Without a bound, one missed terminal path grows the map — and the
+# gauge derived from it — without limit.
+_STALE_REQUEST_AGE_S = 2 * 60 * 60
+
+# How often the opportunistic sweep may run. The recorder has no background
+# loop of its own, so it piggybacks on request arrivals.
+_STALE_SWEEP_INTERVAL_S = 60.0
+_last_stale_sweep = 0.0
+
+
+def _publish_in_flight() -> None:
+    """Publish the in-flight gauge from the tracked set.
+
+    The gauge used to be hand-maintained with paired ``inc()``/``dec()``
+    calls, which drifted in both directions: terminal paths that never
+    reached ``record_complete`` (a client disconnect, a rate-limit or budget
+    reject) left an increment behind forever, while a request that failed
+    classification completed without ever having been enqueued and
+    decremented one it never added. Deriving the value from the map it is
+    supposed to describe makes both impossible.
+    """
+    prom.REQUESTS_IN_FLIGHT.set(len(_request_states))
+
+
+def _sweep_stale_requests(now: float) -> None:
+    """Drop tracked requests too old to still be running.
+
+    A safety net, not the mechanism: terminal paths are expected to finalise
+    their own request. This only keeps a future missed path from growing the
+    map without bound and pinning the gauge to a number that never comes
+    down again.
+    """
+    global _last_stale_sweep
+    if now - _last_stale_sweep < _STALE_SWEEP_INTERVAL_S:
+        return
+    _last_stale_sweep = now
+
+    cutoff = now - _STALE_REQUEST_AGE_S
+    stale = [request_id for request_id, (start, _m, _p) in _request_states.items() if start < cutoff]
+    for request_id in stale:
+        _request_states.pop(request_id, None)
+    if stale:
+        logger.warning(
+            "Dropped %d request(s) tracked for more than %ds — a terminal path did not finalise them",
+            len(stale),
+            _STALE_REQUEST_AGE_S,
+        )
+
+
+def _nonneg_int(value: Any) -> Optional[int]:
+    """A non-negative int token count, or None when the value is unusable.
+
+    ``bool`` is an ``int`` subclass but never a token count, so it is
+    excluded explicitly (same rule as ``extract_token_usage``).
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
 
 def _resolve_label_names(model_id: Optional[int], provider_id: Optional[int]) -> tuple[str, str]:
     """Resolve the model/provider label values for completion metrics.
@@ -57,11 +120,13 @@ class MonitoringRecorder:
         timeout_s: Optional[int] = None,
     ) -> None:
         prom.REQUESTS_TOTAL.labels(status="enqueued").inc()
-        prom.REQUESTS_IN_FLIGHT.inc()
         if queue_depth is not None:
             prom.QUEUE_DEPTH.set(queue_depth)
         model, provider = _resolve_label_names(model_id, provider_id)
-        _request_states[request_id] = (time.monotonic(), model, provider)
+        now = time.monotonic()
+        _sweep_stale_requests(now)
+        _request_states[request_id] = (now, model, provider)
+        _publish_in_flight()
 
         payload = {
             "model_id": model_id,
@@ -121,37 +186,102 @@ class MonitoringRecorder:
                     payload[key] = value
         self._write(request_id, **payload)
 
+    def _settle(
+        self,
+        request_id: str,
+        result_status: ResultStatus | str,
+        cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
+    ) -> str:
+        """Close out a request's metrics and return the status string.
+
+        Idempotent: a request that was already settled, or one that never
+        reached ``record_enqueue`` (a classification failure completes before
+        it is ever enqueued), contributes no duration observation and cannot
+        move the in-flight gauge.
+
+        ``usage_tokens`` is the ``extract_token_usage`` dict of a completed
+        request (``prompt_tokens`` / ``completion_tokens`` /
+        ``prompt_cached_tokens``). Token counters count what the provider
+        actually processed, so they are observed for every outcome — a
+        timeout that streamed most of the generation still consumed those
+        tokens.
+        """
+        status_value = result_status.value if isinstance(result_status, ResultStatus) else str(result_status)
+
+        state = _request_states.pop(request_id, None)
+        _publish_in_flight()
+        if state is None:
+            # Nothing to settle: either this request was already settled — a
+            # context-resolution failure passes through `_record_log_failure`
+            # twice, once in the mode handler and once in the outer exception
+            # handler — or it never got as far as being enqueued. Counting
+            # here would inflate the outcome totals past the enqueue count;
+            # keeping the counter inside this branch makes
+            # `enqueued == sum(terminal states)` hold by construction.
+            return status_value
+
+        prom.REQUESTS_TOTAL.labels(status=status_value).inc()
+
+        start, model, provider = state
+        prom.REQUEST_DURATION_SECONDS.labels(
+            model=model,
+            provider=provider,
+            status=status_value,
+        ).observe(time.monotonic() - start)
+
+        if cold_start:
+            prom.COLD_STARTS_TOTAL.labels(model=model, provider=provider).inc()
+        if usage_tokens:
+            self._observe_token_usage(model, provider, usage_tokens)
+        return status_value
+
+    @staticmethod
+    def _observe_token_usage(model: str, provider: str, usage_tokens: Dict[str, int]) -> None:
+        """Feed the token counters and the per-model context-window histogram.
+
+        ``extract_token_usage`` already stores ints only, but the recorder
+        must not break a request over a malformed dict, so each value is
+        coerced defensively and skipped when absent.
+        """
+        prompt_tokens = _nonneg_int(usage_tokens.get("prompt_tokens"))
+        completion_tokens = _nonneg_int(usage_tokens.get("completion_tokens"))
+        cached_tokens = _nonneg_int(usage_tokens.get("prompt_cached_tokens"))
+
+        if prompt_tokens is not None:
+            prom.PROMPT_TOKENS_TOTAL.labels(model=model, provider=provider).inc(prompt_tokens)
+        if completion_tokens is not None:
+            prom.GENERATION_TOKENS_TOTAL.labels(model=model, provider=provider).inc(completion_tokens)
+        if cached_tokens is not None:
+            prom.CACHED_PROMPT_TOKENS_TOTAL.labels(model=model, provider=provider).inc(cached_tokens)
+
+        context_tokens = (prompt_tokens or 0) + (completion_tokens or 0)
+        if context_tokens > 0:
+            # How much of the model's context window the request used — the
+            # signal for whether a deployment can be downsized or needs a
+            # bigger window.
+            prom.REQUEST_CONTEXT_TOKENS.labels(model=model).observe(context_tokens)
+
+    def discard(self, request_id: str, result_status: ResultStatus | str) -> None:
+        """Finalise a request whose terminal state was persisted elsewhere.
+
+        Used by the failure paths that write the log row themselves — a
+        client disconnect, a rate-limit or budget reject. They used to leave
+        the request counted as in-flight forever; production was leaking
+        ~470 of them a day, which is what made the gauge climb without ever
+        coming back down.
+        """
+        self._settle(request_id, result_status)
+
     def record_complete(
         self,
         request_id: str,
         result_status: ResultStatus | str,
         cold_start: Optional[bool] = None,
         error_message: Optional[str] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
     ) -> None:
-        status_value = result_status.value if isinstance(result_status, ResultStatus) else str(result_status)
-
-        prom.REQUESTS_TOTAL.labels(status=status_value).inc()
-        prom.REQUESTS_IN_FLIGHT.dec()
-
-        state = _request_states.pop(request_id, None)
-        if state is not None:
-            start, model, provider = state
-        else:
-            start, model, provider = None, "unknown", "unknown"
-
-        if start is not None:
-            duration = time.monotonic() - start
-            prom.REQUEST_DURATION_SECONDS.labels(
-                model=model,
-                provider=provider,
-                status=status_value,
-            ).observe(duration)
-
-        if cold_start:
-            prom.COLD_STARTS_TOTAL.labels(
-                model=model,
-                provider=provider,
-            ).inc()
+        status_value = self._settle(request_id, result_status, cold_start, usage_tokens)
 
         payload = {
             "request_complete_ts": datetime.datetime.now(datetime.timezone.utc),

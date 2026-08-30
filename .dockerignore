@@ -9,7 +9,12 @@
 # "failed to compute cache key: … not found" — the path is simply absent from
 # the context.
 *
-!shared
+# Shared dependency: only the files the orchestrator's dependency layer
+# installs from (metadata, declared readme, package source) — not the whole
+# directory, so e.g. shared/poetry.lock churn never enters the build context.
+!shared/pyproject.toml
+!shared/README.md
+!shared/shared
 !logos/db
 !logos/logos-orchestrator/pyproject.toml
 !logos/logos-orchestrator/src

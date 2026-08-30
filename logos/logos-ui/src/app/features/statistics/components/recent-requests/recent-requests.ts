@@ -11,7 +11,6 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { formatUsd } from '../../../../shared/utils/currency';
-import { AppSelectOption, SelectComponent } from '../../../../shared/components/select/select';
 import {
   LatestRequestsPage,
   RequestCursor,
@@ -24,6 +23,7 @@ import {
   getRequestBorderColor,
   formatTimeAgo,
   formatElapsed,
+  providerLabel,
   RequestStage,
 } from '../../statistics.utils';
 
@@ -35,16 +35,39 @@ import {
  */
 const PAGE_SIZE = 10;
 
-/** One entry of the requester/team filter dropdowns. */
-export interface FeedFilterOption {
-  id: number;
-  label: string;
+/**
+ * One frame's worth of the way from a shown figure to the pushed one: 30% of
+ * the gap, at least one token. A target below the shown one is reached at
+ * once — that is the estimate the real prompt replaced, and counting backwards
+ * from a wrong number reads as the count falling out of the air.
+ */
+export function chaseStep(shown: number, target: number): number {
+  if (target <= shown) return target;
+  return Math.min(target, shown + Math.max(1, Math.ceil((target - shown) * 0.3)));
+}
+
+/**
+ * The token line as the page shows it: "↑prompt ↓completion", nothing when
+ * neither figure is known. The numbers are the ones on screen — mid-chase
+ * that trails the last pushed one — and a prompt the upstream has not stated
+ * yet (the request still queues) carries a tilde, because it is the estimate
+ * the context routing computed from the body, not a measured figure.
+ */
+export function tokenLabel(
+  prompt: number | null,
+  completion: number | null,
+  shown: { p: number; c: number },
+  promptEstimated: boolean,
+): string | null {
+  if (prompt == null && completion == null) return null;
+  const est = promptEstimated ? '~' : '';
+  return `↑${est}${shown.p} ↓${shown.c}`;
 }
 
 @Component({
   selector: 'app-stats-recent-requests',
   standalone: true,
-  imports: [CommonModule, SelectComponent, StatsSkeletonComponent],
+  imports: [CommonModule, StatsSkeletonComponent],
   templateUrl: './recent-requests.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './recent-requests.scss',
@@ -52,7 +75,10 @@ export interface FeedFilterOption {
 export class RecentRequests implements OnChanges, OnDestroy {
   private statisticsService = inject(StatisticsService);
 
-  /** Live rows pushed by the stats WS (newest page, unfiltered). */
+  /**
+   * Live rows pushed by the stats WS — the newest page, already narrowed to the
+   * page's scope, since the server applies it to the push itself.
+   */
   @Input() liveRequests: RequestItem[] = [];
 
   /**
@@ -60,8 +86,12 @@ export class RecentRequests implements OnChanges, OnDestroy {
    * Same range, resolved per aggregate push, so it can trail the live rows by a
    * few — hence the floor in `totalCount()`. Only used while page 1 is showing
    * live rows; a fetched page brings its own count.
+   *
+   * `null` for a state-filtered live feed while its first pushed bucket total
+   * is still in flight: the page then has no figure for that set, and the
+   * header shows "—" rather than a number describing a different set.
    */
-  @Input() totalInRange = 0;
+  @Input() totalInRange: number | null = 0;
 
   /** The selected range as ISO strings — what the pages are cut out of. */
   @Input() range: { startIso: string; endIso: string } | null = null;
@@ -69,37 +99,71 @@ export class RecentRequests implements OnChanges, OnDestroy {
   /** True while a range change is in flight and the rows below are stale. */
   @Input() pending = false;
 
-  /** Requesters to offer in the filter (all platform users). */
-  @Input() users: FeedFilterOption[] = [];
-
-  /** Teams to offer in the filter. */
-  @Input() teams: FeedFilterOption[] = [];
+  /**
+   * The page's scope, so deeper pages are fetched with the same narrowing the
+   * live push already has. Owned by the statistics page — the dropdowns used to
+   * live in this toolbar and moved out when the filter stopped applying to this
+   * list alone.
+   */
+  @Input() filterUserId: number | null = null;
+  @Input() filterTeamId: number | null = null;
+  /**
+   * The lifecycle bucket the feed is narrowed to (queued/running/error/
+   * finished), or null for all states. Like the user/team inputs it is owned
+   * by the page — the live push and every fetched page must agree on it.
+   */
+  @Input() filterStatus: string | null = null;
 
   /** Shared ticker: ms since epoch, updated by setInterval. */
   now = signal(Date.now());
 
   private intervalId: ReturnType<typeof setInterval> | null = null;
 
+  // ── Count-up ───────────────────────────────────────────────────────────────
+
+  /**
+   * The token line does not jump between two pushes — the figure on screen
+   * chases the pushed one a little at a time, so a jump of nine tokens reads
+   * as motion. Keyed by request id; a request that leaves the live set leaves
+   * with its entry.
+   *
+   * The template reads this through `tokensLabelOf`, which is what makes a
+   * write from the (zoneless) interval tick render: the view tracks the
+   * signal, the signal does not care who writes it.
+   */
+  private readonly _shownTokens = signal<Record<string, { p: number; c: number }>>({});
+
+  private chaseId: ReturnType<typeof setInterval> | null = null;
+
   // Input mirror signals so the computed()s below actually react: a plain
   // @Input() is not a tracked producer, so reading it inside computed() would
   // cache the very first value (an empty list) forever.
   private readonly _liveRequests = signal<RequestItem[]>([]);
-  private readonly _totalInRange = signal(0);
-  private readonly _users = signal<FeedFilterOption[]>([]);
-  private readonly _teams = signal<FeedFilterOption[]>([]);
+  private readonly _totalInRange = signal<number | null>(0);
+  private readonly _filterUserId = signal<number | null>(null);
+  private readonly _filterTeamId = signal<number | null>(null);
+  private readonly _filterStatus = signal<string | null>(null);
 
-  // ── Filter ─────────────────────────────────────────────────────────────────
-
-  readonly filterUserId = signal<number | null>(null);
-  readonly filterTeamId = signal<number | null>(null);
-
+  /** Only for the empty state, which reads differently once a filter is on. */
   readonly filterActive = computed(
-    () => this.filterUserId() !== null || this.filterTeamId() !== null,
+    () => this._filterUserId() !== null || this._filterTeamId() !== null,
   );
+
+  /**
+   * The empty state, worded for the filters that are on. A state filter alone
+   * names the state; a team/user scope keeps its own wording, with the state
+   * folded in when both are active.
+   */
+  readonly emptyMessage = computed(() => {
+    const state = this._filterStatus() ? `${this._filterStatus()} ` : '';
+    return this.filterActive()
+      ? `No ${state}requests from this requester or team in the selected range.`
+      : `No ${state}requests in this time range.`;
+  });
 
   // ── Paging ─────────────────────────────────────────────────────────────────
 
-  /** 0-based. Page 0 unfiltered is the live feed; everything else is fetched. */
+  /** 0-based. Page 0 is the live feed; everything deeper is fetched. */
   readonly pageIndex = signal(0);
 
   /**
@@ -117,18 +181,38 @@ export class RecentRequests implements OnChanges, OnDestroy {
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
 
-  /** True while page 1 shows what the websocket pushes rather than a fetch. */
-  readonly onLivePage = computed(() => this.pageIndex() === 0 && !this.filterActive());
+  /**
+   * True while page 1 shows what the websocket pushes rather than a fetch.
+   *
+   * A filtered view used to be excluded here and served entirely over REST,
+   * because the push was platform-wide and could not answer a narrowed
+   * question. The server scopes the push itself now, so page 1 stays live
+   * whatever the filter says.
+   */
+  readonly onLivePage = computed(() => this.pageIndex() === 0);
 
   readonly displayItems = computed<RequestItem[]>(() =>
     this.onLivePage() ? this._liveRequests() : this._pageRows(),
   );
 
-  readonly totalCount = computed(() => {
+  readonly totalCount = computed<number | null>(() => {
     const known = this.onLivePage() ? this._totalInRange() : (this._pageTotal() ?? 0);
+    // A filtered live feed waiting for its first pushed total has no figure
+    // for the set it shows; the header renders that as "—".
+    if (known === null) return null;
     // Never promise fewer rows than are on screen: on the live page the
     // aggregate push the total comes from can be a beat behind the feed.
     return Math.max(known, this.firstRowNumber() + this.displayItems().length - 1);
+  });
+
+  /**
+   * The total as the header prints it. A filtered feed waiting for its first
+   * pushed bucket total has no figure for the set it shows, so the line reads
+   * "of —" there rather than a number describing a different set.
+   */
+  readonly totalInRangeLabel = computed(() => {
+    const total = this.totalCount();
+    return total === null ? '—' : this.formatCount(total);
   });
 
   /** 1-based number of the first row on this page, for the "11-20 of n" line. */
@@ -151,81 +235,35 @@ export class RecentRequests implements OnChanges, OnDestroy {
       : this._pageHasMore();
   });
 
-  // ── Filter dropdown options ────────────────────────────────────────────────
-
-  readonly userOptions = computed<AppSelectOption[]>(() => [
-    { value: '', label: 'All requesters' },
-    ...this._users().map((u) => ({ value: String(u.id), label: u.label })),
-  ]);
-
-  readonly teamOptions = computed<AppSelectOption[]>(() => [
-    { value: '', label: 'All teams' },
-    ...this._teams().map((t) => ({ value: String(t.id), label: t.label })),
-  ]);
-
-  readonly selectedUserValue = computed(() => {
-    const id = this.filterUserId();
-    return id === null ? '' : String(id);
-  });
-
-  readonly selectedTeamValue = computed(() => {
-    const id = this.filterTeamId();
-    return id === null ? '' : String(id);
-  });
-
   private hasLive = computed(() =>
     this.displayItems().some((it) => deriveStage(it) !== 'complete'),
   );
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['liveRequests']) this._liveRequests.set(this.liveRequests ?? []);
-    if (changes['totalInRange']) this._totalInRange.set(this.totalInRange ?? 0);
-    if (changes['users']) this._users.set(this.users ?? []);
-    if (changes['teams']) this._teams.set(this.teams ?? []);
-    // A new range invalidates every page cut out of the previous one.
-    if (changes['range'] && !changes['range'].firstChange) {
+    if (changes['totalInRange']) this._totalInRange.set(this.totalInRange);
+    if (changes['filterUserId']) this._filterUserId.set(this.filterUserId);
+    if (changes['filterTeamId']) this._filterTeamId.set(this.filterTeamId);
+    if (changes['filterStatus']) this._filterStatus.set(this.filterStatus);
+    // A new range or a new scope invalidates every page cut out of the previous
+    // one. No fetch follows: page 0 is the live feed either way, and the
+    // websocket is already sending it for the new scope.
+    const scopeChanged =
+      (changes['filterUserId'] && !changes['filterUserId'].firstChange) ||
+      (changes['filterTeamId'] && !changes['filterTeamId'].firstChange) ||
+      (changes['filterStatus'] && !changes['filterStatus'].firstChange);
+    if ((changes['range'] && !changes['range'].firstChange) || scopeChanged) {
       this.resetToFirstPage();
-      if (this.filterActive()) void this.fetchPage(0, null);
     }
     // Re-schedule ticker whenever inputs change so cadence stays correct.
     this.scheduleTicker();
+    // A new push is where the chase gets new ground to cover.
+    if (changes['liveRequests']) this.startChase();
   }
 
   ngOnDestroy(): void {
     this.clearTicker();
-  }
-
-  // ── Filter handlers ────────────────────────────────────────────────────────
-
-  setUserFilter(value: string | null): void {
-    const id = value ? Number(value) : null;
-    if (id === this.filterUserId()) return;
-    this.filterUserId.set(Number.isFinite(id as number) ? id : null);
-    this.onFilterChanged();
-  }
-
-  setTeamFilter(value: string | null): void {
-    const id = value ? Number(value) : null;
-    if (id === this.filterTeamId()) return;
-    this.filterTeamId.set(Number.isFinite(id as number) ? id : null);
-    this.onFilterChanged();
-  }
-
-  clearFilter(): void {
-    if (!this.filterActive()) return;
-    this.filterUserId.set(null);
-    this.filterTeamId.set(null);
-    this.onFilterChanged();
-  }
-
-  /**
-   * A narrowed feed is served entirely over REST rather than taught to the
-   * websocket: the push runs every 2 s for every open session, and a filtered
-   * view is a question the operator asks, not a tail they watch.
-   */
-  private onFilterChanged(): void {
-    this.resetToFirstPage();
-    if (this.filterActive()) void this.fetchPage(0, null);
+    this.clearChase();
   }
 
   private resetToFirstPage(): void {
@@ -253,9 +291,9 @@ export class RecentRequests implements OnChanges, OnDestroy {
     if (this.loading() || !this.hasPrev()) return;
     const target = this.pageIndex() - 1;
     const cursor = this.cursorForPage[target] ?? null;
-    // Back to the live page: the websocket already holds those rows, so going
-    // there is a state change rather than a fetch.
-    if (target === 0 && !this.filterActive()) {
+    // Back to the live page: the websocket already holds those rows — scoped
+    // the same way — so going there is a state change rather than a fetch.
+    if (target === 0) {
       this.pageIndex.set(0);
       this._pageRows.set([]);
       return;
@@ -287,7 +325,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
         range.startIso,
         range.endIso,
         PAGE_SIZE,
-        { userId: this.filterUserId(), teamId: this.filterTeamId() },
+        { userId: this._filterUserId(), teamId: this._filterTeamId(), status: this._filterStatus() },
         cursor,
       );
       const rows = page.requests ?? [];
@@ -329,10 +367,74 @@ export class RecentRequests implements OnChanges, OnDestroy {
     }
   }
 
+  /**
+   * One frame of the chase: every streaming row's shown figure moves part of
+   * the way to the pushed one. A new row starts at its first pushed figure —
+   * a request that is already mid-generation when the page opens should show
+   * its numbers at once, not count them up from zero — and only the growth
+   * after that is animated.
+   */
+  private chaseFrame(): void {
+    const targets = new Map<string, { p: number; c: number }>();
+    for (const it of this.displayItems()) {
+      if (!it.streaming) continue;
+      targets.set(it.request_id, { p: it.prompt_tokens ?? 0, c: it.completion_tokens ?? 0 });
+    }
+
+    const shown = { ...this._shownTokens() };
+    let dirty = false;
+    let catchingUp = false;
+    for (const [id, target] of targets) {
+      const current = shown[id];
+      if (current === undefined) {
+        shown[id] = target;
+        dirty = true;
+        continue;
+      }
+      const p = chaseStep(current.p, target.p);
+      const c = chaseStep(current.c, target.c);
+      if (p !== current.p || c !== current.c) {
+        shown[id] = { p, c };
+        dirty = true;
+      }
+      if (p < target.p || c < target.c) catchingUp = true;
+    }
+    for (const id of Object.keys(shown)) {
+      if (!targets.has(id)) {
+        delete shown[id];
+        dirty = true;
+      }
+    }
+    if (dirty) this._shownTokens.set(shown);
+
+    // Nothing is streaming anymore, or every figure has reached its target and
+    // the next push will start a new chase. Either way this timer is done.
+    if (targets.size === 0 || !catchingUp) this.clearChase();
+  }
+
+  private startChase(): void {
+    if (this.chaseId !== null) return;
+    // ~15 fps: enough that the count reads as continuous, cheap enough that
+    // re-running change detection on ten rows does not register.
+    this.chaseId = setInterval(() => this.chaseFrame(), 66);
+  }
+
+  private clearChase(): void {
+    if (this.chaseId !== null) {
+      clearInterval(this.chaseId);
+      this.chaseId = null;
+    }
+  }
+
   // ── Template helpers ─────────────────────────────────────────────────────
 
   stageOf(item: RequestItem): RequestStage {
     return deriveStage(item);
+  }
+
+  /** 'none' while the request is still queued — see `providerLabel`. */
+  providerLabelOf(item: RequestItem): string {
+    return providerLabel(item);
   }
 
   borderColorOf(item: RequestItem): string {
@@ -360,12 +462,43 @@ export class RecentRequests implements OnChanges, OnDestroy {
     return formatUsd(item.cost_microcents);
   }
 
-  /** Token line "↑prompt ↓completion", only when token counts are known. */
+  /**
+   * The figures the row shows right now: for a running request the chase
+   * value that is still moving toward the last pushed one, for everything
+   * else the stored numbers.
+   *
+   * Reads the chase signal, which is what keeps this component re-rendering
+   * on the interval's ticks in a zoneless app.
+   */
+  private shownTokensOf(item: RequestItem): { p: number; c: number } {
+    const shown = this._shownTokens();
+    const target = { p: item.prompt_tokens ?? 0, c: item.completion_tokens ?? 0 };
+    if (item.streaming && shown[item.request_id]) return shown[item.request_id];
+    return target;
+  }
+
   tokensLabelOf(item: RequestItem): string | null {
-    const p = item.prompt_tokens;
-    const c = item.completion_tokens;
-    if (p == null && c == null) return null;
-    return `↑${p ?? 0} ↓${c ?? 0}`;
+    return tokenLabel(
+      item.prompt_tokens,
+      item.completion_tokens,
+      this.shownTokensOf(item),
+      item.prompt_estimated ?? false,
+    );
+  }
+
+  /**
+   * Generation rate of a request that is still streaming.
+   *
+   * Only while it runs: once it finishes, an average over its whole span says
+   * less than the duration already on the row, and a figure that stops moving
+   * next to counts that stopped moving reads as part of the record rather than
+   * as a live measurement.
+   */
+  rateLabelOf(item: RequestItem): string | null {
+    if (!item.streaming) return null;
+    const rate = item.tokens_per_second;
+    if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return null;
+    return `${rate < 10 ? rate.toFixed(1) : Math.round(rate)} tok/s`;
   }
 
   totalTimeLabelOf(item: RequestItem): string {

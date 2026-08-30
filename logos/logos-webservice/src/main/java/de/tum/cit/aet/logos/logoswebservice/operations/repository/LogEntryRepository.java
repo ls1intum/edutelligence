@@ -10,7 +10,142 @@ import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.operations.entity.LogEntry;
 
+/**
+ * Queries behind the statistics page.
+ *
+ * Every aggregate here takes a nullable {@code userId} / {@code teamId} pair and
+ * narrows to it when set, so one query serves both the whole platform and one
+ * team's slice of it. The predicate is spelled
+ * {@code (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))}
+ * in every one of them: the cast is what tells Postgres the type of a parameter
+ * it only ever sees as NULL, and repeating it beats a second copy of each query
+ * that could drift from the filtered one.
+ *
+ * The pair has to reach every aggregate the page draws, not just the request
+ * feed. A filter that narrows the list under the charts while the charts keep
+ * showing platform-wide totals reads as a bug, because the two disagree about
+ * what is on screen.
+ */
 public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
+
+    /**
+     * One team's requests by stage, right now.
+     *
+     * Stage is read off the timestamps rather than a status column, because
+     * that is what actually distinguishes the two live states: a request that
+     * has been accepted but not yet forwarded is queued, and one forwarded
+     * without a response yet is running. ``result_status`` only settles at the
+     * end and says nothing about either.
+     *
+     * The in-flight counts stop at {@code inFlightSince} rather than counting
+     * every row that never got a response. Rows do get stranded — a client that
+     * disconnects, a worker that dies mid-stream — and they never gain one, so
+     * an unbounded count only grows. Team 5 alone had 142 of them, every one
+     * over a day old, which a live view would have reported as a queue backing
+     * up right now. Nothing older than the request timeout can still be
+     * running, so anything past it is wreckage, not work.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NULL AND le.timestamp_response IS NULL
+                                  AND le.timestamp_request >= :inFlightSince) AS queued,
+               COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NULL
+                                  AND le.timestamp_forwarding >= :inFlightSince) AS running,
+               COUNT(*) FILTER (WHERE le.timestamp_response IS NOT NULL AND le.timestamp_response >= :since) AS finished,
+               COUNT(*) FILTER (WHERE le.timestamp_response IS NOT NULL AND le.timestamp_response >= :since
+                                  AND (le.result_status IS DISTINCT FROM 'success'
+                                       OR (le.error_message IS NOT NULL AND le.error_message != ''))) AS failed
+        FROM log_entry le
+        WHERE le.team_id = :teamId
+          AND (le.timestamp_response IS NULL OR le.timestamp_response >= :since)
+        """, nativeQuery = true)
+    TeamActivityProjections.LiveCountsProjection findTeamLiveCounts(
+        @Param("teamId") int teamId,
+        @Param("since") Timestamp since,
+        @Param("inFlightSince") Timestamp inFlightSince);
+
+    /**
+     * What each of a team's API keys spent over the window.
+     *
+     * Keys with no traffic are left out rather than listed at zero: the answer
+     * being looked for is where the tokens went, and a roster of unused keys
+     * buries it.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT k.id AS keyId,
+               k.name AS keyName,
+               k.key_type::text AS keyType,
+               k.environment AS environment,
+               COUNT(DISTINCT le.id) AS requestCount,
+               SUM(ut.token_count) AS totalTokens
+        FROM log_entry le
+        JOIN api_keys k ON k.id = le.api_key_id
+        LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
+             AND ut.type_id = (SELECT id FROM token_types WHERE name = 'total_tokens')
+        WHERE le.team_id = :teamId
+          AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= :since
+        GROUP BY k.id, k.name, k.key_type, k.environment
+        ORDER BY totalTokens DESC NULLS LAST, requestCount DESC
+        """, nativeQuery = true)
+    List<TeamActivityProjections.KeyUsageProjection> findTeamKeyUsage(
+        @Param("teamId") int teamId,
+        @Param("since") Timestamp since);
+
+    /**
+     * Teams that actually sent something in the range, with how much.
+     *
+     * The filter dropdowns were built from the platform's user and team
+     * inventory, which is a different list: it includes everyone who has never
+     * made a request, and every one of those entries is guaranteed to select
+     * nothing. Offering only what the range holds is both shorter and honest
+     * about what picking it will do.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.team_id AS id,
+               COALESCE(t.name, 'Team ' || le.team_id) AS label,
+               COUNT(*) AS requestCount
+        FROM log_entry le
+        LEFT JOIN teams t ON t.id = le.team_id
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND le.team_id IS NOT NULL
+        GROUP BY le.team_id, t.name
+        ORDER BY requestCount DESC
+        """, nativeQuery = true)
+    List<ScopeOptionProjection> findTeamsWithTraffic(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end);
+
+    /**
+     * Requesters that actually sent something in the range, optionally only
+     * within one team.
+     *
+     * Scoped by team but deliberately never by user: this list *is* the user
+     * picker, so narrowing it by the current selection would leave it holding
+     * only the entry already chosen and no way back to the others.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.user_id AS id,
+               COALESCE(
+                   NULLIF(TRIM(COALESCE(u.prename, '') || ' ' || COALESCE(u.name, '')), ''),
+                   u.username,
+                   'User ' || le.user_id
+               ) AS label,
+               COUNT(*) AS requestCount
+        FROM log_entry le
+        LEFT JOIN users u ON u.id = le.user_id
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND le.user_id IS NOT NULL
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+        GROUP BY le.user_id, u.prename, u.name, u.username
+        ORDER BY requestCount DESC
+        """, nativeQuery = true)
+    List<ScopeOptionProjection> findRequestersWithTraffic(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("teamId") Integer teamId);
 
     @Transactional(readOnly = true)
     @Query(value = """
@@ -23,12 +158,16 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.request_id IS NOT NULL
           AND le.timestamp_request >= :startTs
           AND le.timestamp_request <= :endTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         ORDER BY le.timestamp_request, le.request_id
         LIMIT :limitN
         """, nativeQuery = true)
     List<EnqueueEventProjection> findInRange(
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId,
         @Param("limitN") int limitN);
 
     @Transactional(readOnly = true)
@@ -41,11 +180,15 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         WHERE le.timestamp_request IS NOT NULL
           AND le.request_id IS NOT NULL
           AND le.timestamp_request <= :untilTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         ORDER BY le.timestamp_request, le.request_id
         LIMIT :limitN
         """, nativeQuery = true)
     List<EnqueueEventProjection> findDeltasNoCursor(
         @Param("untilTs") Timestamp untilTs,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId,
         @Param("limitN") int limitN);
 
     @Transactional(readOnly = true)
@@ -59,6 +202,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.request_id IS NOT NULL
           AND (le.timestamp_request, le.request_id::text) > (:cursorTs, :cursorId)
           AND le.timestamp_request <= :untilTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         ORDER BY le.timestamp_request, le.request_id
         LIMIT :limitN
         """, nativeQuery = true)
@@ -66,6 +211,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("cursorTs") Timestamp cursorTs,
         @Param("cursorId") String cursorId,
         @Param("untilTs") Timestamp untilTs,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId,
         @Param("limitN") int limitN);
 
     @Transactional(readOnly = true)
@@ -153,6 +300,24 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          -- One of the four lifecycle buckets the feed can be narrowed to:
+          -- queued (not yet scheduled), running (scheduled, not answered),
+          -- error (answered with a failure), finished (answered otherwise).
+          -- A null status leaves the feed unfiltered.
+          AND (CAST(:status AS TEXT) IS NULL
+               OR (CAST(:status AS TEXT) = 'queued'
+                   AND le.timestamp_forwarding IS NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'running'
+                   AND le.timestamp_forwarding IS NOT NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'error'
+                   AND le.timestamp_response IS NOT NULL
+                   AND (le.result_status = 'error' OR le.result_status = 'timeout'))
+               OR (CAST(:status AS TEXT) = 'finished'
+                   AND le.timestamp_response IS NOT NULL
+                   AND le.result_status IS DISTINCT FROM 'error'
+                   AND le.result_status IS DISTINCT FROM 'timeout'))
           -- Keyset cursor: everything strictly older than the last row handed
           -- out. Unlike OFFSET this neither re-walks the skipped rows nor slides
           -- when new requests arrive at the top while the operator pages.
@@ -178,9 +343,49 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("endTs") Timestamp endTs,
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
+        @Param("status") String status,
         @Param("cursorTs") Timestamp cursorTs,
         @Param("cursorId") String cursorId,
         @Param("limitN") int limitN);
+
+    /**
+     * Whether anything the statistics aggregates summarise has moved, as a
+     * single aggregate over the same set {@link #findTotals} counts.
+     *
+     * The window predicate and the scope are deliberately identical to
+     * {@link #findTotals}: a movement signal that describes a different set
+     * than the aggregates would either refresh them for nothing or, worse,
+     * let them go stale. There is no status narrowing on purpose — the
+     * signal has to see every bucket, the ones a feed filter hides included.
+     *
+     * The last-event timestamp is the GREATEST of the three lifecycle
+     * columns, not just {@code timestamp_request}: each of them is stamped
+     * when it moves the aggregates (a forward moves the queue figures, a
+     * response moves the outcome, token and cost totals), and a completion
+     * of an older request would advance none of count or request timestamp
+     * and so be invisible — which is exactly the case of an operator
+     * watching one bucket while the rest of the traffic settles.
+     *
+     * One aggregate pass, no joins: this runs on the two-second push cadence
+     * for every session that has a feed filter on, where
+     * {@link #findTotals} itself runs at a tenth of that.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*) AS rowCount,
+               GREATEST(MAX(le.timestamp_request),
+                        MAX(le.timestamp_forwarding),
+                        MAX(le.timestamp_response)) AS lastEventTs
+        FROM log_entry le
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+        """, nativeQuery = true)
+    ScopeMovementProjection findScopeMovement(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     /**
      * How many requests the range holds under the active filter — the "of N" in
@@ -196,12 +401,29 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          -- Identical to the predicate in {@link #findLatestRequests} (minus the
+          -- cursor): the count and the rows must describe the same set.
+          AND (CAST(:status AS TEXT) IS NULL
+               OR (CAST(:status AS TEXT) = 'queued'
+                   AND le.timestamp_forwarding IS NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'running'
+                   AND le.timestamp_forwarding IS NOT NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'error'
+                   AND le.timestamp_response IS NOT NULL
+                   AND (le.result_status = 'error' OR le.result_status = 'timeout'))
+               OR (CAST(:status AS TEXT) = 'finished'
+                   AND le.timestamp_response IS NOT NULL
+                   AND le.result_status IS DISTINCT FROM 'error'
+                   AND le.result_status IS DISTINCT FROM 'timeout'))
         """, nativeQuery = true)
     Long countRequestsInRange(
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs,
         @Param("userId") Integer userId,
-        @Param("teamId") Integer teamId);
+        @Param("teamId") Integer teamId,
+        @Param("status") String status);
 
     @Transactional(readOnly = true)
     @Query(value = """
@@ -257,6 +479,110 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     List<RequestLogProjection> findRequestLogs(
         @Param("apiKeyId") Integer apiKeyId,
         @Param("requestIds") List<String> requestIds);
+
+    /**
+     * The request traces of one team for the export (issue #667).
+     *
+     * Every request of the window comes out — the export must describe the
+     * same slice of traffic the activity list above shows, and a download that
+     * is empty just because the team never consented reads as a bug. Only the
+     * rows the orchestrator recorded at FULL privacy carry the request and
+     * response payloads; for the billing-only ones the content columns come
+     * back NULL, and the envelope says so.
+     *
+     * The token and cost columns reuse the lateral joins of
+     * {@link #findLatestRequests} so an exported number and the same request in
+     * the feed can never disagree. Newest first, with the primary key as tie
+     * break: the export is capped, and the rows kept must be a stable,
+     * explainable slice of the window rather than an arbitrary one.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.id AS id,
+               le.request_id AS requestId,
+               le.timestamp_request AS timestampRequest,
+               le.timestamp_forwarding AS timestampForwarding,
+               le.timestamp_response AS timestampResponse,
+               le.time_at_first_token AS timeAtFirstToken,
+               le.privacy_level::text AS privacyLevel,
+               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
+               p.provider_type::text AS providerType,
+               le.environment AS environment,
+               k.id AS apiKeyId,
+               k.name AS keyName,
+               u.username AS username,
+               NULLIF(TRIM(COALESCE(u.prename, '') || ' ' || COALESCE(u.name, '')), '') AS fullName,
+               t.name AS teamName,
+               le.client_ip AS clientIp,
+               le.result_status::text AS resultStatus,
+               le.error_message AS errorMessage,
+               le.priority AS priority,
+               le.initial_priority AS initialPriority,
+               le.priority_when_scheduled AS priorityWhenScheduled,
+               le.queue_depth_at_enqueue AS queueDepthAtEnqueue,
+               le.queue_depth_at_schedule AS queueDepthAtSchedule,
+               le.queue_depth_at_arrival AS queueDepthAtArrival,
+               le.timeout_s AS timeoutS,
+               le.utilization_at_arrival AS utilizationAtArrival,
+               le.queue_wait_ms AS queueWaitMs,
+               le.was_cold_start AS wasColdStart,
+               le.load_duration_ms AS loadDurationMs,
+               le.available_vram_mb AS availableVramMb,
+               tk.prompt_tokens AS promptTokens,
+               tk.completion_tokens AS completionTokens,
+               tk.total_tokens AS totalTokens,
+               c.cost_micro_cents AS costMicroCents,
+               le.classification_statistics::text AS classificationStatistics,
+               le.input_payload::text AS inputPayload,
+               le.headers::text AS headers,
+               le.response_payload::text AS responsePayload
+        FROM log_entry le
+        LEFT JOIN models m ON m.id = le.model_id
+        LEFT JOIN providers p ON p.id = le.provider_id
+        LEFT JOIN api_keys k ON k.id = le.api_key_id
+        LEFT JOIN teams t ON t.id = le.team_id
+        LEFT JOIN users u ON u.id = le.user_id
+        LEFT JOIN LATERAL (
+            SELECT MAX(CASE WHEN tt.name = 'prompt_tokens'     THEN ut.token_count END) AS prompt_tokens,
+                   MAX(CASE WHEN tt.name = 'completion_tokens' THEN ut.token_count END) AS completion_tokens,
+                   MAX(CASE WHEN tt.name = 'total_tokens'      THEN ut.token_count END) AS total_tokens
+            FROM usage_tokens ut
+            JOIN token_types tt ON tt.id = ut.type_id
+            WHERE ut.log_entry_id = le.id
+        ) tk ON true
+        LEFT JOIN LATERAL (
+            SELECT SUM(
+                CASE WHEN tp.price_per_k_token IS NOT NULL
+                     THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+                END
+            ) AS cost_micro_cents
+            FROM usage_tokens ut
+            LEFT JOIN LATERAL (
+                SELECT price_per_k_token
+                FROM token_prices
+                WHERE type_id = ut.type_id
+                  AND (model_id = le.model_id OR model_id IS NULL)
+                  AND (provider_id = le.provider_id OR provider_id IS NULL)
+                  AND valid_from <= le.timestamp_request
+                ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+                         (provider_id = le.provider_id) DESC NULLS LAST,
+                         valid_from DESC
+                LIMIT 1
+            ) tp ON true
+            WHERE ut.log_entry_id = le.id
+        ) c ON true
+        WHERE le.team_id = :teamId
+          AND le.timestamp_request BETWEEN :startTs AND :endTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+        ORDER BY le.timestamp_request DESC, le.id DESC
+        LIMIT :limitN
+        """, nativeQuery = true)
+    List<LogExportProjection> findTracesForExport(
+        @Param("teamId") int teamId,
+        @Param("startTs") Timestamp startTs,
+        @Param("endTs") Timestamp endTs,
+        @Param("userId") Integer userId,
+        @Param("limitN") int limitN);
 
     @Transactional(readOnly = true)
     @Query(value = """
@@ -315,13 +641,17 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
     @Transactional(readOnly = true)
     @Query(value = """
-        SELECT MAX(COALESCE(timestamp_forwarding, timestamp_request, timestamp_response)) AS lastTs
-        FROM log_entry
-        WHERE COALESCE(timestamp_forwarding, timestamp_request, timestamp_response) BETWEEN :start AND :end
+        SELECT MAX(COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)) AS lastTs
+        FROM log_entry le
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         """, nativeQuery = true)
     LastEventTsProjection findLastEventTs(
         @Param("start") Timestamp start,
-        @Param("end") Timestamp end);
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     @Transactional(readOnly = true)
     @Query(value = """
@@ -340,6 +670,12 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                   JOIN log_entry re2 ON re2.id = ut.log_entry_id
                  WHERE tt.name = 'total_tokens'
                    AND COALESCE(re2.timestamp_forwarding, re2.timestamp_request, re2.timestamp_response) BETWEEN :start AND :end
+                   -- The scope has to reach inside here too. This sum lands in
+                   -- the same KPI card as the request count above, so leaving it
+                   -- platform-wide would pair one team's requests with everyone's
+                   -- tokens.
+                   AND (CAST(:userId AS INTEGER) IS NULL OR re2.user_id = CAST(:userId AS INTEGER))
+                   AND (CAST(:teamId AS INTEGER) IS NULL OR re2.team_id = CAST(:teamId AS INTEGER))
                ) AS totalTokens,
                -- "Cloud" here must mean exactly what cloudRequests above means:
                -- the statistics page shows this sum and that count in the same
@@ -369,25 +705,35 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                   ) tp ON true
                  WHERE p3.privacy_level != 'LOCAL' AND p3.privacy_level IS NOT NULL
                    AND COALESCE(re3.timestamp_forwarding, re3.timestamp_request, re3.timestamp_response) BETWEEN :start AND :end
+                   AND (CAST(:userId AS INTEGER) IS NULL OR re3.user_id = CAST(:userId AS INTEGER))
+                   AND (CAST(:teamId AS INTEGER) IS NULL OR re3.team_id = CAST(:teamId AS INTEGER))
                ) AS cloudCostMicroCents
         FROM log_entry le
         LEFT JOIN providers p ON p.id = le.provider_id
-        WHERE COALESCE(timestamp_forwarding, timestamp_request, timestamp_response) BETWEEN :start AND :end
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         """, nativeQuery = true)
     RequestLogTotalsProjection findTotals(
         @Param("start") Timestamp start,
-        @Param("end") Timestamp end);
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     @Transactional(readOnly = true)
     @Query(value = """
-        SELECT COALESCE(result_status::text, 'unknown') AS status, COUNT(*) AS cnt
-        FROM log_entry
-        WHERE COALESCE(timestamp_forwarding, timestamp_request, timestamp_response) BETWEEN :start AND :end
+        SELECT COALESCE(le.result_status::text, 'unknown') AS status, COUNT(*) AS cnt
+        FROM log_entry le
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         GROUP BY 1
         """, nativeQuery = true)
     List<StatusCountProjection> findStatusCounts(
         @Param("start") Timestamp start,
-        @Param("end") Timestamp end);
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     // Model breakdown — a TRUE per-model breakdown, aggregated across ALL providers.
     // A single model can be served by multiple providers; grouping by provider would
@@ -409,13 +755,17 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                         THEN 1 ELSE 0 END) AS errorCount
         FROM log_entry re
         LEFT JOIN models m ON m.id = re.model_id
-        WHERE COALESCE(timestamp_forwarding, timestamp_request, timestamp_response) BETWEEN :start AND :end
+        WHERE COALESCE(re.timestamp_forwarding, re.timestamp_request, re.timestamp_response) BETWEEN :start AND :end
+          AND (CAST(:userId AS INTEGER) IS NULL OR re.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR re.team_id = CAST(:teamId AS INTEGER))
         GROUP BY re.model_id, modelName
         ORDER BY requestCount DESC
         """, nativeQuery = true)
     List<ModelBreakdownProjection> findModelBreakdown(
         @Param("start") Timestamp start,
-        @Param("end") Timestamp end);
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     @Transactional(readOnly = true)
     @Query(value = """
@@ -437,6 +787,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             FROM log_entry re
             LEFT JOIN providers p ON p.id = re.provider_id
             WHERE COALESCE(re.timestamp_forwarding, re.timestamp_request, re.timestamp_response) BETWEEN :start AND :end
+              AND (CAST(:userId AS INTEGER) IS NULL OR re.user_id = CAST(:userId AS INTEGER))
+              AND (CAST(:teamId AS INTEGER) IS NULL OR re.team_id = CAST(:teamId AS INTEGER))
             GROUP BY 1
         )
         SELECT EXTRACT(EPOCH FROM bs.bucket_ts) AS bucketTs,
@@ -452,7 +804,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     List<TimeSeriesProjection> findTimeSeries(
         @Param("start") Timestamp start,
         @Param("end") Timestamp end,
-        @Param("bucketSec") int bucketSec);
+        @Param("bucketSec") int bucketSec,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     @Transactional(readOnly = true)
     @Query(value = """
@@ -464,39 +818,51 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         LEFT JOIN models m ON m.id = re.model_id
         WHERE COALESCE(re.timestamp_forwarding, re.timestamp_request, re.timestamp_response) BETWEEN :start AND :end
           AND re.model_id IS NOT NULL
+          AND (CAST(:userId AS INTEGER) IS NULL OR re.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR re.team_id = CAST(:teamId AS INTEGER))
         GROUP BY 1, re.model_id, m.name
         ORDER BY 1, modelName
         """, nativeQuery = true)
     List<ModelTimeSeriesProjection> findModelTimeSeries(
         @Param("start") Timestamp start,
         @Param("end") Timestamp end,
-        @Param("bucketSec") int bucketSec);
+        @Param("bucketSec") int bucketSec,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     @Transactional(readOnly = true)
     @Query(value = """
-        SELECT AVG(queue_depth_at_enqueue) AS avgEnqueue,
-               AVG(queue_depth_at_schedule) AS avgSchedule,
-               PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_enqueue) AS p95Enqueue,
-               PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY queue_depth_at_schedule) AS p95Schedule
-        FROM log_entry
-        WHERE COALESCE(timestamp_forwarding, timestamp_request, timestamp_response) BETWEEN :start AND :end
-          AND (queue_depth_at_enqueue IS NOT NULL OR queue_depth_at_schedule IS NOT NULL)
+        SELECT AVG(le.queue_depth_at_enqueue) AS avgEnqueue,
+               AVG(le.queue_depth_at_schedule) AS avgSchedule,
+               PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY le.queue_depth_at_enqueue) AS p95Enqueue,
+               PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY le.queue_depth_at_schedule) AS p95Schedule
+        FROM log_entry le
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND (le.queue_depth_at_enqueue IS NOT NULL OR le.queue_depth_at_schedule IS NOT NULL)
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         """, nativeQuery = true)
     QueueDepthProjection findQueueDepth(
         @Param("start") Timestamp start,
-        @Param("end") Timestamp end);
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     @Transactional(readOnly = true)
     @Query(value = """
-        SELECT CASE WHEN was_cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
+        SELECT CASE WHEN le.was_cold_start IS TRUE THEN 'cold' ELSE 'warm' END AS kind,
                COUNT(*) AS count,
-               AVG(CASE WHEN timestamp_forwarding IS NOT NULL AND timestamp_response IS NOT NULL
-                   THEN EXTRACT(EPOCH FROM (timestamp_response - timestamp_forwarding)) END) AS avgRunSeconds
-        FROM log_entry
-        WHERE COALESCE(timestamp_forwarding, timestamp_request, timestamp_response) BETWEEN :start AND :end
+               AVG(CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
+                   THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END) AS avgRunSeconds
+        FROM log_entry le
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         GROUP BY kind
         """, nativeQuery = true)
     List<RuntimeByColdStartProjection> findRuntimeByColdStart(
         @Param("start") Timestamp start,
-        @Param("end") Timestamp end);
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 }

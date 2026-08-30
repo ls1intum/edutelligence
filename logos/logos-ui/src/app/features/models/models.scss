@@ -96,6 +96,17 @@
   }
 }
 
+// Last used: models without recent traffic are deprecation candidates.
+.last-used {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700));
+  white-space: nowrap;
+
+  &--stale {
+    color: rgb(var(--color-warning));
+  }
+}
+
 // ── Form dialogs ──────────────────────────────────────────────────────────
 .form-body {
   display: flex;

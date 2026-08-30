@@ -24,6 +24,10 @@ import {
   chooseDynamicTargetBuckets,
   extractProviderVramMb,
   formatRangeLabel,
+  formatTokenCount as formatTokenCountValue,
+  normalizeFeedStatus,
+  resolveFeedTotal,
+  REQUEST_STATUS_FILTERS,
   BYTES_PER_GIB,
   BYTES_PER_MIB,
   toGb,
@@ -38,6 +42,7 @@ import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/ti
 
 import type {
   DeviceInfo,
+  FeedFilterOption,
   LaneSignalData,
   RequestItem,
   RequestLogStats,
@@ -55,9 +60,8 @@ import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
 import { LaneVramPieComponent } from './components/lane-vram-pie/lane-vram-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
-import { FeedFilterOption, RecentRequests } from './components/recent-requests/recent-requests';
-import { UserManagementService } from '../../core/services/user-management.service';
-import { TeamManagementService } from '../../core/services/team-management.service';
+import { RecentRequests } from './components/recent-requests/recent-requests';
+import { StatisticsService } from './services/statistics.service';
 import { RequestVolumeChartComponent, ChartTooltip } from './components/request-volume-chart/request-volume-chart';
 import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
@@ -104,12 +108,124 @@ const TIMELINE_EVENT_CAP = 200_000;
 })
 export class Statistics implements OnInit, OnDestroy {
   private statsWs = inject(StatsWebsocketService);
-  private userManagement = inject(UserManagementService);
-  private teamManagement = inject(TeamManagementService);
+  private statisticsService = inject(StatisticsService);
 
-  /** Filter options for the request feed, loaded once on init. */
+  /** Filter options, loaded once on init. */
   readonly feedUsers = signal<FeedFilterOption[]>([]);
   readonly feedTeams = signal<FeedFilterOption[]>([]);
+
+  // ── Scope ─────────────────────────────────────────────────────────────────
+  // Null on either side means "everyone". The filter lives on the page rather
+  // than inside the request feed, because it applies to the page: narrowing the
+  // list while the KPI cards and charts above it kept counting the whole
+  // platform left the two halves of the screen describing different things.
+  //
+  // Deliberately not applied to VRAM, lanes or GPUs. Those are properties of
+  // the hardware and are not attributable to a team, so filtering them would
+  // not be a narrower truth — it would be no data at all.
+  readonly filterUserId = signal<number | null>(null);
+  readonly filterTeamId = signal<number | null>(null);
+
+  readonly filterActive = computed(
+    () => this.filterUserId() !== null || this.filterTeamId() !== null,
+  );
+
+  // Both lists carry their request count, so the dropdown says which entries
+  // are worth opening instead of being an alphabet of names. Ordered busiest
+  // first by the server, which only reads as deliberate once the numbers show.
+  readonly userFilterOptions = computed<AppSelectOption[]>(() => [
+    {
+      value: '',
+      label: this.filterTeamId() === null ? 'All requesters' : 'Everyone in this team',
+    },
+    ...this.feedUsers().map((u) => ({
+      value: String(u.id),
+      label: `${u.label} (${u.requestCount.toLocaleString()})`,
+    })),
+  ]);
+
+  readonly teamFilterOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'All teams' },
+    ...this.feedTeams().map((t) => ({
+      value: String(t.id),
+      label: `${t.label} (${t.requestCount.toLocaleString()})`,
+    })),
+  ]);
+
+  /**
+   * Nobody in the selected team sent anything in this range, so the requester
+   * dropdown has nothing but its "everyone" entry. Worth saying outright — an
+   * empty picker otherwise reads as a page that failed to load its options.
+   */
+  readonly noRequestersInScope = computed(
+    () => this.feedUsers().length === 0 && this.feedTeams().length > 0,
+  );
+
+  readonly selectedUserValue = computed(() => {
+    const id = this.filterUserId();
+    return id === null ? '' : String(id);
+  });
+
+  readonly selectedTeamValue = computed(() => {
+    const id = this.filterTeamId();
+    return id === null ? '' : String(id);
+  });
+
+  /** What the active filter narrows to, for the label above the KPI strip. */
+  readonly filterLabel = computed(() => {
+    const parts: string[] = [];
+    const teamId = this.filterTeamId();
+    if (teamId !== null) {
+      parts.push(this.feedTeams().find((t) => t.id === teamId)?.label ?? `team ${teamId}`);
+    }
+    const userId = this.filterUserId();
+    if (userId !== null) {
+      parts.push(this.feedUsers().find((u) => u.id === userId)?.label ?? `user ${userId}`);
+    }
+    return parts.join(' · ');
+  });
+
+  // ── Request feed state filter ───────────────────────────────────────────────
+  // One lifecycle bucket the recent-requests list is narrowed to; null shows
+  // every state. Deliberately not part of the page scope: a state filter only
+  // makes sense for the list of individual requests, not for the KPI cards and
+  // charts above it, which must keep summarising the whole team/user selection.
+  readonly feedStatus = signal<string | null>(null);
+
+  readonly feedStatusOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'All states' },
+    ...REQUEST_STATUS_FILTERS.map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) })),
+  ]);
+
+  readonly selectedFeedStatusValue = computed(() => this.feedStatus() ?? '');
+
+  /**
+   * The feed's own total, reported by the live push while a state filter is on.
+   * The unfiltered page borrows the statistics aggregate instead, so this stays
+   * null then and `requestFeedTotal` falls back to that total.
+   */
+  readonly liveFeedTotal = signal<number | null>(null);
+
+  /** Total the feed header shows: the status-filtered count, else the KPI total. */
+  readonly requestFeedTotal = computed(() =>
+    resolveFeedTotal(this.feedStatus(), this.liveFeedTotal(), this.totalRequests()),
+  );
+
+  setFeedStatusFilter(value: string | null): void {
+    const next = normalizeFeedStatus(value);
+    if (next === this.feedStatus()) return;
+    // The total the last push reported describes the previous bucket — or,
+    // when clearing, there was none — so it is wrong for this selection and
+    // is dropped until the first push for it lands. Without this the header
+    // keeps advertising the old bucket's count, indefinitely if the socket
+    // is down.
+    this.liveFeedTotal.set(null);
+    this.feedStatus.set(next);
+    // Only the feed changes, so only it is marked loading — the KPI cards and
+    // charts keep their current (unaffected) numbers.
+    this.requestsPending.set(true);
+    this.statsWs.setFeedStatus(next);
+  }
 
   // ── Raw WS signals ────────────────────────────────────────────────────────────
   readonly stats = signal<RequestLogStats | null>(null);
@@ -603,11 +719,9 @@ export class Statistics implements OnInit, OnDestroy {
   readonly totalTokens = computed(() => this.stats()?.totals.totalTokens ?? 0);
   readonly cloudCostMicroCents = computed(() => this.stats()?.totals.cloudCostMicroCents ?? 0);
 
-  /** Format a token count for the KPI card (1.2M / 340k / 12). */
+  /** Format a token count for the KPI card on the K/M/B/T scale. */
   formatTokenCount(v: number): string {
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
-    return String(Math.round(v));
+    return formatTokenCountValue(v);
   }
 
   /** Format cloud cost in microcents as USD (the unit litellm prices in). */
@@ -765,6 +879,8 @@ export class Statistics implements OnInit, OnDestroy {
       // Enabled: without the deltas the volume chart is drawn once from the
       // events of the initial load and then never moves again.
       timelineDeltas: true,
+      scope: { userId: this.filterUserId(), teamId: this.filterTeamId() },
+      feedStatus: this.feedStatus(),
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
         onVramDelta: (p) => this.handleVramWsDeltaV2(p),
@@ -776,38 +892,88 @@ export class Statistics implements OnInit, OnDestroy {
     });
 
     this.nowInterval = setInterval(() => this.nowMs.set(Date.now()), 30_000);
-    void this.loadFilterOptions();
+    void this.loadScopeOptions();
+  }
+
+  // ── Scope handlers ────────────────────────────────────────────────────────
+
+  setUserFilter(value: string | null): void {
+    const id = value ? Number(value) : null;
+    const next = Number.isFinite(id as number) ? id : null;
+    if (next === this.filterUserId()) return;
+    this.filterUserId.set(next);
+    this.applyScope();
   }
 
   /**
-   * Requesters and teams for the request feed's filter. Both endpoints are
-   * admin-gated, like this page, and are read once — the lists are platform
-   * inventory, not something that moves while the page is open.
+   * Pick a team, and the requester list becomes that team's requesters.
+   *
+   * Not a precondition, though: a handful of people send requests under more
+   * than one team, and making the team mandatory would make "everything user X
+   * did" unaskable. It is a way to shorten the list, not a gate in front of it.
    */
-  private async loadFilterOptions(): Promise<void> {
-    const [users, teams] = await Promise.allSettled([
-      this.userManagement.getUsers(),
-      this.teamManagement.getTeams(),
-    ]);
-    if (users.status === 'fulfilled') {
-      this.feedUsers.set(
-        users.value
-          .map((u) => ({
-            id: u.id,
-            label: `${u.prename ?? ''} ${u.name ?? ''}`.trim() || u.username,
-          }))
-          .sort((a, b) => a.label.localeCompare(b.label)),
-      );
+  setTeamFilter(value: string | null): void {
+    const id = value ? Number(value) : null;
+    const next = Number.isFinite(id as number) ? id : null;
+    if (next === this.filterTeamId()) return;
+    this.filterTeamId.set(next);
+    this.applyScope();
+    void this.loadScopeOptions();
+  }
+
+  clearFilter(): void {
+    if (!this.filterActive()) return;
+    this.filterUserId.set(null);
+    this.filterTeamId.set(null);
+    this.applyScope();
+    void this.loadScopeOptions();
+  }
+
+  /**
+   * Hand the new scope to the server and blank every range-scoped panel until
+   * it answers. Same treatment a range change gets: the numbers on screen
+   * describe the previous scope, and leaving them up while the new ones are in
+   * flight is how a filter appears not to have worked.
+   */
+  private applyScope(): void {
+    this.markRangeChanged();
+    this.statsWs.setScope({ userId: this.filterUserId(), teamId: this.filterTeamId() });
+  }
+
+  /**
+   * Refill the filter dropdowns for the current range and team.
+   *
+   * These used to be the platform's user and team inventory, read once. That is
+   * a different list from a useful one: it held every account ever created,
+   * including the majority that have never sent a request, and a native select
+   * has no search box to dig through it with. Now the server answers with what
+   * the range actually contains — and, once a team is picked, only that team's
+   * requesters.
+   *
+   * Re-run on a range change as well as a team change, since a narrower window
+   * holds fewer of both.
+   */
+  private async loadScopeOptions(): Promise<void> {
+    const cfg = this.wsTimelineConfig();
+    const teamId = this.filterTeamId();
+    try {
+      const options = await this.statisticsService.getScopeOptions(cfg.start, cfg.end, teamId);
+      this.feedTeams.set(options.teams ?? []);
+      this.feedUsers.set(options.requesters ?? []);
+
+      // The selected requester may not be in the new list — a different team, or
+      // a range they were quiet in. Leaving them selected would hold the page on
+      // a scope with no data and no visible cause, since the dropdown cannot
+      // show a value it has no option for.
+      const userId = this.filterUserId();
+      if (userId !== null && !this.feedUsers().some((u) => u.id === userId)) {
+        this.filterUserId.set(null);
+        this.applyScope();
+      }
+    } catch {
+      // A failure leaves the dropdowns as they are, which still describes the
+      // scope in force. No reason to bother the operator about it.
     }
-    if (teams.status === 'fulfilled') {
-      this.feedTeams.set(
-        teams.value
-          .map((t) => ({ id: t.id, label: t.name }))
-          .sort((a, b) => a.label.localeCompare(b.label)),
-      );
-    }
-    // A failure leaves the dropdown at "all", which is exactly the unfiltered
-    // view — no reason to bother the operator about it.
   }
 
   ngOnDestroy(): void {
@@ -918,12 +1084,16 @@ export class Statistics implements OnInit, OnDestroy {
     this.offset.set(0);
     this.clearCustomRange();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    // The dropdowns list what the range holds, so a different range is a
+    // different list — and possibly one the current selection is not in.
+    void this.loadScopeOptions();
   }
 
   setOffset(o: number): void {
     this.offset.set(o);
     this.clearCustomRange();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    void this.loadScopeOptions();
   }
 
   formatChartValue(v: number): string {
@@ -934,10 +1104,20 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── WS handlers ───────────────────────────────────────────────────────────────
 
-  private handleRequestsWsData(payload: { requests?: RequestItem[] }): void {
+  private handleRequestsWsData(payload: { requests?: RequestItem[]; total?: number }): void {
     if (payload.requests) {
       this.latestRequests.set(payload.requests);
       this.requestsPending.set(false);
+    }
+    // A status-filtered feed carries its own total (the page's KPI total is
+    // only as narrow as the team/user scope, not the state bucket). The
+    // server sends it only when the row set it counts has moved, so a push
+    // without a total keeps the last one: the count cannot have changed in
+    // between. Unfiltered pushes have no total, and switching the filter
+    // clears this signal, so the borrowed aggregate is never shown for a
+    // set it does not describe.
+    if (this.feedStatus() && typeof payload.total === 'number') {
+      this.liveFeedTotal.set(payload.total);
     }
   }
 

@@ -546,3 +546,123 @@ def test_scheduler_signals_mtp_acceptance_none_without_spec_decode() -> None:
     signals = main._build_logosnode_scheduler_signals(runtime)
     assert signals["models"]["plain-model"]["mtp_acceptance_rate_avg"] is None
     assert signals["models"]["plain-model"]["prefix_cache_hit_rate_avg"] == pytest.approx(0.3)
+
+
+# ── Per-lane context window ──────────────────────────────────────────────────
+# The statistics page shows the window each lane is serving at. It has to travel
+# on the lane, not the model: the planner sizes every lane against the KV cache
+# it could get, so two lanes of one model routinely differ.
+
+
+def _ctx_runtime(lane: dict, profiles: dict | None = None) -> dict:
+    return {
+        "timestamp": "2026-03-16T18:00:00Z",
+        "transport": {"connected": True},
+        "devices": {},
+        "capacity": {},
+        "lanes": [lane],
+        "model_profiles": profiles or {},
+    }
+
+
+def test_lane_signal_reports_the_window_vllm_is_running_at() -> None:
+    signals = main._build_logosnode_scheduler_signals(
+        _ctx_runtime(
+            {
+                "lane_id": "lane-a",
+                "model": "big-model",
+                "vllm": True,
+                "runtime_state": "running",
+                "active_requests": 0,
+                "effective_vram_mb": 90000.0,
+                "backend_metrics": {"engine": "vllm", "max_model_len": 111200},
+            }
+        )
+    )
+    assert signals["lanes"]["lane-a"]["max_model_len"] == 111200
+
+
+def test_two_lanes_of_one_model_report_their_own_windows() -> None:
+    """The whole reason this is per lane and not per model."""
+    runtime = _ctx_runtime({}, {})
+    runtime["lanes"] = [
+        {
+            "lane_id": "roomy",
+            "model": "same-model",
+            "vllm": True,
+            "runtime_state": "running",
+            "active_requests": 0,
+            "effective_vram_mb": 90000.0,
+            "backend_metrics": {"engine": "vllm", "max_model_len": 262144},
+        },
+        {
+            "lane_id": "cramped",
+            "model": "same-model",
+            "vllm": True,
+            "runtime_state": "running",
+            "active_requests": 0,
+            "effective_vram_mb": 20000.0,
+            "backend_metrics": {"engine": "vllm", "max_model_len": 32768},
+        },
+    ]
+
+    signals = main._build_logosnode_scheduler_signals(runtime)
+
+    assert signals["lanes"]["roomy"]["max_model_len"] == 262144
+    assert signals["lanes"]["cramped"]["max_model_len"] == 32768
+
+
+def test_lane_signal_falls_back_to_the_calibrated_profile() -> None:
+    """A vLLM lane started without --max-model-len takes the calibrated value,
+    so the number is not on the lane itself."""
+    signals = main._build_logosnode_scheduler_signals(
+        _ctx_runtime(
+            {
+                "lane_id": "lane-a",
+                "model": "calibrated-model",
+                "vllm": True,
+                "runtime_state": "loaded",
+                "active_requests": 0,
+                "effective_vram_mb": 8000.0,
+                "backend_metrics": {"engine": "vllm"},
+            },
+            {"calibrated-model": {"calibration_max_model_len": 40960}},
+        )
+    )
+    assert signals["lanes"]["lane-a"]["max_model_len"] == 40960
+
+
+def test_lane_signal_reports_an_ollama_lanes_configured_window() -> None:
+    signals = main._build_logosnode_scheduler_signals(
+        _ctx_runtime(
+            {
+                "lane_id": "lane-a",
+                "model": "ollama-model",
+                "vllm": False,
+                "runtime_state": "loaded",
+                "active_requests": 0,
+                "effective_vram_mb": 4000.0,
+                "context_length": 8192,
+            }
+        )
+    )
+    assert signals["lanes"]["lane-a"]["max_model_len"] == 8192
+
+
+def test_lane_signal_omits_a_window_it_cannot_derive() -> None:
+    """None rather than 0: the row leaves the badge off instead of claiming a
+    size vLLM picked for itself and never reported."""
+    signals = main._build_logosnode_scheduler_signals(
+        _ctx_runtime(
+            {
+                "lane_id": "lane-a",
+                "model": "unknown-model",
+                "vllm": True,
+                "runtime_state": "loaded",
+                "active_requests": 0,
+                "effective_vram_mb": 8000.0,
+                "backend_metrics": {"engine": "vllm"},
+            }
+        )
+    )
+    assert signals["lanes"]["lane-a"]["max_model_len"] is None

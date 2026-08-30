@@ -117,12 +117,47 @@
   }
 }
 
+// Wake/Sleep: unlike Unload they are not destructive, so they share one
+// neutral treatment — the labels (and tooltips) carry the semantics.
+.btn-lane-action {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-500));
+  background: transparent;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+  border-radius: 8px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
 .lane-model {
   font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+// Sits at the end of the model line. Dimmer than the name, because it answers a
+// question asked second: which model, then how much room it has here.
+.lane-context {
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-300));
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  border-radius: 6px;
 }
 
 .lane-stats {

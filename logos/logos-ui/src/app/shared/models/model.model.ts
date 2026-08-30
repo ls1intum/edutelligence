@@ -3,18 +3,18 @@ export interface Model {
   name: string;
   description: string | null;
   tags: string | null;
-  parallel: number | null;
   weight_latency: number | null;
   weight_accuracy: number | null;
   weight_cost: number | null;
   weight_quality: number | null;
+  /** Only present for logos_admin (the endpoint is open to all roles). */
+  last_used_at?: string | null;
 }
 
 export interface AddModelPayload {
   name: string;
   description?: string;
   tags?: string;
-  parallel?: number;
   worse_latency_id?: number;
   worse_accuracy_id?: number;
   worse_cost_id?: number;
@@ -26,7 +26,6 @@ export interface UpdateModelPayload {
   name?: string;
   description?: string;
   tags?: string;
-  parallel?: number;
   weight_latency?: number;
   weight_accuracy?: number;
   weight_cost?: number;

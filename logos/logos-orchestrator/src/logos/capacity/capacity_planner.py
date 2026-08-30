@@ -88,6 +88,27 @@ class CapacityPlanner:
     DEMAND_WAKE_FLOOR = 0.5  # one partial-demand signal is enough to wake
     DEMAND_LOAD_FLOOR = 1.0  # one real request is enough to load on empty VRAM
 
+    # How long an announced upcoming use (POST /v1/models/{id}/warmup) keeps
+    # counting as a reason to cold-load on free VRAM. Long enough for a load to
+    # actually get planned across a few cycles, short enough that a session the
+    # developer abandoned before sending anything stops holding a lane open.
+    ANNOUNCED_USE_TTL_SECONDS = 300.0
+
+    # Balance wake: when the best-first winner is under queue pressure for a
+    # model (>= this many active+queued requests on it), the planner wakes a
+    # sleeping replica on a NON-winning worker (no eviction, no cold load, at
+    # most one per model per cycle). Without it, a hot model with N-1 awake
+    # replicas and one sleeping standby stays at N-1 capacity forever: the
+    # ranker always prefers the 0.0s awake lanes over the 2.0s wake and the
+    # standby just idle-sleeps (observed in production: Qwen3.8-27B on
+    # deimama/deipapa saturated with queue 2-8 while the deioma replica slept
+    # for 7h with GPU 2 fully free).
+    # The floor keeps single-request blips from flapping the lane against the
+    # 120s idle tier: at >=4 concurrent the next arrival would wait a full
+    # request duration (60-120s for long-context completions), which a ~2s
+    # wake + VRAM reservation pays back.
+    BALANCE_WAKE_QUEUE_FLOOR = 4
+
     # Competitive ratios: applied when eviction IS required.
     # target_effective_demand > max(eviction_set_demand) * RATIO to proceed.
     WAKE_COMPETITIVE_RATIO = 1.5  # target must beat eviction set by 50%
@@ -275,6 +296,10 @@ class CapacityPlanner:
         # Optional hint payload — does not gate cycle behaviour, but is
         # surfaced in logs so we can see which request woke the cycle.
         self._tick_hints: list[tuple[int, str]] = []
+        # model -> time.time() of the last announced upcoming use (the /warmup
+        # endpoint). Read only by the cold-load path, and only when nothing has
+        # to be evicted for it; see _has_announced_use.
+        self._announced_use: dict[str, float] = {}
         self._use_additive_loads = os.environ.get("LOGOS_USE_ADDITIVE_LOADS", "true").strip().lower() not in (
             "0",
             "false",
@@ -480,6 +505,44 @@ class CapacityPlanner:
             del self._tick_hints[: len(self._tick_hints) - 64]
         self._tick_event.set()
 
+    def announce_upcoming_use(self, model_name: str) -> None:
+        """Record that a caller is about to use ``model_name``, and wake the cycle.
+
+        Backs the ``/warmup`` endpoint. The demand score alone cannot carry this
+        signal: it is decayed once per cycle *before* the demand evaluation runs,
+        so any single increment is already multiplied by DECAY_FACTOR (0.7) by
+        the time it is compared against DEMAND_LOAD_FLOOR (1.0) — a lone hint can
+        never clear the floor, whatever weight it is given. Real traffic does not
+        hit this because a queued request bypasses the floor outright; an
+        announcement has no queue entry to be found by. So it is recorded as its
+        own fact and read next to ``has_queued``.
+
+        What it deliberately does not do is compete: the bypass applies only on
+        free VRAM, so an announcement can never displace a lane that is serving
+        someone. Against contention it stays exactly what it was — a hint.
+        """
+        self._announced_use[model_name] = time.time()
+        # Trim expired entries here rather than on a timer: the dict only ever
+        # holds models someone asked for, and this runs per announcement.
+        cutoff = time.time() - self.ANNOUNCED_USE_TTL_SECONDS
+        for model in [m for m, at in self._announced_use.items() if at < cutoff]:
+            del self._announced_use[model]
+        self.hint_capacity_needed(model_name)
+
+    def _has_announced_use(self, model_name: str) -> bool:
+        """Whether an unexpired announcement is on file for ``model_name``."""
+        announced_at = self._announced_use.get(model_name)
+        return announced_at is not None and (time.time() - announced_at) < self.ANNOUNCED_USE_TTL_SECONDS
+
+    def _consume_announced_use(self, model_name: str) -> None:
+        """Drop the announcement once it has produced a planned load.
+
+        One announcement is one load. Without this the same hint would satisfy
+        the floor again on the next cycle and, if the first load is still coming
+        up, argue for a second lane nobody asked for.
+        """
+        self._announced_use.pop(model_name, None)
+
     async def stop(self) -> None:
         """Stop the planner."""
         if self._task and not self._task.done():
@@ -629,6 +692,11 @@ class CapacityPlanner:
         # providers, so two providers don't independently agree to load the
         # same model in the same cycle.
         cycle_planned_models: set[str] = set()
+        # Balance-wake tracking: at most one balance-wake per model per cycle,
+        # so a saturated winner doesn't fan out wakes to every sleeping
+        # replica at once (one extra replica per cycle is the escalation step;
+        # the next cycle re-evaluates with the updated queues).
+        cycle_balance_wake_models: set[str] = set()
 
         provider_ids = list(self._facade.provider_ids())
         # Sort providers by current queue pressure so the worker most under
@@ -645,6 +713,7 @@ class CapacityPlanner:
 
             provider_ids.sort(key=_provider_pressure, reverse=True)
         self._log_cluster_summary(provider_ids)
+        self._refresh_engine_cache_metrics(provider_ids)
 
         # Cross-provider best-first ranking: pre-score every (provider,
         # model) candidate so the cheapest worker for each model wins,
@@ -694,6 +763,7 @@ class CapacityPlanner:
                     cycle_planned_models=cycle_planned_models,
                     best_provider_for_model=best_provider_for_model,
                     cluster_lanes_by_model=cluster_lanes_by_model,
+                    cycle_balance_wake_models=cycle_balance_wake_models,
                 )
             )
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
@@ -755,6 +825,51 @@ class CapacityPlanner:
                 )
 
         prom.CAPACITY_PLANNER_CYCLE_DURATION_SECONDS.observe(time.time() - cycle_start)
+
+    def _refresh_engine_cache_metrics(self, provider_ids: List[int]) -> None:
+        """Publish per-(provider, model) prefix-cache and MTP-acceptance rates.
+
+        Feeds the ``logos_prefix_cache_hit_rate`` / ``logos_mtp_acceptance_rate``
+        gauges from the workers' lane backend metrics. Aggregation mirrors the
+        live-statistics payload: the prefix hit rate is the plain mean across
+        the model's lanes, while the MTP acceptance rate is token-weighted
+        (sum of accepted / sum of draft tokens), because an unweighted mean of
+        per-lane rates misstates the model rate when lanes see different
+        draft volumes. Pairs with no lanes this cycle are retired by the
+        publish helper.
+        """
+        entries: list[tuple[str, str, float | None, float | None]] = []
+        for pid in provider_ids:
+            snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
+            if snap is None:
+                continue
+            provider_name = self._facade.get_provider_name(pid) or str(pid)
+            runtime = snap.get("runtime") or {}
+            lanes = runtime.get("lanes")
+            per_model: dict[str, dict[str, float]] = {}
+            for lane in lanes if isinstance(lanes, list) else []:
+                if not isinstance(lane, dict):
+                    continue
+                model = str(lane.get("model") or "").strip()
+                if not model:
+                    continue
+                backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+                agg = per_model.setdefault(
+                    model, {"prefix_sum": 0.0, "prefix_count": 0.0, "mtp_draft": 0.0, "mtp_accepted": 0.0}
+                )
+                prefix_rate = lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
+                if prefix_rate is not None:
+                    agg["prefix_sum"] += prefix_rate
+                    agg["prefix_count"] += 1
+                mtp_draft = lane_metric_float(backend_metrics.get("mtp_draft_tokens_total")) or 0.0
+                mtp_accepted = lane_metric_float(backend_metrics.get("mtp_accepted_tokens_total")) or 0.0
+                agg["mtp_draft"] += mtp_draft
+                agg["mtp_accepted"] += mtp_accepted
+            for model, agg in per_model.items():
+                prefix_rate = agg["prefix_sum"] / agg["prefix_count"] if agg["prefix_count"] > 0 else None
+                mtp_rate = agg["mtp_accepted"] / agg["mtp_draft"] if agg["mtp_draft"] > 0 else None
+                entries.append((model, provider_name, prefix_rate, mtp_rate))
+        prom.update_engine_cache_metrics(entries)
 
     def _log_cluster_summary(self, provider_ids: List[int]) -> None:
         """Print a colored cluster overview for the current planner cycle."""
@@ -2931,6 +3046,84 @@ class CapacityPlanner:
     # Demand-based actions
     # ------------------------------------------------------------------
 
+    def _balance_wake_reason(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: List[LaneSchedulerSignals],
+        winner_pid: int,
+        cycle_balance_wake_models: Optional[set[str]],
+    ) -> Optional[str]:
+        """Decide whether this NON-winning provider should balance-wake.
+
+        Called from the demand loop when the best-first ranker picked a
+        different (cheaper) worker for the model. Returns the planned
+        action's reason when a balance-wake is warranted, else None.
+
+        Eligibility (all required):
+          - the model was not already balance-woken elsewhere this cycle
+            (one extra replica per cycle is the escalation step),
+          - the winner is AWAKE for the model (it is the saturated incumbent,
+            not a replica that also needs waking itself),
+          - the winner's combined demand for the model (active + vLLM queue
+            + scheduler queue) is >= BALANCE_WAKE_QUEUE_FLOOR,
+          - this provider has a sleeping lane for the model (wake path only —
+            a cold load is a replication decision, not a balance one).
+
+        Balance-wake is always on (no flag): it only spends VRAM an
+        idle-slept replica already parked, and the guardrails above keep it
+        from evicting, cold-loading, or fanning out.
+
+        VRAM feasibility and the no-eviction rule are enforced by the caller:
+        the WAKE branch only proceeds with the pre-computed reason when the
+        eviction set is empty.
+        """
+        if cycle_balance_wake_models is not None and model_name in cycle_balance_wake_models:
+            logger.info(
+                "Skipping balance-wake of %s on worker=%s: already balance-woken this cycle",
+                model_name,
+                self._facade.get_provider_name(provider_id) or provider_id,
+            )
+            return None
+        # Local check first — the common skip case (this worker has no
+        # sleeping lane for the model) exits before touching the winner.
+        sleeping = [
+            lane
+            for lane in lanes
+            if lane.model_name == model_name
+            and lane.sleep_state == "sleeping"
+            and not self._lane_is_in_wake_failure_cooldown(provider_id, lane.lane_id)
+        ]
+        if not sleeping:
+            return None
+        try:
+            winner_lanes = self._facade.get_all_provider_lane_signals(winner_pid)
+        except Exception:
+            return None
+        winner_awake = any(
+            lane.model_name == model_name
+            and lane.runtime_state in ("loaded", "running")
+            and lane.sleep_state != "sleeping"
+            for lane in winner_lanes
+        )
+        if not winner_awake:
+            return None
+        winner_queue = self._get_queue_depth_for_model(winner_pid, model_name, winner_lanes)
+        if winner_queue < self.BALANCE_WAKE_QUEUE_FLOOR:
+            logger.info(
+                "Skipping balance-wake of %s on worker=%s: winner queue=%d < floor=%d",
+                model_name,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                winner_queue,
+                self.BALANCE_WAKE_QUEUE_FLOOR,
+            )
+            return None
+        winner_name = self._facade.get_provider_name(winner_pid) or winner_pid
+        return (
+            f"Balance-wake: winner={winner_name} queue_depth={winner_queue} "
+            f"≥ floor={self.BALANCE_WAKE_QUEUE_FLOOR}; VRAM free"
+        )
+
     def _compute_demand_actions(
         self,
         provider_id: int,
@@ -2939,6 +3132,7 @@ class CapacityPlanner:
         cycle_planned_models: Optional[set[str]] = None,
         best_provider_for_model: Optional[dict[str, int]] = None,
         cluster_lanes_by_model: Optional[dict[str, int]] = None,
+        cycle_balance_wake_models: Optional[set[str]] = None,
     ) -> List[CapacityPlanAction]:
         """Compute wake/load actions based on demand patterns.
 
@@ -3047,19 +3241,36 @@ class CapacityPlanner:
             # different worker as the cheapest for this model, skip here so
             # the winner can serve it (wake on a sleeping lane beats a cold
             # load on a different worker even when both have capability).
+            #
+            # Exception: balance wake. The ranker's cost model answers
+            # "which worker is cheapest to make able to serve" — an awake
+            # lane costs 0.0s and always wins over a 2.0s wake, so a
+            # sleeping standby replica of a hot model is skipped forever
+            # while the awake incumbent's queue grows. When the winner is
+            # saturated, fall through so the WAKE branch can spread the
+            # load (wake path only, never evicts — enforced below).
+            balance_wake_reason: Optional[str] = None
             if (
                 self._cross_provider_best_first
                 and best_provider_for_model is not None
                 and best_provider_for_model.get(model_name, provider_id) != provider_id
             ):
-                logger.info(
-                    "Skipping demand action for worker=%s model=%s: best-first" " ranker picked worker=%s",
-                    self._facade.get_provider_name(provider_id) or provider_id,
+                winner_pid = best_provider_for_model[model_name]
+                balance_wake_reason = self._balance_wake_reason(
+                    provider_id,
                     model_name,
-                    self._facade.get_provider_name(best_provider_for_model[model_name])
-                    or best_provider_for_model[model_name],
+                    lanes,
+                    winner_pid,
+                    cycle_balance_wake_models,
                 )
-                continue
+                if balance_wake_reason is None:
+                    logger.info(
+                        "Skipping demand action for worker=%s model=%s: best-first" " ranker picked worker=%s",
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        model_name,
+                        self._facade.get_provider_name(winner_pid) or winner_pid,
+                    )
+                    continue
             model_lanes = lanes_by_model.get(model_name, [])
             # Phase 3.4: per-lane VRAM ledger gate — under v2, only skip this
             # model when an in-flight reservation overlaps the GPUs its target
@@ -3203,6 +3414,41 @@ class CapacityPlanner:
                         target_lane_id=target.lane_id,
                     )
 
+                if balance_wake_reason is not None:
+                    # Balance wakes only spend free VRAM: the action spreads
+                    # load for the saturated winner, but no request is waiting
+                    # on this lane — evicting another model's lane for it
+                    # would be speculative preemption. Infeasible or
+                    # eviction-needing wakes are simply retried next cycle.
+                    if eviction_set is None:
+                        logger.info(
+                            "Skipping balance-wake of %s on worker=%s: " "needed VRAM not available",
+                            model_name,
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                        )
+                    elif eviction_set:
+                        logger.info(
+                            "Skipping balance-wake of %s on worker=%s: "
+                            "would evict other models' lanes "
+                            "(balance-wake is eviction-free)",
+                            model_name,
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                        )
+                    else:
+                        actions.append(
+                            CapacityPlanAction(
+                                action="wake",
+                                provider_id=provider_id,
+                                lane_id=target.lane_id,
+                                model_name=model_name,
+                                reason=balance_wake_reason,
+                            )
+                        )
+                        planned_models.add(model_name)
+                        if cycle_balance_wake_models is not None:
+                            cycle_balance_wake_models.add(model_name)
+                    continue
+
                 if eviction_set is None:
                     logger.info(
                         "Skipping wake of %s on worker=%s: cannot free enough GPU memory",
@@ -3239,6 +3485,17 @@ class CapacityPlanner:
                     #     be popular doesn't preempt a recently-warm one
                     #     on speculation alone.
                     #
+                    # has_queued alone is the real-demand signal in branch (a) —
+                    # do NOT stack an eff >= FLOOR requirement on top of it.
+                    # A single queued request contributes QUEUE_WEIGHT to eff
+                    # and its base score decays (DECAY_FACTOR per cycle) within
+                    # a couple of cycles, so a lone waiting request can never
+                    # clear the floor and the bypass deadlocked the sequential
+                    # switchover: model A's benchmark ends, model B is requested
+                    # one at a time, B's request waits until it times out, and
+                    # A's lane sticks (#827). Victims are idle by construction,
+                    # so reclaiming them preempts no real work.
+                    #
                     # Phase 3.2: under v2, branch (a) only fires when the
                     # victim is genuinely idle (eff < floor). Otherwise
                     # both target and victim have queue and we must use
@@ -3257,12 +3514,12 @@ class CapacityPlanner:
                         victim_below_floor = max_non_self < self.DEMAND_WAKE_FLOOR
                         proceed = (
                             self_only
-                            or (has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR)
+                            or (has_queued and victim_below_floor)
                             or eff > max_non_self * self.WAKE_COMPETITIVE_RATIO
                         )
                         if self_only:
                             gate_reason = "self-eviction (same model as target)"
-                        elif has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR:
+                        elif has_queued and victim_below_floor:
                             gate_reason = (
                                 f"queued_demand & victims_idle → bypass ratio "
                                 f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
@@ -3272,9 +3529,7 @@ class CapacityPlanner:
                                 f"target_eff={eff:.2f} > victim={max_non_self:.2f}" f"×{self.WAKE_COMPETITIVE_RATIO}"
                             )
                     else:
-                        proceed = (
-                            has_queued and eff >= self.DEMAND_WAKE_FLOOR
-                        ) or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
+                        proceed = has_queued or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
                         gate_reason = (
                             f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                             if has_queued and eff <= max_victim_score * self.WAKE_COMPETITIVE_RATIO
@@ -3434,12 +3689,30 @@ class CapacityPlanner:
             has_queued = self._get_queue_depth_for_model(provider_id, model_name, lanes) > 0
 
             if not eviction_set:
-                # Resources freely available — act on floor score.
-                if eff < self.DEMAND_LOAD_FLOOR and not has_queued:
+                # Resources freely available — act on floor score. An announced
+                # upcoming use counts alongside a queued request: nothing has to
+                # be given up for this load, and the caller has said the traffic
+                # is coming. Restricted to this branch on purpose — see
+                # announce_upcoming_use.
+                announced = self._has_announced_use(model_name)
+                if eff < self.DEMAND_LOAD_FLOOR and not has_queued and not announced:
                     continue
                 if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
                     continue
                 lane_id = self._planner_lane_id(model_name)
+                if eff >= self.DEMAND_LOAD_FLOOR or has_queued:
+                    reason = f"Demand eff={eff:.2f} ≥ floor={self.DEMAND_LOAD_FLOOR}; VRAM free"
+                else:
+                    reason = f"Announced upcoming use (eff={eff:.2f} below floor); VRAM free"
+                    logger.info(
+                        "Cold-loading %s on worker=%s for an announced upcoming use "
+                        "(eff=%.2f below floor=%.2f, no eviction needed)",
+                        model_name,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        eff,
+                        self.DEMAND_LOAD_FLOOR,
+                    )
+                self._consume_announced_use(model_name)
                 actions.append(
                     CapacityPlanAction(
                         action="load",
@@ -3447,16 +3720,17 @@ class CapacityPlanner:
                         lane_id=lane_id,
                         model_name=model_name,
                         params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-                        reason=f"Demand eff={eff:.2f} ≥ floor={self.DEMAND_LOAD_FLOOR}; VRAM free",
+                        reason=reason,
                     )
                 )
                 planned_models.add(model_name)
             else:
-                # Contention. Same two-regime logic as the wake path:
-                # real queued requests bypass the ratio (victims are
-                # already idle by construction); speculative score is
-                # gated by LOAD_COMPETITIVE_RATIO to avoid thrashing on
-                # a model that *might* become popular.
+                # Contention. Same two-regime logic as the wake path (see the
+                # regime comment there, including why has_queued alone is the
+                # real-demand signal — #827): real queued requests bypass the
+                # ratio (victims are already idle by construction); speculative
+                # score is gated by LOAD_COMPETITIVE_RATIO to avoid thrashing
+                # on a model that *might* become popular.
                 # Phase 3.2/3.3: under v2, branch (a) requires victim_below_floor
                 # and self-eviction is degenerate.
                 non_self_victims = [s for vlane, _, s in eviction_set if vlane.model_name != model_name]
@@ -3467,12 +3741,12 @@ class CapacityPlanner:
                     victim_below_floor = max_non_self < self.DEMAND_LOAD_FLOOR
                     proceed = (
                         self_only
-                        or (has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR)
+                        or (has_queued and victim_below_floor)
                         or eff > max_non_self * self.LOAD_COMPETITIVE_RATIO
                     )
                     if self_only:
                         gate_reason = "self-eviction (same model as target)"
-                    elif has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR:
+                    elif has_queued and victim_below_floor:
                         gate_reason = (
                             f"queued_demand & victims_idle → bypass ratio "
                             f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
@@ -3480,9 +3754,7 @@ class CapacityPlanner:
                     else:
                         gate_reason = f"target_eff={eff:.2f} > victim={max_non_self:.2f}×{self.LOAD_COMPETITIVE_RATIO}"
                 else:
-                    proceed = (
-                        has_queued and eff >= self.DEMAND_LOAD_FLOOR
-                    ) or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
+                    proceed = has_queued or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
                     gate_reason = (
                         f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                         if has_queued and eff <= max_victim_score * self.LOAD_COMPETITIVE_RATIO
@@ -5669,8 +5941,21 @@ class CapacityPlanner:
 
         Only infers TP > 1 when the model clearly won't fit on a single GPU.
         Returns None if inference is not possible or TP=1 is sufficient.
+
+        Calibrated profiles are the exception: their tensor_parallel_size is
+        the single source of truth (the calibrator probed this hardware and
+        the profile's residency/KV data were measured under that TP), so it
+        is returned as-is — even TP=1, which all callers treat as "no
+        escalation" via their ``> 1`` checks. This matters for a calibrated
+        TP=1: inferring off the calibrated base_residency (the full awake
+        footprint, often most of a GPU) would escalate it to a higher TP and
+        overwrite the calibrated verdict with data measured at a different
+        parallelism (issue #616).
         """
         import math
+
+        if profile.residency_source == "calibrated" and profile.tensor_parallel_size is not None:
+            return int(profile.tensor_parallel_size)
 
         base_mb = profile.estimate_base_residency_mb()
         if base_mb is None or base_mb <= 0:

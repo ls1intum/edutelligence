@@ -10,7 +10,7 @@
          it. Only one session may occupy a workspace at a time, which the
          runner enforces when it admits queued work — parallelism comes from
          running several workspaces. -->
-    <changeSet id="013-agent-workspaces" author="logos">
+    <changeSet id="019-agent-workspaces" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="agent_workspaces"/></not>
         </preConditions>
@@ -29,7 +29,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="013-agent-sessions" author="logos">
+    <changeSet id="019-agent-sessions" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="agent_sessions"/></not>
         </preConditions>
@@ -93,7 +93,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="013-agent-events" author="logos">
+    <changeSet id="019-agent-events" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="agent_events"/></not>
         </preConditions>

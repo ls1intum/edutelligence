@@ -24,6 +24,28 @@ export function getRequestBorderColor(stage: RequestStage, status: string): stri
   }
 }
 
+/**
+ * The provider label a request row shows.
+ *
+ * The log row already carries a provider while the request is still queued at
+ * the orchestrator: it is the deployment the request was made for, written at
+ * enqueue time, not the one that will serve it — scheduling can pick a
+ * different model or provider entirely. Naming it while the request has not
+ * been forwarded anywhere reads as a decision that has not been made, so a
+ * queued row says 'none' and the real provider appears only once the request
+ * was handed off (or the row settled).
+ */
+export function providerLabel(
+  item: {
+    provider_name: string | null;
+    scheduled_ts: string | null;
+    request_complete_ts: string | null;
+  },
+): string {
+  if (deriveStage(item) === 'queued') return 'none';
+  return item.provider_name || 'none';
+}
+
 export function formatTimeAgo(ts: string | null, nowMs: number): string {
   if (!ts) return '';
   const diffS = Math.max(0, (nowMs - new Date(ts).getTime()) / 1000);
@@ -40,6 +62,88 @@ export function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}m ${s}s`;
+}
+
+// ── Recent-requests state filter ──────────────────────────────────────────────
+
+/**
+ * The lifecycle buckets the request feed can be narrowed to, in the order the
+ * filter offers them. `queued` and `running` are the in-flight states; `error`
+ * and `finished` split the settled ones by outcome (a timeout counts as an
+ * error, matching how the row border colours timeouts as a failure).
+ */
+export const REQUEST_STATUS_FILTERS = ['queued', 'running', 'error', 'finished'] as const;
+
+export type RequestStatusFilter = (typeof REQUEST_STATUS_FILTERS)[number];
+
+/**
+ * Normalise the state-filter dropdown's value to the bucket the feed is
+ * narrowed by. The empty selection means "all states" (null); anything that is
+ * not one of the four buckets is treated the same, so a stale or tampered value
+ * widens back to the full feed instead of matching nothing.
+ */
+export function normalizeFeedStatus(value: string | null): string | null {
+  if (!value) return null;
+  return (REQUEST_STATUS_FILTERS as readonly string[]).includes(value) ? value : null;
+}
+
+/**
+ * The "of N" total the feed header shows.
+ *
+ * An unfiltered feed borrows the statistics aggregate (the page's KPI total),
+ * which it already matches. A status-filtered feed must show the count of that
+ * bucket instead — the aggregate is only as narrow as the team/user scope, not
+ * the state — so it shows the total the live push reports for the bucket, and
+ * nothing while that push is still in flight: the borrowed aggregate
+ * describes a different set, and a wrong "of N" reads as worse than an
+ * absent one.
+ */
+export function resolveFeedTotal(
+  status: string | null,
+  pushedTotal: number | null,
+  aggregateTotal: number,
+): number | null {
+  if (!status) return aggregateTotal;
+  return pushedTotal;
+}
+
+// ── Token count scale ─────────────────────────────────────────────────────────
+
+/**
+ * The scale a token count is displayed on: the unit steps up the moment the
+ * value leaves its range — K at 1.000, M at 1.000.000, B at 1.000.000.000,
+ * T at 1.000.000.000.000.
+ */
+const TOKEN_COUNT_UNITS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 1_000, label: 'K' },
+  { value: 1_000_000, label: 'M' },
+  { value: 1_000_000_000, label: 'B' },
+  { value: 1_000_000_000_000, label: 'T' },
+];
+
+/**
+ * A token count on the K/M/B/T scale: always the highest applicable
+ * magnitude, a space between the value and the unit, and the value's decimal
+ * notation kept — the 2470.7M the statistics page used to show reads "2.4 B".
+ * Counts below 1.000 stay plain; input that is not a positive finite number
+ * reads "0".
+ *
+ * The value is truncated to one decimal, dropped when it is zero. One digit
+ * after the dot keeps the dot unambiguous — a thousands group is three
+ * digits, never one — and it keeps the abbreviation shorter than the number
+ * it replaces (262.1 K instead of 262,144).
+ */
+export function formatTokenCount(count: number | null | undefined): string {
+  if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) return '0';
+  if (count < 1_000) return String(Math.round(count));
+  // The early return guarantees count >= 1.000, so K always matches and the
+  // walk from K up ends on the highest unit the count reaches.
+  const unit = TOKEN_COUNT_UNITS.reduce(
+    (highest, u) => (count >= u.value ? u : highest),
+    TOKEN_COUNT_UNITS[0],
+  );
+  const tenths = Math.floor(count / (unit.value / 10));
+  return `${(tenths / 10).toFixed(1).replace(/\.0$/, '')} ${unit.label}`;
 }
 
 // ── X-axis labels (shared by request-volume and VRAM charts) ─────────────────

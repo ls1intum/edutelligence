@@ -1,0 +1,97 @@
+package de.tum.cit.aet.logos.logoswebservice.operations.controller;
+
+import java.util.Map;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestAttribute;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
+import de.tum.cit.aet.logos.logoswebservice.operations.service.TeamActivityService;
+
+/**
+ * One team's live request counts and token spend (issue #776).
+ *
+ * App administrators wanted what the statistics page gives Logos admins,
+ * narrowed to their own teams and cut down to the two questions they actually
+ * ask: what is running right now, and what has the team used.
+ */
+@RestController
+public class TeamActivityController {
+
+    private final TeamActivityService teamActivityService;
+    private final ApiKeyAdminService apiKeyAdminService;
+
+    public TeamActivityController(TeamActivityService teamActivityService,
+                                  ApiKeyAdminService apiKeyAdminService) {
+        this.teamActivityService = teamActivityService;
+        this.apiKeyAdminService = apiKeyAdminService;
+    }
+
+    /**
+     * Activity for one team.
+     *
+     * Team id comes from the path and the check is against that id, so there is
+     * no way to widen the scope through the body — the same ownership rule the
+     * key admin endpoints apply: a Logos admin sees any team, an app admin only
+     * one they own.
+     */
+    @PostMapping("/logosdb/teams/{teamId}/activity")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> teamActivity(@PathVariable Integer teamId,
+                                          @RequestBody(required = false) Map<String, Object> body,
+                                          @RequestAttribute("authContext") AuthContext auth) {
+        if (teamId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "team_id is required"));
+        }
+        if (Role.APP_ADMIN.matches(auth.role())
+                && (auth.userId() == null || !apiKeyAdminService.isTeamOwner(teamId, auth.userId()))) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        Map<String, Object> payload = body != null ? body : Map.of();
+        Integer days = payload.get("days") instanceof Number n ? n.intValue() : null;
+        // Narrows the request list to one requester. The team scope still
+        // applies on top, so this can only ever cut the list down further —
+        // there is no user id that reaches outside the team checked above.
+        Integer userId = payload.get("user_id") instanceof Number n ? n.intValue() : null;
+        String cursorTs = payload.get("cursor_ts") instanceof String s ? s : null;
+        String cursorId = payload.get("cursor_id") instanceof String s ? s : null;
+        return ResponseEntity.ok(
+            teamActivityService.getTeamActivity(teamId, days, userId, cursorTs, cursorId));
+    }
+
+    /**
+     * Download of the team's request traces (issue #667).
+     *
+     * Every request of the window comes back, the same slice the activity
+     * view shows. The consented ones (recorded at FULL privacy) carry their
+     * request and response content; for the billing-only rows the content
+     * columns are empty, and the envelope says whether the team has full
+     * logging activated at all. Same gate as the activity view, same window
+     * and narrowing rules, so the export never reaches further than the page
+     * it is started from.
+     */
+    @PostMapping("/logosdb/teams/{teamId}/activity/export")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> exportTeamTraces(@PathVariable Integer teamId,
+                                              @RequestBody(required = false) Map<String, Object> body,
+                                              @RequestAttribute("authContext") AuthContext auth) {
+        if (teamId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "team_id is required"));
+        }
+        if (Role.APP_ADMIN.matches(auth.role())
+                && (auth.userId() == null || !apiKeyAdminService.isTeamOwner(teamId, auth.userId()))) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        Map<String, Object> payload = body != null ? body : Map.of();
+        Integer days = payload.get("days") instanceof Number n ? n.intValue() : null;
+        Integer userId = payload.get("user_id") instanceof Number n ? n.intValue() : null;
+        return ResponseEntity.ok(teamActivityService.exportTeamTraces(teamId, days, userId));
+    }
+}

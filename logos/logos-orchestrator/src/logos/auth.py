@@ -56,7 +56,10 @@ class AuthContext:
     environment: Optional[str]
     log_level: str
     settings: Optional[dict]
-    default_priority: int = 1
+    # Queue priority the key owner configured for this key (1/5/10 scale, see
+    # queue.models.Priority). 0 means "not set": the request falls back to the
+    # policy-level priority (see pipeline.resolve_queue_priority).
+    default_priority: int = 0
     cloud_rl: Optional[dict] = None
     local_rl: Optional[dict] = None
 
@@ -83,5 +86,7 @@ def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
         environment=row["environment"],
         log_level=row.get("log") or "BILLING",
         settings=row.get("settings") if row.get("settings") is not None else {},
-        default_priority=row.get("default_priority") or 1,
+        # Preserve 0 (the webservice/UI "not set" sentinel) so the pipeline
+        # can fall back to the policy-level priority.
+        default_priority=row.get("default_priority") or 0,
     )
