@@ -300,6 +300,24 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          -- One of the four lifecycle buckets the feed can be narrowed to:
+          -- queued (not yet scheduled), running (scheduled, not answered),
+          -- error (answered with a failure), finished (answered otherwise).
+          -- A null status leaves the feed unfiltered.
+          AND (CAST(:status AS TEXT) IS NULL
+               OR (CAST(:status AS TEXT) = 'queued'
+                   AND le.timestamp_forwarding IS NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'running'
+                   AND le.timestamp_forwarding IS NOT NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'error'
+                   AND le.timestamp_response IS NOT NULL
+                   AND (le.result_status = 'error' OR le.result_status = 'timeout'))
+               OR (CAST(:status AS TEXT) = 'finished'
+                   AND le.timestamp_response IS NOT NULL
+                   AND le.result_status IS DISTINCT FROM 'error'
+                   AND le.result_status IS DISTINCT FROM 'timeout'))
           -- Keyset cursor: everything strictly older than the last row handed
           -- out. Unlike OFFSET this neither re-walks the skipped rows nor slides
           -- when new requests arrive at the top while the operator pages.
@@ -325,9 +343,49 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("endTs") Timestamp endTs,
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
+        @Param("status") String status,
         @Param("cursorTs") Timestamp cursorTs,
         @Param("cursorId") String cursorId,
         @Param("limitN") int limitN);
+
+    /**
+     * Whether anything the statistics aggregates summarise has moved, as a
+     * single aggregate over the same set {@link #findTotals} counts.
+     *
+     * The window predicate and the scope are deliberately identical to
+     * {@link #findTotals}: a movement signal that describes a different set
+     * than the aggregates would either refresh them for nothing or, worse,
+     * let them go stale. There is no status narrowing on purpose — the
+     * signal has to see every bucket, the ones a feed filter hides included.
+     *
+     * The last-event timestamp is the GREATEST of the three lifecycle
+     * columns, not just {@code timestamp_request}: each of them is stamped
+     * when it moves the aggregates (a forward moves the queue figures, a
+     * response moves the outcome, token and cost totals), and a completion
+     * of an older request would advance none of count or request timestamp
+     * and so be invisible — which is exactly the case of an operator
+     * watching one bucket while the rest of the traffic settles.
+     *
+     * One aggregate pass, no joins: this runs on the two-second push cadence
+     * for every session that has a feed filter on, where
+     * {@link #findTotals} itself runs at a tenth of that.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*) AS rowCount,
+               GREATEST(MAX(le.timestamp_request),
+                        MAX(le.timestamp_forwarding),
+                        MAX(le.timestamp_response)) AS lastEventTs
+        FROM log_entry le
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+        """, nativeQuery = true)
+    ScopeMovementProjection findScopeMovement(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
 
     /**
      * How many requests the range holds under the active filter — the "of N" in
@@ -343,12 +401,29 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          -- Identical to the predicate in {@link #findLatestRequests} (minus the
+          -- cursor): the count and the rows must describe the same set.
+          AND (CAST(:status AS TEXT) IS NULL
+               OR (CAST(:status AS TEXT) = 'queued'
+                   AND le.timestamp_forwarding IS NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'running'
+                   AND le.timestamp_forwarding IS NOT NULL
+                   AND le.timestamp_response IS NULL)
+               OR (CAST(:status AS TEXT) = 'error'
+                   AND le.timestamp_response IS NOT NULL
+                   AND (le.result_status = 'error' OR le.result_status = 'timeout'))
+               OR (CAST(:status AS TEXT) = 'finished'
+                   AND le.timestamp_response IS NOT NULL
+                   AND le.result_status IS DISTINCT FROM 'error'
+                   AND le.result_status IS DISTINCT FROM 'timeout'))
         """, nativeQuery = true)
     Long countRequestsInRange(
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs,
         @Param("userId") Integer userId,
-        @Param("teamId") Integer teamId);
+        @Param("teamId") Integer teamId,
+        @Param("status") String status);
 
     @Transactional(readOnly = true)
     @Query(value = """

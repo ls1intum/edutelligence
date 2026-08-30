@@ -289,18 +289,82 @@ class CalibrationOrchestrator:
             return False
         return not bool(node_health.get("healthy", True))
 
+    def _calibration_gpu_subset(self, provider_id: int) -> frozenset[int]:
+        """GPUs the calibration holds on *provider_id* (issue #592).
+
+        Derived from the worker's nvidia GPU count as the largest power-of-two
+        slice — the same slice the worker's lane manager holds and the probe is
+        pinned to (see ``calibration_gpu_slice`` in the worker). Returns an
+        empty set when the count cannot be determined, in which case the caller
+        treats the whole node as busy (conservative, the old behaviour).
+        """
+        try:
+            snap = self._registry.peek_runtime_snapshot(provider_id)
+        except Exception:
+            snap = None
+        if not isinstance(snap, dict):
+            return frozenset()
+        device_list = ((snap.get("runtime") or {}).get("devices") or {}).get("devices") or []
+        n_gpus = 0
+        for dev in device_list:
+            if not isinstance(dev, dict):
+                continue
+            if dev.get("kind") not in (None, "nvidia"):
+                continue
+            try:
+                index = int((dev.get("extra") or {}).get("index"))
+            except (TypeError, ValueError):
+                continue
+            if index >= 0:
+                n_gpus += 1
+        if n_gpus < 1:
+            return frozenset()
+        slice_size = 1 << (n_gpus.bit_length() - 1)
+        return frozenset(range(slice_size))
+
+    @staticmethod
+    def _lane_touches_subset(gpu_devices: str, subset: frozenset[int]) -> bool:
+        """True when a lane's GPU set intersects the calibration *subset*.
+
+        Mirrors the worker's lane-manager guard: a blank/"all" selector spans
+        every GPU (so it intersects), "none" spans none, and an explicit list
+        is tested by intersection.
+        """
+        raw = (gpu_devices or "").strip().replace(" ", "")
+        lowered = raw.lower()
+        if lowered in {"", "all"}:
+            return True
+        if lowered == "none":
+            return False
+        indices = {int(part) for part in raw.split(",") if part.isdigit()}
+        return bool(indices & subset)
+
     def _provider_has_active_requests(self, provider_id: int) -> bool:
-        """Return True if the provider has any active inference requests."""
+        """Return True if the provider has active requests on the calibration slice.
+
+        A lane busy only on the leftover GPUs (outside the calibration's
+        power-of-two slice) no longer blocks scheduling a calibration
+        (issue #592) — the probe only uses the slice, so a busy leftover GPU is
+        irrelevant. When the slice cannot be determined, any busy lane blocks
+        (the previous, conservative behaviour).
+        """
         try:
             signals = self._facade.get_all_provider_lane_signals(provider_id)
         except Exception:
             # Telemetry unavailable — assume busy to avoid interrupting work.
             return True
+        subset = self._calibration_gpu_subset(provider_id)
         for sig in signals:
-            if int(getattr(sig, "active_requests", 0) or 0) > 0:
-                return True
-            if float(getattr(sig, "queue_waiting", 0.0) or 0.0) > 0.0:
-                return True
+            busy = (
+                int(getattr(sig, "active_requests", 0) or 0) > 0
+                or float(getattr(sig, "queue_waiting", 0.0) or 0.0) > 0.0
+            )
+            if not busy:
+                continue
+            if subset and not self._lane_touches_subset(str(getattr(sig, "gpu_devices", "") or ""), subset):
+                # Busy only on a leftover GPU the probe does not touch.
+                continue
+            return True
         return False
 
     def _provider_has_uncalibrated_models(self, provider_id: int) -> bool:
