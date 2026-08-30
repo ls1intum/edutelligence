@@ -630,9 +630,41 @@ def test_contract_requires_backticks_and_does_not_ban_them():
 
     for template in (pipeline.system_prompt_template, pipeline.help_request_template):
         rendered = _render(template, _episode_with(1))
-        assert "FORMAT, and this is required rather than optional" in rendered
-        assert "Every name you point at goes in" in rendered
+        assert (
+            "FORMAT of `message`, and this is required rather than optional" in rendered
+        )
+        assert "every name you point at goes in backticks" in rendered
         # The ban has to name what it targets: composed code, not markup.
         assert "Writing code the student could take over as the fix" in rendered
         # The over-broad phrasing that caused the miss must not come back.
         assert "Code in any form" not in rendered
+
+
+def test_inline_hint_is_specified_and_parsed_as_plain_text():
+    """
+    Regression: the gutter cue arrived as "Still returns `-1` unconditionally (stub)" and the
+    student saw the backticks as characters. inlineHint is drawn into the editor unfiltered, with
+    no markdown pass, so the FORMAT rule that makes `message` mark up every name is exactly wrong
+    here. The prompt now says so, and the parser strips regardless, because this field reaches the
+    editor without anything else in between.
+    """
+    pipeline = StruggleInterventionPipeline()
+    rendered = _render(pipeline.system_prompt_template, _episode_with(0))
+    assert "FORMAT of `inlineHint` is the opposite" in rendered
+    assert "no markdown pass" in rendered
+
+    gate = parse_gate_result(
+        '{"action": "ambient", "message": "look at `foo`", "confidence": 0.8,'
+        ' "inlineHint": "Still returns `-1` unconditionally"}'
+    )
+    assert gate.inline_hint == "Still returns -1 unconditionally"
+    # message keeps its markup: that one IS rendered as markdown.
+    assert gate.message == "look at `foo`"
+
+    # A cue that was nothing but markup is not a cue.
+    assert (
+        parse_gate_result(
+            '{"action": "ambient", "message": "m", "confidence": 0.5, "inlineHint": "``"}'
+        ).inline_hint
+        is None
+    )

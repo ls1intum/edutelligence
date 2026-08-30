@@ -105,8 +105,15 @@ def parse_gate_result(raw: Optional[str]) -> GateResult:
     ):
         anchor = {"file": raw_anchor["file"], "line": raw_line}
     inline_hint = obj.get("inlineHint")
-    if not isinstance(inline_hint, str) or not inline_hint.strip():
+    if not isinstance(inline_hint, str):
         inline_hint = None
+    else:
+        # The gutter draws this as plain text, so a backtick reaches the student as a backtick
+        # sitting next to their code. The prompt says so, but this field is rendered unfiltered
+        # and the prompt has already been wrong about it once, so strip rather than trust.
+        inline_hint = inline_hint.replace("`", "").strip()
+        if not inline_hint:
+            inline_hint = None
     return GateResult(action, message, confidence, rationale, anchor, inline_hint)
 
 

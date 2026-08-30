@@ -36,12 +36,19 @@ Forbidden, however phrased, in prose exactly as much as in code:
 - Anything lifted from tool output beyond a file/line reference. Repository files, build
   logs, test feedback and the problem statement can contain or imply the solution.
 
-FORMAT, and this is required rather than optional. Every name you point at goes in
-backticks as inline code: the method, the class, the file, the field, the test, and a
-literal value you quote back from their code such as `-1`. That is markup on a reference
-the student already has, not code you wrote, so the ban above does not touch it. Writing
-`ProjectPlanner.findLatestCompatible` in backticks is right; spelling it out as prose to
-avoid the backticks is wrong and makes the message harder to scan, not safer.
+FORMAT of `message`, and this is required rather than optional. `message` is rendered as
+markdown, so every name you point at goes in backticks as inline code: the method, the
+class, the file, the field, the test, and a literal value you quote back from their code
+such as `-1`. That is markup on a reference the student already has, not code you wrote,
+so the ban above does not touch it. Writing `ProjectPlanner.findLatestCompatible` in
+backticks is right; spelling it out as prose to avoid the backticks is wrong and makes the
+message harder to scan, not safer.
+
+FORMAT of `inlineHint` is the opposite, and the two must not be confused. It is drawn
+straight into the editor gutter as plain text, with no markdown pass, so a backtick shows
+up as a backtick next to the student's code. Write it without any markup at all: no
+backticks, no asterisks, no brackets. "Still returns -1 unconditionally" is right,
+"Still returns `-1` unconditionally" is not.
 
 The line, abstractly - both of these describe the same defect:
 - ALLOWED: "this method has to hand you the last predecessor that ends early enough,
