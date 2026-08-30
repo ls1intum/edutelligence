@@ -7,8 +7,11 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,12 +25,13 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Provider;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.PairLatencyStatsProjection;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.PairTpotStatsProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.PairTokenPriceProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 /**
- * Auto-derivation of the L/A/C/Q values for model-provider pairs (issue #651).
+ * Auto-derivation of the L/A/C/Q values for model-provider pairs.
  *
  * Derivation rules:
  * <ul>
@@ -39,7 +43,8 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  *       prices, in the same per-million unit the model list displays
  *       (price_per_k_token / 100000).</li>
  *   <li>Cost (local pairs): VRAM x latency proxy
- *       (total_vram_mb x total_latency_hours x {@link #LOCAL_COST_PER_MB_HOUR}).
+ *       (total_vram_mb x total_latency_hours x {@link #LOCAL_COST_PER_MB_HOUR}),
+ *       i.e. USD for one typical request occupying the whole card.
  *       PLACEHOLDER: there is no per-hardware $/h figure in the system yet;
  *       the constant is a rough on-prem amortisation estimate and must be
  *       tuned once real hardware costs are available.</li>
@@ -50,8 +55,21 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  *
  * The per-model latency/cost weight (the unit the classification consumes) is
  * the best (lowest) derived value across the model's pairs, mapped onto the
- * standard relative weight scale. A dimension an admin set manually
- * (models.weight_overrides) is never overwritten.
+ * standard relative weight scale. The cloud and local cost figures use
+ * different units (USD per million tokens vs. USD per request), so only the
+ * cloud cost is commensurable across pairs and only it feeds the cost
+ * ranking — the local figure stays on the pair row for display.
+ *
+ * A relative scale is only meaningful when the whole population is ranked on
+ * it: the write for a dimension is held until every model that has a pair
+ * (cost: a cloud pair) has a derived value for that dimension, so the fleet
+ * never mixes auto- and manually-ranked scales.
+ *
+ * A dimension an admin set manually (models.weight_overrides) is never
+ * overwritten: the weight write is a targeted UPDATE whose WHERE clause
+ * re-checks the override map at write time, so a pin committed concurrently
+ * with a derivation run survives, and runs where no value moved are no-ops
+ * that do not notify the orchestrator.
  */
 @Service
 public class ModelMetricsService {
@@ -74,17 +92,20 @@ public class ModelMetricsService {
     private final ProviderRepository providerRepository;
     private final ModelRepository modelRepository;
     private final ModelWeightService modelWeightService;
+    private final PriceUpdaterService priceUpdaterService;
     private final OrchestratorNotificationService orchestratorNotificationService;
 
     public ModelMetricsService(ModelProviderRepository modelProviderRepository,
                                ProviderRepository providerRepository,
                                ModelRepository modelRepository,
                                ModelWeightService modelWeightService,
+                               PriceUpdaterService priceUpdaterService,
                                OrchestratorNotificationService orchestratorNotificationService) {
         this.modelProviderRepository = modelProviderRepository;
         this.providerRepository = providerRepository;
         this.modelRepository = modelRepository;
         this.modelWeightService = modelWeightService;
+        this.priceUpdaterService = priceUpdaterService;
         this.orchestratorNotificationService = orchestratorNotificationService;
     }
 
@@ -116,6 +137,28 @@ public class ModelMetricsService {
         } catch (Exception e) {
             log.warn("metrics_derivation: async refresh failed for model id={}: {}", modelId, e.getMessage());
         }
+    }
+
+    /**
+     * Derivation for a freshly connected model: the catalogue price refresh
+     * runs first (synchronously in the async worker), because the cloud cost
+     * reads token_prices - a brand-new pair has no price rows yet.
+     */
+    @Async
+    public void deriveAfterPriceRefreshAsync(int modelId) {
+        try {
+            deriveAfterPriceRefresh(modelId);
+        } catch (Exception e) {
+            log.warn("metrics_derivation: async refresh failed for model id={}: {}", modelId, e.getMessage());
+        }
+    }
+
+    public void deriveAfterPriceRefresh(int modelId) {
+        Model model = modelRepository.findById(modelId).orElse(null);
+        if (model != null && model.getName() != null && !model.getName().isBlank()) {
+            priceUpdaterService.updatePricesForModel(modelId, model.getName());
+        }
+        deriveForModel(modelId);
     }
 
     public void deriveForModel(int modelId) {
@@ -151,11 +194,14 @@ public class ModelMetricsService {
         int providerId = pair.getProviderId();
         Timestamp since = Timestamp.from(Instant.now().minus(STATS_WINDOW_DAYS, ChronoUnit.DAYS));
 
+        // Both stats queries return null (not an empty projection) when the
+        // pair has no qualifying log entries yet - a freshly linked pair.
         PairLatencyStatsProjection latency = modelProviderRepository.findLatencyStats(modelId, providerId, since);
-        int samples = latency.getSamples() != null ? latency.getSamples().intValue() : 0;
-        Integer ttftMs = roundMs(latency.getTtftP50Ms());
-        Integer totalMs = roundMs(latency.getTotalP50Ms());
-        Integer tpotMs = roundMs(modelProviderRepository.findTpotStats(modelId, providerId, since).getTpotP50Ms());
+        int samples = latency != null && latency.getSamples() != null ? latency.getSamples().intValue() : 0;
+        Integer ttftMs = latency != null ? roundMs(latency.getTtftP50Ms()) : null;
+        Integer totalMs = latency != null ? roundMs(latency.getTotalP50Ms()) : null;
+        PairTpotStatsProjection tpot = modelProviderRepository.findTpotStats(modelId, providerId, since);
+        Integer tpotMs = tpot != null ? roundMs(tpot.getTpotP50Ms()) : null;
 
         BigDecimal cost = derivePairCost(modelId, providerId, totalMs, samples);
         modelProviderRepository.updateDerivedMetrics(
@@ -180,7 +226,9 @@ public class ModelMetricsService {
             return BigDecimal.valueOf(mean).setScale(6, RoundingMode.HALF_UP);
         }
 
-        // Local (logosnode) pair: VRAM x latency proxy, PLACEHOLDER factor.
+        // Local (logosnode) pair: VRAM x latency proxy in USD per request,
+        // PLACEHOLDER factor. Display-only - see class javadoc why it does not
+        // reach the cost ranking.
         if (provider.getTotalVramMb() == null || totalLatencyMs == null || samples < MIN_LATENCY_SAMPLES) {
             return null;
         }
@@ -192,48 +240,65 @@ public class ModelMetricsService {
     /**
      * Re-rank the models that have derived latency/cost values (best value
      * across their pairs wins) onto the standard weight scale and store the
-     * result, skipping every dimension the admin overrode manually.
-     * Returns true when any weight changed.
+     * result. See class javadoc for the full rules: fleet-wide scale gating,
+     * cloud-only cost ranking, and race-safe, guarded, targeted writes that
+     * skip manual pins and no-op when nothing moved.
+     * Returns true when any weight actually changed.
      */
     boolean applyDerivedWeights() {
+        // Build the per-dimension populations from the pairs table:
+        // latency = all pairs, but cost ranking = only cloud pairs.
+        Set<Integer> pairedModelIds = new HashSet<>();
+        Set<Integer> cloudPairedModelIds = new HashSet<>();
+        Set<Integer> cloudProviderIds = providerRepository.findAll().stream()
+            .filter(p -> p.getCloudProviderType() != null)
+            .map(Provider::getId).collect(Collectors.toSet());
         Map<Integer, Double> latencyValues = new HashMap<>();
         Map<Integer, Double> costValues = new HashMap<>();
         for (ModelProvider pair : modelProviderRepository.findAll()) {
+            pairedModelIds.add(pair.getModelId());
+            if (cloudProviderIds.contains(pair.getProviderId())) cloudPairedModelIds.add(pair.getModelId());
+
             if (pair.getDerivedSamples() != null && pair.getDerivedSamples() >= MIN_LATENCY_SAMPLES
                     && pair.getDerivedTotalLatencyMs() != null) {
                 latencyValues.merge(pair.getModelId(), pair.getDerivedTotalLatencyMs().doubleValue(), Math::min);
             }
-            if (pair.getDerivedCostUsdPerMillion() != null) {
-                costValues.merge(pair.getModelId(), pair.getDerivedCostUsdPerMillion().doubleValue(), Double::min);
+            // Only the cloud cost in $/M tokens is commensurable across pairs,
+            // so only it feeds the model-level cost ranking; the local $/request
+            // proxy stays display-only on the pair row.
+            if (pair.getDerivedCostUsd() != null && cloudProviderIds.contains(pair.getProviderId())) {
+                costValues.merge(pair.getModelId(), pair.getDerivedCostUsd().doubleValue(), Double::min);
             }
         }
 
-        Map<Integer, Integer> latencyWeights = modelWeightService.rankValuesToWeights(latencyValues);
-        Map<Integer, Integer> costWeights = modelWeightService.rankValuesToWeights(costValues);
-        if (latencyWeights.isEmpty() && costWeights.isEmpty()) return false;
+        // A model without a pair is not in either population, so models without
+        // data or traffic stay on their current (manual/default) weight.
+        // Under-sampled models are in the latency population (paired) but not in
+        // the latency data set (not enough samples), so they'd create a mixed
+        // scale -> hold the write for that dimension until full coverage.
+        boolean latencyFull = !pairedModelIds.isEmpty() && latencyValues.keySet().containsAll(pairedModelIds);
+        boolean costFull = !cloudPairedModelIds.isEmpty() && costValues.keySet().containsAll(cloudPairedModelIds);
+        if (!latencyFull && !costFull) return false;
+        Map<Integer, Integer> latencyWeights = latencyFull ? modelWeightService.rankValuesToWeights(latencyValues) : Map.of();
+        Map<Integer, Integer> costWeights = costFull ? modelWeightService.rankValuesToWeights(costValues) : Map.of();
 
-        List<Model> changed = new ArrayList<>();
+        int updated = 0;
         for (Model model : modelRepository.findAll()) {
-            Map<String, Boolean> overrides =
-                model.getWeightOverrides() != null ? model.getWeightOverrides() : Map.of();
-            boolean modelChanged = false;
+            // Compare first, so a steady-state run is a no-op and we don't
+            // saveAll/notify needlessly (even though the entity is loaded in the
+            // transaction, we don't dirty it unless there's a real change).
             Integer latencyWeight = latencyWeights.get(model.getId());
-            if (latencyWeight != null && !Boolean.TRUE.equals(overrides.get("latency"))) {
-                model.setWeightLatency(latencyWeight);
-                modelChanged = true;
+            if (latencyWeight != null && !latencyWeight.equals(model.getWeightLatency())) {
+                updated += modelRepository.updateWeightLatencyGuarded(model.getId(), latencyWeight);
             }
             Integer costWeight = costWeights.get(model.getId());
-            if (costWeight != null && !Boolean.TRUE.equals(overrides.get("cost"))) {
-                model.setWeightCost(costWeight);
-                modelChanged = true;
+            if (costWeight != null && !costWeight.equals(model.getWeightCost())) {
+                updated += modelRepository.updateWeightCostGuarded(model.getId(), costWeight);
             }
-            if (modelChanged) changed.add(model);
         }
-
-        if (changed.isEmpty()) return false;
-        modelRepository.saveAll(changed);
-        log.info("metrics_derivation: updated weights for {} models (latency ranked: {}, cost ranked: {})",
-            changed.size(), latencyWeights.size(), costWeights.size());
+        if (updated == 0) return false;
+        log.info("metrics_derivation: updated {} model weights (latency ranked: {} models, cost ranked: {} models)",
+            updated, latencyWeights.size(), costWeights.size());
         return true;
     }
 

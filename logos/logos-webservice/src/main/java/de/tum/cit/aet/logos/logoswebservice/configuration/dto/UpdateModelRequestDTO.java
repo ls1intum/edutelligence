@@ -12,7 +12,7 @@ public record UpdateModelRequestDTO(
     Integer weightCost,
     Integer weightQuality,
     /**
-     * Optional explicit replacement of the weight-override set (issue #651):
+     * Optional explicit replacement of the weight-override set:
      * which dimensions the metrics derivation must not touch. When omitted,
      * weight values that actually change are auto-marked as overrides.
      */

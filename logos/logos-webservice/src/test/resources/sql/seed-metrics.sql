@@ -48,7 +48,10 @@ SELECT 90036 + g, NOW() - (g || ' hours')::interval,
        NOW() - (g || ' hours')::interval + make_interval(secs => 0.2),
        6102, 5102, 'success', FALSE
 FROM generate_series(1, 12) g;
--- cold starts, errors, and failed streaming (no first token / no response) - excluded from latency stats
+-- cold start (excluded via was_cold_start), error (excluded via result_status),
+-- and failed streaming: no first token, so excluded from the TTFT aggregate,
+-- but still a total-latency sample (success with a response) - the metrics
+-- test asserts 13 samples for the cloud pair on purpose.
 INSERT INTO log_entry (id, timestamp_request, timestamp_response, time_at_first_token, provider_id, model_id, result_status, was_cold_start)
 VALUES
   (90051, NOW(), NOW() + INTERVAL '60 seconds', NOW() + INTERVAL '30 seconds', 6101, 5101, 'success', TRUE),

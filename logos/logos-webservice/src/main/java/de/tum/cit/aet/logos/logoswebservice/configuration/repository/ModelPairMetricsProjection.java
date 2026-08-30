@@ -13,7 +13,7 @@ public interface ModelPairMetricsProjection {
     Integer getDerivedTtftMs();
     Integer getDerivedTotalLatencyMs();
     Integer getDerivedTpotMs();
-    BigDecimal getDerivedCostUsdPerMillion();
+    BigDecimal getDerivedCostUsd();
     Integer getDerivedSamples();
     Instant getDerivedUpdatedAt();
 }

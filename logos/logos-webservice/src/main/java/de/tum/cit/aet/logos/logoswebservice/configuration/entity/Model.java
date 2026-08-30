@@ -34,7 +34,7 @@ public class Model {
     /**
      * Classifications-weight dimensions (latency/accuracy/cost/quality) the
      * admin set manually. The metrics derivation never overwrites a dimension
-     * that carries an override (issue #651).
+     * that carries an override.
      */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb", nullable = false)

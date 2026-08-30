@@ -1,9 +1,17 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.math.BigDecimal;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,7 +27,10 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelMetricsService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -43,8 +54,16 @@ class ModelMetricsControllerTest {
     ModelMetricsService modelMetricsService;
     @Autowired
     JdbcTemplate jdbc;
+    @Autowired
+    ModelRepository modelRepository;
     @MockitoBean
     JwtDecoder jwtDecoder;
+    // Mocked so the price refresh the derivation waits for never reaches the
+    // live litellm catalog; tests install prices via the mock's answer.
+    @MockitoBean
+    PriceUpdaterService priceUpdaterService;
+    @MockitoBean
+    OrchestratorNotificationService orchestratorNotificationService;
 
     @Test
     void getModelMetrics_returnsPairDerivedMetrics() throws Exception {
@@ -60,7 +79,7 @@ class ModelMetricsControllerTest {
            .andExpect(jsonPath("$[0].derived_ttft_ms").value(100))
            .andExpect(jsonPath("$[0].derived_total_latency_ms").value(500))
            .andExpect(jsonPath("$[0].derived_tpot_ms").value(44))
-           .andExpect(jsonPath("$[0].derived_cost_usd_per_million").value(0.015d))
+           .andExpect(jsonPath("$[0].derived_cost_usd").value(0.015d))
            // 12 warm requests plus row 90053 (success with response but no first token):
            // it feeds the total-latency p50, so it counts as a sample
            .andExpect(jsonPath("$[0].derived_samples").value(13))
@@ -69,7 +88,7 @@ class ModelMetricsControllerTest {
            .andExpect(jsonPath("$[1].derived_ttft_ms").value(9000))
            .andExpect(jsonPath("$[1].derived_total_latency_ms").value(40000))
            .andExpect(jsonPath("$[1].derived_tpot_ms").value(3444))
-           .andExpect(jsonPath("$[1].derived_cost_usd_per_million").value(0.008889d))
+           .andExpect(jsonPath("$[1].derived_cost_usd").value(0.008889d))
            .andExpect(jsonPath("$[1].derived_samples").value(12));
     }
 
@@ -85,6 +104,32 @@ class ModelMetricsControllerTest {
     }
 
     @Test
+    void deriveAfterPriceRefresh_derivesCostOnlyAfterPriceUpdate() throws Exception {
+        // A freshly connected cloud pair has no catalogue price yet, so a
+        // derivation that ran before the price update would store a null cost.
+        jdbc.update("DELETE FROM token_prices WHERE model_id = 5101 AND provider_id = 6101");
+        AtomicInteger priceUpdateRan = new AtomicInteger();
+        doAnswer(invocation -> {
+            jdbc.update("INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_token) "
+                + "VALUES (92201, 9101, 5101, 6101, NOW() - INTERVAL '1 year', 1000), "
+                + "       (92202, 9102, 5101, 6101, NOW() - INTERVAL '1 year', 2000)");
+            priceUpdateRan.set(1);
+            return null;
+        }).when(priceUpdaterService).updatePricesForModel(eq(5101), anyString());
+
+        // Synchronous entry point: the catalogue refresh runs first, the
+        // derivation reads the prices it installed.
+        modelMetricsService.deriveAfterPriceRefresh(5101);
+
+        assertThat(priceUpdateRan.get()).isEqualTo(1);
+        BigDecimal cost = jdbc.queryForObject(
+            "SELECT derived_cost_usd FROM model_provider WHERE model_id = 5101 AND provider_id = 6101",
+            BigDecimal.class);
+        assertThat(cost).isNotNull();
+        assertThat(cost.doubleValue()).isEqualTo(0.015);
+    }
+
+    @Test
     void deriveAllMetrics_appliesModelWeights() throws Exception {
         modelMetricsService.deriveAllMetrics();
         mvc.perform(post("/logosdb/get_models")
@@ -92,12 +137,14 @@ class ModelMetricsControllerTest {
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
-           // best latency pair (500ms) and best cost pair (local 0.008889) are on different
-           // models; weights follow the ModelWeightService scale
+           // Latency is the best pair per model (5101: cloud 500ms, 5102: local 900ms).
+           // Cost is ranked over cloud pairs only (the local $/request figure is
+           // display-only, not commensurable): 5101 cloud 0.015 < 5102 cloud 0.06.
+           // Weights follow the ModelWeightService scale.
            .andExpect(jsonPath("$[0].weight_latency").value(4))   // 5101 fast
-           .andExpect(jsonPath("$[0].weight_cost").value(-4))     // 5101 slow on cost
+           .andExpect(jsonPath("$[0].weight_cost").value(4))      // 5101 cheaper (cloud)
            .andExpect(jsonPath("$[1].weight_latency").value(-4))  // 5102 slow
-           .andExpect(jsonPath("$[1].weight_cost").value(4))      // 5102 fast on cost
+           .andExpect(jsonPath("$[1].weight_cost").value(-4))     // 5102 pricier (cloud)
            // accuracy and quality are not derived in v1 - stay at seed values
            .andExpect(jsonPath("$[0].weight_accuracy").value(0))
            .andExpect(jsonPath("$[0].weight_quality").value(0));
@@ -133,6 +180,34 @@ class ModelMetricsControllerTest {
            .andExpect(status().isOk());
         String overrides = jdbc.queryForObject("SELECT COALESCE(weight_overrides::text,'{}') FROM models WHERE id=5102", String.class);
         assertThat(overrides).doesNotContain("latency");
+    }
+
+    @Test
+    void guardedWeightUpdate_leavesPinnedDimensionsAlone() {
+        modelMetricsService.deriveAllMetrics();
+        // Without a pin the targeted write lands...
+        assertThat(modelRepository.updateWeightLatencyGuarded(5101, 7)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT weight_latency FROM models WHERE id = 5101", Integer.class)).isEqualTo(7);
+        // ...a pin committed in the meantime (e.g. by a concurrent admin edit)
+        // makes the very same UPDATE a no-op, because the guard is re-checked
+        // in the WHERE clause at write time.
+        jdbc.update("UPDATE models SET weight_overrides = '{\"latency\": true}' WHERE id = 5101");
+        assertThat(modelRepository.updateWeightLatencyGuarded(5101, 9)).isEqualTo(0);
+        assertThat(jdbc.queryForObject("SELECT weight_latency FROM models WHERE id = 5101", Integer.class)).isEqualTo(7);
+    }
+
+    @Test
+    void steadyStateDerivation_isNoOpWithoutNotification() {
+        // First run moves the weights from their seed values onto the derived
+        // scale (and notifies). Clear the bookkeeping so the assertion below
+        // only covers the steady-state second run - the startup @Scheduled run
+        // may otherwise have raced with the seed and poked the mock too.
+        modelMetricsService.deriveAllMetrics();
+        clearInvocations(orchestratorNotificationService);
+        // Second run: every derived weight already equals the stored one, so
+        // nothing is written and the orchestrator is not poked.
+        modelMetricsService.deriveAllMetrics();
+        verifyNoInteractions(orchestratorNotificationService);
     }
 
     @Test

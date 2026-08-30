@@ -156,7 +156,7 @@ public class ModelController {
     }
 
     /**
-     * Auto-derived L/A/C/Q metrics per model-provider pair (issue #651).
+     * Auto-derived L/A/C/Q metrics per model-provider pair.
      * The optional model_id restricts the result to one model's pairs.
      */
     @PostMapping("/get_model_metrics")

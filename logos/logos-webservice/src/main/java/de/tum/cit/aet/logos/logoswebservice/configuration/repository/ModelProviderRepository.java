@@ -120,7 +120,7 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
         SET derived_ttft_ms = :ttftMs,
             derived_total_latency_ms = :totalLatencyMs,
             derived_tpot_ms = :tpotMs,
-            derived_cost_usd_per_million = :costUsdPerMillion,
+            derived_cost_usd = :costUsd,
             derived_samples = :samples,
             derived_updated_at = :updatedAt
         WHERE model_id = :modelId AND provider_id = :providerId
@@ -130,7 +130,7 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
                              @Param("ttftMs") Integer ttftMs,
                              @Param("totalLatencyMs") Integer totalLatencyMs,
                              @Param("tpotMs") Integer tpotMs,
-                             @Param("costUsdPerMillion") BigDecimal costUsdPerMillion,
+                             @Param("costUsd") BigDecimal costUsd,
                              @Param("samples") int samples,
                              @Param("updatedAt") Instant updatedAt);
 
@@ -141,7 +141,7 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
                mp.derived_ttft_ms AS derived_ttft_ms,
                mp.derived_total_latency_ms AS derived_total_latency_ms,
                mp.derived_tpot_ms AS derived_tpot_ms,
-               mp.derived_cost_usd_per_million AS derived_cost_usd_per_million,
+               mp.derived_cost_usd AS derived_cost_usd,
                mp.derived_samples AS derived_samples,
                mp.derived_updated_at AS derived_updated_at
         FROM model_provider mp

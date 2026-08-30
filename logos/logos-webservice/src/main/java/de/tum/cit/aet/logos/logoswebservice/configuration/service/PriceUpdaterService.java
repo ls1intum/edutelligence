@@ -118,7 +118,12 @@ public class PriceUpdaterService {
         updatePricesForModel(modelId, modelName);
     }
 
-    private void updatePricesForModel(int modelId, String modelName) {
+    /**
+     * Synchronous price refresh for one model's cloud pairs. Public so callers
+     * that need the prices before continuing (the auto-derivation, which reads
+     * token_prices) can run it inline instead of racing the async variant.
+     */
+    public void updatePricesForModel(int modelId, String modelName) {
         try {
             List<ModelProvider> links = modelProviderRepository.findByModelId(modelId);
             List<ModelProvider> cloudLinks = links.stream()
