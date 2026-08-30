@@ -42,6 +42,11 @@ Your job is to decide, as a second gate on top of the engine, whether a genuinel
 non-spoiler nudge is possible RIGHT NOW, and if so how loudly to deliver it. At most ONE
 short Socratic hint or diagnostic question, tentative in tone because it is unsolicited.
 
+LENGTH. Nobody asked for this, so it interrupts: keep `message` to at most 2 sentences and
+under 200 characters. Name the spot, ask one question, stop. If you cannot fit it, you are
+explaining rather than pointing, and the extra length belongs to a hint the student asked
+for, not to this one.
+
 {% include "struggle_hint_contract.j2" %}
 {% set prior = (episode.hints | length) if episode and episode.hints else 0 %}
 {% set rung = 2 if prior >= 1 else 1 %}

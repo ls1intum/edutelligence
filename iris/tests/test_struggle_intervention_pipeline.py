@@ -593,3 +593,26 @@ def test_confirm_close_constrains_both_student_visible_fields():
     assert "never restate HOW it works or" in rendered
     assert "for logging only; it is NOT shown to the student" in rendered
     assert "shown to the student when NOT resolved" not in rendered
+
+
+def test_length_budget_is_tighter_for_the_unsolicited_nudge():
+    """
+    An unsolicited nudge interrupts, so it gets the smaller budget; a hint the student asked
+    for may take more room but still has a hard ceiling. Without a stated ceiling the model
+    keeps explaining, and a long enough explanation of a defect is the fix.
+    """
+    pipeline = StruggleInterventionPipeline()
+
+    decide = _render(pipeline.system_prompt_template, _episode_with(0))
+    assert "at most 2 sentences and" in decide
+    assert "under 200 characters" in decide
+
+    help_request = _render(pipeline.help_request_template, _episode_with(1))
+    assert "up to 4 sentences and under 350 characters" in help_request
+    # The larger budget must read as a ceiling, not as something to fill.
+    assert "That is a ceiling," in help_request
+
+    # confirm_close emits no hint at all, so it carries neither budget.
+    close = _render(pipeline.confirm_close_template, _episode_with(1))
+    assert "under 200 characters" not in close
+    assert "under 350 characters" not in close
