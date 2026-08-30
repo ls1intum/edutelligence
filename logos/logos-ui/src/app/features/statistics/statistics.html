@@ -379,13 +379,26 @@
       title="Recent requests"
       subtitle="Latest activity from the request log."
     >
+      <span panelRight>
+        <!-- State filter for this list only — it sits with the feed, not in the
+             page scope, because it must not narrow the KPI cards and charts. -->
+        <app-select
+          class="stats-feed-status"
+          [options]="feedStatusOptions()"
+          [value]="selectedFeedStatusValue()"
+          [compact]="true"
+          ariaLabel="Filter requests by state"
+          (valueChange)="setFeedStatusFilter($event)"
+        />
+      </span>
       <app-stats-recent-requests
         [liveRequests]="latestRequests()"
-        [totalInRange]="totalRequests()"
+        [totalInRange]="requestFeedTotal()"
         [range]="requestFeedRange()"
         [pending]="requestsPending()"
         [filterUserId]="filterUserId()"
         [filterTeamId]="filterTeamId()"
+        [filterStatus]="feedStatus()"
       />
     </app-stats-chart-panel>
 

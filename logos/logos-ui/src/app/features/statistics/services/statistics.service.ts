@@ -32,6 +32,8 @@ export interface LatestRequestsPage {
 export interface RequestFilter {
   userId: number | null;
   teamId: number | null;
+  /** One lifecycle bucket (queued/running/error/finished), or null for all. */
+  status: string | null;
 }
 
 /** One entry of a filter dropdown, with how much picking it would select. */
@@ -98,6 +100,7 @@ export class StatisticsService {
         limit,
         user_id: filter.userId,
         team_id: filter.teamId,
+        status: filter.status,
         cursor_ts: cursor?.ts ?? null,
         cursor_id: cursor?.request_id ?? null,
       }),
