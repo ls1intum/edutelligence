@@ -85,9 +85,29 @@ def test_is_gguf_file_ref() -> None:
 def test_is_gguf_repo_name() -> None:
     assert gguf.is_gguf_repo_name("unsloth/Qwen3-8B-GGUF") is True
     assert gguf.is_gguf_repo_name("huihui_ai/gemma-3-4b-it-GGUF") is True
+    assert gguf.is_gguf_repo_name("org/model_GGUF") is True  # underscore variant
+    # The suffix must be the end of the name — "gguf" anywhere in the name is
+    # not the convention and must not match (a false positive makes
+    # resolve_gguf_spec fail a plain model with "pin a quant").
+    assert gguf.is_gguf_repo_name("my-org/gguf-tools-model") is False
+    assert gguf.is_gguf_repo_name("acme/GGUFactory-7B") is False
+    assert gguf.is_gguf_repo_name("org/some_gguf_thing") is False
+    assert gguf.is_gguf_repo_name("org/gguf") is False  # no dash/underscore suffix
     assert gguf.is_gguf_repo_name("Qwen/Qwen3-8B") is False
     # No org/ separator → not a repo id
     assert gguf.is_gguf_repo_name("Qwen3-8B-GGUF") is False
+
+
+def test_hf_cache_dir_name_unifies_reference_forms() -> None:
+    # Every reference form of the same repo maps to one HF cache directory —
+    # the directory the startup prefetch fills — so the capability cache check
+    # and the RAM cache never look in a directory the prefetch never wrote.
+    bare = gguf.hf_cache_dir_name("unsloth/Qwen3-8B-GGUF")
+    assert bare == "models--unsloth--Qwen3-8B-GGUF"
+    assert gguf.hf_cache_dir_name("unsloth/Qwen3-8B-GGUF:Q4_K_M") == bare
+    assert gguf.hf_cache_dir_name("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf") == bare
+    # Non-GGUF references are unchanged.
+    assert gguf.hf_cache_dir_name("Qwen/Qwen3-8B") == "models--Qwen--Qwen3-8B"
 
 
 def test_is_gguf_model_and_explicit_ref() -> None:
@@ -144,27 +164,40 @@ def test_quant_from_filename_dash_wins_over_dot() -> None:
 
 
 def test_candidate_quants_deduplicates_and_skips_mmproj() -> None:
+    # ``candidate_quants`` reports (quant, total-bytes) pairs; the total is
+    # the whole-quant footprint (shards summed), not a single file.
     filenames = [
-        "Qwen3-8B-Q4_K_M-00001-of-00002.gguf",
-        "Qwen3-8B-Q4_K_M-00002-of-00002.gguf",
-        "Qwen3-8B-Q4_K_S.gguf",
-        "mmproj-Qwen3-8B-F16.gguf",
-        "tokenizer.gguf",
+        ("Qwen3-8B-Q4_K_M-00001-of-00002.gguf", 1024),
+        ("Qwen3-8B-Q4_K_M-00002-of-00002.gguf", 1024),
+        ("Qwen3-8B-Q4_K_S.gguf", 512),
+        ("mmproj-Qwen3-8B-F16.gguf", 4096),
+        ("tokenizer.gguf", 8),
     ]
-    assert gguf.candidate_quants(filenames) == ["Q4_K_M", "Q4_K_S"]
+    assert gguf.candidate_quants(filenames) == [("Q4_K_M", 2048), ("Q4_K_S", 512)]
 
 
 def test_select_quant_preferred_wins() -> None:
-    assert gguf.select_quant(["Q4_K_S", "Q4_K_M"], preferred="Q4_K_S") == "Q4_K_S"
+    assert gguf.select_quant([("Q4_K_S", 1), ("Q4_K_M", 2)], preferred="Q4_K_S") == "Q4_K_S"
 
 
 def test_select_quant_prefers_q4_k_m() -> None:
     # Q4_K_M is first in the preferred order regardless of listing order.
-    assert gguf.select_quant(["Q8_0", "Q4_K_S", "Q4_K_M"]) == "Q4_K_M"
+    assert gguf.select_quant([("Q8_0", 4), ("Q4_K_S", 3), ("Q4_K_M", 2)]) == "Q4_K_M"
 
 
-def test_select_quant_fallback_first_candidate() -> None:
-    assert gguf.select_quant(["IQ4_XS"]) == "IQ4_XS"
+def test_select_quant_fallback_smallest_file() -> None:
+    # The fallback (no preferred quant present) orders the exotic quants by
+    # ascending file size — not listing order, which the Hub tends to order
+    # largest-first. The smallest loadable candidate wins, never the largest
+    # variant merely because it happened to be listed first.
+    assert gguf.select_quant([("IQ4_XS", 512)]) == "IQ4_XS"
+    # Two exotic quants (neither in the preferred order): the 128 KiB one
+    # beats the 2 MiB one, whatever order the listing gave them.
+    assert gguf.select_quant([("TQ2_0", 2048), ("Q3_KS", 128)]) == "Q3_KS"
+    assert gguf.select_quant([("Q3_KS", 128), ("TQ2_0", 2048)]) == "Q3_KS"
+    # A repository whose only quants are float types still serves the only
+    # available file — the fallback is a last resort, not a failure.
+    assert gguf.select_quant([("BF16", 8192)]) == "BF16"
     assert gguf.select_quant([]) is None
 
 
@@ -188,10 +221,11 @@ def test_list_cached_gguf_files_finds_cached_model(tmp_path: Path) -> None:
         ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "Qwen3-8B-Q4_K_M-00002-of-00002.gguf", "Qwen3-8B-Q4_K_S.gguf"],
     )
     files = gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF")
+    # (name, size) pairs, sorted by file name.
     assert files == [
-        "Qwen3-8B-Q4_K_M-00001-of-00002.gguf",
-        "Qwen3-8B-Q4_K_M-00002-of-00002.gguf",
-        "Qwen3-8B-Q4_K_S.gguf",
+        ("Qwen3-8B-Q4_K_M-00001-of-00002.gguf", 1),
+        ("Qwen3-8B-Q4_K_M-00002-of-00002.gguf", 1),
+        ("Qwen3-8B-Q4_K_S.gguf", 1),
     ]
 
 
@@ -206,7 +240,7 @@ def test_list_cached_gguf_files_ignores_zero_byte_and_non_gguf(tmp_path: Path) -
     # extraction and the mmproj filter happen later in candidate_quants);
     # zero-byte downloads and non-GGUF files are not.
     files = gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF")
-    assert files == ["Qwen3-8B-Q4_K_M.gguf", "tokenizer.gguf"]
+    assert files == [("Qwen3-8B-Q4_K_M.gguf", 16), ("tokenizer.gguf", 1)]
 
 
 def test_list_cached_gguf_files_none_when_not_cached(tmp_path: Path) -> None:
@@ -289,7 +323,7 @@ def test_resolve_gguf_spec_file_ref_passthrough() -> None:
 def test_resolve_gguf_spec_bare_repo_auto_quant() -> None:
     spec = gguf.resolve_gguf_spec(
         "unsloth/Qwen3-8B-GGUF",
-        gguf_file_names=["Qwen3-8B-Q4_K_S.gguf", "Qwen3-8B-Q4_K_M-00001-of-00002.gguf"],
+        gguf_file_names=[("Qwen3-8B-Q4_K_S.gguf", 512), ("Qwen3-8B-Q4_K_M-00001-of-00002.gguf", 1024)],
     )
     assert spec is not None
     assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
@@ -300,7 +334,7 @@ def test_resolve_gguf_spec_bare_repo_operator_pin_wins() -> None:
     spec = gguf.resolve_gguf_spec(
         "unsloth/Qwen3-8B-GGUF",
         gguf_quant="q4_k_s",
-        gguf_file_names=["Qwen3-8B-Q4_K_M.gguf", "Qwen3-8B-Q4_K_S.gguf"],
+        gguf_file_names=[("Qwen3-8B-Q4_K_M.gguf", 1024), ("Qwen3-8B-Q4_K_S.gguf", 512)],
     )
     assert spec is not None
     assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_S"
@@ -326,12 +360,17 @@ def test_resolve_gguf_spec_cached_listing_without_gguf_disproves_plain_name() ->
     assert gguf.resolve_gguf_spec("org/some-model", gguf_file_names=[]) is None
 
 
-def test_resolve_gguf_spec_gguf_name_without_any_quant_raises() -> None:
-    # The name says -GGUF, so the name keeps the benefit of the doubt even
-    # over an empty listing (it may be partial) — with no quant anywhere the
-    # lane fails with an actionable message instead of a cryptic vLLM error.
+def test_resolve_gguf_spec_authoritative_empty_listing_is_not_gguf() -> None:
+    # An authoritative listing — a list, from the local cache OR the Hub —
+    # that contains no GGUF files is proof the repo holds no GGUF weights,
+    # even when its name follows the ``…-GGUF`` convention. The name alone
+    # no longer gets the benefit of the doubt once the listing actually
+    # resolved; the lane is served as a (non-GGUF) model. Only an
+    # *unavailable* listing (None) keeps the name's benefit of the doubt.
+    assert gguf.resolve_gguf_spec("unsloth/Qwen3-8B-GGUF", gguf_file_names=[]) is None
+    # An unavailable listing (None) still raises for a nameless-quant repo.
     with pytest.raises(ValueError, match="gguf_quant"):
-        gguf.resolve_gguf_spec("unsloth/Qwen3-8B-GGUF", gguf_file_names=[])
+        gguf.resolve_gguf_spec("unsloth/Qwen3-8B-GGUF")
 
 
 def test_resolve_gguf_spec_plain_name_with_gguf_cache_is_gguf() -> None:
@@ -339,7 +378,7 @@ def test_resolve_gguf_spec_plain_name_with_gguf_cache_is_gguf() -> None:
     # repo only contains GGUF weights.
     spec = gguf.resolve_gguf_spec(
         "org/some-quantized-model",
-        gguf_file_names=["some-model-Q4_K_M.gguf"],
+        gguf_file_names=[("some-model-Q4_K_M.gguf", 1024)],
     )
     assert spec is not None
     assert spec.serve_ref == "org/some-quantized-model:Q4_K_M"

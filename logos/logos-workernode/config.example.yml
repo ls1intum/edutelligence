@@ -153,10 +153,15 @@ logos:
     #   - unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf # explicit file
     #
     # A bare repo downloads/serves one quantization: Q4_K_M when the repo
-    # ships it, otherwise a deterministic fallback order. Pin a different one
-    # under engines.vllm.model_overrides.<model>.gguf_quant. vLLM recommends
+    # ships it, otherwise the smallest available quant (the Hub tends to list
+    # larger, often unquantised, variants first). Pin a different one under
+    # engines.vllm.model_overrides.<model>.gguf_quant. vLLM recommends
     # passing the base model's tokenizer (gguf_tokenizer) — it also serves as
     # the HF config source for the GGUF loader.
+    #
+    # Calibrate before routing: an uncalibrated GGUF model is dropped from the
+    # worker's advertised capabilities, so the orchestrator never requests a
+    # lane for it until calibration has produced a profile for it.
     #
     # - model: unsloth/Qwen3-8B-GGUF
     #   kv_cache_memory_bytes: 4G

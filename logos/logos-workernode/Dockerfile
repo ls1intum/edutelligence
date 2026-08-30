@@ -216,8 +216,25 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
          #    and is auto-loaded through vLLM's plugin entry point. Worker
          #    lanes address GGUF models as repo:quant / file references
          #    (see logos_worker_node/gguf.py). Prebuilt wheel — no CUDA build
-         #    step, and all of its deps (vllm, gguf, torch) are already in.
-         && uv pip install --no-cache "vllm-gguf-plugin==0.0.5" \
+         #    step.
+         #
+         #    Blast radius: vllm.general_plugins is evaluated on EVERY vLLM
+         #    engine start, and the plugin's register() is not passive — it
+         #    registers the GGUF quantization, loader and config parser and
+         #    applies three monkey-patches over vLLM internals (EngineArgs,
+         #    the speculator-override hook, the diffusers loader). Those
+         #    wrappers run inside every lane on the node (AWQ, safetensors,
+         #    …), not only GGUF lanes: they detect GGUF references and pass
+         #    through otherwise, but a bug in the plugin reaches every lane.
+         #
+         #    Installed with --no-deps (like the FlashInfer step above): the
+         #    plugin declares unpinned deps on gguf, vllm and torch, and a
+         #    plain install lets the resolver float torch/vllm out from under
+         #    the pinned CUDA stack below. gguf is installed explicitly first
+         #    (a --no-deps plugin does not pull it); it is otherwise already
+         #    in and the explicit install is a no-op when it is.
+         && uv pip install --no-cache gguf \
+         && uv pip install --no-cache --no-deps "vllm-gguf-plugin==0.0.5" \
          # 7. Pin the CUDA compiler wheels to the runtime-header version.
          #    torch pins nvidia-cuda-runtime (the headers, CUDART_VERSION)
          #    but NOT nvidia-cuda-nvcc, so the resolver floats nvcc to the
