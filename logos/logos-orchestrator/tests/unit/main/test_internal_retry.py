@@ -468,6 +468,56 @@ async def test_same_provider_retry_does_not_recharge_the_bucket(retry_env):
     assert pipeline.sync_calls[1]["rl_key"] == "api_key:1:local"
 
 
+async def test_azure_to_cloud_failover_charges_the_cloud_bucket_once(retry_env):
+    """A failover between two *cloud* provider types (azure -> cloud)
+    re-selects the same rate-limit bucket, so the request must be charged
+    exactly once — not once per provider type. ``rl_key`` (local/cloud) is
+    coarser than ``provider_type`` (azure, cloud, ...), so keying the dedup on
+    the bucket rather than the provider type is what stops a single request
+    from consuming two rpm slots on the platform's own failure and tripping
+    the caller's limit."""
+    import logos.rate_limiter as rl_module
+
+    limiter = _FakeRateLimiter()
+    retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
+    budget_calls = []
+    retry_env.setattr(main, "_check_budget_if_cloud", lambda db, auth, is_cloud, month: budget_calls.append(is_cloud))
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[
+            _ok_result(provider_id=1, provider_type="azure"),
+            _ok_result(provider_id=2, provider_type="cloud"),
+        ],
+        sync_responses=[
+            JSONResponse(content={"error": "worker gone"}, status_code=502),
+            JSONResponse(content={"ok": True}, status_code=200),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth_with_rl(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # Both attempts land in the cloud bucket (azure and cloud are not local),
+    # so the request is charged once — the second attempt re-selects a bucket
+    # it was already charged to. (Deduping by provider_type would charge it
+    # twice, once per type.)
+    assert [key for key, _ in limiter.checks] == ["api_key:1:cloud"]
+    assert len(limiter.checks) == 1
+    # Both attempts are cloud for budget purposes.
+    assert budget_calls == [True, True]
+    assert pipeline.sync_calls[0]["rl_key"] == "api_key:1:cloud"
+    assert pipeline.sync_calls[1]["rl_key"] == "api_key:1:cloud"
+
+
 async def test_failover_into_exhausted_bucket_is_rejected(retry_env):
     """If the bucket the failover re-selects is already exhausted, the
     request is rejected against THAT bucket — with the attempt's slot

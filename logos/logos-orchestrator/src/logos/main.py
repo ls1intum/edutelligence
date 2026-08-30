@@ -4374,10 +4374,11 @@ async def _execute_resource_mode(
     # re-queueing under the same pressure cannot help.
     retry_budget = _new_retry_budget()
     rl_tpm_key: Optional[str] = None
-    # The provider types this request's rate-limit hit was already recorded
-    # for — a retry must not charge a bucket the request was charged to
-    # already.
-    charged_provider_types: set[str] = set()
+    # The rate-limit buckets this request's rate-limit hit was already
+    # recorded for — a retry must not charge a bucket the request was charged
+    # to already. Keyed by rl_key (local/cloud), not provider_type, because
+    # several provider types (e.g. azure and cloud) share one bucket.
+    charged_rl_keys: set[str] = set()
     while True:
         # Process through classification and scheduling
         result = await _pipeline.process(pipeline_req)
@@ -4413,14 +4414,14 @@ async def _execute_resource_mode(
         # was scheduled on.
         rl_tpm_key = rl_key if rl_info and rl_info.get("tpm") is not None else None
 
-        # Rate limiting counts the request once per provider type it is
-        # dispatched to, not once per internal retry attempt: the bucket
-        # identity is a property of where the request runs, so a failover to
-        # another provider type re-selects it — but a retry on a provider
-        # type the request was already charged to must not charge it again,
-        # or the caller's own limit would be tripped by the platform's
-        # failure.
-        if rl_info is not None and provider_type not in charged_provider_types:
+        # Rate limiting counts the request once per rate-limit bucket it is
+        # dispatched to, not once per internal retry attempt. The bucket is
+        # keyed by rl_key (local vs cloud), which is coarser than
+        # provider_type — both "azure" and "cloud" map to the cloud bucket —
+        # so a failover between provider types that share a bucket must not
+        # charge it twice, or the caller's own limit would be tripped by the
+        # platform's failure.
+        if rl_info is not None and rl_key not in charged_rl_keys:
             from logos.rate_limiter import RateLimitConfig, get_rate_limiter
 
             rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
@@ -4447,7 +4448,7 @@ async def _execute_resource_mode(
                     detail=f"Rate limit exceeded: {reason}",
                     headers={"Retry-After": str(RateLimitConfig.window_seconds)},
                 )
-            charged_provider_types.add(provider_type)
+            charged_rl_keys.add(rl_key)
 
         # The cloud budget check, like the bucket above, is a property of
         # where the request runs: it re-runs on every attempt, so a key over
