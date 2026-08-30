@@ -176,7 +176,7 @@ class LaneSchedulerSignals:
     sleep_state: str  # unsupported|unknown|awake|sleeping
     active_requests: int
     queue_waiting: float  # from backend_metrics, 0.0 when the engine reports nothing
-    requests_running: float  # from backend_metrics, or active_requests when no running count is reported
+    requests_running: float  # from backend_metrics, 0.0 when no running count is reported
     gpu_cache_usage_percent: Optional[float]  # vLLM only
     ttft_p95_seconds: float  # computed from ttft_histogram, 0.0 if unavailable
     e2e_latency_p50_seconds: float  # p50 end-to-end request latency, 0.0 if unavailable

@@ -132,13 +132,13 @@ def test_scheduler_view_loaded_and_sleeping_lanes(monkeypatch):
     assert len(view.lanes) == 2
 
     # Verify lane signals
-    vllm_lane = next(l for l in view.lanes if l.lane_id == "vllm-1")
+    vllm_lane = next(lane for lane in view.lanes if lane.lane_id == "vllm-1")
     assert vllm_lane.requests_running == 2.0
     assert vllm_lane.gpu_cache_usage_percent == 45.0
     assert vllm_lane.gpu_memory_utilization == 0.7
     assert vllm_lane.tensor_parallel_size == 2
 
-    sleeping_lane = next(l for l in view.lanes if l.lane_id == "sleeping-1")
+    sleeping_lane = next(lane for lane in view.lanes if lane.lane_id == "sleeping-1")
     assert sleeping_lane.requests_running == 0.0  # no running count reported → 0.0
     assert sleeping_lane.gpu_cache_usage_percent is None
 

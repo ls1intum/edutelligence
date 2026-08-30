@@ -29,6 +29,7 @@ class DummyInventoryDB:
         self.stats_status = stats_status
         self.delta_payload = delta_payload if delta_payload is not None else {"providers": [], "last_snapshot_id": 0}
         self.delta_status = delta_status
+        self.deltas_calls: list[tuple] = []
 
     def __enter__(self):
         return self
@@ -44,8 +45,9 @@ class DummyInventoryDB:
         assert logos_key == "test-key"
         return self.stats_payload, self.stats_status
 
-    def get_provider_vram_deltas(self, logos_key, day, after_snapshot_id=0):  # noqa: ARG002
+    def get_provider_vram_deltas(self, logos_key, day, after_snapshot_id=0, since=None):  # noqa: ARG002
         assert logos_key == "test-key"
+        self.deltas_calls.append((day, after_snapshot_id, since))
         return self.delta_payload, self.delta_status
 
 
@@ -73,6 +75,21 @@ def mock_auth(monkeypatch):
         return mock_auth_ctx
 
     monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate)
+
+
+def test_initial_all_day_vram_load_is_bounded_by_recent_since_window(monkeypatch):
+    """day='all' with no cursor (initial WS load) must go through
+    get_provider_vram_deltas bounded by a recent `since` window."""
+    db = DummyInventoryDB([], delta_payload={"providers": [], "last_snapshot_id": 42})
+    monkeypatch.setattr(main, "DBManager", lambda: db)
+
+    payload = main._load_persisted_local_provider_vram_payload("test-key", day="all")
+
+    assert payload["last_snapshot_id"] == 42
+    day, after_snapshot_id, since = db.deltas_calls[0]
+    assert day == "all"
+    assert after_snapshot_id == 0
+    assert since is not None
 
 
 @pytest.mark.asyncio
