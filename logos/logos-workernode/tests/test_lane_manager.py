@@ -308,6 +308,62 @@ async def test_sleep_and_wake_lane_delegate_to_vllm_handle(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sleep_lane_invokes_the_on_lane_slept_hook(monkeypatch) -> None:
+    """The moment a lane's weights land in host RAM, the wired hook (the RAM
+    cache re-plan) must run before sleep_lane returns — so several lanes
+    sleeping in quick succession do not face a cache that keeps its old size
+    for up to a 60 s tick. A failing hook must never fail the sleep itself."""
+    calls = []
+
+    async def _hook() -> None:
+        calls.append(1)
+
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15071,
+        lane_port_end=15080,
+        on_lane_slept=_hook,
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_id = "deepseek-ai_DeepSeek-R1-0528-Qwen3-8B"
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15071
+            self.lane_config = lane
+            self.sleep_called = 0
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            self.sleep_called += 1
+            return {"ok": True}
+
+    fake = FakeVllmHandle()
+    manager._handles[lane_id] = fake  # noqa: SLF001
+    sentinel = object()
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+
+    out = await manager.sleep_lane(lane_id, level=1, mode="wait")
+
+    assert out is sentinel
+    assert fake.sleep_called == 1
+    assert calls == [1]
+
+    async def _boom() -> None:
+        raise RuntimeError("simulated re-plan failure")
+
+    manager._on_lane_slept = _boom  # noqa: SLF001
+    out2 = await manager.sleep_lane(lane_id, level=1, mode="wait")
+
+    assert out2 is sentinel  # the sleep still succeeds
+    assert fake.sleep_called == 2
+
+
+@pytest.mark.asyncio
 async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
     manager = LaneManager(OllamaConfig(), lane_port_start=15031, lane_port_end=15040)
     lane = LaneConfig(

@@ -293,6 +293,7 @@ class LaneManager:
         model_cache: Any | None = None,
         auto_reboot_on_stuck_gpu: bool = True,
         reboot_sentinel_path: str = "/host/reboot-requested",
+        on_lane_slept: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
@@ -305,6 +306,14 @@ class LaneManager:
         self._model_cache = model_cache
         self._auto_reboot_on_stuck_gpu = auto_reboot_on_stuck_gpu
         self._reboot_sentinel_path = reboot_sentinel_path
+        # Invoked after a lane has successfully slept (its weights are in
+        # host RAM now). The wiring in main.py points this at the RAM-cache
+        # re-plan so the cache shrinks on the sleep itself instead of on the
+        # next 60 s tick — tmpfs pages are not reclaimable by the kernel, so
+        # a cache that keeps its old size in that window is what lets a burst
+        # of sleeps push the host to the OOM killer. Must never raise into
+        # the sleep path (see sleep_lane).
+        self._on_lane_slept = on_lane_slept
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -908,7 +917,22 @@ class LaneManager:
                 details=f"level={level}, mode={mode}",
                 port=handle.port,
             )
-            return await self._get_status_unlocked(lane_id)
+            status = await self._get_status_unlocked(lane_id)
+        # The lane is asleep and its weights are in host RAM now — re-plan
+        # the RAM cache immediately, before the next sleep lands, instead of
+        # on the next 60 s tick: the kernel cannot reclaim tmpfs pages, so a
+        # cache that keeps its old size in that window is what makes the host
+        # OOM killer pick vLLM rather than the cache. Runs outside
+        # self._lock so the hook's lane inspection cannot deadlock on it, and
+        # a failing hook must never fail the sleep itself.
+        if self._on_lane_slept is not None:
+            try:
+                await self._on_lane_slept()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.debug("on_lane_slept hook failed", exc_info=True)
+        return status
 
     async def wake_lane(self, lane_id: str) -> LaneStatus:
         """Wake a sleeping vLLM lane."""
@@ -975,6 +999,36 @@ class LaneManager:
     # ------------------------------------------------------------------
     # Status / queries
     # ------------------------------------------------------------------
+
+    async def sleeping_models(self) -> set[str]:
+        """Models whose lane is alive and in vLLM sleep mode right now —
+        i.e. holding its weights in host RAM.
+
+        Only the ``/is_sleeping`` probe is paid, and only for live vLLM
+        lanes with sleep mode enabled (a dead process holds no RAM) — no
+        VRAM queries, no profile recording, no lane recovery, so this is a
+        fraction of what ``get_all_statuses`` costs. The RAM-cache re-plan
+        uses this to keep the sleep reserve from counting a model twice: an
+        asleep model's RAM is already out of MemAvailable, so reserving it
+        again would shrink the cache's budget by the size of every sleeping
+        model. A lane that cannot be probed (engine wedged, transport
+        failure) is not counted as asleep — the reserve then still covers
+        it, which is the safe direction.
+        """
+        asleep: set[str] = set()
+        for handle in list(self._handles.values()):
+            ps = handle.status()
+            if ps.state != ProcessState.RUNNING:
+                continue
+            lc = handle.lane_config
+            if lc is None or not lc.vllm or not (lc.vllm_config and lc.vllm_config.enable_sleep_mode):
+                continue
+            try:
+                if await handle.is_sleeping() is True:
+                    asleep.add(lc.model)
+            except Exception:
+                logger.debug("sleep probe failed for lane '%s'", handle.lane_id, exc_info=True)
+        return asleep
 
     async def get_all_statuses(self) -> list[LaneStatus]:
         # Snapshot handles without the lock so status collection (which does
