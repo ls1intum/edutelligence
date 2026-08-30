@@ -506,7 +506,7 @@ def test_contract_names_the_prose_spoiler_classes():
     assert "algorithm or data structure to apply" in rendered
     assert "State-variable names together with their update rule" in rendered
     assert "ordered sequence of steps whose endpoint is working code" in rendered
-    assert "Code in any form" in rendered
+    assert "Writing code the student could take over as the fix" in rendered
     # The blanket rule the old help-request guardrails carried, kept verbatim so it does not
     # depend on a reader stitching the individual classes above together.
     assert "NEVER give the full or near-full solution" in rendered
@@ -605,7 +605,7 @@ def test_length_budget_is_tighter_for_the_unsolicited_nudge():
 
     decide = _render(pipeline.system_prompt_template, _episode_with(0))
     assert "at most 2 sentences and" in decide
-    assert "under 200 characters" in decide
+    assert "under 250 characters" in decide
 
     help_request = _render(pipeline.help_request_template, _episode_with(1))
     assert "up to 4 sentences and under 350 characters" in help_request
@@ -614,5 +614,25 @@ def test_length_budget_is_tighter_for_the_unsolicited_nudge():
 
     # confirm_close emits no hint at all, so it carries neither budget.
     close = _render(pipeline.confirm_close_template, _episode_with(1))
-    assert "under 200 characters" not in close
+    assert "under 250 characters" not in close
     assert "under 350 characters" not in close
+
+
+def test_contract_requires_backticks_and_does_not_ban_them():
+    """
+    Regression for a live miss: the first hint after the contract shipped contained no inline
+    code at all. "Code in any form ... method-call chains" reads as a ban on the markup, so the
+    model spelled `ProjectPlanner.findLatestCompatible` out as prose to comply. The ban is about
+    composing a fix; naming something already in the student's code has to stay marked up, or
+    the reference is unscannable and the chip styling never renders.
+    """
+    pipeline = StruggleInterventionPipeline()
+
+    for template in (pipeline.system_prompt_template, pipeline.help_request_template):
+        rendered = _render(template, _episode_with(1))
+        assert "FORMAT, and this is required rather than optional" in rendered
+        assert "Every name you point at goes in" in rendered
+        # The ban has to name what it targets: composed code, not markup.
+        assert "Writing code the student could take over as the fix" in rendered
+        # The over-broad phrasing that caused the miss must not come back.
+        assert "Code in any form" not in rendered
