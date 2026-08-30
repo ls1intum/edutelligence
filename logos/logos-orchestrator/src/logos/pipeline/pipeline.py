@@ -20,9 +20,39 @@ from logos.timeouts import global_timeout_s
 
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
+from .prefix_affinity import affinity_keys
 from .scheduler_interface import QueueTimeoutError, SchedulerInterface, SchedulingRequest
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_queue_priority(default_priority: Optional[int], policy_priority: Optional[int]) -> int:
+    """
+    Resolve the effective queue priority for a request.
+
+    The API key's ``default_priority`` (set per key, editable in the admin UI)
+    takes precedence over the policy-level ``priority``: a key that has a
+    priority set (non-zero) queues its requests at that priority regardless of
+    the policy, so a key owner's explicit choice is always honoured. A key
+    without a priority set (0, the default for newly created keys) falls back
+    to the policy's priority, preserving the historical policy-only behaviour.
+
+    Both values use the same 1/5/10 scale consumed by ``Priority.from_int``
+    (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL).
+
+    Args:
+        default_priority: The requesting API key's default_priority, or 0/None
+            when the key has none set.
+        policy_priority: The policy's ``priority`` value (may be 0/None).
+
+    Returns:
+        The effective integer priority for the request's queue entry.
+    """
+    if default_priority:
+        return int(default_priority)
+    if policy_priority:
+        return int(policy_priority)
+    return 0
 
 
 @dataclass
@@ -43,6 +73,13 @@ class PipelineRequest:
     # context resolver to build the forward URL for cloud upstream providers,
     # which serve the same OpenAI-shaped surface as our /v1 routes.
     request_path: Optional[str] = None
+    # The requesting API key's default_priority (see auth.AuthContext). The key
+    # owner's queue-priority choice for their traffic. 0 means "not set": the
+    # policy-level priority applies instead (see resolve_queue_priority).
+    default_priority: int = 0
+    # Calling API key. Seeds the prefix-affinity hash so two keys never share
+    # a stream identity, and so one key's parallel agent loops stay separate.
+    api_key_id: Optional[int] = None
 
 
 @dataclass
@@ -143,7 +180,7 @@ class RequestPipeline:
             )
 
         sorted_candidates = sorted(classification_result.candidates, key=lambda x: x[1], reverse=True)
-        target_model_id, _, priority_int, _ = sorted_candidates[0]
+        target_model_id, _, priority_int = sorted_candidates[0]
         target_deployment = next(
             (d for d in request.deployments if d["model_id"] == target_model_id),
             None,
@@ -167,6 +204,7 @@ class RequestPipeline:
             deployments=request.deployments,
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
+            affinity_keys=affinity_keys(request.api_key_id, request.payload),
         )
 
         # Record enqueue
@@ -436,6 +474,14 @@ class RequestPipeline:
             skip_laura=request.skip_laura,
         )
 
+        # The classifier bakes the policy's priority into every candidate, but
+        # the key owner's default_priority takes precedence: resolve the
+        # effective priority here so all downstream consumers (schedulers,
+        # queueing, monitoring, log stats) agree on it.
+        effective_priority = resolve_queue_priority(request.default_priority, policy.get("priority"))
+        if candidates:
+            candidates = [(model_id, weight, effective_priority) for model_id, weight, _ in candidates]
+
         elapsed = time.time() - start
 
         prom.CLASSIFICATION_DURATION_SECONDS.observe(elapsed)
@@ -446,7 +492,7 @@ class RequestPipeline:
             "classification_time": elapsed,
             "candidate_count": len(candidates),
             "candidates": [
-                {"model_id": m, "weight": w, "priority": p} for m, w, p, _ in candidates[:5]  # Top 5 for logging
+                {"model_id": m, "weight": w, "priority": p} for m, w, p in candidates[:5]  # Top 5 for logging
             ],
         }
 
@@ -501,14 +547,24 @@ class RequestPipeline:
         result_status: str,
         error_message: Optional[str] = None,
         cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
     ):
-        """Record request completion."""
+        """Record request completion.
+
+        ``usage_tokens`` (the ``extract_token_usage`` dict) feeds the token
+        counters and the per-model context-window histogram when present.
+        """
         self._monitoring.record_complete(
             request_id=request_id,
             result_status=result_status,
             error_message=error_message,
             cold_start=cold_start,
+            usage_tokens=usage_tokens,
         )
+
+    def discard_request(self, request_id: str, result_status: str) -> None:
+        """Close out a request whose terminal log row was written elsewhere."""
+        self._monitoring.discard(request_id, result_status)
 
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
@@ -556,5 +612,5 @@ class RequestPipeline:
 
 @dataclass
 class _ClassificationResult:
-    candidates: List[Tuple[int, float, int, int]]
+    candidates: List[Tuple[int, float, int]]  # (model_id, weight, priority)
     stats: Dict[str, Any]

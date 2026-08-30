@@ -22,7 +22,9 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteLaneRequestD
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.WakeLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
@@ -160,6 +162,39 @@ public class ProviderController {
         } catch (Exception e) {
             return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
         }
+    }
+
+    @PostMapping("/providers/logosnode/lanes/sleep")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> sleepLane(@RequestBody SleepLaneRequestDTO req) {
+        if (req.providerId() == null || req.laneId() == null)
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        try {
+            return workerAdminClient.sleepLane(req.providerId(), req.laneId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+    }
+
+    @PostMapping("/providers/logosnode/lanes/wake")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> wakeLane(@RequestBody WakeLaneRequestDTO req) {
+        if (req.providerId() == null || req.laneId() == null)
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        try {
+            return workerAdminClient.wakeLane(req.providerId(), req.laneId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+    }
+
+    /** e.getMessage() is null for some exceptions, and Map.of rejects null values. */
+    private Object errorBody(Exception e) {
+        return Map.of("error", e.getMessage() != null ? e.getMessage() : e.toString());
     }
 
     private Object parseOrWrap(String body) {

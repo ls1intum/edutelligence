@@ -5,7 +5,6 @@ public record UpdateModelRequestDTO(
     String name,
     String description,
     String tags,
-    Integer parallel,
     Integer weightLatency,
     Integer weightAccuracy,
     Integer weightCost,

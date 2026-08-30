@@ -71,6 +71,15 @@
   max-width: 240px;
 }
 
+// The export acts on the whole list, not on one filter, so it sits at the end
+// of the toolbar wherever the count line wraps.
+.ac-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 // ── Live tiles ────────────────────────────────────────────────────────────────
 
 .ac-tiles {

@@ -110,6 +110,11 @@ export type LaneSignalData = {
   sleep_state: string | null;
   gpu_devices: string | null;
   effective_gpu_devices: string | null;
+  /**
+   * Worker-reported concurrency. vLLM lanes: full-context KV budget parsed
+   * from the startup log (guaranteed minimum; 0 until the log is parsed).
+   * Ollama lanes: static slot count (legacy — the UI ignores it).
+   */
   num_parallel: number | null;
   active_requests: number;
   effective_vram_mb: number;
@@ -302,6 +307,12 @@ export interface RequestItem {
    * orchestrator's running tally and moves until the request completes.
    */
   streaming?: boolean;
+  /**
+   * The prompt figure is the estimate the context routing computed from the
+   * body — the request has not reached a point where the upstream states the
+   * real size yet (it still queues). Shown as an estimate, not a fact.
+   */
+  prompt_estimated?: boolean;
 }
 
 /**

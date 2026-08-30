@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.MyKeyProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProjection;
 
@@ -19,6 +20,8 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
 
     boolean existsByTeamIdAndKeyTypeAndEnvironmentAndIsActive(
             Integer teamId, ApiKeyType keyType, String environment, boolean isActive);
+
+    boolean existsByTeamIdAndLogAndIsActive(Integer teamId, LogLevel log, boolean isActive);
 
     @Query(value = """
         SELECT id, key_value, name, key_type::text AS key_type, user_id, environment,

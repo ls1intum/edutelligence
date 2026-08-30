@@ -32,6 +32,8 @@ export interface LatestRequestsPage {
 export interface RequestFilter {
   userId: number | null;
   teamId: number | null;
+  /** One lifecycle bucket (queued/running/error/finished), or null for all. */
+  status: string | null;
 }
 
 /** One entry of a filter dropdown, with how much picking it would select. */
@@ -98,6 +100,7 @@ export class StatisticsService {
         limit,
         user_id: filter.userId,
         team_id: filter.teamId,
+        status: filter.status,
         cursor_ts: cursor?.ts ?? null,
         cursor_id: cursor?.request_id ?? null,
       }),
@@ -125,6 +128,28 @@ export class StatisticsService {
 
   unloadLane(providerId: number, laneId: string): Promise<unknown> {
     return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/delete', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
+  /**
+   * Put an awake lane to sleep. The server first drains in-flight requests
+   * (mode="wait"), so the call can take as long as the drain — and rejects
+   * with a reason only when the lane cannot sleep at all (its model is
+   * configured without enable_sleep_mode). Sleep level 1 is fixed
+   * server-side: the weights stay resident, so the wake below does not pay
+   * for a cold load.
+   */
+  sleepLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/sleep', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
+  wakeLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/wake', {
       provider_id: providerId,
       lane_id: laneId,
     }));

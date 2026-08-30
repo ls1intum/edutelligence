@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- The models.parallel column was a static, per-model hard ceiling on
+         parallel capacity. It is now derived from the worker's live lane
+         signals (runtime snapshot: per-lane num_parallel plus the vLLM
+         backend metrics the worker scrapes from /metrics), so the static
+         entry is dropped entirely. Fresh installs create the column in 000
+         and this changeSet removes it again; existing databases drop it
+         here. -->
+    <changeSet id="013-drop-models-parallel-column" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="models" columnName="parallel"/>
+        </preConditions>
+        <dropColumn tableName="models" columnName="parallel"/>
+        <rollback>
+            <sql>ALTER TABLE models ADD COLUMN parallel INTEGER DEFAULT(1) CONSTRAINT minimum CHECK (parallel BETWEEN 1 and 256);</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

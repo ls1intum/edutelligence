@@ -9,7 +9,19 @@
   } @else {
     <div class="table-header" role="row">
       @for (col of columns; track $index) {
-        <div role="columnheader">{{ col }}</div>
+        @if ($index === sortableColumn) {
+          <div
+            role="columnheader"
+            [attr.aria-sort]="sortDirection === 'asc' ? 'ascending' : sortDirection === 'desc' ? 'descending' : 'none'"
+          >
+            <button type="button" class="th-sort" (click)="sortToggle.emit()">
+              {{ col }}
+              <i class="pi {{ sortIcon }}" aria-hidden="true"></i>
+            </button>
+          </div>
+        } @else {
+          <div role="columnheader">{{ col }}</div>
+        }
       }
     </div>
 

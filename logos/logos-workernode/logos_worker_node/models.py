@@ -112,6 +112,17 @@ class VllmConfig(BaseModel):
         "Empty = auto-detect (TRITON_ATTN on pre-Ampere, FlashInfer on Ampere+).",
     )
     enable_prefix_caching: bool = True
+    enable_prompt_tokens_details: bool = Field(
+        default=True,
+        description=(
+            "Make vLLM report usage.prompt_tokens_details (cached_tokens) on "
+            "every completion. Passes --enable-prompt-tokens-details to vLLM, "
+            "which is off by default there. On by default so consumers see the "
+            "prefix-cache hit share of local requests in usage, the same "
+            "meta-information cloud providers report natively. Set to false to "
+            "suppress the field."
+        ),
+    )
     disable_custom_all_reduce: bool = False
     enable_sleep_mode: bool = False
     server_dev_mode: bool = False

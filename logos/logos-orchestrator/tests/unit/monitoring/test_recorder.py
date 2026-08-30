@@ -41,6 +41,9 @@ def _make_recording_metric(name):
             self.label_calls = []
             self.observations = []
             self.inc_calls = 0
+            self.inc_values = []
+            self.dec_calls = 0
+            self.set_values = []
 
         def labels(self, **kwargs):
             self.label_calls.append(kwargs)
@@ -49,14 +52,20 @@ def _make_recording_metric(name):
         def observe(self, value):
             self.observations.append(value)
 
-        def inc(self):
+        def inc(self, value=1):
             self.inc_calls += 1
+            self.inc_values.append(value)
 
         def dec(self):
-            pass
+            self.dec_calls += 1
 
         def set(self, value):
-            pass
+            self.set_values.append(value)
+
+        @property
+        def value(self):
+            """Last published gauge value, or None if never set."""
+            return self.set_values[-1] if self.set_values else None
 
     return _RecordingMetric()
 
@@ -76,6 +85,10 @@ def _patch_prom(monkeypatch):
         REQUEST_DURATION_SECONDS=_make_recording_metric("logos_request_duration_seconds"),
         COLD_STARTS_TOTAL=_make_recording_metric("logos_cold_starts_total"),
         QUEUE_DEPTH=_make_recording_metric("logos_queue_depth"),
+        PROMPT_TOKENS_TOTAL=_make_recording_metric("logos_prompt_tokens_total"),
+        GENERATION_TOKENS_TOTAL=_make_recording_metric("logos_generation_tokens_total"),
+        CACHED_PROMPT_TOKENS_TOTAL=_make_recording_metric("logos_cached_prompt_tokens_total"),
+        REQUEST_CONTEXT_TOKENS=_make_recording_metric("logos_request_context_tokens"),
     )
     monkeypatch.setattr(recorder_module, "prom", fake)
     return fake
@@ -234,3 +247,95 @@ def test_complete_without_enqueue_records_no_duration(monkeypatch):
 
     assert fake.REQUEST_DURATION_SECONDS.label_calls == []
     assert fake.REQUEST_DURATION_SECONDS.observations == []
+
+
+# ---------------------------------------------------------------------------
+# Token usage metrics (issue 819)
+# ---------------------------------------------------------------------------
+
+
+def _settle_with_usage(monkeypatch, result_status, usage_tokens):
+    recorder, _ = _make_recorder(monkeypatch, {27: "Qwen/Qwen3-8B"}, {12: "local-node"})
+    fake = _patch_prom(monkeypatch)
+
+    recorder.record_enqueue(
+        request_id="req-819-tokens",
+        model_id=27,
+        provider_id=12,
+        initial_priority="normal",
+        queue_depth=0,
+    )
+    recorder.record_scheduled(
+        request_id="req-819-tokens",
+        model_id=27,
+        provider_id=12,
+        priority_when_scheduled="normal",
+        queue_depth_at_schedule=0,
+    )
+    recorder.record_complete(
+        request_id="req-819-tokens",
+        result_status=result_status,
+        usage_tokens=usage_tokens,
+    )
+    return fake
+
+
+def test_record_complete_observes_token_counters_and_context_histogram(monkeypatch):
+    fake = _settle_with_usage(
+        monkeypatch,
+        "success",
+        {"prompt_tokens": 100, "completion_tokens": 40, "prompt_cached_tokens": 60},
+    )
+
+    # Counters are per model/provider pair…
+    for metric, expected in (
+        (fake.PROMPT_TOKENS_TOTAL, 100),
+        (fake.GENERATION_TOKENS_TOTAL, 40),
+        (fake.CACHED_PROMPT_TOKENS_TOTAL, 60),
+    ):
+        assert metric.label_calls == [{"model": "Qwen/Qwen3-8B", "provider": "local-node"}]
+        assert metric.inc_values == [expected]
+
+    # …the context-window histogram is per model only (issue 819: "not given
+    # model/provider pair") and covers prompt + generation tokens.
+    assert fake.REQUEST_CONTEXT_TOKENS.label_calls == [{"model": "Qwen/Qwen3-8B"}]
+    assert fake.REQUEST_CONTEXT_TOKENS.observations == [140]
+
+
+def test_timeout_with_usage_still_counts_tokens(monkeypatch):
+    """Tokens the provider processed count toward every outcome, not just success."""
+    fake = _settle_with_usage(monkeypatch, "timeout", {"prompt_tokens": 50})
+
+    assert fake.PROMPT_TOKENS_TOTAL.inc_values == [50]
+    # No completion/cached figures reported: those counters stay untouched.
+    assert fake.GENERATION_TOKENS_TOTAL.label_calls == []
+    assert fake.CACHED_PROMPT_TOKENS_TOTAL.label_calls == []
+    assert fake.REQUEST_CONTEXT_TOKENS.observations == [50]
+
+
+def test_record_complete_without_usage_observes_no_tokens(monkeypatch):
+    fake = _settle_with_usage(monkeypatch, "success", None)
+
+    for metric in (
+        fake.PROMPT_TOKENS_TOTAL,
+        fake.GENERATION_TOKENS_TOTAL,
+        fake.CACHED_PROMPT_TOKENS_TOTAL,
+        fake.REQUEST_CONTEXT_TOKENS,
+    ):
+        assert metric.label_calls == []
+        assert metric.observations == []
+        assert metric.inc_values == []
+
+
+def test_malformed_usage_tokens_are_skipped_not_fatal(monkeypatch):
+    """The recorder must never break a request over a malformed usage dict."""
+    fake = _settle_with_usage(
+        monkeypatch,
+        "success",
+        {"prompt_tokens": "100", "completion_tokens": True, "prompt_cached_tokens": -5},
+    )
+
+    assert fake.PROMPT_TOKENS_TOTAL.label_calls == []
+    assert fake.GENERATION_TOKENS_TOTAL.label_calls == []
+    assert fake.CACHED_PROMPT_TOKENS_TOTAL.label_calls == []
+    assert fake.REQUEST_CONTEXT_TOKENS.observations == []
