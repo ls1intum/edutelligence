@@ -4,11 +4,15 @@ import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
+import java.time.Instant;
+
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -19,6 +23,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
+import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
@@ -39,6 +44,10 @@ class StatsV2WebSocketHandlerTest {
     StatsV2WebSocketHandler handler;
     @Autowired
     ObjectMapper objectMapper;
+    @Autowired
+    RequestLogService requestLogService;
+    @Autowired
+    JdbcTemplate jdbcTemplate;
     @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
@@ -106,6 +115,36 @@ class StatsV2WebSocketHandlerTest {
         assertThat(cleared.has("total")).isFalse();
 
         handler.afterConnectionClosed(session, CloseStatus.NORMAL);
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = {"/sql/seed-operations-status.sql"}, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void scopeMovementSig_movesWhenAnOutOfBucketRowCompletes() {
+        // The shared seed's two rows plus one per lifecycle bucket, all within
+        // the last minute.
+        String start = Instant.now().minus(Duration.ofDays(1)).toString();
+        String end = Instant.now().toString();
+
+        String first = requestLogService.scopeMovementSig(start, end, null, null);
+        assertThat(first).startsWith("6;");
+        // A stable scope repeats its fingerprint.
+        assertThat(requestLogService.scopeMovementSig(start, end, null, null)).isEqualTo(first);
+
+        // A running request settles: no row is added and nothing is enqueued
+        // — the two things a newest-page signature would see — yet the scope's
+        // newest lifecycle event has moved. This is the case a state-filtered
+        // feed's own signature cannot report, so the aggregates' dirty signal
+        // must come from here.
+        jdbcTemplate.update(
+            "UPDATE log_entry SET result_status = 'error', timestamp_response = NOW() "
+            + "WHERE request_id = 'req-state-running'");
+
+        String after = requestLogService.scopeMovementSig(start, end, null, null);
+        // The row count is unchanged ...
+        assertThat(after).startsWith("6;");
+        // ... but the signal moved with the completion.
+        assertThat(after).isNotEqualTo(first);
     }
 
     /** Every requests push the session has been sent so far, in order. */

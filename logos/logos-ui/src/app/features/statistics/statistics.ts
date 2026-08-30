@@ -214,6 +214,12 @@ export class Statistics implements OnInit, OnDestroy {
   setFeedStatusFilter(value: string | null): void {
     const next = normalizeFeedStatus(value);
     if (next === this.feedStatus()) return;
+    // The total the last push reported describes the previous bucket — or,
+    // when clearing, there was none — so it is wrong for this selection and
+    // is dropped until the first push for it lands. Without this the header
+    // keeps advertising the old bucket's count, indefinitely if the socket
+    // is down.
+    this.liveFeedTotal.set(null);
     this.feedStatus.set(next);
     // Only the feed changes, so only it is marked loading — the KPI cards and
     // charts keep their current (unaffected) numbers.
@@ -1103,12 +1109,16 @@ export class Statistics implements OnInit, OnDestroy {
       this.latestRequests.set(payload.requests);
       this.requestsPending.set(false);
     }
-    // A status-filtered feed carries its own total (the page's KPI total is only
-    // as narrow as the team/user scope, not the state bucket). An unfiltered
-    // push has no total, so the borrowed aggregate stays in force.
-    this.liveFeedTotal.set(
-      this.feedStatus() && typeof payload.total === 'number' ? payload.total : null,
-    );
+    // A status-filtered feed carries its own total (the page's KPI total is
+    // only as narrow as the team/user scope, not the state bucket). The
+    // server sends it only when the row set it counts has moved, so a push
+    // without a total keeps the last one: the count cannot have changed in
+    // between. Unfiltered pushes have no total, and switching the filter
+    // clears this signal, so the borrowed aggregate is never shown for a
+    // set it does not describe.
+    if (this.feedStatus() && typeof payload.total === 'number') {
+      this.liveFeedTotal.set(payload.total);
+    }
   }
 
   private handleVramWsInitV2(payload: VramV2Payload): void {

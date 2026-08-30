@@ -177,6 +177,38 @@ public class RequestLogService {
         return total != null ? total : 0L;
     }
 
+    /**
+     * A signature of everything the statistics aggregates summarise, for
+     * change detection only — "has anything moved in this scope since the
+     * last time we looked".
+     *
+     * The live request push hands out one page at a time, and a feed filter
+     * narrows that page to a single lifecycle bucket. A change-detection
+     * signature of that page then only describes the bucket, while the
+     * aggregates it drives still cover the whole user/team scope — so the
+     * caller keeps this, the scope-wide probe, for its dirty flag and uses
+     * the page only for the rows that go out. Count plus last lifecycle
+     * timestamp instead of a second full page fetch: one aggregate pass, no
+     * joins, no row materialisation, at a push cadence of two seconds per
+     * filtered session.
+     *
+     * @return a string that changes whenever the scope's row count or the
+     *         newest enqueue, scheduling or completion in it does
+     */
+    public String scopeMovementSig(String startDate, String endDate,
+                                   Integer userId, Integer teamId) {
+        ZonedDateTime endDt = parseInstantOrNow(endDate);
+        ZonedDateTime startDt = parseInstantOrNull(startDate);
+        if (startDt == null || startDt.isAfter(endDt)) {
+            startDt = endDt.minusDays(30);
+        }
+        Timestamp startTs = Timestamp.from(startDt.toInstant());
+        Timestamp endTs = Timestamp.from(endDt.toInstant());
+        var movement = logEntryRepository.findScopeMovement(startTs, endTs, userId, teamId);
+        if (movement == null) return "";
+        return movement.getRowCount() + ";" + movement.getLastEventTs();
+    }
+
     private static ZonedDateTime parseInstantOrNow(String iso) {
         ZonedDateTime parsed = parseInstantOrNull(iso);
         return parsed != null ? parsed : ZonedDateTime.now(ZoneOffset.UTC);

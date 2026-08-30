@@ -10,7 +10,7 @@
       @if (displayItems().length > 0) {
         <span class="rr-pager__count">
           <strong>{{ formatCount(firstRowNumber()) }}-{{ formatCount(lastRowNumber()) }}</strong>
-          of <strong>{{ formatCount(totalCount()) }}</strong>
+          of <strong>{{ totalInRangeLabel() }}</strong>
         </span>
       }
       <!-- Left of the buttons on purpose: the badge and the spinner appear

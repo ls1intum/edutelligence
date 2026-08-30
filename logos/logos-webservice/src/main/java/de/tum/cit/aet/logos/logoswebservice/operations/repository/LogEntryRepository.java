@@ -349,6 +349,45 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("limitN") int limitN);
 
     /**
+     * Whether anything the statistics aggregates summarise has moved, as a
+     * single aggregate over the same set {@link #findTotals} counts.
+     *
+     * The window predicate and the scope are deliberately identical to
+     * {@link #findTotals}: a movement signal that describes a different set
+     * than the aggregates would either refresh them for nothing or, worse,
+     * let them go stale. There is no status narrowing on purpose — the
+     * signal has to see every bucket, the ones a feed filter hides included.
+     *
+     * The last-event timestamp is the GREATEST of the three lifecycle
+     * columns, not just {@code timestamp_request}: each of them is stamped
+     * when it moves the aggregates (a forward moves the queue figures, a
+     * response moves the outcome, token and cost totals), and a completion
+     * of an older request would advance none of count or request timestamp
+     * and so be invisible — which is exactly the case of an operator
+     * watching one bucket while the rest of the traffic settles.
+     *
+     * One aggregate pass, no joins: this runs on the two-second push cadence
+     * for every session that has a feed filter on, where
+     * {@link #findTotals} itself runs at a tenth of that.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*) AS rowCount,
+               GREATEST(MAX(le.timestamp_request),
+                        MAX(le.timestamp_forwarding),
+                        MAX(le.timestamp_response)) AS lastEventTs
+        FROM log_entry le
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+        """, nativeQuery = true)
+    ScopeMovementProjection findScopeMovement(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId);
+
+    /**
      * How many requests the range holds under the active filter — the "of N" in
      * the feed's header. The predicate has to stay identical to
      * {@link #findLatestRequests} (minus the cursor) or the count describes a

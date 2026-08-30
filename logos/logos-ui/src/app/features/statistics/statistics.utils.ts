@@ -93,16 +93,18 @@ export function normalizeFeedStatus(value: string | null): string | null {
  * An unfiltered feed borrows the statistics aggregate (the page's KPI total),
  * which it already matches. A status-filtered feed must show the count of that
  * bucket instead — the aggregate is only as narrow as the team/user scope, not
- * the state — so it uses the total the live push reports for the bucket, and
- * falls back to the aggregate only while that push is still in flight.
+ * the state — so it shows the total the live push reports for the bucket, and
+ * nothing while that push is still in flight: the borrowed aggregate
+ * describes a different set, and a wrong "of N" reads as worse than an
+ * absent one.
  */
 export function resolveFeedTotal(
   status: string | null,
   pushedTotal: number | null,
   aggregateTotal: number,
-): number {
+): number | null {
   if (!status) return aggregateTotal;
-  return pushedTotal ?? aggregateTotal;
+  return pushedTotal;
 }
 
 // ── Token count scale ─────────────────────────────────────────────────────────

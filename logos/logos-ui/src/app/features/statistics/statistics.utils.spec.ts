@@ -39,7 +39,7 @@ describe('normalizeFeedStatus', () => {
  * Unfiltered, the feed and the KPI card count the same set, so the feed borrows
  * the aggregate. Filtered, it must show the count of that bucket — the aggregate
  * is only as narrow as the team/user scope — using the live push's total and
- * falling back to the aggregate only while that push is still in flight.
+ * showing nothing at all while that push is still in flight.
  */
 describe('resolveFeedTotal', () => {
   it('shows the aggregate total when no state filter is on', () => {
@@ -53,9 +53,12 @@ describe('resolveFeedTotal', () => {
     expect(resolveFeedTotal('finished', 0, 4312)).toBe(0);
   });
 
-  it('falls back to the aggregate while the filtered push is in flight', () => {
-    // The filter is set but its first push has not landed yet.
-    expect(resolveFeedTotal('queued', null, 4312)).toBe(4312);
+  it('shows nothing while the filtered push is in flight', () => {
+    // The filter is set but its first push has not landed yet. The aggregate
+    // describes the whole scope, not the bucket, so the header would promise
+    // a set the filter has hidden — an absent total ("—") is the honest
+    // figure until the bucket's own count lands.
+    expect(resolveFeedTotal('queued', null, 4312)).toBeNull();
   });
 });
 
