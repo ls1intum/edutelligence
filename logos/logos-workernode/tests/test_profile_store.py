@@ -138,17 +138,34 @@ def test_merge_writes_new_fields_including_nulls():
 
 
 def test_merge_clears_a_stale_sleep_measurement():
-    """A run reports sleeping_residual_mb null for exactly one reason: the
-    model is not allowed to sleep here, so the sleep phases were skipped.
-    Keeping the old number hides that, and survives an enable_sleep_mode flip
-    back to true — the freshness check sees a value, declines to re-calibrate,
-    and the planner sizes a wake from a configuration that no longer exists."""
+    """A run reports sleeping_residual_mb null exactly when the model must not
+    be slept here: the sleep phases were skipped, or they ran but failed
+    verification (sleep_mode_disabled=True). Keeping the old number hides
+    that, and survives an enable_sleep_mode flip back to true — the freshness
+    check sees a value, declines to re-calibrate, and the planner sizes a wake
+    from a configuration that no longer exists."""
     prior = {"base_residency_mb": 98945.0, "sleeping_residual_mb": 1400.0, "sleep_mode_disabled": False}
 
     merged = merge_profile(prior, {"base_residency_mb": 99000.0, "sleeping_residual_mb": None})
 
     assert merged["sleeping_residual_mb"] is None
     assert merged["sleep_mode_disabled"] is False, "still a field the probe does not own"
+
+
+def test_merge_sleep_mode_disabled_verdict_overrides_stored_value():
+    """When the probe exercised the sleep phases, its verdict (True/False)
+    overrides the stored value: a new failure sets True, and a successful
+    re-verification clears a stale True (e.g. after a vLLM upgrade). A None
+    verdict (phases skipped at level 0) lets the stored value — e.g. the
+    operator gate's flag — stand."""
+    merged = merge_profile({"sleep_mode_disabled": False}, {"sleep_mode_disabled": True})
+    assert merged["sleep_mode_disabled"] is True, "measured failure wins"
+
+    merged = merge_profile({"sleep_mode_disabled": True}, {"sleep_mode_disabled": False})
+    assert merged["sleep_mode_disabled"] is False, "measured success clears a stale flag"
+
+    merged = merge_profile({"sleep_mode_disabled": True}, {"sleep_mode_disabled": None})
+    assert merged["sleep_mode_disabled"] is True, "no verdict keeps the stored value"
 
 
 def test_merge_keeps_the_sleep_transient_of_a_level_it_did_not_run():

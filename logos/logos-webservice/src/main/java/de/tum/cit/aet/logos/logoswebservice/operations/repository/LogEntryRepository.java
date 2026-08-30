@@ -405,6 +405,110 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("apiKeyId") Integer apiKeyId,
         @Param("requestIds") List<String> requestIds);
 
+    /**
+     * The request traces of one team for the export (issue #667).
+     *
+     * Every request of the window comes out — the export must describe the
+     * same slice of traffic the activity list above shows, and a download that
+     * is empty just because the team never consented reads as a bug. Only the
+     * rows the orchestrator recorded at FULL privacy carry the request and
+     * response payloads; for the billing-only ones the content columns come
+     * back NULL, and the envelope says so.
+     *
+     * The token and cost columns reuse the lateral joins of
+     * {@link #findLatestRequests} so an exported number and the same request in
+     * the feed can never disagree. Newest first, with the primary key as tie
+     * break: the export is capped, and the rows kept must be a stable,
+     * explainable slice of the window rather than an arbitrary one.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.id AS id,
+               le.request_id AS requestId,
+               le.timestamp_request AS timestampRequest,
+               le.timestamp_forwarding AS timestampForwarding,
+               le.timestamp_response AS timestampResponse,
+               le.time_at_first_token AS timeAtFirstToken,
+               le.privacy_level::text AS privacyLevel,
+               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
+               p.provider_type::text AS providerType,
+               le.environment AS environment,
+               k.id AS apiKeyId,
+               k.name AS keyName,
+               u.username AS username,
+               NULLIF(TRIM(COALESCE(u.prename, '') || ' ' || COALESCE(u.name, '')), '') AS fullName,
+               t.name AS teamName,
+               le.client_ip AS clientIp,
+               le.result_status::text AS resultStatus,
+               le.error_message AS errorMessage,
+               le.priority AS priority,
+               le.initial_priority AS initialPriority,
+               le.priority_when_scheduled AS priorityWhenScheduled,
+               le.queue_depth_at_enqueue AS queueDepthAtEnqueue,
+               le.queue_depth_at_schedule AS queueDepthAtSchedule,
+               le.queue_depth_at_arrival AS queueDepthAtArrival,
+               le.timeout_s AS timeoutS,
+               le.utilization_at_arrival AS utilizationAtArrival,
+               le.queue_wait_ms AS queueWaitMs,
+               le.was_cold_start AS wasColdStart,
+               le.load_duration_ms AS loadDurationMs,
+               le.available_vram_mb AS availableVramMb,
+               tk.prompt_tokens AS promptTokens,
+               tk.completion_tokens AS completionTokens,
+               tk.total_tokens AS totalTokens,
+               c.cost_micro_cents AS costMicroCents,
+               le.classification_statistics::text AS classificationStatistics,
+               le.input_payload::text AS inputPayload,
+               le.headers::text AS headers,
+               le.response_payload::text AS responsePayload
+        FROM log_entry le
+        LEFT JOIN models m ON m.id = le.model_id
+        LEFT JOIN providers p ON p.id = le.provider_id
+        LEFT JOIN api_keys k ON k.id = le.api_key_id
+        LEFT JOIN teams t ON t.id = le.team_id
+        LEFT JOIN users u ON u.id = le.user_id
+        LEFT JOIN LATERAL (
+            SELECT MAX(CASE WHEN tt.name = 'prompt_tokens'     THEN ut.token_count END) AS prompt_tokens,
+                   MAX(CASE WHEN tt.name = 'completion_tokens' THEN ut.token_count END) AS completion_tokens,
+                   MAX(CASE WHEN tt.name = 'total_tokens'      THEN ut.token_count END) AS total_tokens
+            FROM usage_tokens ut
+            JOIN token_types tt ON tt.id = ut.type_id
+            WHERE ut.log_entry_id = le.id
+        ) tk ON true
+        LEFT JOIN LATERAL (
+            SELECT SUM(
+                CASE WHEN tp.price_per_k_token IS NOT NULL
+                     THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+                END
+            ) AS cost_micro_cents
+            FROM usage_tokens ut
+            LEFT JOIN LATERAL (
+                SELECT price_per_k_token
+                FROM token_prices
+                WHERE type_id = ut.type_id
+                  AND (model_id = le.model_id OR model_id IS NULL)
+                  AND (provider_id = le.provider_id OR provider_id IS NULL)
+                  AND valid_from <= le.timestamp_request
+                ORDER BY (model_id = le.model_id) DESC NULLS LAST,
+                         (provider_id = le.provider_id) DESC NULLS LAST,
+                         valid_from DESC
+                LIMIT 1
+            ) tp ON true
+            WHERE ut.log_entry_id = le.id
+        ) c ON true
+        WHERE le.team_id = :teamId
+          AND le.timestamp_request BETWEEN :startTs AND :endTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+        ORDER BY le.timestamp_request DESC, le.id DESC
+        LIMIT :limitN
+        """, nativeQuery = true)
+    List<LogExportProjection> findTracesForExport(
+        @Param("teamId") int teamId,
+        @Param("startTs") Timestamp startTs,
+        @Param("endTs") Timestamp endTs,
+        @Param("userId") Integer userId,
+        @Param("limitN") int limitN);
+
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT le.request_id AS requestId,

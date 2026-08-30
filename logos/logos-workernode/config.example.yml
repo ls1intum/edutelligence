@@ -386,6 +386,8 @@ engines:
 #     quantization: str          — "awq" | "gptq" | "fp8" | etc.
 #     enforce_eager: bool        — disable CUDA graph capture.
 #     enable_prefix_caching: bool
+#     enable_prompt_tokens_details: bool — report usage.prompt_tokens_details
+#                                          (cached_tokens); on by default.
 #     disable_custom_all_reduce: bool
 #     disable_nccl_p2p: bool
 #     attention_backend: str

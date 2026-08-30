@@ -70,6 +70,45 @@ async def test_execute_resource_mode_failure_records_error(monkeypatch):
     assert exc.value.status_code == 503
 
 
+async def test_execute_resource_mode_forwards_api_key_priority_to_pipeline(monkeypatch):
+    """The authenticated key's default_priority reaches the PipelineRequest."""
+
+    captured = {}
+
+    class Result:
+        success = False
+        error = "boom"
+        execution_context = None
+        provider_id = None
+        model_id = None
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-1"}
+
+    async def fake_process(pipeline_req):
+        captured["request"] = pipeline_req
+        return Result()
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type("P", (), {"process": fake_process, "record_completion": lambda *a, **k: None}),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main._execute_resource_mode(
+            deployments=[{"model_id": 10, "provider_id": 1}],
+            body={},
+            headers={"h": "v"},
+            auth=MagicMock(key_value="lg-test", api_key_id=1, default_priority=10),
+            log_id=1,
+            is_async_job=False,
+        )
+    assert exc.value.status_code == 503
+    assert captured["request"].default_priority == 10
+
+
 async def test_execute_resource_mode_uses_sync_response_for_resolved_whisper_alias(monkeypatch):
     """A client alias resolving to Whisper must not be framed as SSE."""
 
