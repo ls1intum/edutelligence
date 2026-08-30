@@ -37,7 +37,7 @@ def _fail_result(error, request_id="req-1", model_id=27, provider_id=1):
     )
 
 
-def _ok_result(request_id="req-1", model_id=27, provider_id=2):
+def _ok_result(request_id="req-1", model_id=27, provider_id=2, provider_type="logosnode"):
     return SimpleNamespace(
         success=True,
         error=None,
@@ -49,7 +49,7 @@ def _ok_result(request_id="req-1", model_id=27, provider_id=2):
             "request_id": request_id,
             "model_id": model_id,
             "provider_id": provider_id,
-            "provider_type": "logosnode",
+            "provider_type": provider_type,
         },
     )
 
@@ -95,15 +95,42 @@ def _run_sync_response(retry_env, results, sync_responses, **kwargs):
     retry_env.setattr(main, "_pipeline", pipeline, raising=False)
 
     responses = list(sync_responses)
+    pipeline.sync_calls = []
 
     async def fake_sync(
         context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats, **kw
     ):
         assert responses, "_sync_response called more times than scripted"
+        pipeline.sync_calls.append(kw)
         return responses.pop(0)
 
     retry_env.setattr(main, "_sync_response", fake_sync)
     return pipeline
+
+
+class _FakeRateLimiter:
+    """Records the (bucket, config) pairs it was checked with; rejects the
+    buckets named in ``rejected`` like a rate-limited caller would be."""
+
+    def __init__(self, rejected=()):
+        self.checks = []
+        self.rejected = set(rejected)
+
+    def check_and_record(self, key, config):
+        self.checks.append((key, config))
+        if key in self.rejected:
+            return False, "RPM limit reached"
+        return True, ""
+
+
+def _auth_with_rl(api_key_id=1):
+    return SimpleNamespace(
+        key_value="lg-key",
+        default_priority=0,
+        api_key_id=api_key_id,
+        cloud_rl={"rpm": 10, "tpm": 1000},
+        local_rl={"rpm": 5, "tpm": 5000},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +142,7 @@ async def test_retryable_scheduling_failure_is_retried_and_succeeds(retry_env):
     pipeline = _run_sync_response(
         retry_env,
         results=[
-            _fail_result("Queue wait timeout after 1200s", provider_id=1),
+            _fail_result("All candidate models unavailable (rate-limited or no capacity)", provider_id=1),
             _ok_result(provider_id=2),
         ],
         sync_responses=[JSONResponse(content={"ok": True}, status_code=200)],
@@ -169,7 +196,7 @@ async def test_scheduling_failure_not_retried_when_budget_disabled(retry_env):
     retry_env.setattr(main, "_REQUEST_MAX_ATTEMPTS", 1)  # retry budget off
     pipeline = _run_sync_response(
         retry_env,
-        results=[_fail_result("Queue wait timeout after 1200s")],
+        results=[_fail_result("Failed to resolve execution context: lane not ready after 600s")],
         sync_responses=[],
     )
 
@@ -184,6 +211,34 @@ async def test_scheduling_failure_not_retried_when_budget_disabled(retry_env):
     )
 
     assert result["status_code"] == 503
+    assert len(pipeline.requests) == 1
+
+
+async def test_queue_wait_timeout_is_not_internally_retried(retry_env):
+    """A queue-wait timeout says the queue is saturated, not that a node is
+    broken: re-queueing under the same pressure cannot help, so the timeout
+    goes back to the caller — which backs off on its own terms (and sees a
+    429 + Retry-After once the queue-wait overload response lands) instead
+    of being silently re-queued by the platform."""
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_fail_result("Queue wait timeout after 1200s", provider_id=1)],
+        sync_responses=[],
+    )
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main._execute_resource_mode(
+            deployments=DEPLOYMENTS,
+            body={},
+            headers={},
+            auth=_auth(),
+            log_id=None,
+            is_async_job=False,
+            request_id="req-1",
+        )
+
+    assert exc.value.status_code == 503
+    assert "Queue wait timeout" in exc.value.detail
     assert len(pipeline.requests) == 1
 
 
@@ -320,6 +375,129 @@ async def test_async_job_dict_terminal_status_is_retried(retry_env):
 
     assert result == {"status_code": 200, "data": {"ok": True}}
     assert len(pipeline.requests) == 2
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit bucket + cloud budget follow the provider type the attempt
+# actually runs on
+# ---------------------------------------------------------------------------
+
+
+async def test_failover_to_cloud_reselects_bucket_and_reruns_budget_check(retry_env):
+    """The bucket and the budget check are properties of WHERE the request
+    runs: a local→cloud failover must charge the cloud bucket (so this
+    attempt's tokens are recorded against the cloud limit, not the local
+    bucket from the first attempt) and re-run the cloud budget check — a key
+    over its monthly cloud budget must not gain cloud capacity through a
+    failover."""
+    import logos.rate_limiter as rl_module
+
+    limiter = _FakeRateLimiter()
+    retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
+    budget_calls = []
+    retry_env.setattr(main, "_check_budget_if_cloud", lambda db, auth, is_cloud, month: budget_calls.append(is_cloud))
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[
+            _ok_result(provider_id=1, provider_type="logosnode"),
+            _ok_result(provider_id=2, provider_type="cloud"),
+        ],
+        sync_responses=[
+            JSONResponse(content={"error": "worker gone"}, status_code=502),
+            JSONResponse(content={"ok": True}, status_code=200),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth_with_rl(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # One rate-limit hit per provider type the request was dispatched to,
+    # against the right bucket each time.
+    assert [key for key, _ in limiter.checks] == ["api_key:1:local", "api_key:1:cloud"]
+    # The budget check followed the provider type as well.
+    assert budget_calls == [False, True]
+    # The attempt that actually ran records its tokens against the cloud
+    # bucket, not the local bucket of the failed first attempt.
+    assert pipeline.sync_calls[0]["rl_key"] == "api_key:1:local"
+    assert pipeline.sync_calls[1]["rl_key"] == "api_key:1:cloud"
+
+
+async def test_same_provider_retry_does_not_recharge_the_bucket(retry_env):
+    """A retry on the provider type the request was already charged to must
+    not count a second rate-limit hit — a retry must never trip the
+    caller's own limit."""
+    import logos.rate_limiter as rl_module
+
+    limiter = _FakeRateLimiter()
+    retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
+    budget_calls = []
+    retry_env.setattr(main, "_check_budget_if_cloud", lambda db, auth, is_cloud, month: budget_calls.append(is_cloud))
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1), _ok_result(provider_id=2)],
+        sync_responses=[
+            JSONResponse(content={"error": "worker gone"}, status_code=502),
+            JSONResponse(content={"ok": True}, status_code=200),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth_with_rl(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # Same provider type on both attempts: exactly one rate-limit hit total.
+    assert [key for key, _ in limiter.checks] == ["api_key:1:local"]
+    assert pipeline.sync_calls[0]["rl_key"] == "api_key:1:local"
+    assert pipeline.sync_calls[1]["rl_key"] == "api_key:1:local"
+
+
+async def test_failover_into_exhausted_bucket_is_rejected(retry_env):
+    """If the bucket the failover re-selects is already exhausted, the
+    request is rejected against THAT bucket — with the attempt's slot
+    released — instead of running over the caller's limit."""
+    import logos.rate_limiter as rl_module
+
+    limiter = _FakeRateLimiter(rejected={"api_key:1:cloud"})
+    retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1), _ok_result(provider_id=2, provider_type="cloud")],
+        sync_responses=[JSONResponse(content={"error": "worker gone"}, status_code=502)],
+    )
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main._execute_resource_mode(
+            deployments=DEPLOYMENTS,
+            body={},
+            headers={},
+            auth=_auth_with_rl(),
+            log_id=None,
+            is_async_job=False,
+            request_id="req-1",
+        )
+
+    assert exc.value.status_code == 429
+    assert [key for key, _ in limiter.checks] == ["api_key:1:local", "api_key:1:cloud"]
+    # The slot of the attempt that was rejected is released again.
+    pipeline.scheduler.release.assert_called_once_with(27, 2, "cloud", "req-1")
 
 
 # ---------------------------------------------------------------------------

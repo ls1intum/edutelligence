@@ -5,10 +5,16 @@ Internal retry policy for failed requests (#815).
 A request that fails before the answer is complete is retried internally
 instead of being returned raw to the requester:
 
-- wait-mode timeout — no node had capacity in time,
 - hardware failure — a worker crashed or refused the command,
 - re-deployment — the worker's session dropped mid-request (#793),
-- network hiccups — the connection to the worker broke.
+- network hiccups — the connection to the worker broke,
+- a transient upstream status — a retryable 4xx/5xx before the answer
+  completed.
+
+A queue-wait timeout is deliberately NOT retried: it only says no node had
+capacity within the wait window, not that anything is broken, so re-queueing
+the same request under the same pressure cannot help. The timeout is returned
+to the caller, which backs off and retries on its own terms.
 
 Retries are bounded by an attempt count and an overall wall-clock deadline,
 and each retry may be placed on another node serving the same model (the
@@ -31,7 +37,7 @@ import httpx
 
 from logos.errors import UpstreamStreamError
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
-from logos.pipeline.scheduler_interface import DEFAULT_QUEUE_TIMEOUT_S, QueueTimeoutError
+from logos.pipeline.scheduler_interface import DEFAULT_QUEUE_TIMEOUT_S
 
 # Never start a retry with less than this much time left in the deadline —
 # the next queue wait would expire before it could make progress.
@@ -63,25 +69,22 @@ def status_is_retryable(status_code: Optional[int]) -> bool:
 def pipeline_error_is_retryable(error: Optional[str]) -> bool:
     """Whether a pipeline-level failure (before any execution) is transient.
 
-    - "Queue wait timeout" — wait mode: no node had capacity in time. A
-      re-queue within the retry deadline can catch a freed lane, and another
-      node may serve the model.
     - "All candidate models unavailable" — the same state, detected at
       scoring instead of in the queue.
     - "Failed to resolve execution context" — the lane never became ready:
       worker redeployed, hardware fault, or the model load failed.
 
+    "Queue wait timeout" is deliberately excluded: it says the queue was
+    saturated, not that a node is broken, so an internal re-queue would only
+    wait out the same pressure — the timeout goes back to the caller, which
+    backs off on its own terms.
     "No models passed classification" is a policy decision and is permanent
     for this request.
     """
     if not error:
         return False
     lowered = error.lower()
-    return (
-        "queue wait timeout" in lowered
-        or "all candidate models unavailable" in lowered
-        or "failed to resolve execution context" in lowered
-    )
+    return "all candidate models unavailable" in lowered or "failed to resolve execution context" in lowered
 
 
 def exception_is_retryable(exc: BaseException) -> bool:
@@ -98,7 +101,10 @@ def exception_is_retryable(exc: BaseException) -> bool:
         return True
     if isinstance(exc, UpstreamStreamError):
         return status_is_retryable(exc.status_code)
-    if isinstance(exc, (QueueTimeoutError, asyncio.TimeoutError)):
+    # A queue-wait timeout (QueueTimeoutError) is not in this list on
+    # purpose: it reports queue saturation, not a broken link, so it is
+    # returned to the caller instead of being re-queued.
+    if isinstance(exc, asyncio.TimeoutError):
         return True
     if isinstance(exc, httpx.HTTPError):
         return True

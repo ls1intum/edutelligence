@@ -202,11 +202,14 @@ _LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SEC
 _LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
 _LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = float(os.getenv("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", "1.0") or 1.0)
 # Internal retry (#815): a request that fails before its answer is complete —
-# wait-mode timeout, worker redeploy or crash, network hiccup — is re-dispatched
-# internally (same model, possibly another node serving it) instead of returning
-# the error raw to the caller. Bounded by both an attempt count and an overall
-# wall-clock deadline, so a persistently broken deployment degrades back to the
-# old behaviour, eventually. Set LOGOS_REQUEST_MAX_ATTEMPTS=1 to disable.
+# worker redeploy or crash, network hiccup, transient upstream status — is
+# re-dispatched internally (same model, possibly another node serving it)
+# instead of returning the error raw to the caller. A queue-wait timeout is
+# deliberately not among these: it reports queue saturation, not a broken
+# node, so re-queueing under the same pressure cannot help. Bounded by both
+# an attempt count and an overall wall-clock deadline, so a persistently
+# broken deployment degrades back to the old behaviour, eventually. Set
+# LOGOS_REQUEST_MAX_ATTEMPTS=1 to disable.
 _REQUEST_MAX_ATTEMPTS = _env_int("LOGOS_REQUEST_MAX_ATTEMPTS", 3)
 _REQUEST_RETRY_DEADLINE_S = float(
     global_timeout_s(float(os.getenv("LOGOS_REQUEST_RETRY_DEADLINE_S", "1800") or "1800"))
@@ -4362,15 +4365,20 @@ async def _execute_resource_mode(
     )
 
     # Internal retry (#815): a request that fails before its answer is
-    # complete — no node had capacity in time, a worker crashed or was
-    # redeployed, the connection dropped — is re-dispatched here instead of
-    # being returned raw, bounded by an attempt count and an overall
-    # deadline, and possibly placed on another node serving the same model.
+    # complete — a worker crashed or was redeployed, the connection dropped,
+    # or the worker/upstream answered with a transient status — is
+    # re-dispatched here instead of being returned raw, bounded by an
+    # attempt count and an overall deadline, and possibly placed on another
+    # node serving the same model. A queue-wait timeout is deliberately not
+    # among these: it reports queue saturation, not a broken node, so
+    # re-queueing under the same pressure cannot help.
     retry_budget = _new_retry_budget()
-    attempt = 0
     rl_tpm_key: Optional[str] = None
+    # The provider types this request's rate-limit hit was already recorded
+    # for — a retry must not charge a bucket the request was charged to
+    # already.
+    charged_provider_types: set[str] = set()
     while True:
-        attempt += 1
         # Process through classification and scheduling
         result = await _pipeline.process(pipeline_req)
 
@@ -4397,76 +4405,82 @@ async def _execute_resource_mode(
                 raise HTTPException(status_code=503, detail=error_msg)
 
         provider_type = result.scheduling_stats.get("provider_type", "")
+        is_local = provider_type == "logosnode"
+        rl_key = f"api_key:{auth.api_key_id}:{'local' if is_local else 'cloud'}"
+        rl_info = auth.local_rl if is_local else auth.cloud_rl
+        # This attempt's tokens are recorded against the bucket of the
+        # provider type that actually serves them — not the bucket attempt 1
+        # was scheduled on.
+        rl_tpm_key = rl_key if rl_info and rl_info.get("tpm") is not None else None
 
-        # Rate limiting and the cloud budget check count this request once,
-        # not once per internal retry attempt: a retry is the same request,
-        # and re-checking would double-count its rate-limit hit — and a
-        # retry must never trip the caller's own limit.
-        if attempt == 1:
-            if auth.cloud_rl is not None or auth.local_rl is not None:
-                from logos.rate_limiter import RateLimitConfig, get_rate_limiter
+        # Rate limiting counts the request once per provider type it is
+        # dispatched to, not once per internal retry attempt: the bucket
+        # identity is a property of where the request runs, so a failover to
+        # another provider type re-selects it — but a retry on a provider
+        # type the request was already charged to must not charge it again,
+        # or the caller's own limit would be tripped by the platform's
+        # failure.
+        if rl_info is not None and provider_type not in charged_provider_types:
+            from logos.rate_limiter import RateLimitConfig, get_rate_limiter
 
-                is_local = provider_type == "logosnode"
-                rl_info = auth.local_rl if is_local else auth.cloud_rl
-                rl_key = f"api_key:{auth.api_key_id}:{'local' if is_local else 'cloud'}"
-
-                if rl_info:
-                    rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
-                    allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
-                    if not allowed:
-                        try:
-                            _pipeline.scheduler.release(
-                                result.model_id,
-                                result.provider_id,
-                                provider_type,
-                                result.scheduling_stats.get("request_id") or request_id,
-                            )
-                        except Exception:
-                            logger.warning("Failed to release scheduler slot after rate limit reject")
-                        if is_async_job:
-                            return {
-                                "status_code": 429,
-                                "data": {"error": f"Rate limit exceeded: {reason}"},
-                            }
-                        # Retry-After: the limiter uses a sliding 60s window, so the
-                        # budget is guaranteed to have room again after one window.
-                        raise HTTPException(
-                            status_code=429,
-                            detail=f"Rate limit exceeded: {reason}",
-                            headers={"Retry-After": str(RateLimitConfig.window_seconds)},
-                        )
-
-                    if rl_info.get("tpm") is not None:
-                        rl_tpm_key = rl_key
-
-            with DBManager() as db:
+            rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
+            allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
+            if not allowed:
                 try:
-                    _check_budget_if_cloud(
-                        db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
+                    _pipeline.scheduler.release(
+                        result.model_id,
+                        result.provider_id,
+                        provider_type,
+                        result.scheduling_stats.get("request_id") or request_id,
                     )
-                except Exception as e:
-                    try:
-                        _pipeline.scheduler.release(
-                            result.model_id,
-                            result.provider_id,
-                            provider_type,
-                            result.scheduling_stats.get("request_id") or request_id,
-                        )
-                    except Exception:
-                        logger.warning("Failed to release scheduler slot after budget reject")
-                    if isinstance(e, HTTPException) and is_async_job:
-                        _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
-                        _record_log_failure(
-                            log_id,
-                            result.scheduling_stats.get("request_id") or request_id,
-                            str(e.detail),
-                            model_id=result.model_id,
-                            provider_id=result.provider_id,
-                            classification_stats=result.classification_stats,
-                            scheduling_stats=result.scheduling_stats,
-                        )
-                        return {"status_code": e.status_code, "data": err_body}
-                    raise
+                except Exception:
+                    logger.warning("Failed to release scheduler slot after rate limit reject")
+                if is_async_job:
+                    return {
+                        "status_code": 429,
+                        "data": {"error": f"Rate limit exceeded: {reason}"},
+                    }
+                # Retry-After: the limiter uses a sliding 60s window, so the
+                # budget is guaranteed to have room again after one window.
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded: {reason}",
+                    headers={"Retry-After": str(RateLimitConfig.window_seconds)},
+                )
+            charged_provider_types.add(provider_type)
+
+        # The cloud budget check, like the bucket above, is a property of
+        # where the request runs: it re-runs on every attempt, so a key over
+        # its monthly cloud budget cannot gain cloud capacity through a
+        # failover (and the check is a no-op for local provider types).
+        with DBManager() as db:
+            try:
+                _check_budget_if_cloud(
+                    db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
+                )
+            except Exception as e:
+                try:
+                    _pipeline.scheduler.release(
+                        result.model_id,
+                        result.provider_id,
+                        provider_type,
+                        result.scheduling_stats.get("request_id") or request_id,
+                    )
+                except Exception:
+                    logger.warning("Failed to release scheduler slot after budget reject")
+                if isinstance(e, HTTPException) and is_async_job:
+                    _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
+                    _record_log_failure(
+                        log_id,
+                        result.scheduling_stats.get("request_id") or request_id,
+                        str(e.detail),
+                        model_id=result.model_id,
+                        provider_id=result.provider_id,
+                        classification_stats=result.classification_stats,
+                        scheduling_stats=result.scheduling_stats,
+                    )
+                    return {"status_code": e.status_code, "data": err_body}
+                raise
 
         # Execute and Respond
         try:
@@ -4551,12 +4565,12 @@ async def _execute_resource_mode(
             else:
                 raise e
 
-        # A terminal failure whose status is transient (worker 5xx, queue wait
-        # surfaced as 503, upstream 429/408) is re-dispatched instead of being
-        # returned raw (#815). A committed StreamingResponse has no terminal
-        # status yet and is never retried here: a pre-token failure already
-        # comes back as the JSON error above, and a mid-flight failure
-        # recovers inside the stream (resume).
+        # A terminal failure whose status is transient (worker 5xx, upstream
+        # 429/408) is re-dispatched instead of being returned raw (#815).
+        # A committed StreamingResponse has no terminal status yet and is
+        # never retried here: a pre-token failure already comes back as the
+        # JSON error above, and a mid-flight failure recovers inside the
+        # stream (resume).
         status_code = _response_terminal_status(response)
         if (
             retry_budget is not None

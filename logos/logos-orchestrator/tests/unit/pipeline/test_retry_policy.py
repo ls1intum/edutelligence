@@ -53,8 +53,6 @@ def test_status_is_retryable(status, expected):
 @pytest.mark.parametrize(
     "error",
     [
-        "Queue wait timeout after 1200s",
-        "Queue wait timeout",
         "All candidate models unavailable (rate-limited or no capacity)",
         "Failed to resolve execution context: lane not ready after 600s",
     ],
@@ -66,6 +64,11 @@ def test_pipeline_error_is_retryable_transient(error):
 @pytest.mark.parametrize(
     "error",
     [
+        # A queue-wait timeout says the queue is saturated, not that a node
+        # is broken — it is returned to the caller, never re-queued
+        # internally under the same pressure.
+        "Queue wait timeout after 1200s",
+        "Queue wait timeout",
         "No models passed classification",
         "Some other pipeline error",
         "",
@@ -86,7 +89,6 @@ def test_exception_is_retryable_infrastructure_failures():
     assert exception_is_retryable(LogosNodeCommandError("infer failed")) is True
     assert exception_is_retryable(UpstreamStreamError(429, {"error": "slow down"})) is True
     assert exception_is_retryable(UpstreamStreamError(503, {"error": "unavailable"})) is True
-    assert exception_is_retryable(QueueTimeoutError("req-1", 1, 2, 1200.0)) is True
     assert exception_is_retryable(asyncio.TimeoutError()) is True
     assert exception_is_retryable(httpx.ConnectError("broken pipe")) is True
     assert exception_is_retryable(httpx.ReadTimeout("read timed out")) is True
@@ -99,6 +101,9 @@ def test_exception_is_retryable_permanent_failures():
     assert exception_is_retryable(UpstreamStreamError(400, {"error": "too long"})) is False
     assert exception_is_retryable(ValueError("bad payload")) is False
     assert exception_is_retryable(RuntimeError("something else")) is False
+    # A queue-wait timeout reports queue saturation, not a broken link: it is
+    # returned to the caller (which backs off) instead of being re-queued.
+    assert exception_is_retryable(QueueTimeoutError("req-1", 1, 2, 1200.0)) is False
 
 
 # ---------------------------------------------------------------------------
