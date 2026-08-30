@@ -64,10 +64,15 @@ class Settings:
     dev_mode: bool = _bool("LOGOS_AGENT_DEV_MODE", False)
 
     # --- the platform this runner serves ---------------------------------
-    # Sessions send their model traffic here. Inside the compose network this
-    # is the orchestrator's service name, so agent traffic never leaves the
-    # host and is accounted for like any other Logos request.
+    # This service (on the stack's internal network) reads capacity and
+    # dispatches deploys from here.
     orchestrator_url: str = os.getenv("LOGOS_ORCHESTRATOR_URL", "http://logos-orchestrator:8080")
+    # Where a *session container* sends its model traffic. Sessions live on
+    # the session network, which must not reach the orchestrator itself (that
+    # would hand a bypassPermissions agent the whole internal API), so they
+    # are pointed at a gateway that forwards only the /v1 model surface.
+    # The default is the compose service name of that gateway.
+    session_model_url: str = os.getenv("LOGOS_AGENT_SESSION_MODEL_URL", "http://logos-agent-gateway")
     internal_secret: str = os.getenv("LOGOS_INTERNAL_SECRET", "")
     # The Logos key sessions authenticate with. It is what makes agent traffic
     # ordinary, accounted Logos traffic — give it LOW priority and a token

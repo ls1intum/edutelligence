@@ -223,24 +223,37 @@ class SessionManager:
             await self._settle(sid, exit_code=None, error=f"refusing branch '{branch}'")
             return
 
+        container_id: str | None = None
         try:
             await docker_engine.ensure_volume(
                 workspace["volume_name"], labels={"logos.agent.workspace": workspace["name"]}
             )
+            # The per-session artefact directory, resolved to the host path of
+            # the volume it lives in: the session sees exactly this directory
+            # at /artifacts, never the shared volume around it.
             directory = artifact_dir(sid)
             directory.mkdir(parents=True, exist_ok=True)
+            artifact_host_path = str(Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(sid))
 
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
                 image=settings.workspace_image,
                 env=self._session_env(session, workspace, branch),
                 workspace_volume=workspace["volume_name"],
-                artifact_volume=settings.artifact_volume,
+                artifact_host_path=artifact_host_path,
                 session_id=sid,
             )
             await docker_engine.start_container(container_id)
         except Exception as exc:
             logger.exception("failed to launch session %s", sid)
+            # Settlement removes the container by the id stored in the
+            # database, which is still null on a failed start — remove the
+            # created container here or it survives until a reconcile.
+            if container_id:
+                try:
+                    await docker_engine.remove_container(container_id)
+                except Exception:
+                    logger.warning("could not remove container for session %s after failed launch", sid)
             await self._settle(sid, exit_code=None, error=f"launch failed: {exc}")
             return
 
@@ -265,7 +278,10 @@ class SessionManager:
         env = {
             # The agent's model traffic goes to Logos itself, so it is
             # authenticated, policy-checked, and billed like any other caller.
-            "ANTHROPIC_BASE_URL": settings.orchestrator_url,
+            # It is pointed at the gateway, not at the orchestrator: the
+            # session network must reach only the /v1 model surface, never
+            # the orchestrator's full internal API.
+            "ANTHROPIC_BASE_URL": settings.session_model_url,
             "ANTHROPIC_AUTH_TOKEN": settings.agent_api_key,
             "ANTHROPIC_API_KEY": "",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -307,13 +323,25 @@ class SessionManager:
         task.add_done_callback(lambda _t: self._supervisors.pop(session_id, None))
 
     async def _supervise_session(self, session_id: int, container_id: str) -> None:
-        """Follow a container to its end, persisting its output as it goes."""
+        """Follow a container to its end, persisting its output as it goes.
+
+        Time spent paused does not count against the wall-clock budget: the
+        deadline is extended by every paused interval, so a session that
+        yields while the platform is busy resumes with the time it had,
+        instead of being killed for the hours it spent standing by.
+        """
         log_task = asyncio.create_task(self._collect_logs(session_id, container_id))
         try:
-            deadline = asyncio.get_running_loop().time() + settings.session_timeout_s
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + settings.session_timeout_s
+            paused_since: float | None = None
             exit_code: int | None = None
             while True:
-                remaining = deadline - asyncio.get_running_loop().time()
+                now = loop.time()
+                if paused_since is not None:
+                    deadline += now - paused_since
+                    paused_since = None
+                remaining = deadline - now
                 if remaining <= 0:
                     await db.add_event(
                         session_id,
@@ -324,6 +352,8 @@ class SessionManager:
                     exit_code = -1
                     break
                 state, code = await docker_engine.container_state(container_id)
+                if state == "paused" and paused_since is None:
+                    paused_since = now
                 if state == "gone":
                     break
                 if state == "exited":

@@ -71,6 +71,22 @@ async def ensure_volume(name: str, labels: dict[str, str] | None = None) -> None
     )
 
 
+async def volume_mountpoint(name: str) -> str:
+    """The host path of a named volume (local driver only).
+
+    Named volumes can only be mounted whole into a container, so binding a
+    session to just its own subdirectory goes through the volume's host
+    path: the daemon resolves the bind on the host, where the subdirectory
+    exists (the service creates it through its own mount of the same volume).
+    """
+    response = await _request("GET", f"/volumes/{name}")
+    info = response.json().get(name, {})
+    mountpoint = info.get("Mountpoint")
+    if not mountpoint:
+        raise DockerError(500, f"volume {name} has no host mountpoint (driver: {info.get('Driver')})")
+    return mountpoint
+
+
 async def remove_volume(name: str, *, force: bool = False) -> None:
     try:
         await _request("DELETE", f"/volumes/{name}", params={"force": str(force).lower()})
@@ -99,7 +115,7 @@ async def create_session_container(
     image: str,
     env: dict[str, str],
     workspace_volume: str,
-    artifact_volume: str,
+    artifact_host_path: str,
     session_id: int,
     labels: dict[str, str] | None = None,
 ) -> str:
@@ -113,16 +129,15 @@ async def create_session_container(
     * all capabilities dropped and privilege escalation disabled;
     * memory, CPU, and PID ceilings, so one runaway session cannot take the
       host down or eat the capacity this runner exists to reclaim;
-    * only two writable mounts, the workspace volume and this session's
-      artefact directory; everything else is read-only.
+    * only two writable mounts, the workspace volume and this session's own
+      artefact directory (a host path, so the bind cannot grow to the shared
+      volume and expose other sessions' output); everything else is
+      read-only.
     """
     host_config: dict[str, Any] = {
         "Binds": [
             f"{workspace_volume}:/workspace",
-            # Each session writes into its own subdirectory of the shared
-            # artefact volume, so the service can serve screenshots and logs
-            # without granting the container access to other sessions' output.
-            f"{artifact_volume}:/artifacts",
+            f"{artifact_host_path}:/artifacts",
         ],
         "NetworkMode": settings.session_network,
         "ReadonlyRootfs": True,

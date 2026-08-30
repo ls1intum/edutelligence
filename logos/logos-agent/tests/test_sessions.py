@@ -7,6 +7,10 @@ names, not just ordinary ones.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+from dataclasses import replace
+
 import pytest
 from app.config import settings
 from app.schemas import (
@@ -120,3 +124,148 @@ class TestRequestValidation:
             screenshot_paths=["/dashboard", "/models"],
         )
         assert body.screenshot_paths == ["/dashboard", "/models"]
+
+
+class TestLaunchAndSupervision:
+    """What the manager decides to do with a container.
+
+    These run against fakes of the Docker engine and the database, so they pin
+    down the decisions — what gets bound into a session, what gets removed
+    when a start fails, and how the wall-clock budget treats paused time —
+    without needing a daemon.
+    """
+
+    SESSION = {
+        "id": 7,
+        "workspace_id": 1,
+        "task": "a long enough task description",
+        "model": None,
+        "open_pull_request": False,
+        "screenshot_paths": [],
+    }
+    WORKSPACE = {
+        "id": 1,
+        "name": "feature-work",
+        "base_branch": "main",
+        "volume_name": "logos-agent-ws-1",
+    }
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_failed_launch_removes_its_container_and_binds_its_own_artifacts(self, monkeypatch, tmp_path):
+        # A start that fails after the container exists must not leak it:
+        # settlement removes the container by the id in the database, which is
+        # still null at that point. And the artefact bind must be this
+        # session's own directory on the host, not the shared volume.
+        from app import sessions
+
+        patched = replace(sessions.settings, artifact_root=str(tmp_path))
+        monkeypatch.setattr(sessions, "settings", patched)
+        created: dict = {}
+        removed: list = []
+
+        async def fake_create(**kwargs):
+            created.update(kwargs)
+            return "cid-7"
+
+        async def fake_start(_cid):
+            raise RuntimeError("start failed")
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(
+            sessions.docker_engine,
+            "volume_mountpoint",
+            self._async_value("/var/lib/docker/volumes/logos_agent_artifacts/_data"),
+        )
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(
+            sessions.db, "get_session", self._async_value({"container_id": None, "deploy_to_dev": False})
+        )
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.manager._launch(self.SESSION)
+
+        assert removed == ["cid-7"]
+        assert created["artifact_host_path"] == "/var/lib/docker/volumes/logos_agent_artifacts/_data/7"
+        # Model traffic is pointed at the gateway, not at the orchestrator's
+        # internal API: the session network must not reach the orchestrator.
+        assert created["env"]["ANTHROPIC_BASE_URL"] == patched.session_model_url
+        assert created["env"]["ANTHROPIC_BASE_URL"] != patched.orchestrator_url
+
+    async def test_paused_time_does_not_count_towards_the_session_timeout(self, monkeypatch, tmp_path):
+        # A session that yields while the platform is busy must not burn its
+        # wall-clock budget standing by: the deadline is frozen for as long as
+        # the container is paused, and enforced again once it runs.
+        from app import sessions
+
+        monkeypatch.setattr(
+            sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path), session_timeout_s=1)
+        )
+        states = {"state": "paused"}
+        stopped: list = []
+        events: list = []
+
+        async def fake_state(_cid):
+            return states["state"], None
+
+        async def fake_stop(cid, **_kwargs):
+            stopped.append(cid)
+
+        async def fake_remove(_cid, **_kwargs):
+            return None
+
+        async def fake_stream(_cid, **_kwargs):
+            while True:
+                await asyncio.sleep(3600)
+                yield ""
+
+        async def fake_event(_sid, _kind, payload):
+            events.append(payload)
+
+        monkeypatch.setattr(sessions.docker_engine, "container_state", fake_state)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.docker_engine, "stream_logs", fake_stream)
+        monkeypatch.setattr(
+            sessions.db, "get_session", self._async_value({"container_id": "cid-9", "deploy_to_dev": False})
+        )
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+
+        supervisor = asyncio.create_task(sessions.manager._supervise_session(9, "cid-9"))
+        try:
+            # Paused well past the one-second budget: standing by must not spend it.
+            await asyncio.sleep(2.5)
+            assert stopped == []
+            assert not supervisor.done()
+
+            # Back to work: the remaining budget now runs down and is enforced.
+            states["state"] = "running"
+            for _ in range(20):
+                if stopped:
+                    break
+                await asyncio.sleep(0.25)
+            assert stopped == ["cid-9"]
+            await supervisor
+        finally:
+            if not supervisor.done():
+                supervisor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await supervisor
+
+        assert any("exceeded" in str(payload.get("message", "")) for payload in events)

@@ -114,7 +114,8 @@ branch.
 | `LOGOS_AGENT_PAUSE_ABOVE_LOAD` | `0.85` | Pause at or above this load |
 | `LOGOS_AGENT_SESSION_MEMORY_MB` | `4096` | Per-session memory ceiling |
 | `LOGOS_AGENT_SESSION_CPUS` | `2` | Per-session CPU ceiling |
-| `LOGOS_AGENT_SESSION_TIMEOUT_S` | `10800` | Wall-clock ceiling per session |
+| `LOGOS_AGENT_SESSION_TIMEOUT_S` | `10800` | Wall-clock ceiling per session (paused time does not count) |
+| `LOGOS_AGENT_SESSION_MODEL_URL` | `http://logos-agent-gateway` | Where sessions send model traffic — a gateway that exposes only the orchestrator's `/v1` model surface, so a session never reaches the rest of the internal network |
 | `LOGOS_AGENT_SESSION_GITHUB_TOKEN` | — | Given to containers; contents + PR write only |
 | `LOGOS_AGENT_GITHUB_TOKEN` | — | Held here only; needs `workflow` scope for dev deploys |
 | `LOGOS_AGENT_DEPLOY_ENABLED` | `false` | Whether dev deploys may be dispatched at all |

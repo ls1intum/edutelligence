@@ -60,19 +60,39 @@ class Result:
             fail(f"could not write result file: {exc}")
 
 
+def _redact(cmd: list[str]) -> list[str]:
+    """Scrub secrets from a command before it reaches the transcript.
+
+    The transcript is persisted as agent events, rendered in the UI, and
+    readable by the agent itself, so a token must never reach it — neither in
+    a URL nor in a bare argument.
+    """
+    token = os.environ.get("GITHUB_TOKEN", "")
+
+    def scrub(part: str) -> str:
+        if token and token in part:
+            part = part.replace(token, "***")
+        # Generic credential-in-URL shape: https://user:password@host
+        return re.sub(r"(://[^/:\s]+:)[^@\s]+(@)", r"\1***\2", part)
+
+    return [scrub(c) for c in cmd]
+
+
 def run(
     cmd: list[str], *, cwd: Path | None = None, check: bool = True, quiet: bool = False
 ) -> subprocess.CompletedProcess:
-    """Run a command, echoing it so the transcript shows what happened."""
+    """Run a command, echoing it (secrets redacted) so the transcript shows
+    what happened."""
+    shown = _redact(cmd)
     if not quiet:
-        log(f"$ {' '.join(shlex.quote(c) for c in cmd)}")
+        log(f"$ {' '.join(shlex.quote(c) for c in shown)}")
     process = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, timeout=1800)
     if process.stdout and not quiet:
         print(process.stdout, end="", flush=True)
     if process.stderr:
         print(process.stderr, end="", file=sys.stderr, flush=True)
     if check and process.returncode != 0:
-        raise RuntimeError(f"command failed ({process.returncode}): {' '.join(cmd)}")
+        raise RuntimeError(f"command failed ({process.returncode}): {' '.join(shown)}")
     return process
 
 
@@ -83,28 +103,43 @@ def require_env(name: str) -> str:
     return value
 
 
-def authenticated_remote(repo_url: str, token: str) -> str:
-    """Embed the token in the push URL.
+def _install_git_askpass(token: str) -> None:
+    """Teach git to read the push token from the environment, never a URL.
 
-    Using a credential-in-URL remote rather than a global git credential helper
-    keeps the token out of any file on the workspace volume, which outlives the
-    container.
+    A credential-in-URL remote would persist the token into .git/config on
+    the workspace volume — which outlives the container — and any echo of the
+    URL would land it in the transcript. The askpass helper keeps the token
+    in the process environment only: git prompts for it on an authenticated
+    fetch or push, the helper answers from GITHUB_TOKEN, and nothing on disk
+    or in the log ever carries it. Anonymous clones of the public repository
+    need no credential at all.
     """
-    if not token or not repo_url.startswith("https://"):
-        return repo_url
-    return repo_url.replace("https://", f"https://x-access-token:{token}@", 1)
+    if not token:
+        return
+    helper = Path("/tmp") / "logos-git-askpass.sh"
+    helper.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  Username*) printf "%s\\n" "x-access-token" ;;\n'
+        '  *) printf "%s\\n" "$GITHUB_TOKEN" ;;\n'
+        "esac\n"
+    )
+    helper.chmod(0o700)
+    os.environ["GIT_ASKPASS"] = str(helper)
+    # Never fall back to a terminal prompt: without the helper, fail fast.
+    os.environ["GIT_TERMINAL_PROMPT"] = "0"
 
 
 def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -> None:
     """Get a clean working copy of `base_branch` on a fresh `branch`."""
-    remote = authenticated_remote(repo_url, token)
+    _install_git_askpass(token)
     if not (CHECKOUT / ".git").is_dir():
         log(f"cloning {repo_url} at {base_branch}")
         CHECKOUT.parent.mkdir(parents=True, exist_ok=True)
-        run(["git", "clone", "--depth", "50", "--branch", base_branch, remote, str(CHECKOUT)])
+        run(["git", "clone", "--depth", "50", "--branch", base_branch, repo_url, str(CHECKOUT)])
     else:
         log("reusing existing checkout")
-        run(["git", "remote", "set-url", "origin", remote], cwd=CHECKOUT, quiet=True)
+        run(["git", "remote", "set-url", "origin", repo_url], cwd=CHECKOUT, quiet=True)
         run(["git", "fetch", "--depth", "50", "origin", base_branch], cwd=CHECKOUT)
         # Discard whatever a previous session left behind: a session starts
         # from the base branch, never from another session's leftovers.

@@ -34,6 +34,11 @@ class Reading:
     queue_total: int
     ok: bool  # False when the orchestrator could not be read
     detail: str = ""
+    # False when no model is loaded anywhere: an empty fleet has no idle
+    # capacity to spend, so there is nothing for the runner to reclaim.
+    # Warming a lane in that situation is a different product decision, and
+    # it must stay opt-in rather than the default.
+    reclaimable: bool = True
 
     @property
     def saturated(self) -> bool:
@@ -109,9 +114,10 @@ def parse_scheduler_state(payload: dict) -> Reading:
             queue_total += int(model.get("queue_depth") or 0)
 
     if total == 0:
-        # Nothing resident anywhere. There is no capacity being wasted, so
-        # there is nothing for the runner to reclaim, but neither is the fleet
-        # busy: report idle so a session can start and warm a lane itself.
+        # Nothing resident anywhere, so there is no idle capacity to reclaim —
+        # the fleet is not busy either, but starting a session here would
+        # create demand (a session loads a model and occupies GPUs nobody was
+        # using), which is the opposite of what this runner exists to do.
         return Reading(
             load=0.0,
             busy_slots=0,
@@ -119,6 +125,7 @@ def parse_scheduler_state(payload: dict) -> Reading:
             queue_total=queue_total,
             ok=True,
             detail="no loaded models",
+            reclaimable=False,
         )
 
     return Reading(
@@ -135,6 +142,8 @@ def start_decision(reading: Reading, *, running: int, paused: int) -> tuple[bool
     """Whether another session may start now, and why."""
     if not reading.ok:
         return False, f"capacity unknown ({reading.detail})"
+    if not reading.reclaimable:
+        return False, f"nothing to reclaim ({reading.detail})"
     if running + paused >= settings.max_parallel_sessions:
         return False, (f"at the parallel-session ceiling " f"({running + paused}/{settings.max_parallel_sessions})")
     if reading.queue_total > 0:
@@ -169,6 +178,10 @@ def resume_decision(reading: Reading) -> tuple[bool, str]:
     """
     if not reading.ok:
         return False, f"capacity unknown ({reading.detail})"
+    if not reading.reclaimable:
+        # A paused session resumed into an empty fleet would be the only
+        # thing running on it — demand created, not reclaimed.
+        return False, f"nothing to reclaim ({reading.detail})"
     if reading.queue_total > 0:
         return False, f"users are queueing ({reading.queue_total} waiting)"
     if reading.load >= settings.start_below_load:

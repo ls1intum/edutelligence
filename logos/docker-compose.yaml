@@ -369,6 +369,9 @@ services:
       # Sessions run in this image, on this network, under these ceilings.
       LOGOS_AGENT_WORKSPACE_IMAGE: "${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent-workspace:${IMAGE_TAG:-latest}"
       LOGOS_AGENT_SESSION_NETWORK: "${LOGOS_AGENT_SESSION_NETWORK:-logos-agent-net}"
+      # Where sessions send model traffic: the gateway that exposes only the
+      # orchestrator's /v1 model surface on the session network.
+      LOGOS_AGENT_SESSION_MODEL_URL: "${LOGOS_AGENT_SESSION_MODEL_URL:-http://logos-agent-gateway}"
       LOGOS_AGENT_MAX_PARALLEL_SESSIONS: "${LOGOS_AGENT_MAX_PARALLEL_SESSIONS:-4}"
       LOGOS_AGENT_SESSION_MEMORY_MB: "${LOGOS_AGENT_SESSION_MEMORY_MB:-4096}"
       LOGOS_AGENT_SESSION_CPUS: "${LOGOS_AGENT_SESSION_CPUS:-2}"
@@ -408,6 +411,24 @@ services:
       - "traefik.http.routers.agent-api.priority=200"
 
       - "traefik.http.services.logos-agent-svc.loadbalancer.server.port=8082"
+    networks:
+      - internal
+      - agent
+
+  # The only bridge between the session network and the internal network.
+  # Sessions run with permission prompts disabled, so they must not be able
+  # to reach the orchestrator's other endpoints (or, via `internal`, the
+  # database, Keycloak, and worker APIs): this gateway forwards exactly the
+  # /v1 model surface, and nothing else. See agent-gateway/nginx.conf.
+  logos-agent-gateway:
+    image: nginx:1.28-alpine
+    container_name: logos-agent-gateway
+    restart: unless-stopped
+    profiles: ["agent"]
+    depends_on:
+      - logos-orchestrator
+    volumes:
+      - ./agent-gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - internal
       - agent

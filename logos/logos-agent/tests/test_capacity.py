@@ -43,6 +43,7 @@ class TestParseSchedulerState:
         assert reading.ok
         assert reading.load == 0.0
         assert reading.total_slots == 8
+        assert reading.reclaimable is True
 
     def test_load_is_the_busy_share_of_loaded_slots(self):
         reading = capacity.parse_scheduler_state(scheduler_state([loaded(2, 8), loaded(2, 8)]))
@@ -70,6 +71,14 @@ class TestParseSchedulerState:
         assert reading.load == 0.0
         assert reading.total_slots == 0
 
+    def test_empty_fleet_is_idle_but_not_reclaimable(self):
+        # An empty fleet is not busy, but it has nothing idle to spend either:
+        # starting a session there would warm a lane (demand created, not
+        # capacity reclaimed), which is a separate, opt-in product decision.
+        reading = capacity.parse_scheduler_state(scheduler_state([]))
+        assert reading.reclaimable is False
+        assert reading.detail == "no loaded models"
+
     def test_per_model_queue_depth_counts_towards_the_queue(self):
         reading = capacity.parse_scheduler_state(scheduler_state([loaded(1, 8, queue_depth=3)], queue_total=1))
         assert reading.queue_total == 4
@@ -94,6 +103,12 @@ class TestStartDecision:
         may_start, reason = capacity.start_decision(reading, running=0, paused=0)
         assert not may_start
         assert "queue" in reason
+
+    def test_refuses_to_start_into_an_empty_fleet(self):
+        reading = capacity.parse_scheduler_state(scheduler_state([]))
+        may_start, reason = capacity.start_decision(reading, running=0, paused=0)
+        assert not may_start
+        assert "nothing to reclaim" in reason
 
     def test_refuses_above_the_start_threshold(self):
         busy = int(settings.start_below_load * 8) + 1
@@ -150,3 +165,11 @@ class TestPauseAndResume:
         reading = capacity.parse_scheduler_state(scheduler_state([loaded(0, 8)]))
         may_resume, _ = capacity.resume_decision(reading)
         assert may_resume
+
+    def test_does_not_resume_into_an_empty_fleet(self):
+        # Resuming is admission too: a paused session would be the only thing
+        # running on an empty fleet, so the same rule applies.
+        reading = capacity.parse_scheduler_state(scheduler_state([]))
+        may_resume, reason = capacity.resume_decision(reading)
+        assert not may_resume
+        assert "nothing to reclaim" in reason
