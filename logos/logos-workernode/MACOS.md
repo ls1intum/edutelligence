@@ -34,8 +34,8 @@ CI (GitHub Actions)                    Mac (native)
 │    no runtime          │            │   → ~/logos-workernode-mlx      │
 │                        │            │  install-macos.sh               │
 │ ghcr.io/ls1intum/      │            │   → ~/.venv-vllm-metal          │
-│  edutelligence/        │            │  launchctl bootstrap            │
-│  logos-workernode-mlx  │            │                                 │
+│  logos-workernode-mlx  │            │  launchctl bootstrap            │
+│                        │            │                                 │
 └────────────────────────┘            │ logos_worker_node.main          │
                                       │  ├── outbound WS → orchestrator │
                                       │  └── subprocess: vllm serve     │
@@ -70,6 +70,13 @@ This pulls the image, extracts it to `~/logos-workernode-mlx`, installs
 vllm-metal into `~/.venv-vllm-metal`, and registers the launchd agent. It is
 idempotent — re-run it to deploy a new version.
 
+The chat templates packaged with the image are merged into
+`~/logos-workernode-mlx/chat-templates` (where the agent points
+`LOGOS_CHAT_TEMPLATE_DIR`): templates the machine does not have yet are
+copied in, files you added or edited yourself are never overwritten. A
+template referenced in `config.yml` therefore works out of the box after the
+first bootstrap — no hand-seeding.
+
 Then fill in credentials and start:
 
 ```bash
@@ -91,8 +98,8 @@ launchctl kickstart -k "gui/$(id -u)/de.tum.logos.workernode"
 | Variable | Default | Purpose |
 |---|---|---|
 | `LOGOS_MLX_HOME` | `~/logos-workernode-mlx` | install root |
-| `LOGOS_MLX_IMAGE` | `ghcr.io/…/logos-workernode-mlx:latest` | image to pull |
-| `LOGOS_METAL_VENV` | `~/.venv-vllm-metal` | vllm-metal venv |
+| `LOGOS_MLX_IMAGE` | `ghcr.io/ls1intum/logos-workernode-mlx:latest` | image to pull |
+| `LOGOS_METAL_VENV` | `~/.venv-vllm-metal` | vllm-metal venv — read by the installer *and* the runtime resolvers (vllm binary, telemetry interpreter); bootstrap passes it to the launchd agent. Upstream's installer always creates `~/.venv-vllm-metal`, so a custom path must be populated by you (e.g. upstream's editable install) |
 | `LOGOS_METAL_PYTHON` | resolved from the venv | interpreter for the MLX telemetry probe |
 | `LOGOS_WORKER_BACKEND` | auto (`darwin` → metal) | force `metal` or `cuda` |
 
@@ -170,6 +177,13 @@ sudo sysctl iogpu.wired_limit_mb=57344   # e.g. 56 GB on a 64 GB Mac
 allocation above it however much memory is free. It is reported in the device
 telemetry under `extra.max_buffer_length_mb`.
 
+One accounting quirk of unified memory: the reported GPU usage is the
+*systemwide* wired-page count, and the host-RAM figure is the same machine's
+`vm_stat` — so the same wired pages are visible to both gates, and a large
+model looks tighter than it is on each of them. Both directions err toward
+reporting less free memory, which is the safe side for a capacity planner,
+but do not read the two numbers as independent pools.
+
 ---
 
 ## What differs from a CUDA node
@@ -202,6 +216,34 @@ normally. `config.example.mlx.yml` has worked examples.
 To measure `base_residency_mb`: start the lane, let it idle, then read
 `used_memory_mb` from `GET /runtime`. Round up — underestimating makes the
 planner over-subscribe the node.
+
+---
+
+## Privacy: whose prompts does this machine hold
+
+A Metal lane is a **native process on the machine owner's hardware** — the
+only possible deployment, since Metal cannot be containerised. That owner can
+attach a debugger, read process memory, or capture the lane's logs. Prompts
+routed to this node are therefore visible to the machine's operator, with no
+attestation that the host is what it claims and no isolation between the
+operator and the workload.
+
+`LOCAL` in the router's privacy ordering means "our datacentre", not "not a
+cloud" — so this machine must **not** be registered with the default
+`LOCAL` privacy level, or callers who set `threshold_privacy = "LOCAL"` to
+keep data on trusted infrastructure would silently be routed onto a personal
+laptop. The privacy level for hardware outside operator control is
+**`THIRD_PARTY_HARDWARE`**: when you add this Mac as a provider, select that
+level. It orders below every cloud tier, so it is eligible only for requests
+whose policy threshold explicitly allows third-party hardware — a Mac lane is
+opt-in, and datacentre-only traffic never touches it.
+
+The longer-term direction for exactly this shape of deployment is hardware
+attestation (keys generated in the Secure Enclave, requests decryptable only
+on the attested machine, debugger attachment blocked — the approach
+[Darkbloom](https://www.darkbloom.dev/) uses for idle Apple Silicon). That
+is a separate project; the distinct trust tier above closes the acute gap
+without any cryptography.
 
 ---
 
@@ -242,12 +284,24 @@ public once (Package settings → Change visibility). Until then:
 
 ## Version pinning
 
-Unlike the CUDA image, vLLM is **not** pinned here. vllm-metal's `install.sh`
-pins it by full wheel URL (PyPI carries no macOS vLLM wheel) together with a
+The installer is pinned to a release tag **plus a SHA256 checksum** in
+`install-macos.sh` (`VLLM_METAL_REF` / `VLLM_METAL_INSTALLER_SHA256`) — not
+to `main`. This is an ordinary supply-chain concern for a CI image, but a
+sharper one here: the installer executes on a contributor's personal Mac,
+which is also the machine that will hold other people's prompts in memory. A
+moving `main` can change the venv layout, the CLI flags the worker builds
+against, or the wheel set it resolves — and the worker would only notice
+when lanes stop starting. What runs must be exactly the bytes the checksum
+describes.
+
+vLLM itself is still **not** pinned directly: vllm-metal's `install.sh` pins
+it by full wheel URL (PyPI carries no macOS vLLM wheel) together with a
 matched mlx and torch; pulling that set apart is how you get an unbootable
-lane. As of 0.3.0.dev20260826 it installs vLLM 0.28.0 — the same release the
-CUDA image pins — but the two drift apart between upgrades, since vllm-metal
-can only follow vLLM releases that actually attach a macOS wheel.
+lane. The pinned installer from the requirements table installs vLLM 0.28.0 —
+the same release the CUDA image pins — and the installer's version floor
+(`VLLM_METAL_MIN_VERSION`, asserted against the installed distribution on
+every run) makes the documented requirement enforceable instead of
+aspirational.
 
 That is why `MetalVllmProcessHandle` builds its own command line instead of
 filtering the CUDA one, and why `tests/test_metal_process.py` cross-checks the
@@ -256,12 +310,12 @@ Mac. `logos_update-vllm.yml` only touches `Dockerfile`, not `Dockerfile.mlx`,
 so automated vLLM bumps do not reach this path.
 
 Keep vllm-metal current. It moves fast and dev builds are published daily;
-Qwen3.8 support landed in 08/2026, and 0.2.0 could not serve it at all. Re-run
-`install-macos.sh` — it is idempotent — or upstream's installer directly:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
-```
+Qwen3.8 support landed in 08/2026, and 0.2.0 could not serve it at all. To
+upgrade, pick the release to move to, download its `install.sh`, then update
+`VLLM_METAL_REF` **and** `VLLM_METAL_INSTALLER_SHA256` together in
+`install-macos.sh` (bump `VLLM_METAL_MIN_VERSION` if the new floor applies)
+and re-run it — it is idempotent. Do not pipe a fetched installer into bash:
+verify the checksum first, as the installer now does for itself.
 
 Two things to re-check after an upgrade, both of which changed between 0.2.0
 and 0.3.0.dev: the `VLLM_METAL_*` names in `MetalConfig`

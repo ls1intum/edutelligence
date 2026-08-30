@@ -1107,6 +1107,31 @@ class LaneManager:
                 exhausted_lids.append(lid)
                 continue
 
+            # Skip if the crash was a Metal allocation failure: the model does
+            # not fit this machine's working-set budget (or max buffer length),
+            # and restarting it unchanged fails identically — the same reason
+            # the CUDA fatal-error path stops retrying. Unlike CUDA fatals this
+            # wedges nothing (Metal memory is reclaimed on exit), so no reboot
+            # is involved; the operator fixes the fit (smaller quantization,
+            # lower max_model_len, higher iogpu.wired_limit_mb) and re-adds
+            # the lane, which resets this decision with it.
+            if handle is not None and getattr(handle, "has_metal_allocation_failure", False):
+                logger.error(
+                    "Lane '%s' crashed with a Metal allocation failure in recent logs; "
+                    "skipping restart (the model does not fit this machine's Metal "
+                    "budget — resize it and re-add the lane)",
+                    lid,
+                )
+                self._record_event(
+                    lid,
+                    "crash_restart_skipped_metal_allocation",
+                    model=lane_config.model,
+                    details="Metal allocation failure patterns detected in process logs",
+                    port=status.port,
+                )
+                exhausted_lids.append(lid)
+                continue
+
             # Circuit breaker: skip if restart budget exhausted
             restart_count = self._crash_restart_counts.get(lid, 0)
             if restart_count >= _MAX_CRASH_RESTARTS:
@@ -2052,7 +2077,11 @@ class LaneManager:
 
             # nvidia_smi_available stays False on Metal nodes (there is no
             # nvidia-smi to speak of), so gate on the backend-neutral flag and
-            # fall back to the legacy one for snapshots that predate it.
+            # fall back to the legacy one for snapshots that predate it. A
+            # Metal snapshot on the sysctl-fallback path also reports
+            # telemetry_available=False (its budget is an estimate, not a
+            # measurement), which skips the gate the same way a broken GPU
+            # poll does — degraded numbers must not drive placement.
             if not (snapshot.telemetry_available or snapshot.nvidia_smi_available):
                 break
 

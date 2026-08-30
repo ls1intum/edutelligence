@@ -359,14 +359,15 @@ class MetalConfig(BaseModel):
     vllm_binary: str = Field(
         default="",
         description="Path to the vllm CLI inside the vllm-metal venv. Empty "
-        "(default) resolves ~/.venv-vllm-metal/bin/vllm, then PATH — matching "
-        "the layout vllm-metal's install.sh creates.",
+        "(default) resolves <LOGOS_METAL_VENV or ~/.venv-vllm-metal>/bin/vllm, "
+        "then PATH — matching the layout vllm-metal's install.sh creates.",
     )
     metal_python: str = Field(
         default="",
         description="Interpreter used once at startup to read "
         "mlx.core.device_info() for GPU telemetry. Empty (default) resolves "
-        "~/.venv-vllm-metal/bin/python. Overridable via LOGOS_METAL_PYTHON.",
+        "<LOGOS_METAL_VENV or ~/.venv-vllm-metal>/bin/python. Overridable via "
+        "LOGOS_METAL_PYTHON.",
     )
     memory_fraction: float | None = Field(
         default=None,

@@ -352,6 +352,12 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
+          # Publish target for the MLX distribution image. Resolves to
+          # ghcr.io/ls1intum/logos-workernode-mlx and must stay literally
+          # identical to the default IMAGE ref in
+          # logos/logos-workernode/scripts/bootstrap-macos.sh — that script is
+          # the consumer, and nothing in CI catches a publish/consumer
+          # mismatch.
           images: ghcr.io/${{ github.repository_owner }}/logos-workernode-mlx
           tags: |
             type=ref,event=pr

@@ -23,10 +23,27 @@ Base = declarative_base()
 
 # Enum definition
 class ThresholdLevel(enum.Enum):
+    """Privacy levels — the single ordered definition, most trusted first.
+
+    The declaration order IS the trust ordering (index 0 = strictest);
+    pipeline.py derives PRIVACY_ORDER from it and dbmanager.py derives the
+    validation set, so a new level added here is known to router and
+    registration at once. Mirrors the Postgres enum threshold_enum
+    (liquibase 000 + 014) and the webservice Java enum of the same name —
+    keep those in sync.
+
+    The axis is "how much do we trust this deployment with our data".
+    THIRD_PARTY_HARDWARE covers hardware outside operator control (e.g. a
+    personal Mac running the MLX worker, see logos-workernode/MACOS.md):
+    its owner can inspect the running processes, so it orders below every
+    cloud tier and LOCAL keeps meaning "our datacentre".
+    """
+
     LOCAL = "LOCAL"
+    CLOUD_IN_EU_BY_EU_PROVIDER = "CLOUD_IN_EU_BY_EU_PROVIDER"
     CLOUD_IN_EU_BY_US_PROVIDER = "CLOUD_IN_EU_BY_US_PROVIDER"
     CLOUD_NOT_IN_EU_BY_US_PROVIDER = "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
-    CLOUD_IN_EU_BY_EU_PROVIDER = "CLOUD_IN_EU_BY_EU_PROVIDER"
+    THIRD_PARTY_HARDWARE = "THIRD_PARTY_HARDWARE"
 
 
 class LoggingLevel(enum.Enum):

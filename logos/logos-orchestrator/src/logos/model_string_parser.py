@@ -19,11 +19,15 @@ from typing import Dict, Union
 
 ALLOWED_FIELDS = {"policy"}
 POLICY_FIELDS = {"accuracy", "latency", "quality", "cost", "privacy", "default"}
+# Keep in sync with ThresholdLevel in logos/dbutils/dbmodules.py (the single
+# ordered definition) — a literal set here because this module must stay
+# import-free of the ORM layer.
 PRIVACY_VALUES = {
     "LOCAL",
     "CLOUD_IN_EU_BY_EU_PROVIDER",
     "CLOUD_IN_EU_BY_US_PROVIDER",
     "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+    "THIRD_PARTY_HARDWARE",
 }
 
 

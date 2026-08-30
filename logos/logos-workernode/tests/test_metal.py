@@ -6,6 +6,7 @@ runners and on a developer's Mac.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from unittest.mock import patch
 
@@ -164,6 +165,33 @@ class TestIsMetalBackend:
         assert metal.is_metal_backend() is True
 
 
+class TestDefaultMetalVenv:
+    """The venv location the installer, the launchd plist and the runtime
+    resolvers must all agree on."""
+
+    def test_defaults_to_the_upstream_layout(self, monkeypatch) -> None:
+        monkeypatch.delenv("LOGOS_METAL_VENV", raising=False)
+        assert metal.default_metal_venv() == os.path.expanduser("~/.venv-vllm-metal")
+
+    def test_honours_LOGOS_METAL_VENV(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("LOGOS_METAL_VENV", str(tmp_path / "custom-venv"))
+        assert metal.default_metal_venv() == str(tmp_path / "custom-venv")
+
+    def test_blank_override_falls_back_to_the_default(self, monkeypatch) -> None:
+        monkeypatch.setenv("LOGOS_METAL_VENV", "   ")
+        assert metal.default_metal_venv() == os.path.expanduser("~/.venv-vllm-metal")
+
+    def test_interpreter_candidates_use_the_venv(self, monkeypatch, tmp_path) -> None:
+        # A python inside the custom venv must be probed — the old hard-coded
+        # default would have skipped a correctly installed custom location.
+        venv_python = tmp_path / "custom-venv" / "bin" / "python"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.write_text("#!/bin/sh\n")
+        venv_python.chmod(0o755)
+        monkeypatch.setenv("LOGOS_METAL_VENV", str(tmp_path / "custom-venv"))
+        assert str(venv_python) in metal.metal_python_candidates("")
+
+
 class TestProbeDeviceInfo:
     DEVICE_JSON = (
         '{"device_name": "Apple M3 Pro", "architecture": "applegpu_g15s", '
@@ -292,6 +320,11 @@ class TestMetalMetricsCollector:
         # Degraded, and it must say so — the estimate is not authoritative.
         assert "estimated" in snapshot.degraded_reason
         assert snapshot.total_memory_mb == pytest.approx(38654705664 * metal._DEFAULT_WIRED_FRACTION / 1024**2, abs=1)
+        # The estimate is not measured telemetry: consumers that gate on the
+        # flag keep their registration-time / total-minus-used values until a
+        # real mlx probe succeeds, instead of scheduling against one
+        # machine's measured constant.
+        assert snapshot.telemetry_available is False
 
     @pytest.mark.asyncio
     async def test_honours_an_explicit_wired_limit(self) -> None:

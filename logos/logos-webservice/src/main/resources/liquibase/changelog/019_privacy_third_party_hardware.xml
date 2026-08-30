@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Privacy level for hardware outside operator control — e.g. a personal
+         Mac running the MLX worker (logos/logos-workernode/MACOS.md). Lanes
+         there run as native processes the machine's owner can debug or
+         inspect, so the level orders below every cloud tier: a request that
+         demands a stricter threshold_privacy never routes to such a machine,
+         and the provider is eligible only for policies that explicitly allow
+         third-party hardware. LOCAL keeps meaning "our datacentre", not
+         "somewhere that is not a cloud".
+         Keep the value list in sync with ThresholdLevel in
+         logos-orchestrator/src/logos/dbutils/dbmodules.py (the single ordered
+         definition the router and the provider validation derive from) and
+         with the webservice Java enum of the same name. -->
+    <changeSet id="019-add-third-party-hardware-privacy-level" author="wasnertobias">
+        <sql>ALTER TYPE threshold_enum ADD VALUE IF NOT EXISTS 'THIRD_PARTY_HARDWARE';</sql>
+        <rollback>
+            <!-- Postgres cannot drop an enum value; an existing database keeps
+                 the value (harmless) once it has been used by a row. -->
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

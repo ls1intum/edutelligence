@@ -2490,6 +2490,62 @@ async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_metal_allocation_failure_skips_restart(monkeypatch) -> None:
+    """When has_metal_allocation_failure is True, _recover_dead_lanes must skip the restart.
+
+    The model does not fit the machine's Metal budget; restarting it
+    unchanged fails identically, so the flag must feed the same fatal path
+    as has_fatal_cuda_errors — otherwise a lane that died on an allocation
+    failure burns its whole crash-restart budget on guaranteed failures.
+    """
+    lane_id = "test-lane"
+    lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    restart_calls: list[str] = []
+
+    class MetalAllocFailureHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+            self.has_stuck_vram = False
+            self.has_fatal_cuda_errors = False
+            self.has_metal_allocation_failure = True
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=1, return_code=1)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> Any:
+        restart_calls.append("spawn")
+        raise AssertionError("should not be called")
+
+    manager._handles[lane_id] = MetalAllocFailureHandle()  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+
+    status = LaneStatus(
+        lane_id=lane_id,
+        lane_uid=f"vllm:{lane_id}",
+        model=lane_config.model,
+        port=15000,
+        vllm=True,
+        process=ProcessStatus(state=ProcessState.STOPPED, pid=1, return_code=1),
+        runtime_state="stopped",
+        lane_config=lane_config,
+    )
+    manager._last_crash_restart_attempt_at[lane_id] = 0.0  # bypass cooldown  # noqa: SLF001
+    await manager._recover_dead_lanes([status])  # noqa: SLF001
+
+    assert not restart_calls, "Restart must be suppressed when the crash was a Metal allocation failure"
+
+
+@pytest.mark.asyncio
 async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     """Crash-restart counter resets to 0 after a successful restart."""
     lane_id = "test-lane"

@@ -1,6 +1,15 @@
 export type ProviderType = 'logosnode' | 'cloud';
 export type CloudProviderType = 'azure' | 'openai' | 'anthropic' | 'gemini' | 'bedrock' | 'deepseek' | 'groq' | 'none';
-export type PrivacyLevel = 'LOCAL' | 'CLOUD_IN_EU_BY_US_PROVIDER' | 'CLOUD_NOT_IN_EU_BY_US_PROVIDER' | 'CLOUD_IN_EU_BY_EU_PROVIDER';
+// Mirrors the Postgres enum threshold_enum (liquibase 000 + 014) and
+// ThresholdLevel in logos-orchestrator — keep in sync. THIRD_PARTY_HARDWARE
+// covers hardware outside operator control (e.g. a personal Mac MLX worker);
+// it orders below every cloud tier.
+export type PrivacyLevel =
+  | 'LOCAL'
+  | 'CLOUD_IN_EU_BY_US_PROVIDER'
+  | 'CLOUD_NOT_IN_EU_BY_US_PROVIDER'
+  | 'CLOUD_IN_EU_BY_EU_PROVIDER'
+  | 'THIRD_PARTY_HARDWARE';
 
 export interface Provider {
   id: number;

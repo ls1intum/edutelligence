@@ -61,6 +61,10 @@ export class Providers implements OnInit {
     'CLOUD_IN_EU_BY_US_PROVIDER',
     'CLOUD_NOT_IN_EU_BY_US_PROVIDER',
     'CLOUD_IN_EU_BY_EU_PROVIDER',
+    // Hardware outside operator control — use it for a personal Mac MLX
+    // worker so that LOCAL-threshold requests never route onto a machine
+    // whose owner can inspect the running processes.
+    'THIRD_PARTY_HARDWARE',
   ];
 
   readonly String = String;
@@ -253,6 +257,7 @@ export class Providers implements OnInit {
       CLOUD_IN_EU_BY_US_PROVIDER: 'EU (US)',
       CLOUD_NOT_IN_EU_BY_US_PROVIDER: 'Non-EU (US)',
       CLOUD_IN_EU_BY_EU_PROVIDER: 'EU (EU)',
+      THIRD_PARTY_HARDWARE: 'Third-party HW',
     };
     return map[level] ?? level;
   }

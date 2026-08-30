@@ -30,6 +30,11 @@
         <string>@INSTALL_ROOT@/data</string>
         <key>LOGOS_CHAT_TEMPLATE_DIR</key>
         <string>@INSTALL_ROOT@/chat-templates</string>
+        <!-- Same value install-macos.sh installed with: the runtime resolvers
+             (logos_worker_node.metal.default_metal_venv) read this variable, so
+             a custom venv must reach the launchd environment. -->
+        <key>LOGOS_METAL_VENV</key>
+        <string>@METAL_VENV@</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
     </dict>

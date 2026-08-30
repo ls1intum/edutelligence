@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
+from logos.dbutils.dbmodules import ThresholdLevel
 from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
@@ -24,6 +25,34 @@ from .prefix_affinity import affinity_keys
 from .scheduler_interface import QueueTimeoutError, SchedulerInterface, SchedulingRequest
 
 logger = logging.getLogger(__name__)
+
+# Privacy levels in trust order (index 0 = strictest). Derived from the
+# ThresholdLevel declaration order — the single definition (dbutils/
+# dbmodules.py) that the Postgres enum threshold_enum and the webservice
+# Java enum mirror. A new level is therefore known to the router the moment
+# it is added to the enum, instead of requiring a second copy in here.
+PRIVACY_ORDER = tuple(level.value for level in ThresholdLevel)
+
+
+def _privacy_ok(threshold: str, level: str) -> bool:
+    """Whether a deployment with privacy ``level`` satisfies a request whose
+    policy demands ``threshold_privacy = threshold``.
+
+    The demand is met when the deployment is at least as trusted as required:
+    LOCAL deployments serve every threshold; a THIRD_PARTY_HARDWARE deployment
+    serves only requests that explicitly allow third-party hardware.
+
+    Fail closed, not open: an unrecognised threshold resolves to the
+    STRICTEST requirement (a policy typo then accepts only datacentre
+    deployments instead of every deployment), and an unrecognised level to the
+    LEAST trusted one (a deployment type the router has not been taught about
+    qualifies for nothing strict instead of everything). Before this, both
+    fallbacks failed open — a half-finished enum rollout silently made the
+    new tier eligible for the most confidential requests.
+    """
+    threshold_idx = PRIVACY_ORDER.index(threshold) if threshold in PRIVACY_ORDER else 0
+    level_idx = PRIVACY_ORDER.index(level) if level in PRIVACY_ORDER else len(PRIVACY_ORDER) - 1
+    return threshold_idx >= level_idx
 
 
 def resolve_queue_priority(default_priority: Optional[int], policy_priority: Optional[int]) -> int:
@@ -482,22 +511,10 @@ class RequestPipeline:
         """Run classification to get candidate models."""
         policy = request.policy or ProxyPolicy()
 
-        PRIVACY_ORDER = [
-            "LOCAL",
-            "CLOUD_IN_EU_BY_EU_PROVIDER",
-            "CLOUD_IN_EU_BY_US_PROVIDER",
-            "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-        ]
-
         threshold = policy.get("threshold_privacy", "CLOUD_NOT_IN_EU_BY_US_PROVIDER")
-        threshold_idx = PRIVACY_ORDER.index(threshold) if threshold in PRIVACY_ORDER else len(PRIVACY_ORDER) - 1
-
-        def _privacy_ok(deployment: dict) -> bool:
-            level = deployment.get("privacy_level", "LOCAL")
-            level_idx = PRIVACY_ORDER.index(level) if level in PRIVACY_ORDER else 0
-            return threshold_idx >= level_idx
-
-        privacy_deployments = [d for d in request.deployments if _privacy_ok(d)]
+        privacy_deployments = [
+            d for d in request.deployments if _privacy_ok(threshold, d.get("privacy_level", "LOCAL"))
+        ]
         allowed = get_unique_models_from_deployments(privacy_deployments)
 
         # Extract prompts

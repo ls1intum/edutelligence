@@ -4,7 +4,11 @@
 #
 #   ./bootstrap-macos.sh [image-ref]
 #
-# Default image: ghcr.io/ls1intum/edutelligence/logos-workernode-mlx:latest
+# Default image: ghcr.io/ls1intum/logos-workernode-mlx:latest
+#
+# This default must stay literally identical to the `images:` line for this
+# image in .github/workflows/logos_build-and-push-docker.yml — that workflow
+# is where the package is published, and nothing in CI catches a mismatch.
 #
 # The image is never started. Metal is unavailable inside containers, so the
 # payload is extracted and the worker runs as a native launchd agent — which is
@@ -17,8 +21,13 @@
 # =============================================================================
 set -euo pipefail
 
-IMAGE="${1:-${LOGOS_MLX_IMAGE:-ghcr.io/ls1intum/edutelligence/logos-workernode-mlx:latest}}"
+IMAGE="${1:-${LOGOS_MLX_IMAGE:-ghcr.io/ls1intum/logos-workernode-mlx:latest}}"
 INSTALL_ROOT="${LOGOS_MLX_HOME:-$HOME/logos-workernode-mlx}"
+# The vllm-metal venv: one variable for the whole install, read by
+# install-macos.sh, by the generated launchd plist (below) and by the worker's
+# runtime resolvers (logos_worker_node.metal.default_metal_venv).
+METAL_VENV="${LOGOS_METAL_VENV:-$HOME/.venv-vllm-metal}"
+export LOGOS_METAL_VENV="$METAL_VENV"
 LAUNCH_AGENT_LABEL="de.tum.logos.workernode"
 LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
 LAUNCH_AGENT_PLIST="$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_LABEL.plist"
@@ -66,6 +75,26 @@ rsync -a --delete \
     --exclude '.venv/' \
     --exclude 'chat-templates/' \
     "$STAGING/" "$INSTALL_ROOT/"
+
+# chat-templates/ is excluded from the sync like config.yml — it is operator
+# state (custom and edited templates). But unlike config.yml, the image
+# packages a set of templates and the launchd agent points
+# LOGOS_CHAT_TEMPLATE_DIR at this directory, so a plain exclude would leave it
+# empty after the first deploy and every template referenced in config.yml
+# would fail the lane spawn. Seed and merge with the config.yml rule: files
+# the host does not have yet are copied in from the package, files that are
+# already present (operator-managed) are never touched.
+if [ -d "$STAGING/chat-templates" ]; then
+    log "Merging packaged chat templates into $INSTALL_ROOT/chat-templates"
+    mkdir -p "$INSTALL_ROOT/chat-templates"
+    while IFS= read -r -d '' template; do
+        target="$INSTALL_ROOT/chat-templates/${template#"$STAGING/chat-templates/"}"
+        if [ ! -e "$target" ]; then
+            mkdir -p "$(dirname "$target")"
+            cp -p "$template" "$target"
+        fi
+    done < <(find "$STAGING/chat-templates" -type f -print0)
+fi
 rm -rf "$STAGING"
 
 # ── 3. Install runtime dependencies ──────────────────────────────────────────
@@ -84,6 +113,7 @@ mkdir -p "$LAUNCH_AGENT_DIR"
 # matches, so a label-named file would be silently untracked.
 sed -e "s|@INSTALL_ROOT@|$INSTALL_ROOT|g" \
     -e "s|@LABEL@|$LAUNCH_AGENT_LABEL|g" \
+    -e "s|@METAL_VENV@|$METAL_VENV|g" \
     "$INSTALL_ROOT/scripts/launchd-agent.plist.template" > "$LAUNCH_AGENT_PLIST"
 
 launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT_PLIST" 2>/dev/null \

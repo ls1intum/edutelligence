@@ -78,6 +78,13 @@ class TestBuildCmd:
             assert flag in cmd
         assert cmd[cmd.index("--port") + 1] == "11436"
 
+    def test_binds_loopback_only(self, handle) -> None:
+        """The lane API is unauthenticated; on a personal Mac it must not
+        listen on the local network. Everything that talks to a lane reaches
+        it via 127.0.0.1, so loopback is sufficient."""
+        cmd = handle._build_cmd(make_lane())
+        assert cmd[cmd.index("--host") + 1] == "127.0.0.1"
+
     def test_rejects_tensor_parallelism(self, handle) -> None:
         with pytest.raises(RuntimeError, match="tensor_parallel_size"):
             handle._build_cmd(make_lane(tensor_parallel_size=2))
@@ -286,6 +293,18 @@ class TestBinaryResolution:
         worker_bin.chmod(0o755)
         handle = make_handle(MetalConfig(vllm_binary=str(worker_bin)))
         assert handle._resolve_vllm_binary("vllm") == [str(worker_bin)]
+
+    def test_resolves_the_venv_from_LOGOS_METAL_VENV(self, monkeypatch, tmp_path) -> None:
+        """The same variable scripts/install-macos.sh installs into must be
+        honoured at resolution time — a custom venv that installed cleanly
+        must not be missed at lane spawn (the old fall-through to PATH
+        landed in the worker venv, which deliberately has no vLLM)."""
+        venv_bin = tmp_path / "my-venv" / "bin" / "vllm"
+        venv_bin.parent.mkdir(parents=True)
+        venv_bin.write_text("#!/bin/sh\n")
+        venv_bin.chmod(0o755)
+        monkeypatch.setenv("LOGOS_METAL_VENV", str(tmp_path / "my-venv"))
+        assert make_handle()._resolve_vllm_binary("vllm") == [str(venv_bin)]
 
 
 class TestCacheRoot:

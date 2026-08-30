@@ -46,6 +46,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from logos_worker_node.metal import default_metal_venv
 from logos_worker_node.models import LaneConfig, MetalConfig
 from logos_worker_node.vllm_process import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
@@ -57,9 +58,6 @@ from logos_worker_node.vllm_process import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Where vllm-metal's install.sh puts its virtualenv.
-_DEFAULT_METAL_VENV = "~/.venv-vllm-metal"
 
 
 class MetalVllmProcessHandle(VllmProcessHandle):
@@ -154,10 +152,13 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         # A lane-level vllm_binary is almost always the schema default "vllm";
         # only treat it as authoritative when it actually points somewhere.
         explicit = configured if (configured and configured != "vllm") else ""
+        # default_metal_venv() reads LOGOS_METAL_VENV — the same variable
+        # scripts/install-macos.sh installs into — so a custom venv location
+        # is found here instead of silently falling through to PATH.
         candidates = [
             explicit,
             (self._metal_config.vllm_binary or "").strip(),
-            os.path.join(_DEFAULT_METAL_VENV, "bin", "vllm"),
+            os.path.join(default_metal_venv(), "bin", "vllm"),
         ]
         for candidate in candidates:
             if not candidate:
@@ -222,8 +223,12 @@ class MetalVllmProcessHandle(VllmProcessHandle):
             *self._resolve_vllm_binary(vc.vllm_binary),
             "serve",
             lane_config.model,
+            # Loopback only: everything that talks to a lane (the worker's
+            # proxy, readiness polling, metrics scraping) reaches it via
+            # 127.0.0.1. On a personal Mac, 0.0.0.0 would expose an
+            # unauthenticated OpenAI-compatible API to the local network.
             "--host",
-            "0.0.0.0",
+            "127.0.0.1",
             "--port",
             str(self.port),
             "--dtype",

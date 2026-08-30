@@ -18,7 +18,9 @@ Design notes
   subprocess at startup keeps the dependency where it belongs while still
   giving us the exact value Metal itself will enforce. When that interpreter
   is unreachable we fall back to a sysctl heuristic, which is close but not
-  authoritative, and say so via ``degraded_reason``.
+  authoritative — and say so at the type level: the snapshot then carries
+  ``telemetry_available=False`` (plus the reason in ``degraded_reason``), so
+  consumers that gate on the flag do not schedule against the estimate.
 
 • Per-poll usage comes from ``vm_stat``'s wired-down page count. It is the
   systemwide figure and therefore includes kernel wired memory, so it slightly
@@ -189,6 +191,19 @@ def read_process_rss_mb(pid: int) -> float:
         return 0.0
 
 
+def default_metal_venv() -> str:
+    """The vllm-metal venv, resolved exactly once for the whole worker.
+
+    Reads LOGOS_METAL_VENV — the same variable scripts/install-macos.sh
+    honours — falling back to the layout upstream's installer creates. Every
+    runtime resolution that needs the venv (the vllm binary, this interpreter
+    candidate list) goes through here, so a custom location installed on the
+    host cannot be missed at lane spawn or telemetry probe time.
+    """
+    override = (os.environ.get("LOGOS_METAL_VENV") or "").strip()
+    return os.path.expanduser(override or "~/.venv-vllm-metal")
+
+
 def metal_python_candidates(configured: str = "") -> list[str]:
     """Candidate interpreters that can import mlx, most specific first."""
     candidates: list[str] = []
@@ -197,7 +212,7 @@ def metal_python_candidates(configured: str = "") -> list[str]:
     env_override = (os.environ.get("LOGOS_METAL_PYTHON") or "").strip()
     if env_override:
         candidates.append(os.path.expanduser(env_override))
-    candidates.append(os.path.expanduser("~/.venv-vllm-metal/bin/python"))
+    candidates.append(os.path.join(default_metal_venv(), "bin", "python"))
     found = shutil.which("python3")
     if found:
         candidates.append(found)
@@ -394,7 +409,14 @@ class MetalMetricsCollector:
             # should fall back to its total-minus-used path rather than trust
             # a free_memory_mb it thinks came from nvidia-smi.
             nvidia_smi_available=False,
-            telemetry_available=True,
+            # False on the sysctl-fallback path: the budget there is a
+            # heuristic (one machine's measured constant), and reporting it
+            # as measured telemetry would let the orchestrator size lanes
+            # against a figure that is off by an unknown margin. Consumers
+            # that gate on telemetry_available then keep their
+            # registration-time / total-minus-used values until a real mlx
+            # probe succeeds. The caveat stays visible in degraded_reason.
+            telemetry_available=not degraded_reason,
             degraded_reason=degraded_reason,
             devices=[device],
             total_memory_mb=total_mb,
