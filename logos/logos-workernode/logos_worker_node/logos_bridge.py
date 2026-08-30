@@ -959,6 +959,12 @@ class LogosBridgeClient:
                     "min_kv_cache_mb": round(result.min_kv_cache_mb, 1),
                     "max_kv_cache_mb": round(result.max_kv_cache_mb, 1),
                     "max_model_len": result.max_model_len,
+                    "cold_load_time_s": (
+                        round(result.cold_load_time_s, 1) if result.cold_load_time_s is not None else None
+                    ),
+                    "wake_from_sleep_time_s": (
+                        round(result.wake_from_sleep_time_s, 1) if result.wake_from_sleep_time_s is not None else None
+                    ),
                     "log_text": self._truncate_calibration_log_text(log_text),
                 }
             ),

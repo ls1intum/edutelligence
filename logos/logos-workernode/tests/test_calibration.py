@@ -42,6 +42,7 @@ from logos_worker_node.calibration import (
     calibrate_model,
     is_model_unsupported,
     load_existing_profiles,
+    merge_profile,
     parse_gpu_indices,
     plans_from_config,
     result_to_profile_dict,
@@ -2526,3 +2527,149 @@ def test_result_to_profile_dict_maps_sleep_mode_disabled() -> None:
     assert result_to_profile_dict(_success_result("m"))["sleep_mode_disabled"] is None
     assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=True))["sleep_mode_disabled"] is True
     assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=False))["sleep_mode_disabled"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Cold-load & wake-from-sleep timing (issue #627)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_cold_load_time_measured_from_spawn_to_first_served_request():
+    """The warmup IS the first request served, so spawn → warmup completion is recorded."""
+    patches = _patch_calibration_infra()  # _post answers 200 → warmup request "serves"
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.cold_load_time_s is not None
+    assert result.cold_load_time_s >= 0.0
+    # Everything external is mocked — the interval is only the (tiny)
+    # in-process walk through calibrate_model, so it must stay small.
+    assert result.cold_load_time_s < 10.0
+
+
+def test_cold_load_anchor_excludes_failed_retry_attempts():
+    """The anchor is the successful attempt's spawn, not the moment before
+    the first attempt: _try_start's internal retries (max_model_len /
+    max_num_seqs) typically fail only AFTER loading the weights, and those
+    near-full loads must not be billed to cold_load_time_s."""
+    patches = _patch_calibration_infra()
+
+    def wait_ready_side_effect(*args, **kwargs):
+        if not wait_ready_side_effect.attempts:
+            wait_ready_side_effect.attempts.append(time.perf_counter())
+            # The rejected attempt loads the weights and is only refused at
+            # the very end — simulate that cost before raising.
+            deadline = time.perf_counter() + 0.2
+            while time.perf_counter() < deadline:
+                pass
+            raise RuntimeError("vLLM exited (code=1)")
+        return None
+
+    wait_ready_side_effect.attempts = []
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    # The one failure's log parses to a --max-model-len suggestion, which
+    # drives the retry recursion; nothing else in this run parses to one.
+    suggested = {"done": False}
+
+    def suggest_side_effect(log_tail):
+        if suggested["done"]:
+            return None
+        suggested["done"] = True
+        return 65536
+
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion",
+        side_effect=suggest_side_effect,
+    )
+
+    result, mocks = _run_calibrate(patches)
+
+    assert result.success, result.error
+    # One rejected attempt, one successful retry.
+    assert mocks["spawn"].call_count == 2
+    assert result.cold_load_time_s is not None
+    # The rejected attempt's ~0.2s weight load is NOT in the measured
+    # interval — only the successful attempt (startup → warmup) is.
+    assert result.cold_load_time_s < 0.1
+
+
+def test_cold_load_time_none_when_first_request_does_not_serve():
+    """A value that never actually served a request must not pose as one."""
+    post, _ = _capturing_post(**{"/v1/completions": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.cold_load_time_s is None
+
+
+def test_wake_from_sleep_time_measured_from_wake_to_first_served_request():
+    """/wake_up trigger → post-wake test request served is recorded as the wake time."""
+    post, urls = _capturing_post()
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert any(u.endswith("/wake_up") for u in urls)
+    assert result.wake_from_sleep_time_s is not None
+    assert result.wake_from_sleep_time_s >= 0.0
+    assert result.wake_from_sleep_time_s < 10.0
+
+
+def test_wake_from_sleep_time_none_when_sleep_phases_skipped():
+    """No sleep in the run → no wake to measure."""
+    result, _ = _run_calibrate(_patch_calibration_infra(), sleep_level=0)
+
+    assert result.success, result.error
+    assert result.wake_from_sleep_time_s is None
+
+
+def test_wake_from_sleep_time_none_when_wake_fails():
+    """A wake that cannot be verified safe carries no timing (same rule as the residual)."""
+    post, _ = _capturing_post(**{"/wake_up": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    assert result.wake_from_sleep_time_s is None
+
+
+def test_result_to_profile_dict_maps_timing_fields():
+    """Measured timings map 1:1 into the profile dict; unmeasured ones stay None."""
+    assert result_to_profile_dict(_success_result("m"))["cold_load_time_s"] is None
+    assert result_to_profile_dict(_success_result("m"))["wake_from_sleep_time_s"] is None
+
+    d = result_to_profile_dict(_success_result("m", cold_load_time_s=123.45, wake_from_sleep_time_s=12.34))
+    assert d["cold_load_time_s"] == 123.5  # rounded to 0.1s like the MB fields
+    assert d["wake_from_sleep_time_s"] == 12.3
+
+
+def test_merge_profile_keeps_prior_timing_when_new_run_unmeasured():
+    """A None timing in a fresh result must not erase an earlier measurement."""
+    prior = {"base_residency_mb": 5000.0, "cold_load_time_s": 90.0, "wake_from_sleep_time_s": 12.0}
+    merged = merge_profile(prior, result_to_profile_dict(_success_result("m")))
+    assert merged["cold_load_time_s"] == 90.0
+    assert merged["wake_from_sleep_time_s"] == 12.0
+
+    # A fresh measurement replaces the stored value.
+    merged2 = merge_profile(merged, result_to_profile_dict(_success_result("m", cold_load_time_s=42.0)))
+    assert merged2["cold_load_time_s"] == 42.0
+    assert merged2["wake_from_sleep_time_s"] == 12.0
+
+
+def test_timing_fields_survive_profile_store_roundtrip(tmp_path):
+    result = _success_result("org/m", cold_load_time_s=123.4, wake_from_sleep_time_s=12.3)
+    profiles_path = tmp_path / "model_profiles.yml"
+    save_profiles(profiles_path, {"org/m": merge_profile(None, result_to_profile_dict(result))})
+
+    loaded = load_existing_profiles(profiles_path)
+    assert loaded["org/m"]["cold_load_time_s"] == 123.4
+    assert loaded["org/m"]["wake_from_sleep_time_s"] == 12.3
