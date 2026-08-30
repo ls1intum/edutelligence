@@ -110,6 +110,7 @@ public class ModelService {
         model.setWeightAccuracy(0);
         model.setWeightCost(0);
         model.setWeightQuality(0);
+        ensureNameDoesNotCollideWithAlias(req.name());
         model = modelRepository.save(model);
         saveAliases(model.getId(), req.aliases());
         weightService.rebalanceAfterAdd(
@@ -132,6 +133,7 @@ public class ModelService {
         if (req.weightAccuracy() != null) model.setWeightAccuracy(req.weightAccuracy());
         if (req.weightCost() != null) model.setWeightCost(req.weightCost());
         if (req.weightQuality() != null) model.setWeightQuality(req.weightQuality());
+        ensureNameDoesNotCollideWithAlias(req.name());
         modelRepository.save(model);
         saveAliases(model.getId(), req.aliases());
         orchestratorNotificationService.notifyRefresh(true);
@@ -184,6 +186,26 @@ public class ModelService {
             .map(ModelAlias::getAlias)
             .sorted()
             .toList();
+    }
+
+    /**
+     * Rejects a model name that collides case-insensitively with an existing
+     * alias. Name and alias matching is case-insensitive at the request
+     * boundary and the resolver matches a canonical name before it ever
+     * consults aliases, so a model created or renamed to an existing alias
+     * would silently shadow the model that alias points at — the mirror image
+     * of the alias-collides-with-model-name check in {@link #saveAliases}.
+     * A null/empty name (e.g. an update that does not change the name) is a
+     * no-op.
+     */
+    private void ensureNameDoesNotCollideWithAlias(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            return;
+        }
+        if (modelAliasRepository.existsByAliasIgnoreCase(name)) {
+            throw new IllegalArgumentException(
+                "Model name '" + name + "' collides with an existing model alias");
+        }
     }
 
     /**

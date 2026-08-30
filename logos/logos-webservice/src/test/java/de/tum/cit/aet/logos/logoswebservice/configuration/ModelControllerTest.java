@@ -370,4 +370,63 @@ class ModelControllerTest {
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error").exists());
     }
+
+    @Test
+    void addModel_nameCollidingWithExistingAliasIsRejected() throws Exception {
+        // Model 5001 owns the alias 'local-gpt'. Creating a model whose NAME is
+        // that alias would shadow it, because the resolver matches a canonical
+        // name before it ever consults aliases — so the create path must reject
+        // it (the mirror of the alias-collides-with-name check).
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"aliases\":[\"local-gpt\"]}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(post("/logosdb/add_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"local-gpt\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").exists());
+    }
+
+    @Test
+    void updateModelInfo_renameToExistingAliasIsRejected() throws Exception {
+        // Model 5001 owns the alias 'local-gpt'. Renaming model 5002 to that
+        // name would silently steal every request that used the alias while the
+        // alias row still points at model 5001 — the rename path is the easy
+        // one to miss, so it is covered explicitly.
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"aliases\":[\"local-gpt\"]}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5002,\"name\":\"local-gpt\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").exists());
+    }
+
+    @Test
+    void addModel_nameCollidingWithExistingAliasIsCaseInsensitive() throws Exception {
+        // The collision rule is case-insensitive, matching the alias-side check:
+        // a name that differs only in capitalization from an existing alias is
+        // still rejected.
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"aliases\":[\"local-gpt\"]}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(post("/logosdb/add_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"LOCAL-GPT\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").exists());
+    }
 }
