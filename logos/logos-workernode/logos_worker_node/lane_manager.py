@@ -27,7 +27,7 @@ from logos_worker_node.models import (
     VllmEngineConfig,
 )
 from logos_worker_node.ollama_process import OllamaProcessHandle
-from logos_worker_node.vllm_process import VllmProcessHandle
+from logos_worker_node.vllm_process import VllmProcessHandle, effective_gmu
 
 logger = logging.getLogger("logos_worker_node.lane_manager")
 
@@ -46,13 +46,23 @@ _HANDLE_CLOSE_TIMEOUT = 10
 # on top of the estimate. OFFSET_MB adds a fixed safety margin on top.
 _GPU_PLACEMENT_SECURITY_RATIO = 1.005
 _GPU_PLACEMENT_HEADROOM_OFFSET_MB = 0.0
-# vLLM clamps auto-derived gpu_memory_utilization to this floor (see VllmProcessHandle).
-# Placement must treat this as the minimum per-GPU reservation when the model's actual
-# footprint is smaller, otherwise placement succeeds but vLLM startup fails with
-# "Free memory ... less than desired GPU memory utilization".
-_VLLM_GMU_FLOOR = 0.5
 _CRASH_RESTART_COOLDOWN_S = 30.0
 _MAX_CRASH_RESTARTS = 5  # per lane; budget resets on confirmed successful restart
+
+
+def _placement_threshold_mb(row: dict[str, float], base_threshold_mb: float, gmu: float | None) -> float:
+    """Per-GPU placement threshold for one snapshot row.
+
+    vLLM's startup gate (vllm/v1/worker/utils.py:request_memory) checks
+    free >= gmu × total on each card individually, so on mixed-size nodes the
+    GMU reservation must be sized against the row's own total rather than a
+    global minimum. Rows with an unknown total — or no GMU bound in play (kv
+    pinned) — fall back to the base (footprint-derived) threshold alone.
+    """
+    total_mb = float(row.get("total_mb", 0.0) or 0.0)
+    if gmu is None or total_mb <= 0:
+        return base_threshold_mb
+    return max(base_threshold_mb, gmu * total_mb)
 
 
 # Bounded drain of in-flight requests before sleeping/stopping a lane, so an
@@ -1590,8 +1600,16 @@ class LaneManager:
         multi_gpu_indices: set[int] | None = None,
         awake_lanes_by_gpu: dict[int, int] | None = None,
         awake_used_mb_by_gpu: dict[int, float] | None = None,
+        gmu: float | None = None,
     ) -> list[int] | None:
-        feasible = [row for row in device_rows if float(row["free_mb"]) >= per_gpu_threshold_mb]
+        # Per-row: vLLM's startup gate is per card (free >= gmu × that card's
+        # total), so on mixed-size nodes each row is checked against its own
+        # total (None gmu = kv-pinned lane, base threshold only).
+        feasible = [
+            row
+            for row in device_rows
+            if float(row["free_mb"]) >= _placement_threshold_mb(row, per_gpu_threshold_mb, gmu)
+        ]
         if len(feasible) < tp_size:
             return None
 
@@ -1702,35 +1720,45 @@ class LaneManager:
         per_gpu_required_mb = required_total_mb / float(tp_size)
         per_gpu_threshold_mb = per_gpu_required_mb * _GPU_PLACEMENT_SECURITY_RATIO + _GPU_PLACEMENT_HEADROOM_OFFSET_MB
 
-        # When vLLM sizes its KV cache from gpu_memory_utilization, it clamps a
-        # small model's GMU up to _VLLM_GMU_FLOOR and pre-allocates that fraction
-        # of total GPU memory at startup; checking only the calibrated footprint
-        # would let placement succeed here but vLLM startup fail with
-        # "free memory < desired gpu_memory_utilization".
+        # vLLM's startup gate (vllm/v1/worker/utils.py:request_memory, called
+        # unconditionally at worker init) pre-allocates effective-GMU × total
+        # per card and refuses to start if free is below that; checking only
+        # the calibrated footprint would let placement succeed here but vLLM
+        # startup fail with "free memory < desired gpu_memory_utilization".
+        # The gate runs per card, so the bound is checked against each row's
+        # own total (see _placement_threshold_mb) — on a mixed-size node,
+        # gating a 48 GB card on its 24 GB neighbour's reservation would
+        # understate the requirement.
         #
-        # BUT when the lane pins kv_cache_memory_bytes, vLLM skips memory
-        # profiling and ignores gpu_memory_utilization entirely (it logs exactly
-        # this), reserving only weights + the explicit KV. The floor would then
-        # demand free VRAM the lane never uses and wrongly reject small models
-        # (e.g. a 4B model needing ~6GB rejected for not having ~24GB free). KV
-        # size / concurrency is governed by the planner's calibrated
-        # parallelity-aware pair selection instead, so skip the floor here.
+        # The effective GMU is what VllmProcessHandle._resolve_gmu passes to
+        # vLLM (see effective_gmu() for the shared definition): an explicit
+        # operator value verbatim (no clamping), else the auto-derivation
+        # floor, the minimum the clamped derivation can reach.
+        #
+        # When the lane pins kv_cache_memory_bytes, the *steady-state*
+        # footprint is weights + the explicit KV regardless of GMU: vLLM
+        # skips memory profiling for KV sizing and reserves exactly the
+        # pinned bytes (its "skipped memory profiling ... does not respect
+        # the gpu_memory_utilization config" log refers to that sizing step
+        # only). Gating placement on the GMU reservation would then demand
+        # free VRAM the lane never uses and wrongly reject small models (e.g.
+        # a 4B model needing ~6GB rejected for not having ~24GB free), so the
+        # bound is skipped here. The startup gate itself still applies to
+        # pinned lanes, so a pinned lane placed into tight free VRAM can
+        # still fail it at spawn — honouring the gate here would re-introduce
+        # the over-rejection above, so that trade-off is left to a follow-up.
         kv_pinned = bool(lane_config.vllm_config is not None and lane_config.vllm_config.kv_cache_memory_bytes)
-        gpu_totals = [float(row.get("total_mb", 0.0)) for row in allowed_rows if row.get("total_mb", 0.0) > 0]
-        if gpu_totals and not kv_pinned:
-            min_gpu_total_mb = min(gpu_totals)
-            vllm_floor_mb = _VLLM_GMU_FLOOR * min_gpu_total_mb
-            if vllm_floor_mb > per_gpu_threshold_mb:
-                logger.debug(
-                    "Auto-placement lane '%s': raising per-GPU threshold from %.0fMB to %.0fMB "
-                    "(vLLM GMU floor %.2f × %.0fMB GPU total)",
-                    lane_id,
-                    per_gpu_threshold_mb,
-                    vllm_floor_mb,
-                    _VLLM_GMU_FLOOR,
-                    min_gpu_total_mb,
-                )
-                per_gpu_threshold_mb = vllm_floor_mb
+        gmu: float | None = None
+        if not kv_pinned and any(float(row.get("total_mb", 0.0)) > 0 for row in allowed_rows):
+            gmu = effective_gmu(lane_config.vllm_config)
+            logger.debug(
+                "Auto-placement lane '%s': per-GPU threshold is the estimate "
+                "(%.0fMB) plus the vLLM startup reservation (effective GMU "
+                "%.2f × per-card total)",
+                lane_id,
+                per_gpu_threshold_mb,
+                gmu,
+            )
 
         # Collect GPU indices occupied by active TP>1 lanes so placement can
         # prefer GPUs that aren't already shared with multi-GPU model shards.
@@ -1785,7 +1813,7 @@ class LaneManager:
         if len(sticky_indices) == tp_size:
             sticky_rows = [row for row in allowed_rows if int(row["index"]) in set(sticky_indices)]
             if len(sticky_rows) == tp_size and all(
-                float(row["free_mb"]) >= per_gpu_threshold_mb for row in sticky_rows
+                float(row["free_mb"]) >= _placement_threshold_mb(row, per_gpu_threshold_mb, gmu) for row in sticky_rows
             ):
                 selected_indices = sorted(sticky_indices)
 
@@ -1797,21 +1825,24 @@ class LaneManager:
                 multi_gpu_indices,
                 awake_lanes_by_gpu,
                 awake_used_mb_by_gpu,
+                gmu,
             )
         if selected_indices is None:
             # Fail fast: an unset gpu_devices makes vLLM default to cuda:0,
             # masking the placement failure as an opaque startup OOM.
+            gmu_note = " + vLLM GMU reservation (effective GMU × per-card total)" if gmu is not None else ""
             per_gpu_summary = ", ".join(
-                f"gpu{int(row['index'])}={float(row['free_mb']):.0f}MB"
+                f"gpu{int(row['index'])}={float(row['free_mb']):.0f}MB free "
+                f"(needs {_placement_threshold_mb(row, per_gpu_threshold_mb, gmu):.0f}MB)"
                 for row in sorted(allowed_rows, key=lambda r: int(r["index"]))
             )
             raise RuntimeError(
                 f"Auto-placement: no feasible GPU subset for lane '{lane_id}' "
                 f"model={lane_config.model} (required≈{required_total_mb:.0f}MB total, "
-                f"tp={tp_size}, per-GPU threshold≈{per_gpu_threshold_mb:.0f}MB "
+                f"tp={tp_size}, base per-GPU threshold≈{per_gpu_threshold_mb:.0f}MB "
                 f"(estimate {per_gpu_required_mb:.0f}MB × {_GPU_PLACEMENT_SECURITY_RATIO:.3f} "
-                f"+ {_GPU_PLACEMENT_HEADROOM_OFFSET_MB:.0f}MB); "
-                f"per-GPU free: {per_gpu_summary})"
+                f"+ {_GPU_PLACEMENT_HEADROOM_OFFSET_MB:.0f}MB{gmu_note}); "
+                f"per-GPU: {per_gpu_summary})"
             )
 
         selector = ",".join(str(index) for index in selected_indices)

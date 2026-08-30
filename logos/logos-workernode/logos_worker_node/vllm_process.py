@@ -46,6 +46,29 @@ from logos_worker_node.models import (
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
 
+# Bounds of the auto-derived gpu_memory_utilization (see _resolve_gmu below).
+# The placement planner (lane_manager) gates on the reservation these values
+# produce — via effective_gmu() — so both sides share these constants and the
+# explicit/floor branches instead of re-declaring them.
+GMU_AUTO_FLOOR = 0.5
+GMU_AUTO_CEILING = 0.95
+
+
+def effective_gmu(vllm_config: VllmConfig) -> float:
+    """The gpu_memory_utilization vLLM is started with when the calibrated
+    auto-derivation is not the binding branch.
+
+    An explicit operator ``gpu_memory_utilization`` wins verbatim (vLLM
+    receives it unclamped); otherwise the auto-derivation floor applies — it
+    is the minimum the clamped derivation can reach. The spawner
+    (``_resolve_gmu``) and the placement planner both gate on the reservation
+    this value describes (gmu × per-card total at vLLM startup), so they
+    share this definition instead of each re-implementing the branches.
+    """
+    if vllm_config.gpu_memory_utilization is not None:
+        return float(vllm_config.gpu_memory_utilization)
+    return GMU_AUTO_FLOOR
+
 
 def _env_ready_timeout() -> int:
     """Ready-wait timeout, configurable via ``LOGOS_VLLM_READY_TIMEOUT_S``.
@@ -1162,8 +1185,11 @@ class VllmProcessHandle:
         if self._http is None:
             raise RuntimeError(f"[{self.lane_id}] HTTP client is not initialized")
 
-    _GMU_AUTO_FLOOR: ClassVar[float] = 0.5
-    _GMU_AUTO_CEILING: ClassVar[float] = 0.95
+    # Aliases of the module-level constants so the explicit/floor branches and
+    # the clamp bounds have a single definition shared with the placement
+    # planner (see effective_gmu / GMU_AUTO_FLOOR above).
+    _GMU_AUTO_FLOOR: ClassVar[float] = GMU_AUTO_FLOOR
+    _GMU_AUTO_CEILING: ClassVar[float] = GMU_AUTO_CEILING
 
     def _resolve_gmu(
         self,
@@ -1184,7 +1210,8 @@ class VllmProcessHandle:
              apply its own default (0.9 in current versions).
         """
         if vc.gpu_memory_utilization is not None:
-            return float(vc.gpu_memory_utilization)
+            # Same definition the placement planner gates on (shared helper).
+            return effective_gmu(vc)
         if self._model_profiles is None:
             return None
         profile = self._model_profiles.get_profile(lane_config.model)
