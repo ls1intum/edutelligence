@@ -2836,9 +2836,10 @@ class LaneManager:
 
         if lc is not None:
             model = lc.model
-            # Use vLLM-reported max concurrency (KV-budget-derived) when available.
+            # Use vLLM-reported max concurrency (KV-budget-derived) when available,
+            # falling back to the configured scheduling hint until it is reported.
             vllm_max = getattr(handle, "max_concurrency", None)
-            num_parallel = vllm_max if vllm_max and vllm_max > 0 else 0
+            num_parallel = vllm_max if vllm_max and vllm_max > 0 else lc.num_parallel
             context_length = lc.context_length
             flash_attention = lc.flash_attention
             gpu_devices = lc.gpu_devices

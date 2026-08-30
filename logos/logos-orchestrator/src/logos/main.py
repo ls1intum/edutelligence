@@ -920,7 +920,6 @@ def _merge_local_provider_vram_payload(
         entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
 
         runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
-        runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
         entry["runtime_modes"] = ["vllm"]
         transport = (
             runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}

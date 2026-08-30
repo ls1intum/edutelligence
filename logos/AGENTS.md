@@ -68,8 +68,7 @@ logos/
     │   ├── sdi/                       # Tests for SDI facades
     │   ├── queue/                     # Tests for priority queue
     │   └── responses/                 # Tests for proxy behavior
-    ├── integration/                   # Full endpoint tests with mock providers
-    └── scheduling_data/               # SDI-specific tests
+    └── integration/                   # Full endpoint tests with mock providers
 ```
 
 ## Architecture & Key Patterns

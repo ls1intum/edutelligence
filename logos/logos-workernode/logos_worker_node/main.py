@@ -348,14 +348,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
     # workspace_base is the parent of .cache/flashinfer; flashinfer 0.6.x reads
     # FLASHINFER_WORKSPACE_BASE (not FLASHINFER_JIT_DIR) to relocate its cache.
-    # Honor LOGOS_WORKER_CACHE_ROOT first so deployments with a different
-    # storage layout can point all worker caches at any persistent path;
-    # default to the worker's persistent model store (worker.models_path),
-    # the persistent volume in the standard compose.
+    # Resolved through the shared persistent cache root resolver
+    # (LOGOS_WORKER_CACHE_ROOT > worker.cache_path > worker.models_path) so
+    # the FlashInfer JIT cache always lands on the same persistent volume as
+    # every other worker cache.
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
+        from logos_worker_node.vllm_process import VllmProcessHandle
 
-        workspace_base = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip() or cfg.worker.models_path
+        workspace_base = VllmProcessHandle._resolve_persistent_cache_root(cfg.worker)
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:

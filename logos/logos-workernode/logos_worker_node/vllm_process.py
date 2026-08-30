@@ -2245,8 +2245,12 @@ class VllmProcessHandle:
         """Single root directory for all worker-side persistent caches.
 
         Resolution order:
-          1. ``LOGOS_WORKER_CACHE_ROOT`` env var if non-empty.
-          2. ``gc.models_path`` (the worker's persistent model store,
+          1. ``LOGOS_WORKER_CACHE_ROOT`` env var if non-empty (config.yml's
+             ``worker.cache_path`` is lifted into this env var at load time,
+             but is also consulted directly below so the resolver stays
+             correct for configs built without that propagation).
+          2. ``gc.cache_path`` (``worker.cache_path``) if non-empty.
+          3. ``gc.models_path`` (the worker's persistent model store,
              ``worker.models_path``) — used because the standard docker-compose
              mounts that as a persistent named volume, so it's the one path
              the worker can rely on surviving container rebuilds in the
@@ -2261,6 +2265,9 @@ class VllmProcessHandle:
         override = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
         if override:
             return override
+        cache_path = (getattr(gc, "cache_path", "") or "").strip()
+        if cache_path:
+            return cache_path
         return getattr(gc, "models_path", "") or ""
 
     def _resolve_hf_home(self, cache_root_dir: str) -> str:

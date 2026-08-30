@@ -170,7 +170,7 @@ async def test_apply_lanes_rejects_vllm_without_nvidia_smi() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_lane_rejects_switch_to_vllm_without_nvidia_smi() -> None:
+async def test_reconfigure_lane_rejects_change_without_nvidia_smi() -> None:
     manager = LaneManager(
         WorkerConfig(),
         lane_port_start=15010,
@@ -189,10 +189,7 @@ async def test_reconfigure_lane_rejects_switch_to_vllm_without_nvidia_smi() -> N
     manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
 
     with pytest.raises(RuntimeError, match="nvidia-smi"):
-        await manager.reconfigure_lane(
-            lane_id,
-            {"vllm": True, "vllm_config": VllmConfig().model_dump()},
-        )
+        await manager.reconfigure_lane(lane_id, {"context_length": 8192})
 
 
 @pytest.mark.asyncio
@@ -353,24 +350,6 @@ async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sleep_lane_rejects_non_vllm_lane() -> None:
-    manager = LaneManager(WorkerConfig(), lane_port_start=15040, lane_port_end=15050)
-    lane = LaneConfig(model="qwen2.5-coder:32b")
-    lane_id = "qwen2.5-coder_32b"
-
-    class FakeHandle:
-        def __init__(self) -> None:
-            self.lane_id = lane_id
-            self.port = 15040
-            self.lane_config = lane
-
-    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
-
-    with pytest.raises(ValueError, match="not a vLLM lane"):
-        await manager.sleep_lane(lane_id)
-
-
-@pytest.mark.asyncio
 async def test_status_revision_advances_on_active_request_change() -> None:
     manager = LaneManager(WorkerConfig(), lane_port_start=15060, lane_port_end=15070)
     lane = LaneConfig(model="qwen2.5-coder:32b")
@@ -484,8 +463,9 @@ def test_auto_tp_noop_for_single_gpu() -> None:
     assert result.vllm_config.tensor_parallel_size == 1
 
 
-def test_auto_tp_noop_without_vllm_config() -> None:
-    """A lane without vllm_config is left untouched by the TP auto-tuner."""
+def test_auto_tp_noop_for_unmeasured_model() -> None:
+    """Without a measured profile there is no evidence the model exceeds one
+    GPU, so the default TP=1 config passes the auto-tuner unchanged."""
     manager = LaneManager(
         WorkerConfig(),
         lane_port_start=15100,
@@ -494,7 +474,7 @@ def test_auto_tp_noop_without_vllm_config() -> None:
     )
     lane = LaneConfig(model="qwen2.5-coder:32b")
     result = manager._auto_tensor_parallel(lane)
-    assert result.vllm_config is None
+    assert result.vllm_config.tensor_parallel_size == 1
 
 
 def test_auto_tp_prefers_calibrated_tp() -> None:
@@ -2700,18 +2680,16 @@ def _manager_with_handles(handles: dict) -> LaneManager:
 async def test_destroy_lanes_on_gpus_stops_only_slice_vllm_lanes() -> None:
     slice_lane = _StubHandle(LaneConfig(model="m-slice", vllm=True, gpu_devices="0,1"))
     leftover_lane = _StubHandle(LaneConfig(model="m-left", vllm=True, gpu_devices="2"))
-    ollama_lane = _StubHandle(LaneConfig(model="m-ollama", vllm=False, gpu_devices="0"))
 
-    manager = _manager_with_handles({"a": slice_lane, "b": leftover_lane, "c": ollama_lane})
+    manager = _manager_with_handles({"a": slice_lane, "b": leftover_lane})
     stopped = await manager.destroy_lanes_on_gpus({0, 1})
 
     assert stopped == 1
     assert slice_lane.destroyed is True
     assert "a" not in manager._handles  # noqa: SLF001
-    # Leftover and non-vLLM lanes are untouched and keep serving.
+    # Leftover lanes are untouched and keep serving.
     assert leftover_lane.destroyed is False
     assert "b" in manager._handles  # noqa: SLF001
-    assert "c" in manager._handles  # noqa: SLF001
 
 
 def _snapshot_3gpu(free: dict) -> DeviceSummary:

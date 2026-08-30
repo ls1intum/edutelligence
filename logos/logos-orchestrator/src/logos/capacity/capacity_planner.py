@@ -4720,27 +4720,13 @@ class CapacityPlanner:
                         # in _ensure_sleep_mode_ready and the action fails.
                         lane_can_sleep = lane.sleep_state != "unsupported"
                         if sleeping_residual > 0 and lane_can_sleep:
-                            # For vLLM lanes, ALWAYS prefer sleep over stop.
-                            # Sleeping frees 14-18 GB (loaded - residual) while
-                            # keeping the model warm for 2-3s wake.  Stopping
-                            # frees the full amount but costs 30-60s cold reload.
-                            # Even if freed_by_sleep < required_free_mb, sleep is
-                            # still the right choice — a second lane can be slept
-                            # or the residual alone may suffice.
-                            sleep_candidates.append(
-                                (
-                                    freed_by_sleep,
-                                    CapacityPlanAction(
-                                        action="sleep_l1",
-                                        provider_id=provider_id,
-                                        lane_id=lane.lane_id,
-                                        model_name=lane.model_name,
-                                        reason=f"Request-time reclaim (drain+sleep) for {target.model_name}",
-                                    ),
-                                )
-                            )
-                        elif freed_by_sleep >= required_free_mb and sleeping_residual > 0 and lane_can_sleep:
-                            # Non-vLLM lane: sleeping frees enough
+                            # ALWAYS prefer sleep over stop: sleeping frees
+                            # 14-18 GB (loaded - residual) while keeping the
+                            # model warm for a 2-3s wake, vs. a 30-60s cold
+                            # reload after a stop. Even if freed_by_sleep <
+                            # required_free_mb, sleep is still the right
+                            # choice — a second lane can be slept, or the
+                            # residual alone may suffice.
                             sleep_candidates.append(
                                 (
                                     freed_by_sleep,
@@ -4754,7 +4740,7 @@ class CapacityPlanner:
                                 )
                             )
                         else:
-                            # Non-vLLM, no residual, or sleep disabled: must
+                            # No sleep residual, or sleep disabled: must
                             # fully stop.
                             if not self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
                                 stop_candidates.append(
