@@ -11,14 +11,23 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.Delayed;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.Trigger;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -34,7 +43,7 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestContainersConfig.class)
+@Import({TestContainersConfig.class, ModelMetricsControllerTest.SchedulingDisabled.class})
 @TestPropertySource(properties = {
     "spring.liquibase.enabled=true",
     "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
@@ -64,6 +73,55 @@ class ModelMetricsControllerTest {
     PriceUpdaterService priceUpdaterService;
     @MockitoBean
     OrchestratorNotificationService orchestratorNotificationService;
+
+    /**
+     * The @Scheduled derivation run (initialDelay = 0) fires on the scheduler
+     * thread at context startup and can land between a test's seed and its
+     * assertions: on a slow runner it moves the weights from their seed
+     * values and pokes the notification mock, flaking the steady-state test.
+     * A no-op TaskScheduler makes this context deterministic - the tests call
+     * the derivation methods directly. The websocket handlers create their own
+     * executors, so nothing else in the context depends on real scheduling.
+     */
+    @TestConfiguration
+    static class SchedulingDisabled {
+        @Bean
+        TaskScheduler taskScheduler() {
+            ScheduledFuture<?> done = new FinishedFuture();
+            return new TaskScheduler() {
+                @Override
+                public ScheduledFuture<?> schedule(Runnable task, Trigger trigger) { return done; }
+                @Override
+                public ScheduledFuture<?> schedule(Runnable task, Instant startTime) { return done; }
+                @Override
+                public ScheduledFuture<?> scheduleAtFixedRate(Runnable task, Instant startTime, Duration fixedRate) { return done; }
+                @Override
+                public ScheduledFuture<?> scheduleAtFixedRate(Runnable task, Duration fixedRate) { return done; }
+                @Override
+                public ScheduledFuture<?> scheduleWithFixedDelay(Runnable task, Instant startTime, Duration fixedDelay) { return done; }
+                @Override
+                public ScheduledFuture<?> scheduleWithFixedDelay(Runnable task, Duration fixedDelay) { return done; }
+            };
+        }
+
+        /** A finished future returned by the no-op scheduler. */
+        record FinishedFuture() implements ScheduledFuture<Object> {
+            @Override
+            public long getDelay(TimeUnit unit) { return 0; }
+            @Override
+            public int compareTo(Delayed other) { return 0; }
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) { return true; }
+            @Override
+            public boolean isCancelled() { return true; }
+            @Override
+            public boolean isDone() { return true; }
+            @Override
+            public Object get() { return null; }
+            @Override
+            public Object get(long timeout, TimeUnit unit) { return null; }
+        }
+    }
 
     @Test
     void getModelMetrics_returnsPairDerivedMetrics() throws Exception {
@@ -200,8 +258,9 @@ class ModelMetricsControllerTest {
     void steadyStateDerivation_isNoOpWithoutNotification() {
         // First run moves the weights from their seed values onto the derived
         // scale (and notifies). Clear the bookkeeping so the assertion below
-        // only covers the steady-state second run - the startup @Scheduled run
-        // may otherwise have raced with the seed and poked the mock too.
+        // only covers the steady-state second run. The startup @Scheduled run
+        // is disabled in this context (SchedulingDisabled), so only these two
+        // calls can poke the mock.
         modelMetricsService.deriveAllMetrics();
         clearInvocations(orchestratorNotificationService);
         // Second run: every derived weight already equals the stored one, so
