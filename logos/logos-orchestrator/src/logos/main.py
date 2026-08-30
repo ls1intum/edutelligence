@@ -303,12 +303,30 @@ def _resolve_requested_model_name(
     Lane ids carry a replica suffix for a model's second and further lanes
     (``planner-<alias>-2``), so those resolve to the model as well — a copied
     replica lane name is still an address for the same model.
+
+    An exact alias match is strictly more specific than a replica-suffix
+    match, so the tiers resolve in that order: exact canonical name, then
+    exact alias, then replica suffix. The replica tier is also suppressed
+    whenever the requested name is another model's own alias — model families
+    carry numeric suffixes (``gemma-2``, ``llama-3``, ``phi-4``), so with
+    ``llama`` and ``llama-3`` both deployed, ``planner-llama-3`` is the
+    planner alias of ``llama-3``, not a third replica of ``llama``.
     """
     requested = str(requested_name or "").strip()
     if not requested:
         return None
 
+    # All planner-safe aliases up front: the replica-suffix check below needs
+    # to know whether the requested name is another model's own alias.
+    sanitized_aliases = {
+        _planner_model_alias(canonical)
+        for raw_name in available_model_names
+        for canonical in [str(raw_name or "").strip()]
+        if canonical
+    }
+
     alias_matches: set[str] = set()
+    replica_matches: set[str] = set()
     for raw_name in available_model_names:
         canonical = str(raw_name or "").strip()
         if not canonical:
@@ -324,10 +342,18 @@ def _resolve_requested_model_name(
         replica_prefix = f"planner-{sanitized}-"
         suffix = requested[len(replica_prefix) :] if requested.startswith(replica_prefix) else None
         if suffix is not None and suffix.isdigit() and int(suffix) >= 2:
-            alias_matches.add(canonical)
+            # Skip when <alias>-<n> is another deployed model's own alias:
+            # that request addresses that model, not this one's replica.
+            if f"{sanitized}-{suffix}" in sanitized_aliases:
+                continue
+            replica_matches.add(canonical)
 
-    if len(alias_matches) == 1:
-        return next(iter(alias_matches))
+    if alias_matches:
+        # Two distinct models sharing one planner-safe alias is a genuine
+        # ambiguity — refuse rather than guess.
+        return next(iter(alias_matches)) if len(alias_matches) == 1 else None
+    if len(replica_matches) == 1:
+        return next(iter(replica_matches))
     return None
 
 
