@@ -2308,10 +2308,11 @@ async def test_resolve_gguf_spec_falls_back_to_hub_listing(monkeypatch, tmp_path
 
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     handle.hf_home_override = str(tmp_path)
+    # (name, size) pairs — the tree listing shape fetch_repo_gguf_files returns.
     monkeypatch.setattr(
         gguf_module,
         "fetch_repo_gguf_files",
-        lambda _repo: ("Qwen3-8B-Q8_0.gguf", "Qwen3-8B-Q4_K_M.gguf"),
+        lambda _repo: (("Qwen3-8B-Q8_0.gguf", 4096), ("Qwen3-8B-Q4_K_M.gguf", 2048)),
     )
 
     lane = LaneConfig(model="unsloth/Qwen3-8B-GGUF", vllm=True, vllm_config=VllmConfig())

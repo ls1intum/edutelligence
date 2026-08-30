@@ -2317,6 +2317,39 @@ def test_plans_from_config_forwards_extra_args(tmp_path: Path) -> None:
     assert hf in _build_vllm_cmd(plan, "vllm", "127.0.0.1", 9000, "4G")
 
 
+def test_gguf_calibration_spec_resolves_from_local_cache_offline(monkeypatch, tmp_path: Path) -> None:
+    """A GGUF repo already in the HF cache resolves without the Hub.
+
+    The calibration fingerprint builds the same command the spawn runs, and
+    for a GGUF model that command resolves the serve reference from the local
+    HF cache first (HuggingFace Hub as fallback). Resolving before the model
+    is in the local cache would list the Hub — a network call inside the KV
+    sweep, and a hard failure when the Hub is unreachable for a repo that is
+    already downloaded. With ``hf_home`` pointing at the populated cache the
+    reference resolves from local files and the Hub is never consulted.
+    """
+    from logos_worker_node import calibration
+    from logos_worker_node.calibration import _resolve_gguf_calibration_spec
+
+    # A bare -GGUF repo present in the local HF cache (Q4_K_M and a larger Q8_0).
+    snapshot = tmp_path / "hub" / "models--unsloth--Qwen3-8B-GGUF" / "snapshots" / "rev"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    (snapshot / "Qwen3-8B-Q4_K_M.gguf").write_bytes(b"\x00" * 1024)
+    (snapshot / "Qwen3-8B-Q8_0.gguf").write_bytes(b"\x00" * 4096)
+
+    # The Hub is unreachable: if the resolver reaches for it, the run fails,
+    # so a successful resolution proves the local cache was used.
+    def _no_network(_repo: str):
+        raise RuntimeError("no hub access")
+
+    monkeypatch.setattr(calibration, "fetch_repo_gguf_files", _no_network)
+
+    spec = _resolve_gguf_calibration_spec({"model": "unsloth/Qwen3-8B-GGUF"}, str(tmp_path))
+    assert spec is not None
+    assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    assert spec.quant == "Q4_K_M"
+
+
 def test_plans_from_config_never_takes_internal_bookkeeping(tmp_path: Path) -> None:
     """The retry counters steer the sweep and must not be settable from config."""
     from logos_worker_node.calibration import plans_from_config

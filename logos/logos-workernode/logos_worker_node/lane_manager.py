@@ -348,12 +348,16 @@ class LaneManager:
         """
         import os
 
+        from logos_worker_node import gguf  # noqa: PLC0415 — single cache-dir key
+
         missing = []
         hf_home = os.environ.get("HF_HOME", os.path.join(self._global_config.models_path, ".hf"))
         models_path = self._global_config.models_path
         for model_name in capabilities_models:
-            # Check HF cache (transformers style: models--org--name)
-            hf_cache_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
+            # Check HF cache (transformers style: models--org--name). Keyed on
+            # the bare repo id so a GGUF reference (repo:quant / repo/file.gguf)
+            # lands in the same directory the prefetch fills.
+            hf_cache_dir = os.path.join(hf_home, "hub", gguf.hf_cache_dir_name(model_name))
             # Check direct model path
             direct_path = os.path.join(models_path, model_name)
             if not os.path.isdir(hf_cache_dir) and not os.path.isdir(direct_path):

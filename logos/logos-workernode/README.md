@@ -67,6 +67,29 @@ source for the GGUF loader), use `engines.vllm.model_overrides` — see
 downloads only the selected quantization's files, not the whole multi-quant
 repository.
 
+**The plugin loads into every vLLM process, not just GGUF lanes.**
+`vllm-gguf-plugin` registers through vLLM's `vllm.general_plugins` entry
+point, which vLLM evaluates on *every* engine start. Its `register()` is not
+passive: it registers the GGUF quantization, loader, and config parser and
+applies three monkey-patches over vLLM internals (`EngineArgs`, the
+speculator-override hook, the diffusers loader). Those wrappers therefore run
+inside every lane on the node — AWQ, safetensors, and GGUF alike — and are a
+no-op only because they detect GGUF references and pass through otherwise. A
+bug in the plugin (pinned at `vllm-gguf-plugin==0.0.5` in the GPU image)
+reaches every lane, not only GGUF ones. The worker's own GGUF handling is
+still gated to lanes that actually resolve to a GGUF reference; the global
+registration is the plugin's, not the worker's.
+
+**Calibrate before you route.** A GGUF model is not routable the moment it is
+configured. Until the worker has calibrated it, its capability is reported as
+`UNCALIBRATED` (no `base_residency_mb` yet) and is excluded from the
+capabilities the worker advertises — so the orchestrator never sees the model
+and never requests a lane for it. Run calibration for the model first (the
+nightly session or a targeted run); once a profile exists it advertises and
+placement proceeds as for any other calibrated model. The `kv_budget` /
+`gguf_quant` overrides land immediately, but they take effect on routing only
+after the model is calibrated back into the advertised set.
+
 ## Storage layout
 
 The worker uses **one persistent volume** for everything that benefits from

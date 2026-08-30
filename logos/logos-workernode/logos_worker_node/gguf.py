@@ -207,15 +207,22 @@ def is_gguf_file_ref(model: str) -> bool:
 
 
 def is_gguf_repo_name(model: str) -> bool:
-    """Whether a bare repo id follows the ``…-GGUF`` naming convention.
+    """Whether a bare repo id follows the ``…-GGUF`` / ``…_GGUF`` naming convention.
 
     Every major GGUF publisher (unsloth, bartowski, QuantFactory, huihui-ai,
-    …) suffices its repository name with ``-GGUF``; a repo id containing
-    ``gguf`` is treated as a GGUF repository unless the file listing proves
-    otherwise (see :func:`resolve_gguf_spec`).
+    …) suffices its repository *name* with ``-GGUF`` (some use ``_GGUF``). The
+    marker must be the end of the name, not a substring anywhere: a repository
+    whose name merely contains ``gguf`` (``org/gguf-tools``,
+    ``acme/GGUFactory-7B``, ``org/some_gguf_thing``) is not a GGUF repository.
+    A substring match here is not harmless — a false positive makes
+    :func:`resolve_gguf_spec` fail a plain model with "pin a quant" for a quant
+    it does not have.
     """
-    model = (model or "").strip()
-    return "/" in model and "gguf" in model.lower()
+    repo = repo_id_of(model)
+    if "/" not in repo:
+        return False
+    name = repo.rsplit("/", 1)[1].strip().lower()
+    return name.endswith("-gguf") or name.endswith("_gguf")
 
 
 def is_gguf_model(model: str) -> bool:
@@ -247,6 +254,20 @@ def repo_id_of(model: str) -> str:
     return model
 
 
+def hf_cache_dir_name(model: str) -> str:
+    """HuggingFace cache directory name for *model*.
+
+    The single source of the cache-directory key. It is keyed on
+    :func:`repo_id_of`, so every form of a reference (bare repo,
+    ``repo:quant``, ``repo/file.gguf``) maps to the same ``models--org--name``
+    directory that the startup prefetch fills. The capability cache check and
+    the RAM cache must derive the directory the same way, or two of the
+    reference forms land in a directory the prefetch never populates. Non-GGUF
+    references are unchanged (repo_id_of returns them as-is).
+    """
+    return "models--" + repo_id_of(model).replace("/", "--")
+
+
 def quant_from_filename(filename: str) -> str | None:
     """Extract the quant type from a GGUF file name, when present.
 
@@ -274,61 +295,75 @@ def quant_from_filename(filename: str) -> str | None:
     return None
 
 
-def candidate_quants(filenames: list[str]) -> list[str]:
-    """Quant types available across *filenames*, de-duplicated, order kept.
+def candidate_quants(filenames: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    """(quant, total_size) pairs available across *filenames*, de-duplicated.
 
-    Multimodal projector files (``mmproj*.gguf``) are excluded: they are a
-    different model part and their quant (often F16) is not the backbone's.
+    *filenames* are ``(name, size)`` pairs. The total size is summed over a
+    quant's files (its shards) so :func:`select_quant` compares whole-quants,
+    not single shards. Multimodal projector files (``mmproj*.gguf``) are
+    excluded: they are a different model part and their quant (often F16) is
+    not the backbone's.
     """
-    seen: list[str] = []
-    for filename in filenames or []:
+    order: list[str] = []
+    sizes: dict[str, int] = {}
+    for filename, size in filenames or []:
         base = (filename or "").rsplit("/", 1)[-1].lower()
         if "mmproj" in base:
             continue
         quant = quant_from_filename(filename)
-        if quant and quant not in seen:
-            seen.append(quant)
-    return seen
+        if not quant:
+            continue
+        if quant not in sizes:
+            order.append(quant)
+            sizes[quant] = 0
+        sizes[quant] += int(size)
+    return [(quant, sizes[quant]) for quant in order]
 
 
-def select_quant(candidates: list[str], preferred: str = "") -> str | None:
-    """Pick the quant to serve from *candidates*.
+def select_quant(candidates: list[tuple[str, int]], preferred: str = "") -> str | None:
+    """Pick the quant to serve from *candidates* ``(quant, size)`` pairs.
 
     An explicit *preferred* value is authoritative (the operator knows the
     repo even if the listing is stale or partial). Otherwise the first match
-    in :data:`_PREFERRED_QUANTS` wins; with no match the first candidate is
-    returned so the choice stays deterministic.
+    in :data:`_PREFERRED_QUANTS` wins. With no match the smallest file is
+    returned: the Hub lists larger (often unquantised, e.g. ``BF16``) variants
+    first, so listing order would tend to the largest file — the least likely
+    to load on the node's cards. The smallest quant is the most likely to fit.
+    The tie-break on the name keeps the choice deterministic.
     """
-    cands = [c for c in (candidates or []) if c]
+    cands = [(quant, int(size)) for quant, size in (candidates or []) if quant]
     pref = (preferred or "").strip().upper()
     if pref:
         return pref
     if not cands:
         return None
+    present = {quant for quant, _ in cands}
     for quant in _PREFERRED_QUANTS:
-        if quant in cands:
+        if quant in present:
             return quant
-    return cands[0]
+    quant, _ = min(cands, key=lambda c: (c[1], c[0]))
+    return quant
 
 
-def list_cached_gguf_files(hf_home: str | None, model: str) -> list[str] | None:
-    """GGUF file names for *model* in the local HF cache.
+def list_cached_gguf_files(hf_home: str | None, model: str) -> list[tuple[str, int]] | None:
+    """(name, size) pairs of *model*'s GGUF files in the local HF cache.
 
-    Returns the (possibly empty) list of ``.gguf`` file names when the model
+    Returns the (possibly empty) list of ``(name, size)`` pairs when the model
     directory exists under ``<hf_home>/hub/models--<org>--<name>``, and None
     when it does not (model not downloaded yet — the caller may then fall
     back to a remote listing). An empty list is authoritative: the repo is
-    cached and contains no GGUF weights.
+    cached and contains no GGUF weights. Sizes let :func:`select_quant` order
+    the fallback by file size instead of relying on listing order.
     """
     if not hf_home:
         return None
     repo = repo_id_of(model)
     if "/" not in repo:
         return None
-    snapshots = Path(hf_home) / "hub" / ("models--" + repo.replace("/", "--")) / "snapshots"
+    snapshots = Path(hf_home) / "hub" / hf_cache_dir_name(model) / "snapshots"
     if not snapshots.is_dir():
         return None
-    names: set[str] = set()
+    sizes: dict[str, int] = {}
     try:
         for rev_dir in snapshots.iterdir():
             if not rev_dir.is_dir():
@@ -338,28 +373,37 @@ def list_cached_gguf_files(hf_home: str | None, model: str) -> list[str] | None:
                     continue
                 try:
                     # stat() follows the snapshot symlink into blobs/
-                    if entry.stat().st_size > 0:
-                        names.add(entry.name)
+                    size = entry.stat().st_size
+                    if size > 0:
+                        sizes[entry.name] = size
                 except OSError:
                     continue
     except OSError:
         return None
-    return sorted(names)
+    return sorted(sizes.items())
 
 
 @lru_cache(maxsize=64)
-def fetch_repo_gguf_files(repo_id: str) -> tuple[str, ...]:
-    """List ``.gguf`` file names of *repo_id* on the HuggingFace Hub.
+def fetch_repo_gguf_files(repo_id: str) -> tuple[tuple[str, int], ...]:
+    """List ``(path, size)`` pairs of *repo_id*'s ``.gguf`` files on the Hub.
 
     Network call (cached per process). Raises on Hub errors — callers decide
     whether an unavailable listing is fatal or falls back to a configured
-    ``gguf_quant``.
+    ``gguf_quant``. The tree listing is used (rather than the lighter
+    file-name listing) so each file carries its size: :func:`select_quant`
+    orders the no-preference fallback by file size, and only the tree exposes
+    that.
     """
     from huggingface_hub import HfApi  # noqa: PLC0415 — transitive dep, keep lazy
 
     api = HfApi(token=os.environ.get("HF_TOKEN") or None)
-    files = api.list_repo_files(repo_id)
-    return tuple(sorted(f for f in files if f.lower().endswith(".gguf")))
+    pairs: list[tuple[str, int]] = []
+    for entry in api.list_repo_tree(repo_id, recursive=True):
+        path = getattr(entry, "path", None)
+        size = getattr(entry, "size", None)
+        if path and path.lower().endswith(".gguf") and size is not None:
+            pairs.append((path, int(size)))
+    return tuple(sorted(pairs))
 
 
 def download_allow_patterns(model: str, quant: str) -> list[str] | None:
@@ -411,7 +455,7 @@ def resolve_gguf_spec(
     *,
     gguf_quant: str = "",
     gguf_tokenizer: str = "",
-    gguf_file_names: list[str] | None = None,
+    gguf_file_names: list[tuple[str, int]] | None = None,
 ) -> GgufServeSpec | None:
     """Resolve the serve reference for a lane model, or None when it is not GGUF.
 
@@ -419,9 +463,9 @@ def resolve_gguf_spec(
     * ``gguf_tokenizer`` — HF repo to pass as ``--tokenizer`` (recommended:
       the base model, whose tokenizer and config the plugin then uses
       instead of converting them from GGUF metadata).
-    * ``gguf_file_names`` — ``.gguf`` file names of the model. None means the
-      listing is unavailable (nothing cached, Hub listing failed); a list —
-      possibly empty — is authoritative.
+    * ``gguf_file_names`` — ``(name, size)`` pairs of the model's ``.gguf``
+      files. None means the listing is unavailable (nothing cached, Hub
+      listing failed); a list — possibly empty — is authoritative.
 
     Raises ValueError when the model is detected as a GGUF repository but no
     quant can be determined — serving a bare repo without a quant is
@@ -439,12 +483,15 @@ def resolve_gguf_spec(
         return GgufServeSpec(model=model, serve_ref=model, quant=quant, tokenizer=tokenizer)
 
     looks_like_gguf_repo = is_gguf_repo_name(model)
-    has_gguf_files = bool(gguf_file_names)
-    # A cached listing without GGUF files disproves the naming convention;
-    # an unavailable listing (None) does not — the name gets the benefit of
-    # the doubt and the lane fails at spawn with a clear error if wrong.
-    if gguf_file_names is not None and not gguf_file_names and not looks_like_gguf_repo:
+    # An authoritative listing (a list — from the local cache or the Hub) that
+    # contains no GGUF files is proof the repo is not a GGUF model, even if its
+    # name follows the convention: the name alone no longer gets the benefit of
+    # the doubt once the listing actually resolved. Treating only a cached empty
+    # listing as disproving left an empty *Hub* result standing as a false
+    # positive. An unavailable listing (None) does not disprove the name.
+    if gguf_file_names is not None and not gguf_file_names:
         return None
+    has_gguf_files = bool(gguf_file_names)
     if not looks_like_gguf_repo and not has_gguf_files:
         return None
 

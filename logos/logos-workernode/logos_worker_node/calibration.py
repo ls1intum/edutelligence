@@ -1727,7 +1727,27 @@ def calibrate_model(
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
         if plan_overrides:
             planned.update(plan_overrides)
-        fingerprint = _cmd_fingerprint(_build_vllm_cmd(planned, vllm_binary, host, port, kv_str))
+        # Populate the RAM cache BEFORE the fingerprint, not before the spawn.
+        # The fingerprint builds the same vLLM command the spawn runs, and for a
+        # GGUF model that command resolves the serve reference from the local
+        # HF cache first (HuggingFace Hub as fallback). If the fingerprint ran
+        # before the model was cached it would resolve from the Hub instead — a
+        # network call inside the KV sweep, and a hard failure when the Hub is
+        # unreachable for a repo that is already downloaded. Caching first also
+        # sets hf_home to the tmpfs root the spawn will load from, so the
+        # fingerprint and the spawn resolve to the same reference.
+        if not _ram_cached and model_cache is not None:
+            logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
+            _hf = model_cache.ensure_cached_sync(model) or None
+            if _hf:
+                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
+                if is_tmpfs:
+                    hf_home = _hf
+                    logger.info("  [RAM cache] %s → loading from tmpfs", model)
+                else:
+                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+            _ram_cached = True
+        fingerprint = _cmd_fingerprint(_build_vllm_cmd(planned, vllm_binary, host, port, kv_str, hf_home=hf_home))
         # Whitelist: known-good from a previous calibration run.  Trust the
         # result — skip the expensive vLLM spawn during the binary search.
         if allow_whitelist and fingerprint in succeeded_commands:
@@ -1746,18 +1766,6 @@ def calibrate_model(
             )
             _probes[kv_mb] = "skip"
             return None
-        # Lazy RAM cache: copy model into tmpfs on first real spawn.
-        if not _ram_cached and model_cache is not None:
-            logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
-            _hf = model_cache.ensure_cached_sync(model) or None
-            if _hf:
-                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
-                if is_tmpfs:
-                    hf_home = _hf
-                    logger.info("  [RAM cache] %s → loading from tmpfs", model)
-                else:
-                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
-            _ram_cached = True
         # Remember where this probe's output starts so every later extraction
         # parses THIS probe rather than the tail of the shared append log.
         _spawn_log_offset = _log_size(log_path)
@@ -2306,7 +2314,9 @@ def calibrate_model(
         for _attempt in range(_FINAL_MEASUREMENT_RETRIES):
             _final_kv_str = _format_kv_mb(_final_kv)
             _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
-            _final_fp = _cmd_fingerprint(_build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str))
+            _final_fp = _cmd_fingerprint(
+                _build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str, hf_home=hf_home)
+            )
             failed_commands.discard(_final_fp)
             proc = _try_start(_final_kv, record_blacklist=False, allow_whitelist=False)
             if proc is not None:
@@ -2347,7 +2357,9 @@ def calibrate_model(
         succeeded_commands.clear()
         _fixed_kv_str = _format_kv_mb(kv_cache_sent_mb)
         _fixed_planned = {**plan, "kv_cache_memory_bytes": _fixed_kv_str}
-        _fixed_fp = _cmd_fingerprint(_build_vllm_cmd(_fixed_planned, vllm_binary, host, port, _fixed_kv_str))
+        _fixed_fp = _cmd_fingerprint(
+            _build_vllm_cmd(_fixed_planned, vllm_binary, host, port, _fixed_kv_str, hf_home=hf_home)
+        )
         if _fixed_fp in failed_commands:
             failed_commands.discard(_fixed_fp)
             logger.info(
