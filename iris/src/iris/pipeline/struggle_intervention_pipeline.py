@@ -50,6 +50,34 @@ def _as_opt_str(v) -> Optional[str]:
     return v if isinstance(v, str) else None
 
 
+# The gutter cue is drawn inline after the anchored line of the student's own code, so its
+# length is a layout constraint, not a preference: nothing downstream clamps it (the editor
+# side only prefixes the lamp), and an overlong cue pushes the line off to the right.
+INLINE_HINT_MAX_CHARS = 60
+
+
+def _clean_inline_hint(raw: str) -> Optional[str]:
+    """Make an inlineHint safe to draw straight into the editor gutter, or drop it.
+
+    Two things the prompt asks for but cannot guarantee, both enforced here because this
+    value reaches the editor unfiltered:
+
+    - No markdown. The gutter has no markdown pass, so a backtick arrives as a backtick
+      next to the code. Observed live before this existed.
+    - At most INLINE_HINT_MAX_CHARS. Truncation happens at a word boundary with an ellipsis,
+      so a slightly long cue is shortened rather than lost; only a cue with no boundary to
+      cut at inside the budget is dropped, since a word cut mid-way reads as a defect.
+    """
+    cue = raw.replace("`", "").strip()
+    if not cue:
+        return None
+    if len(cue) <= INLINE_HINT_MAX_CHARS:
+        return cue
+    head = cue[: INLINE_HINT_MAX_CHARS - 1].rstrip()
+    cut = head.rfind(" ")
+    return f"{head[:cut]}…" if cut > 0 else None
+
+
 @dataclass
 class GateResult:
     action: StruggleAction
@@ -111,9 +139,7 @@ def parse_gate_result(raw: Optional[str]) -> GateResult:
         # The gutter draws this as plain text, so a backtick reaches the student as a backtick
         # sitting next to their code. The prompt says so, but this field is rendered unfiltered
         # and the prompt has already been wrong about it once, so strip rather than trust.
-        inline_hint = inline_hint.replace("`", "").strip()
-        if not inline_hint:
-            inline_hint = None
+        inline_hint = _clean_inline_hint(inline_hint)
     return GateResult(action, message, confidence, rationale, anchor, inline_hint)
 
 

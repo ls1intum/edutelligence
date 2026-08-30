@@ -5,6 +5,7 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.struggle.episode_dto import EpisodeDTO, EpisodeHintDTO
 from iris.domain.struggle.struggle_signal_dto import StruggleSignal
 from iris.pipeline.struggle_intervention_pipeline import (
+    INLINE_HINT_MAX_CHARS,
     StruggleInterventionPipeline,
     parse_confirm_close_result,
     parse_gate_result,
@@ -502,6 +503,10 @@ def test_contract_names_the_prose_spoiler_classes():
     rendered = _render(pipeline.help_request_template, _episode_with(1))
 
     assert "operator or condition replacement" in rendered
+    # Reciting the required behaviour is rung 3, so the unconditional Allowed list must not
+    # hand it out at every rung - that collapses the gap between rung 2 and rung 3.
+    assert "Reciting what they say is rung 3" in rendered
+    assert "The behaviour that spot must have, but only as far as" not in rendered
     assert "Index ranges or loop bounds" in rendered
     assert "algorithm or data structure to apply" in rendered
     assert "State-variable names together with their update rule" in rendered
@@ -665,6 +670,45 @@ def test_inline_hint_is_specified_and_parsed_as_plain_text():
     assert (
         parse_gate_result(
             '{"action": "ambient", "message": "m", "confidence": 0.5, "inlineHint": "``"}'
+        ).inline_hint
+        is None
+    )
+
+
+def test_inline_hint_is_clamped_to_the_gutter_budget():
+    """
+    The cue is drawn inline after the anchored line of the student's own code and nothing
+    downstream clamps it, so an overlong one pushes that line sideways. The prompt asks for 60
+    characters; this makes it true.
+    """
+    long_cue = "Still returns minus one unconditionally and blocks both of the DP methods below"
+    gate = parse_gate_result(
+        '{"action": "ambient", "message": "m", "confidence": 0.5, "inlineHint": "%s"}'
+        % long_cue
+    )
+    assert gate.inline_hint is not None
+    assert len(gate.inline_hint) <= INLINE_HINT_MAX_CHARS
+    assert gate.inline_hint.endswith("…")
+    # Cut at a word boundary, never mid-word.
+    assert long_cue.startswith(gate.inline_hint[:-1])
+    assert not gate.inline_hint[:-1].endswith(" ")
+
+    # Exactly at the budget is untouched.
+    exact = "x" * INLINE_HINT_MAX_CHARS
+    assert (
+        parse_gate_result(
+            '{"action": "ambient", "message": "m", "confidence": 0.5, "inlineHint": "%s"}'
+            % exact
+        ).inline_hint
+        == exact
+    )
+
+    # One long unbreakable token has no honest way to be shortened, so it is dropped rather
+    # than cut mid-word; the anchor still marks the line.
+    assert (
+        parse_gate_result(
+            '{"action": "ambient", "message": "m", "confidence": 0.5, "inlineHint": "%s"}'
+            % ("y" * 90)
         ).inline_hint
         is None
     )
