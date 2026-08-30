@@ -20,7 +20,7 @@
          weight dimensions (latency/accuracy/cost/quality) an admin set
          manually; the derivation never overwrites a dimension that carries an
          override. -->
-    <changeSet id="017-model-provider-derived-metrics" author="wasnertobias">
+    <changeSet id="021-model-provider-derived-metrics" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="model_provider" columnName="derived_ttft_ms"/></not>
         </preConditions>
@@ -36,7 +36,7 @@
         </addColumn>
     </changeSet>
 
-    <changeSet id="017-models-weight-overrides" author="wasnertobias">
+    <changeSet id="021-models-weight-overrides" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="models" columnName="weight_overrides"/></not>
         </preConditions>
