@@ -64,6 +64,12 @@ export interface StatsWsConnectOptions {
   timeline: TimelineRequestConfig;
   timelineDeltas: boolean;
   scope?: StatsScope;
+  /**
+   * State bucket the request feed is narrowed to (queued/running/error/
+   * finished), or null for all states. Feed-only: it never touches the page
+   * scope, so the KPI cards and charts keep their full team/user totals.
+   */
+  feedStatus?: string | null;
   handlers: StatsWsHandlers;
 }
 
@@ -143,6 +149,24 @@ export class StatsWebsocketService {
           team_id: scope.teamId,
         })
       );
+    }
+  }
+
+  /**
+   * Narrow the request feed to one lifecycle bucket (queued, running, error,
+   * finished); null shows all states.
+   *
+   * Stored on the options as well as sent, so a reconnect re-applies it — the
+   * dropdown keeps showing the filter, and a socket that came back unfiltered
+   * would quietly widen the list under it. The server answers with a forced
+   * feed push only; the aggregates are untouched by a state filter.
+   */
+  setFeedStatus(status: string | null): void {
+    if (this.opts) {
+      this.opts = { ...this.opts, feedStatus: status };
+    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: 'set_feed_status', status }));
     }
   }
 
@@ -267,6 +291,7 @@ export class StatsWebsocketService {
           },
           user_id: current.scope?.userId ?? null,
           team_id: current.scope?.teamId ?? null,
+          status: current.feedStatus ?? null,
         })
       );
 
