@@ -115,6 +115,7 @@ def test_fetch_hf_model_metadata_success():
         "num_key_value_heads": 8,
         "max_position_embeddings": 8192,
         "torch_dtype": "bfloat16",
+        "quantization_config": {"quant_method": "awq", "bits": 4},
     }
 
     with (
@@ -128,6 +129,26 @@ def test_fetch_hf_model_metadata_success():
     assert meta.weight_bytes == 5_000_000_000
     assert meta.kv_per_token_bytes == 2 * 32 * 8 * 128 * 2
     assert meta.max_context_length == 8192
+    assert meta.quantization_method == "awq"
+
+
+def test_fetch_hf_model_metadata_quantization_method_defaults_to_none():
+    fake_api = MagicMock()
+    fake_api.model_info.return_value = MagicMock(siblings=[])
+    base_config = {"num_hidden_layers": 1}
+
+    for config in (
+        base_config,  # no quantization_config at all
+        {**base_config, "quantization_config": "not-a-dict"},
+        {**base_config, "quantization_config": {"bits": 4}},  # no quant_method key
+    ):
+        with (
+            patch("huggingface_hub.HfApi", return_value=fake_api),
+            patch("huggingface_hub.hf_hub_download", return_value="/fake/config.json"),
+            patch("builtins.open", mock_open(read_data=json.dumps(config))),
+        ):
+            meta = fetch_hf_model_metadata("org/model", token=None)
+        assert meta.quantization_method is None
 
 
 @pytest.mark.parametrize(
@@ -156,8 +177,8 @@ def test_fetch_hf_model_metadata_distinguishes_not_found_from_gated():
         meta = fetch_hf_model_metadata("org/does-not-exist", token=None)
     assert meta.source == "error:model-not-found"
 
-    # GatedRepoError is a RepositoryNotFoundError subclass (a real repo the
-    # caller just lacks access to) — must be classified as gated, not not-found.
+    # GatedRepoError is a RepositoryNotFoundError subclass (a real repo
+    # the caller lacks access to) — must classify as gated, not not-found.
     with (
         patch("huggingface_hub.HfApi", side_effect=_hf_http_error(GatedRepoError, "gated")),
         patch("huggingface_hub.hf_hub_download", side_effect=_hf_http_error(GatedRepoError, "gated")),
@@ -222,7 +243,8 @@ def test_min_feasible_tp():
     gb = 1024 * 1024 * 1024
     # Fits at tp=1 on plenty of VRAM.
     assert min_feasible_tp(4 * gb, per_gpu_free_mb=20000.0, hardware_max_tp=8) == 1
-    # 40 GB weights need tp=4 (10 GB/GPU) — tp=2 (20 GB/GPU) doesn't fit in 12 GB free.
+    # 40 GB weights need tp=4 (10 GB/GPU) — tp=2 (20 GB/GPU) doesn't fit
+    # in 12 GB free.
     assert min_feasible_tp(40 * gb, per_gpu_free_mb=12000.0, hardware_max_tp=8) == 4
     # Doesn't fit anywhere, even at hardware max.
     assert min_feasible_tp(500 * gb, per_gpu_free_mb=20000.0, hardware_max_tp=8) is None
@@ -231,6 +253,7 @@ def test_min_feasible_tp():
     # min_kv_mb pushes the required tp up a step.
     assert min_feasible_tp(8 * gb, per_gpu_free_mb=12000.0, hardware_max_tp=8, min_kv_mb=0.0) == 1
     assert min_feasible_tp(8 * gb, per_gpu_free_mb=12000.0, hardware_max_tp=8, min_kv_mb=3000.0) == 2
-    # Only steps through powers of two — 15 GB at tp=2 (7.5 GB/GPU) doesn't fit
-    # a 5 GB budget, but tp=4 (3.75 GB/GPU) does; tp=3 is never considered.
+    # Only steps through powers of two — 15 GB at tp=2 (7.5 GB/GPU)
+    # doesn't fit a 5 GB budget, but tp=4 (3.75 GB/GPU) does; tp=3 is
+    # never considered.
     assert min_feasible_tp(15 * gb, per_gpu_free_mb=5000.0, hardware_max_tp=8) == 4

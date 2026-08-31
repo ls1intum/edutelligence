@@ -36,6 +36,7 @@ import logging
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import threading
@@ -768,6 +769,46 @@ def parse_gpu_indices(gpu_devices: str) -> list[int] | None:
     if not gd or gd == "all":
         return None
     return [int(x.strip()) for x in gd.split(",") if x.strip().isdigit()]
+
+
+# ---------------------------------------------------------------------------
+# vLLM registry introspection
+# ---------------------------------------------------------------------------
+
+
+_BAKED_QUANT_METHODS_FILENAME = "vllm_quantization_methods.json"
+
+
+def query_vllm_quantization_methods(vllm_binary: str) -> list[str]:
+    """Quantization method names this vLLM install recognizes — name
+    only, not a platform/hardware check. Prefers a build-time-baked
+    JSON file next to vllm_binary (see the Dockerfile); falls back to
+    querying the venv's own Python. Raises only if both fail."""
+    # A bare command (no path separator, e.g. the "vllm" default) needs a
+    # real PATH search, like the OS does when spawning it — Path(...).
+    # resolve() alone silently resolves it against the CWD instead.
+    resolved = vllm_binary
+    if "/" not in vllm_binary and "\\" not in vllm_binary:
+        resolved = shutil.which(vllm_binary) or vllm_binary
+    venv_bin = Path(resolved).resolve().parent
+    baked = venv_bin / _BAKED_QUANT_METHODS_FILENAME
+    if baked.exists():
+        try:
+            return json.loads(baked.read_text())
+        except (OSError, ValueError):
+            pass  # corrupt/unreadable — fall through to the live query
+    raw = subprocess.check_output(
+        [
+            str(venv_bin / "python"),
+            "-c",
+            "from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS\n"
+            "import json\n"
+            "print(json.dumps(QUANTIZATION_METHODS))",
+        ],
+        text=True,
+        timeout=60,
+    )
+    return json.loads(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -1552,10 +1593,9 @@ def calibrate_model(
             exc,
         )
 
-    # HF precheck weight estimate narrows the ceiling further, recomputed at
-    # this tp so it stays correct as the escalation tries different tp values.
-    # Non-positive means weights alone exceed the cap here — leave max_kv_mb
-    # as-is and let the sweep's OOM handling take it from there (the hard-skip
+    # HF precheck weight estimate narrows the KV ceiling, recomputed per
+    # tp. Non-positive means weights alone exceed the cap — leave max_kv_mb
+    # as-is; the sweep's OOM handling takes it from there (the hard-skip
     # in logos_bridge.py already ruled out "no tp works at all").
     hf_weight_bytes = plan.get("_hf_weight_bytes")
     if hf_weight_bytes and max_kv_mb < float("inf"):

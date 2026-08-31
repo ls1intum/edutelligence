@@ -6,6 +6,6 @@ Use these files as the current source of truth:
 - `README.md` for project overview and current API surface.
 - `LANES.md` for lane operations (Ollama, vLLM, mixed lanes).
 - `TESTING.md` for benchmark and runbook commands.
-- `logos_worker_node/models.py` and `logos_worker_node/admin_api.py` for exact request/response schemas.
+- `logos_worker_node/models.py` for exact request/response schemas (`admin_api.py`, referenced here before, no longer exists — schemas live in `models.py` alone now).
 
 If any historical notes elsewhere conflict with runtime behavior, follow the code and the docs above.

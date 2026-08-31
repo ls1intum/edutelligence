@@ -115,6 +115,12 @@ class LogosBridgeClient:
         # session, run_compatibility_precheck RPC) share the on-disk cache
         # instance instead of re-reading it from disk every time.
         self._hf_info_cache: Any | None = None
+        # Cached result of query_vllm_quantization_methods (see
+        # _get_vllm_quant_methods) — the registry only changes when this
+        # vLLM install is upgraded, which requires a redeploy that restarts
+        # this process anyway, so a plain process-lifetime cache is exact,
+        # not just an approximation. None means "not fetched yet".
+        self._vllm_quant_methods: list[str] | None = None
 
     @property
     def worker_id(self) -> str:
@@ -772,6 +778,26 @@ class LogosBridgeClient:
             self._hf_info_cache = HfModelInfoCache(get_state_dir())
         return self._hf_info_cache
 
+    async def _get_vllm_quant_methods(self, model_name: str) -> list[str] | None:
+        """Cached wrapper around query_vllm_quantization_methods — a
+        success is cached for this process's lifetime; a failure never
+        is, so a broken install gets to retry and recover without a
+        restart. Returns None (and warns) on failure."""
+        if self._vllm_quant_methods is not None:
+            return self._vllm_quant_methods
+        from logos_worker_node.calibration import _DEFAULT_VLLM, query_vllm_quantization_methods  # noqa: PLC0415
+
+        try:
+            self._vllm_quant_methods = await asyncio.to_thread(query_vllm_quantization_methods, _DEFAULT_VLLM)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "[Precheck] vLLM quantization registry query failed for %s — quantization check skipped",
+                model_name,
+                exc_info=True,
+            )
+            return None
+        return self._vllm_quant_methods
+
     async def _run_hf_compatibility_precheck(self, model_name: str, *, persist: bool = True) -> dict[str, Any]:
         """Best-effort HF compatibility check for one model on this node.
 
@@ -797,6 +823,7 @@ class LogosBridgeClient:
             REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
             REASON_MODEL_GATED,
             REASON_MODEL_NOT_FOUND,
+            REASON_UNSUPPORTED_QUANTIZATION,
             fetch_hf_model_metadata,
             min_feasible_tp,
         )
@@ -817,13 +844,10 @@ class LogosBridgeClient:
             hf_meta = None
             logger.debug("[Precheck] HF fetch raised unexpectedly for %s", model_name, exc_info=True)
 
-        # Not-found and gated are self-explanatory, expected outcomes, warned
-        # about (with a skip event) by the calibration loop that calls this.
-        # Anything else — network trouble, a bad HF_TOKEN, huggingface_hub
-        # missing — has no such caller-side signal, and left at debug level
-        # this degrades to a silent no-op every night. Warn here so a
-        # persistent failure is visible instead of only showing up as an
-        # unexplained absence of HF-derived data.
+        # Not-found/gated already warn via the calibration loop's skip
+        # event. Anything else (network trouble, bad HF_TOKEN, missing
+        # huggingface_hub) has no such signal and stays silent at debug
+        # level forever — warn here so a persistent failure is visible.
         if hf_meta is None or hf_meta.source not in ("hf", "error:model-not-found", "error:model-gated"):
             logger.warning(
                 "[Precheck] HF metadata unavailable for %s (source=%s) — precheck skipped this run",
@@ -837,6 +861,7 @@ class LogosBridgeClient:
             "weight_bytes": hf_meta.weight_bytes if hf_meta is not None else None,
             "kv_per_token_bytes": hf_meta.kv_per_token_bytes if hf_meta is not None else None,
             "max_context_length": hf_meta.max_context_length if hf_meta is not None else None,
+            "quantization_method": hf_meta.quantization_method if hf_meta is not None else None,
             "per_gpu_total_mb": None,
             "per_gpu_free_mb": None,
             "hardware_max_tp": None,
@@ -853,15 +878,24 @@ class LogosBridgeClient:
                 model_profiles.mark_calibration_unsupported(model_name, True, REASON_MODEL_NOT_FOUND)
             return result
 
-        # Gating is temporary — an admin can add a working HF_TOKEN at any
-        # time — so this is deliberately NOT persisted via
-        # mark_calibration_unsupported: that flag drops the model out of
-        # _list_uncalibrated_models's candidate list, and it would never be
-        # picked again to notice access was granted. Skip this attempt only;
-        # the model stays a candidate and gets rechecked every session.
+        # Gating is temporary (a token can be added later), so this is
+        # NOT persisted via mark_calibration_unsupported — that flag drops
+        # the model from _list_uncalibrated_models's candidates for good.
+        # Skip this attempt only; stays a candidate, rechecked every session.
         if hf_meta is not None and hf_meta.source == "error:model-gated":
             result["unsupported_reason"] = REASON_MODEL_GATED
             return result
+
+        # An unrecognized quant method can never load — check before VRAM.
+        # Name-level only; see query_vllm_quantization_methods for the
+        # platform-check gap. A failed query leaves this unset (fail-open).
+        if hf_meta is not None and hf_meta.quantization_method:
+            supported_methods = await self._get_vllm_quant_methods(model_name)
+            if supported_methods is not None and hf_meta.quantization_method not in supported_methods:
+                result["unsupported_reason"] = REASON_UNSUPPORTED_QUANTIZATION
+                if persist:
+                    model_profiles.mark_calibration_unsupported(model_name, True, REASON_UNSUPPORTED_QUANTIZATION)
+                return result
 
         if hf_meta is None or not hf_meta.weight_bytes:
             return result
@@ -1350,7 +1384,7 @@ class LogosBridgeClient:
                 plan = plan_by_model.get(model_name) or {"model": model_name}
 
                 # Pre-flight: HF compatibility precheck (see
-                # _run_hf_compatibility_precheck for the best-effort/skip rules).
+                # _run_hf_compatibility_precheck's docstring for the rules).
                 precheck = await self._run_hf_compatibility_precheck(model_name)
                 if precheck["unsupported_reason"] is not None:
                     logger.warning(

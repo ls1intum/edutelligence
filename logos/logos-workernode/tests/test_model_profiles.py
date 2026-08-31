@@ -560,7 +560,7 @@ def test_apply_hf_precheck_respects_manual_override():
     profile = registry.get_profile("org/model")
     assert profile.base_residency_mb == pytest.approx(7500.0)
     assert profile.residency_source == "override"
-    # kv_per_token_bytes has no override set for it, so the HF value still lands.
+    # kv_per_token_bytes has no override, so the HF value still lands.
     assert profile.kv_per_token_bytes == 1024
 
 

@@ -137,11 +137,10 @@ class ModelProfileRecord:
     #   "measured"   — derived from live observation: loaded_vram − kv_cache_sent.
     #                  Value is weights-only; callers DO add KV separately.
     #   "override"   — operator-provided value in config.yml.
-    #   "hf"         — best-effort estimate from the model's HF config.json +
-    #                  safetensors sizes, set by the pre-calibration
-    #                  compatibility precheck. Value is weights-only, same
-    #                  semantics as "measured"; a real calibration always
-    #                  replaces it.
+    #   "hf"         — best-effort estimate from HF config.json +
+    #                  safetensors sizes (pre-calibration precheck).
+    #                  Weights-only, same semantics as "measured";
+    #                  a real calibration always replaces it.
     #   "cached"     — any of the above, loaded from persisted yml on restart.
     residency_source: str | None = None
     # Provenance: what enforce_eager mode the calibration ran under.

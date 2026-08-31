@@ -1092,7 +1092,7 @@ async def test_session_frees_calibrating_slice_before_calibrating(tmp_path, monk
     app.state.lane_manager.end_calibration_session.assert_called_once()
 
 
-# ── HF compatibility precheck ────────────────────────────────────────────────
+# ── HF compatibility precheck ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -1269,11 +1269,9 @@ async def test_hf_precheck_failure_does_not_block_calibration(tmp_path, monkeypa
 
 @pytest.mark.asyncio
 async def test_hf_precheck_warns_on_persistent_fetch_failure(tmp_path, monkeypatch, caplog):
-    """Not-found/gated already surface via the calibration loop's own
-    warning + skip event. Any other fetch failure (network trouble, a bad
-    HF_TOKEN, huggingface_hub missing) has no such caller-side signal, so
-    _run_hf_compatibility_precheck itself must warn — left at debug level,
-    a persistent failure degrades to a silent no-op every night."""
+    """Not-found/gated already warn via the calibration loop's skip
+    event. Any other fetch failure has no such signal and stays
+    silent at debug level forever — this must warn on its own."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.hf_model_info import HfModelMetadata
 
@@ -1316,7 +1314,7 @@ async def test_hf_precheck_no_warning_for_not_found_or_gated(tmp_path, monkeypat
         caplog.clear()
 
 
-# ── Standalone compatibility precheck (run_compatibility_precheck RPC) ─────────
+# ── Standalone compatibility precheck (run_compatibility_precheck RPC) ────────
 
 
 @pytest.mark.asyncio
@@ -1347,8 +1345,16 @@ async def test_run_compatibility_precheck_rpc_returns_fit_result(tmp_path, monke
     monkeypatch.setattr(
         "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
         lambda *a, **k: HfModelMetadata(
-            weight_bytes=4 * 1024 * 1024 * 1024, kv_per_token_bytes=1024, max_context_length=8192, source="hf"
+            weight_bytes=4 * 1024 * 1024 * 1024,
+            kv_per_token_bytes=1024,
+            max_context_length=8192,
+            quantization_method="awq",
+            source="hf",
         ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["awq", "gptq", "fp8"],
     )
     monkeypatch.setattr(
         "logos_worker_node.calibration.query_gpu_vram",
@@ -1362,6 +1368,7 @@ async def test_run_compatibility_precheck_rpc_returns_fit_result(tmp_path, monke
     assert response["fit_tp_idle"] == 1
     assert response["fit_tp_current"] == 1
     assert response["unsupported_reason"] is None
+    assert response["quantization_method"] == "awq"
     # No calibration session, no lanes touched — the app fixture's destroy_all
     # mock must never have been called.
     app.state.lane_manager.destroy_all.assert_not_awaited()
@@ -1437,6 +1444,143 @@ async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_run_compatibility_precheck_skips_unsupported_quantization_without_querying_vram(tmp_path, monkeypatch):
+    """A quantization method the installed vLLM doesn't recognize by name
+    can never load, independent of VRAM — skip before querying it, and mark
+    a real (persisted) verdict, same as model-not-found."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_UNSUPPORTED_QUANTIZATION, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="some-future-method", source="hf"
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["awq", "gptq", "fp8"],
+    )
+    gpu_query = MagicMock(side_effect=AssertionError("must not query VRAM for an unsupported quant method"))
+    monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", gpu_query)
+
+    response = await client._execute_command(  # noqa: SLF001
+        "run_compatibility_precheck", {"model": "org/future-quant-model"}
+    )
+
+    assert response["unsupported_reason"] == REASON_UNSUPPORTED_QUANTIZATION
+    gpu_query.assert_not_called()
+    profile = app.state.model_profiles.get_profile("org/future-quant-model")
+    assert profile.calibration_unsupported is True
+    assert profile.calibration_unsupported_reason == REASON_UNSUPPORTED_QUANTIZATION
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_proceeds_for_known_quantization_method(tmp_path, monkeypatch):
+    """A quantization method the registry does recognize must not block
+    anything — the rest of the precheck runs normally."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["awq", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_registry_query_failure_fails_open(tmp_path, monkeypatch, caplog):
+    """A failed registry query must never block a model — fail-open,
+    same as every other best-effort step here. Must still warn, not
+    stay silent at debug — a persistently broken install shouldn't
+    quietly turn this check into a no-op."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+
+    def _raise(*a, **k):
+        raise OSError("vllm venv not found")
+
+    monkeypatch.setattr("logos_worker_node.calibration.query_vllm_quantization_methods", _raise)
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = await client._execute_command(
+            "run_compatibility_precheck", {"model": "org/awq-model"}
+        )  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+    assert any("quantization registry query failed" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_vllm_quant_methods_cached_across_precheck_calls(tmp_path, monkeypatch):
+    """The registry only changes on a vLLM upgrade, which restarts this
+    process anyway — a successful lookup must be reused for the rest of the
+    client's lifetime, not re-queried (and re-paying vLLM's torch import
+    cost) for every quantized model checked."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    registry_query = MagicMock(return_value=["awq", "gptq", "fp8"])
+    monkeypatch.setattr("logos_worker_node.calibration.query_vllm_quantization_methods", registry_query)
+
+    await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model-1"})  # noqa: SLF001
+    await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model-2"})  # noqa: SLF001
+
+    registry_query.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, monkeypatch):
     """A model that fits on an empty node but not around today's live
     traffic is reported as such WITHOUT being marked permanently unsupported
@@ -1468,7 +1612,8 @@ async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, m
     profile = app.state.model_profiles.get_profile("org/model")
     assert profile.calibration_unsupported is not True
 
-    # 200 GB of weights: doesn't fit even on an empty node — real verdict this time.
+    # 200 GB of weights: doesn't fit even on an empty node — real
+    # verdict this time.
     monkeypatch.setattr(
         "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
         lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),

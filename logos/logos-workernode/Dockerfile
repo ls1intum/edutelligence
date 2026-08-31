@@ -296,6 +296,15 @@ RUN if [ "$INSTALL_VLLM" = "1" ]; then \
         && ldconfig; \
     fi
 
+# ── Bake vLLM's quantization-method registry (GPU builds only) ──────────────
+# Precomputes what the runtime otherwise imports torch+transformers for on
+# every worker (query_vllm_quantization_methods). Runs with the vLLM
+# install above so it can't drift; best-effort, never fails the build.
+RUN if [ "$INSTALL_VLLM" = "1" ]; then \
+        /opt/venv/bin/python -c "from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS; import json; json.dump(QUANTIZATION_METHODS, open('/opt/venv/bin/vllm_quantization_methods.json', 'w'))" \
+        || echo "WARNING: could not bake vLLM quantization methods — runtime will query it live instead" >&2; \
+    fi
+
 COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
 COPY tools/ /app/tools/

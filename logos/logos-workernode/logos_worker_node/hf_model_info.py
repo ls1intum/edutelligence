@@ -42,6 +42,7 @@ REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS = "insufficient-vram-for-weights"
 REASON_INSUFFICIENT_VRAM_FOR_MIN_KV = "insufficient-vram-for-min-kv-cache"
 REASON_MODEL_NOT_FOUND = "model-not-found"
 REASON_MODEL_GATED = "model-gated"
+REASON_UNSUPPORTED_QUANTIZATION = "unsupported-quantization-method"
 
 _DTYPE_BYTES = {
     "float32": 4,
@@ -63,6 +64,11 @@ class HfModelMetadata:
     weight_bytes: int | None = None  # sum of *.safetensors sibling sizes
     kv_per_token_bytes: int | None = None
     max_context_length: int | None = None
+    # config.json's quantization_config.quant_method (e.g. "awq", "gptq").
+    # This module just extracts the raw string; logos_bridge.py checks it
+    # against the installed vLLM's supported methods separately (see
+    # calibration.query_vllm_quantization_methods).
+    quantization_method: str | None = None
     fetched_at: float = 0.0
     source: str = "error:unknown"  # "hf" on success, "error:<reason>" otherwise
     error: str | None = None
@@ -78,19 +84,10 @@ def _get_config_field(config: dict[str, Any], key: str) -> Any:
 
 
 def _effective_max_context_length(config: dict[str, Any], base: int | None) -> int | None:
-    """Stretch ``base`` (the config's raw ``max_position_embeddings``) by an
-    active YaRN/linear RoPE scaling factor, when the config unambiguously
-    says ``base`` is the pre-scaling value.
-
-    HF repos are inconsistent about whether ``max_position_embeddings``
-    already includes the RoPE-scaled length or not. The only case handled
-    here is the unambiguous one: ``rope_scaling.original_max_position_embeddings``
-    equals ``base`` (proof it hasn't been folded in yet) alongside a numeric
-    ``factor``. Anything else — no ``rope_scaling``, an already-scaled
-    ``base``, or ``type``/``rope_type`` "dynamic" (which has no fixed
-    extended length; it adapts to the actual input at inference time) —
-    leaves ``base`` untouched. Best-effort, like the rest of this module.
-    """
+    """Stretch ``base`` (raw max_position_embeddings) by an active
+    YaRN/linear RoPE factor, only when
+    ``original_max_position_embeddings`` equals ``base`` (proof it's
+    pre-scaling); left untouched otherwise, "dynamic" included."""
     if not base:
         return base
     rope_scaling = _get_config_field(config, "rope_scaling")
@@ -151,6 +148,7 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
 
     kv_per_token_bytes: int | None = None
     max_context_length: int | None = None
+    quantization_method: str | None = None
     try:
         # etag_timeout only bounds the existence check, not the (tiny)
         # config.json transfer itself — hf_hub_download has no knob for that.
@@ -159,6 +157,10 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
             config = json.load(f)
         kv_per_token_bytes = _derive_kv_per_token_bytes(config, None)
         max_context_length = _effective_max_context_length(config, _get_config_field(config, "max_position_embeddings"))
+        quant_cfg = _get_config_field(config, "quantization_config")
+        if isinstance(quant_cfg, dict):
+            quant_method = quant_cfg.get("quant_method")
+            quantization_method = str(quant_method) if quant_method else None
     except GatedRepoError as exc:
         gated = True
         logger.debug("[HF precheck] config.json gated for %s: %s", model_name, exc)
@@ -181,6 +183,7 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
         weight_bytes=weight_bytes,
         kv_per_token_bytes=kv_per_token_bytes,
         max_context_length=max_context_length,
+        quantization_method=quantization_method,
         fetched_at=time.time(),
         source="hf",
     )
@@ -232,6 +235,7 @@ class HfModelInfoCache:
                 "weight_bytes": meta.weight_bytes,
                 "kv_per_token_bytes": meta.kv_per_token_bytes,
                 "max_context_length": meta.max_context_length,
+                "quantization_method": meta.quantization_method,
                 "fetched_at": meta.fetched_at or time.time(),
                 "source": meta.source,
                 "error": meta.error,
