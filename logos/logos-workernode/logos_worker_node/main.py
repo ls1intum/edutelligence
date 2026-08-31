@@ -45,8 +45,9 @@ def _download_one_model(model_name: str, hf_home: str) -> None:
     """Blocking download of a single model into the HF hub cache.
 
     Uses huggingface_hub.snapshot_download with HF_TOKEN from the environment.
-    Imported lazily because huggingface_hub is supplied transitively by the
-    vLLM runtime image and is not a declared dependency of this package.
+    Imported lazily to keep worker startup cheap; huggingface_hub is a
+    declared dependency (requirements.txt) because the isolated macOS worker
+    venv installs nothing beyond that file.
     """
     from huggingface_hub import snapshot_download
 
@@ -284,23 +285,36 @@ async def _auto_calibrate_if_needed(
         model_profiles._load_persisted()
 
 
+def _resolve_worker_cache_root(cfg) -> str:
+    """The cache root exactly as the lane process handles that will spawn use it.
+
+    The Metal backend overrides ``_resolve_persistent_cache_root`` with a
+    macOS-appropriate fallback (the ollama models path is not creatable
+    without root on a Mac), so pick the resolver of the handle that will
+    actually spawn the lanes. Startup validation and the background prefetch
+    must inspect and download the same directory the lanes read weights from.
+    """
+    from logos_worker_node.metal_process import MetalVllmProcessHandle
+    from logos_worker_node.vllm_process import VllmProcessHandle
+
+    handle_cls = MetalVllmProcessHandle if is_metal_backend() else VllmProcessHandle
+    return handle_cls._resolve_persistent_cache_root(cfg.engines.ollama)
+
+
 def _log_storage_layout(cfg) -> None:
     """Log the resolved storage paths for HF + the four compilation/JIT caches.
 
     Surfaces (a) where the cache root resolves from — env var vs. config field
-    vs. ollama-path fallback — and (b) the absolute path each cache will use,
-    so a single grep at boot is enough to debug "is X being persisted?"
-    questions.
+    vs. fallback — and (b) the absolute path each cache will use, so a single
+    grep at boot is enough to debug "is X being persisted?" questions.
     """
-    from logos_worker_node.vllm_process import VllmProcessHandle
-
-    cache_root = VllmProcessHandle._resolve_persistent_cache_root(cfg.engines.ollama)
+    cache_root = _resolve_worker_cache_root(cfg)
     if os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip():
         source = "LOGOS_WORKER_CACHE_ROOT env var"
     elif cfg.worker.cache_path:
         source = "config.yml worker.cache_path"
     else:
-        source = "fallback: engines.ollama.models_path"
+        source = "fallback: engines.ollama.models_path or backend default"
 
     hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
     cache_dir = os.path.join(cache_root, ".cache")
@@ -389,7 +403,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # ── tmpfs RAM cache (created before calibration so models can be loaded
     # from RAM during VRAM measurement, then evicted to free space) ──────────
-    hf_home = os.environ.get("HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache"))
+    # Same resolution the lanes receive: the model cache and the startup
+    # prefetch must use the HF_HOME the lane processes download into — on a
+    # Mac without LOGOS_WORKER_CACHE_ROOT that is not the ollama models path.
+    cache_root = _resolve_worker_cache_root(cfg)
+    hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
     model_cache = create_model_cache(
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,
@@ -547,7 +565,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Validate capabilities models at startup (warnings only)
     if cfg.logos and cfg.logos.capabilities_models:
-        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models)
+        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models, hf_home, cache_root)
         if missing and cfg.worker.prefetch_missing_models:
             # Fire-and-forget: download missing weights in the background so the
             # worker boots into zero-lane mode immediately and serves the models

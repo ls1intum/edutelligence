@@ -380,31 +380,45 @@ class LaneManager:
         # probe keeps the slice's VRAM to itself. Leftover GPUs stay placeable.
         self._calibration_gpu_subset: frozenset[int] | None = None
 
-    def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
+    def validate_capabilities(
+        self,
+        capabilities_models: list[str],
+        hf_home: str,
+        cache_root: str = "",
+    ) -> list[str]:
         """Check which capabilities_models are available locally.
 
-        For each model, checks if it exists in the HF cache or models path.
-        Returns a list of models that could NOT be found (warnings only,
-        doesn't block startup).
+        For each model, checks the HF hub cache, the direct model path under
+        the models path, and (when given) the direct model path under the
+        cache root. Returns a list of models that could NOT be found (warnings
+        only, doesn't block startup).
+
+        ``hf_home``/``cache_root`` come from the caller's resolved storage
+        layout — the same directory the lane processes download into — rather
+        than being re-derived here: on a Mac the inherited ollama models path
+        does not exist, and re-deriving would check a location the lanes
+        never read.
         """
         import os
 
         missing = []
-        hf_home = os.environ.get("HF_HOME", os.path.join(self._global_config.models_path, ".hf"))
         models_path = self._global_config.models_path
         for model_name in capabilities_models:
             # Check HF cache (transformers style: models--org--name)
             hf_cache_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
-            # Check direct model path
-            direct_path = os.path.join(models_path, model_name)
-            if not os.path.isdir(hf_cache_dir) and not os.path.isdir(direct_path):
+            # Check direct model path (ollama-style models dir, and — on
+            # backends with their own cache root — a model dir placed there)
+            checked = [os.path.join(models_path, model_name)]
+            if cache_root:
+                checked.append(os.path.join(cache_root, model_name))
+            if not os.path.isdir(hf_cache_dir) and not any(os.path.isdir(p) for p in checked):
                 missing.append(model_name)
                 logger.warning(
                     "Capability model '%s' not found locally (checked %s and %s). "
                     "Ensure the model is downloaded before it can be loaded.",
                     model_name,
                     hf_cache_dir,
-                    direct_path,
+                    ", ".join(checked),
                 )
         if not missing:
             logger.info(

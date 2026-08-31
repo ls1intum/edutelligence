@@ -83,10 +83,14 @@ export class Providers implements OnInit {
   }
 
   private privacyLevelOptionsFor(type: ProviderType): AppSelectOption[] {
+    // A logosnode is self-hosted hardware: either the operator's own box
+    // (LOCAL) or hardware outside operator control, e.g. a personal Mac MLX
+    // worker (THIRD_PARTY_HARDWARE). The CLOUD_* tiers describe jurisdiction
+    // of a cloud provider and never apply to a logosnode.
     const levels =
       type === 'logosnode'
-        ? this.privacyLevels.filter((l) => l === 'LOCAL')
-        : this.privacyLevels.filter((l) => l !== 'LOCAL');
+        ? this.privacyLevels.filter((l) => l === 'LOCAL' || l === 'THIRD_PARTY_HARDWARE')
+        : this.privacyLevels.filter((l) => l !== 'LOCAL' && l !== 'THIRD_PARTY_HARDWARE');
     return levels.map((l) => ({ value: l, label: l }));
   }
 
@@ -108,10 +112,15 @@ export class Providers implements OnInit {
     cloud: CloudProviderType,
     privacy: PrivacyLevel,
   ): { cloud: CloudProviderType; privacy: PrivacyLevel } {
-    if (type === 'logosnode') return { cloud: 'none', privacy: 'LOCAL' };
+    if (type === 'logosnode') {
+      // Preserve a valid logosnode selection instead of forcing LOCAL: a Mac
+      // saved as third-party hardware must keep that tier when the edit
+      // dialog reopens or the type toggle is cycled.
+      return { cloud: 'none', privacy: privacy === 'THIRD_PARTY_HARDWARE' ? privacy : 'LOCAL' };
+    }
     return {
       cloud: cloud === 'none' ? this.defaultCloudProviderType : cloud,
-      privacy: privacy === 'LOCAL' ? this.defaultCloudPrivacyLevel : privacy,
+      privacy: privacy === 'LOCAL' || privacy === 'THIRD_PARTY_HARDWARE' ? this.defaultCloudPrivacyLevel : privacy,
     };
   }
 

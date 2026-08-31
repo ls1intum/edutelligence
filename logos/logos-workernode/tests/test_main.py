@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 
 import logos_worker_node.main as worker_main
-from logos_worker_node.models import AppConfig, DeviceSummary, LaneConfig, VllmConfig
+from logos_worker_node.models import AppConfig, DeviceSummary, LaneConfig, OllamaConfig, VllmConfig
 
 
 class _FakeGpuCollector:
@@ -74,3 +76,41 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
 
         with pytest.raises(RuntimeError, match="nvidia-smi"):
             await context.__aenter__()
+
+
+class TestResolveWorkerCacheRoot:
+    """The cache root must resolve exactly as the lane processes do.
+
+    On a Mac the inherited fallback (ollama models path) does not exist and
+    is not creatable, so the Metal handle overrides the resolver. Startup
+    validation and the prefetch must use that same override, otherwise they
+    check and download a directory the lanes never read.
+    """
+
+    @staticmethod
+    def _cfg(models_path: str):
+        return SimpleNamespace(engines=SimpleNamespace(ollama=OllamaConfig(models_path=models_path)))
+
+    def test_metal_backend_uses_the_macos_fallback(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(worker_main, "is_metal_backend", lambda: True)
+        monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
+        root = worker_main._resolve_worker_cache_root(self._cfg(str(tmp_path / "nonexistent-ollama")))
+        assert root == str(Path.home() / "Library" / "Caches" / "logos-workernode")
+
+    def test_metal_backend_keeps_a_writable_models_path(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(worker_main, "is_metal_backend", lambda: True)
+        monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
+        root = worker_main._resolve_worker_cache_root(self._cfg(str(tmp_path)))
+        assert root == str(tmp_path)
+
+    def test_env_override_wins_on_every_backend(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(worker_main, "is_metal_backend", lambda: True)
+        monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path / "custom"))
+        root = worker_main._resolve_worker_cache_root(self._cfg("/nonexistent-ollama"))
+        assert root == str(tmp_path / "custom")
+
+    def test_non_metal_keeps_the_inherited_resolver(self, monkeypatch) -> None:
+        monkeypatch.setattr(worker_main, "is_metal_backend", lambda: False)
+        monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
+        root = worker_main._resolve_worker_cache_root(self._cfg("/usr/share/ollama/.ollama/models"))
+        assert root == "/usr/share/ollama/.ollama/models"
