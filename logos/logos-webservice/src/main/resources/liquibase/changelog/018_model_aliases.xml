@@ -21,7 +21,7 @@
          Rows disappear with their model (ON DELETE CASCADE); the model_id
          index serves the per-model lookups from the webservice and the
          string_agg subselects in the orchestrator's model list queries. -->
-    <changeSet id="017-model-aliases" author="logos">
+    <changeSet id="018-model-aliases" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="model_aliases"/></not>
         </preConditions>
