@@ -386,7 +386,7 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
             "team_id": None,
             "user_id": None,
             "environment": "model-provider-benchmark",
-            "log_level": "BILLING",
+            "log_level": "FULL",
             "request_id": execute.await_args.kwargs["request_id"],
         }
     ]

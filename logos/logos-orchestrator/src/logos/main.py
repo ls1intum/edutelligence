@@ -2563,7 +2563,7 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         team_id=None,
         user_id=None,
         environment="model-provider-benchmark",
-        log_level="BILLING",
+        log_level="FULL",
         settings={},
         default_priority=1,
     )
