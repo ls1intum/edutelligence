@@ -96,6 +96,7 @@ async def test_no_active_providers_returns_empty_results(monkeypatch):
     [
         (LogosNodeOfflineError("no session"), "Worker not connected"),
         (LogosNodeCommandError("boom"), "boom"),
+        (RuntimeError("totally unexpected"), "Unexpected error: totally unexpected"),
     ],
 )
 async def test_send_command_failure_reported_as_error_not_raised(monkeypatch, exc, expected_error):
@@ -112,3 +113,30 @@ async def test_send_command_failure_reported_as_error_not_raised(monkeypatch, ex
 
     assert body["results"][0]["ok"] is False
     assert body["results"][0]["error"] == expected_error
+
+
+@pytest.mark.asyncio
+async def test_one_providers_unexpected_failure_does_not_lose_the_others(monkeypatch):
+    """The whole point of fanning out is answering "would this model run on
+    ANY node" — one provider blowing up with something neither
+    LogosNodeOfflineError nor LogosNodeCommandError must not take down the
+    results already gathered for every other provider too."""
+    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    registry = MagicMock()
+    registry.active_provider_ids = lambda: [1, 2]
+    registry.peek_runtime_snapshot = lambda pid: {"worker_id": f"node-{pid}"}
+
+    async def _send_command(pid, action, params, timeout_seconds):
+        if pid == 1:
+            raise RuntimeError("boom")
+        return {"fit_tp_idle": pid, "fit_tp_current": pid, "unsupported_reason": None}
+
+    registry.send_command = AsyncMock(side_effect=_send_command)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    response = await main_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
+    body = json.loads(response.body)
+
+    by_provider = {r["provider_id"]: r for r in body["results"]}
+    assert by_provider[1]["ok"] is False
+    assert by_provider[2]["fit_tp_idle"] == 2

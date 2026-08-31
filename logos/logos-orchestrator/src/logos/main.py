@@ -2288,16 +2288,7 @@ async def internal_compatibility_precheck(model_name: str, request: Request, pro
     this model run on ANY node" rather than requiring the caller to already
     know which one to ask.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     provider_ids = [provider_id] if provider_id is not None else _logosnode_registry.active_provider_ids()
     if not provider_ids:
@@ -2313,6 +2304,11 @@ async def internal_compatibility_precheck(model_name: str, request: Request, pro
             return {"provider_id": pid, "provider_name": pname, "ok": False, "error": "Worker not connected"}
         except LogosNodeCommandError as exc:
             return {"provider_id": pid, "provider_name": pname, "ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            # An unexpected failure for one provider must not lose the
+            # results already gathered for every other one — see below.
+            logger.exception("[Precheck] unexpected failure checking provider %s for %s", pid, model_name)
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": f"Unexpected error: {exc}"}
         return {"provider_id": pid, "provider_name": pname, **result}
 
     results = await asyncio.gather(*(_check_one(pid) for pid in provider_ids))

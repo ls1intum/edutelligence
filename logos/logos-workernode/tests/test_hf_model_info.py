@@ -258,6 +258,35 @@ def test_cache_get_prunes_the_single_stale_entry_it_finds(tmp_path):
     assert "org/model" not in cache._entries  # noqa: SLF001
 
 
+def test_cache_get_treats_a_malformed_entry_as_a_miss(tmp_path):
+    """A hand-edited/corrupted/foreign-schema entry must never raise out of
+    get() — HfModelMetadata(**entry) or _is_expired(entry) would otherwise
+    blow up on a non-dict value or an unexpected key. Treated as a cache
+    miss and removed, not left to keep raising on every future lookup."""
+    cache = HfModelInfoCache(tmp_path)
+    cache._entries["org/not-a-dict"] = "corrupted"  # noqa: SLF001
+    bad_entry = {"source": "hf", "fetched_at": time.time(), "not_a_real_field": 1}
+    cache._entries["org/unexpected-key"] = bad_entry  # noqa: SLF001
+
+    assert cache.get("org/not-a-dict") is None
+    assert "org/not-a-dict" not in cache._entries  # noqa: SLF001
+    assert cache.get("org/unexpected-key") is None
+    assert "org/unexpected-key" not in cache._entries  # noqa: SLF001
+
+
+def test_cache_put_sweeps_a_malformed_entry_belonging_to_another_model(tmp_path):
+    """A single malformed entry must not poison put() for every other
+    model — the TTL sweep in put() has to validate before calling
+    _is_expired() on entries it isn't even writing right now."""
+    cache = HfModelInfoCache(tmp_path)
+    cache._entries["org/broken"] = ["not", "a", "dict"]  # noqa: SLF001
+
+    cache.put("org/fine", HfModelMetadata(weight_bytes=1, source="hf"))
+
+    assert "org/broken" not in cache._entries  # noqa: SLF001
+    assert cache.get("org/fine") is not None
+
+
 def test_fetch_hf_model_metadata_uses_cache_without_refetching(tmp_path):
     cache = HfModelInfoCache(tmp_path)
     cache.put("org/model", HfModelMetadata(weight_bytes=999, source="hf"))

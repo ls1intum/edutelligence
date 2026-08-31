@@ -626,7 +626,10 @@ class ModelProfileRegistry:
                     # multiple models share GPU memory.
                     if profile.residency_source == "calibrated":
                         pass  # keep calibrated value
-                    elif tp_changed or profile.base_residency_mb is None:
+                    elif tp_changed or profile.base_residency_mb is None or profile.residency_source == "hf":
+                        # "hf" is a best-effort guess, not a prior real
+                        # measurement — the first live one replaces it
+                        # exactly instead of blending through it via EMA.
                         profile.base_residency_mb = measured_base
                         profile.residency_source = "measured"
                     else:

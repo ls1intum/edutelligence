@@ -77,6 +77,22 @@ def test_record_loaded_vram_subsequent_uses_ema():
     assert profile.measurement_count == 2
 
 
+def test_record_loaded_vram_after_hf_precheck_uses_measurement_exactly():
+    """residency_source="hf" is a best-effort guess, not a prior real
+    measurement — the first live load must replace it exactly, not blend
+    through _ema() and keep 70% weight on a guess that could be badly off."""
+    registry = ModelProfileRegistry()
+    registry.apply_hf_precheck("org/model", disk_size_bytes=4_000_000_000, base_residency_mb=4200.0)
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "hf"
+
+    registry.record_loaded_vram("org/model", 9000.0, engine="vllm", kv_cache_sent_mb=2000.0)
+
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "measured"
+    assert profile.base_residency_mb == pytest.approx(9000.0 - 2000.0)
+
+
 def test_record_loaded_vram_ignores_zero():
     registry = ModelProfileRegistry()
     registry.record_loaded_vram("llama3:8b", 0.0)

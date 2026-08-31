@@ -23,7 +23,7 @@ This section (and most of this file) covers `logos-orchestrator/`, the Python/Fa
 FastAPI service described in most of this file lives under
 `logos-orchestrator/`, alongside three sibling services:
 
-```
+```text
 logos/
 ├── AGENTS.md                          # This file
 ├── docker-compose.yaml                # Full stack (db, orchestrator, webservice, ui, traefik)
@@ -130,7 +130,7 @@ Role-based authorization lives in `role_auth.py`, checked separately from the ab
 API keys are passed via: `logos_key` header, `logos-key` header, or `Authorization: Bearer <key>`
 
 ### Entity Hierarchy
-```
+```text
 User (role: app_developer | app_admin | logos_admin)
   └── Team(s), via team_members (is_owner flag)
         └── API Key(s) (key_type: developer | application)
@@ -145,7 +145,7 @@ This replaced an older Process/Profile hierarchy (`process`, `profiles`,
 longer exist; don't design against them.
 
 ### Request Flow
-```
+```text
 Request → Auth → Log
   ├── PROXY MODE (body has "model"): → Verify access → Resolve auth/URL → Execute
   └── RESOURCE MODE (no "model"):    → Classify → Schedule → Resolve → Execute
@@ -230,7 +230,7 @@ Tests stub heavy dependencies (sentence_transformers, gRPC) via `conftest.py`. D
 ### Naming Conventions (MANDATORY)
 
 **PR Title** — Must match this regex (enforced by CI):
-```
+```text
 ^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos|Memiris)`:\s[A-Z].*$
 ```
 Examples:
@@ -238,7 +238,7 @@ Examples:
 - `` `Logos`: Fix rate limiting for batch users ``
 
 **Commit Messages** — Must follow the same pattern (without backticks):
-```
+```text
 ProjectName: Description starting with capital letter (#issue_number)
 ```
 Examples:

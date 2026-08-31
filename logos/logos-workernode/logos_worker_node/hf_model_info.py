@@ -22,7 +22,7 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +72,9 @@ class HfModelMetadata:
     fetched_at: float = 0.0
     source: str = "error:unknown"  # "hf" on success, "error:<reason>" otherwise
     error: str | None = None
+
+
+_HF_METADATA_FIELDS = frozenset(f.name for f in fields(HfModelMetadata))
 
 
 def _get_config_field(config: dict[str, Any], key: str) -> Any:
@@ -217,6 +220,14 @@ class HfModelInfoCache:
             logger.debug("[HF precheck] could not read cache at %s", self._path, exc_info=True)
 
     @staticmethod
+    def _is_valid_entry(entry: Any) -> bool:
+        # A JSON value that isn't a plain mapping of only the fields
+        # HfModelMetadata(**entry) accepts (hand-edited, corrupted, or a
+        # schema this code doesn't know) would otherwise raise out of
+        # get()/put() instead of being treated as a miss.
+        return isinstance(entry, dict) and set(entry.keys()) <= _HF_METADATA_FIELDS
+
+    @staticmethod
     def _is_expired(entry: dict[str, Any]) -> bool:
         ttl = _SUCCESS_CACHE_TTL_S if entry.get("source") == "hf" else _ERROR_CACHE_TTL_S
         return time.time() - (entry.get("fetched_at") or 0) > ttl
@@ -227,7 +238,7 @@ class HfModelInfoCache:
             entry = self._entries.get(model_name)
             if entry is None:
                 return None
-            if self._is_expired(entry):
+            if not self._is_valid_entry(entry) or self._is_expired(entry):
                 # Drop it here too, not just on the next put() sweep — a
                 # model checked often should never accumulate stale copies.
                 del self._entries[model_name]
@@ -237,10 +248,11 @@ class HfModelInfoCache:
     def put(self, model_name: str, meta: HfModelMetadata) -> None:
         with self._lock:
             self._ensure_loaded()
-            # Sweep everything past its TTL, not just model_name — otherwise
-            # a model dropped from configured_models (so never looked up
-            # again) would keep its stale entry forever.
-            for name in [n for n, e in self._entries.items() if self._is_expired(e)]:
+            # Sweep everything invalid or past its TTL, not just model_name —
+            # otherwise a dropped-from-config model keeps a stale/broken entry
+            # forever, and one malformed entry keeps raising out of every
+            # future put() sweep too.
+            for name in [n for n, e in self._entries.items() if not self._is_valid_entry(e) or self._is_expired(e)]:
                 del self._entries[name]
             self._entries[model_name] = {
                 "weight_bytes": meta.weight_bytes,

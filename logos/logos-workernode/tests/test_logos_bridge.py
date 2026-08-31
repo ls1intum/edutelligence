@@ -1411,6 +1411,42 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
 
 
 @pytest.mark.asyncio
+async def test_run_compatibility_precheck_survives_a_broken_profile_store(tmp_path, monkeypatch, caplog):
+    """A profile-store write failure must only discard that precheck's
+    persistence, never propagate — _run_hf_compatibility_precheck's own
+    docstring promises it never raises, and the calibration session loop
+    that calls it has no try/except around that call: an uncaught
+    exception here would abort every remaining model that session, not
+    just skip this one."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:model-not-found"),
+    )
+
+    def _broken_write(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app.state.model_profiles, "mark_calibration_unsupported", _broken_write)
+
+    with caplog.at_level(logging.WARNING):
+        response = await client._execute_command(  # noqa: SLF001
+            "run_compatibility_precheck", {"model": "org/does-not-exist"}
+        )
+
+    assert response["ok"] is True
+    assert response["unsupported_reason"] == "model-not-found"
+    assert any("failed to persist result" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path, monkeypatch):
     """Unlike not-found, a gated model must NOT be marked
     calibration_unsupported: that flag drops it out of
@@ -1499,6 +1535,70 @@ async def test_run_compatibility_precheck_proceeds_for_known_quantization_method
     monkeypatch.setattr(
         "logos_worker_node.calibration.query_vllm_quantization_methods",
         lambda *a, **k: ["awq", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_empty_registry_fails_open(tmp_path, monkeypatch):
+    """An empty (but non-None) registry list is not proof the method is
+    unsupported — treat it the same as a failed query, or a corrupted/
+    empty baked file would permanently mark every quantized model as
+    unsupported the moment it's checked."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.query_vllm_quantization_methods", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+    profile = app.state.model_profiles.get_profile("org/awq-model")
+    assert profile is None or profile.calibration_unsupported is not True
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_quantization_match_is_case_insensitive(tmp_path, monkeypatch):
+    """HF config.json is arbitrary user-uploaded JSON — "AWQ" vs "awq" (or
+    stray whitespace) must not read as a mismatch and wrongly, permanently
+    block a model that would actually load fine."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method=" AWQ ", source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["AWQ", "gptq", "fp8"],
     )
     monkeypatch.setattr(
         "logos_worker_node.calibration.query_gpu_vram",

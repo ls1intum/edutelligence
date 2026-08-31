@@ -797,6 +797,16 @@ class LogosBridgeClient:
             return None
         return self._vllm_quant_methods
 
+    async def _persist_precheck(self, model_name: str, func: Any, *args: Any, **kwargs: Any) -> None:
+        """Runs a model_profiles write off the event loop, catching any
+        failure so a broken profile store degrades only this precheck's
+        persistence — never the whole calibration session. Must itself
+        never raise (see _run_hf_compatibility_precheck's docstring)."""
+        try:
+            await asyncio.to_thread(func, *args, **kwargs)
+        except Exception:  # noqa: BLE001
+            logger.warning("[Precheck] failed to persist result for %s", model_name, exc_info=True)
+
     async def _run_hf_compatibility_precheck(self, model_name: str, *, persist: bool = True) -> dict[str, Any]:
         """Best-effort HF compatibility check for one model on this node.
 
@@ -874,9 +884,8 @@ class LogosBridgeClient:
         if hf_meta is not None and hf_meta.source == "error:model-not-found":
             result["unsupported_reason"] = REASON_MODEL_NOT_FOUND
             if persist:
-                # Rewrites the whole model_profiles.yml — off the event loop.
-                await asyncio.to_thread(
-                    model_profiles.mark_calibration_unsupported, model_name, True, REASON_MODEL_NOT_FOUND
+                await self._persist_precheck(
+                    model_name, model_profiles.mark_calibration_unsupported, model_name, True, REASON_MODEL_NOT_FOUND
                 )
             return result
 
@@ -890,19 +899,24 @@ class LogosBridgeClient:
 
         # An unrecognized quant method can never load — check before VRAM.
         # Name-level only; see query_vllm_quantization_methods for the
-        # platform-check gap. A failed query leaves this unset (fail-open).
+        # platform-check gap. A failed OR empty query leaves this unset
+        # (fail-open) — an empty list is not proof nothing is supported.
         if hf_meta is not None and hf_meta.quantization_method:
             supported_methods = await self._get_vllm_quant_methods(model_name)
-            if supported_methods is not None and hf_meta.quantization_method not in supported_methods:
-                result["unsupported_reason"] = REASON_UNSUPPORTED_QUANTIZATION
-                if persist:
-                    await asyncio.to_thread(
-                        model_profiles.mark_calibration_unsupported,
-                        model_name,
-                        True,
-                        REASON_UNSUPPORTED_QUANTIZATION,
-                    )
-                return result
+            if supported_methods:
+                canonical_method = hf_meta.quantization_method.strip().lower()
+                canonical_supported = {m.strip().lower() for m in supported_methods}
+                if canonical_method not in canonical_supported:
+                    result["unsupported_reason"] = REASON_UNSUPPORTED_QUANTIZATION
+                    if persist:
+                        await self._persist_precheck(
+                            model_name,
+                            model_profiles.mark_calibration_unsupported,
+                            model_name,
+                            True,
+                            REASON_UNSUPPORTED_QUANTIZATION,
+                        )
+                    return result
 
         if hf_meta is None or not hf_meta.weight_bytes:
             return result
@@ -948,9 +962,8 @@ class LogosBridgeClient:
         )
 
         if persist:
-            # Both rewrite the whole model_profiles.yml — off the event loop,
-            # same reasoning as the mark_calibration_unsupported calls above.
-            await asyncio.to_thread(
+            await self._persist_precheck(
+                model_name,
                 model_profiles.apply_hf_precheck,
                 model_name,
                 disk_size_bytes=hf_meta.weight_bytes,
@@ -959,8 +972,8 @@ class LogosBridgeClient:
                 max_context_length=hf_meta.max_context_length,
             )
             if unsupported_reason is not None:
-                await asyncio.to_thread(
-                    model_profiles.mark_calibration_unsupported, model_name, True, unsupported_reason
+                await self._persist_precheck(
+                    model_name, model_profiles.mark_calibration_unsupported, model_name, True, unsupported_reason
                 )
 
         return result
