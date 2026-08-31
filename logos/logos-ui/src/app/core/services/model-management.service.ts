@@ -34,6 +34,15 @@ export class ModelManagementService {
     );
   }
 
+  cancelBenchmark(jobId: number): Promise<{ job_id: number; status: string }> {
+    return firstValueFrom(
+      this.http.post<{ job_id: number; status: string }>(
+        '/api/logosdb/model_benchmarks/cancel',
+        { id: jobId },
+      ),
+    );
+  }
+
   deleteBenchmark(benchmarkId: number): Promise<{ deleted: boolean; id: number }> {
     return firstValueFrom(
       this.http.post<{ deleted: boolean; id: number }>(

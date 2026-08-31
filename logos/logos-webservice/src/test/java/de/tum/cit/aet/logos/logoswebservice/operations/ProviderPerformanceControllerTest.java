@@ -304,4 +304,18 @@ class ProviderPerformanceControllerTest {
            .andExpect(jsonPath("$.job_id").value(42))
            .andExpect(jsonPath("$.status").value("pending"));
     }
+
+    @Test
+    void cancelModelBenchmark_forwardsJobToOrchestrator() throws Exception {
+        when(orchestratorWorkerAdminClient.cancelModelBenchmark(42))
+            .thenReturn(ResponseEntity.ok(Map.of("job_id", 42, "status", "failed")));
+
+        mvc.perform(post("/logosdb/model_benchmarks/cancel")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"id\":42}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.job_id").value(42))
+           .andExpect(jsonPath("$.status").value("failed"));
+    }
 }

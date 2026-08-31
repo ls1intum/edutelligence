@@ -104,6 +104,21 @@ public class ProviderPerformanceController {
         }
     }
 
+    @PostMapping("/model_benchmarks/cancel")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> cancelModelBenchmark(@RequestBody DeleteModelBenchmarkRequestDTO request) {
+        if (request.id() == null || request.id() <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "id must be a positive integer"));
+        }
+        try {
+            return orchestratorWorkerAdminClient.cancelModelBenchmark(request.id());
+        } catch (HttpStatusCodeException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(orchestratorError(e));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(503).body(Map.of("error", "Benchmark service is unavailable"));
+        }
+    }
+
     private Map<String, Object> orchestratorError(HttpStatusCodeException exception) {
         try {
             return objectMapper.readValue(exception.getResponseBodyAsString(), new TypeReference<>() {});

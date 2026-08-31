@@ -67,6 +67,10 @@ public class OrchestratorWorkerAdminClient {
         );
     }
 
+    public ResponseEntity<Map> cancelModelBenchmark(int jobId) {
+        return post("/internal/model_benchmarks/jobs/" + jobId + "/cancel", Map.of());
+    }
+
     private ResponseEntity<Map> post(String path, Map<String, Object> body) {
         if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
             throw new IllegalStateException("Orchestrator URL or internal secret not configured");

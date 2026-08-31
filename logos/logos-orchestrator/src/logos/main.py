@@ -114,6 +114,31 @@ logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
 _benchmark_tasks: Set[asyncio.Task] = set()
+_benchmark_tasks_by_job: dict[int, asyncio.Task] = {}
+_benchmark_sessions_by_job: dict[int, tuple[int, str]] = {}
+
+
+def _forget_benchmark_task(job_id: int, task: asyncio.Task) -> None:
+    _background_tasks.discard(task)
+    _benchmark_tasks.discard(task)
+    _benchmark_tasks_by_job.pop(job_id, None)
+    _benchmark_sessions_by_job.pop(job_id, None)
+
+
+def _cancel_benchmark_job(job_id: int, reason: str) -> bool:
+    """Persist cancellation first, then stop the local GuideLLM process."""
+    with DBManager() as db:
+        cancelled = db.cancel_model_benchmark_job(job_id, reason)
+    task = _benchmark_tasks_by_job.get(job_id)
+    if task is not None and not task.done():
+        task.cancel(reason)
+    return cancelled
+
+
+def _cancel_benchmarks_for_changed_session(provider_id: int, session_id: str | None) -> None:
+    for job_id, (job_provider_id, expected_session_id) in list(_benchmark_sessions_by_job.items()):
+        if job_provider_id == provider_id and expected_session_id != session_id:
+            _cancel_benchmark_job(job_id, "Provider restarted or disconnected")
 
 
 def _resolve_provider_name(provider_id: int) -> str:
@@ -1723,6 +1748,11 @@ async def lifespan(app: FastAPI):
 # Prometheus metrics auth: set PROMETHEUS_API_KEY env var to require auth; if unset, deny all.
 _PROMETHEUS_API_KEY = os.getenv("PROMETHEUS_API_KEY")
 _INTERNAL_SECRET = os.getenv("LOGOS_INTERNAL_SECRET")
+_BENCHMARKS_ENABLED = os.getenv("LOGOS_BENCHMARKS_ENABLED", "false").lower() == "true"
+try:
+    _BENCHMARK_MAX_CONCURRENCY = max(1, int(os.getenv("LOGOS_BENCHMARK_MAX_CONCURRENCY", "1")))
+except ValueError:
+    _BENCHMARK_MAX_CONCURRENCY = 1
 
 # Initialize FastAPI app with lifespan
 app = FastAPI(
@@ -2322,6 +2352,8 @@ class _InternalBenchmarkRequest(BaseModel):
 async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request: Request):
     """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
     _require_internal_secret(request)
+    if not _BENCHMARKS_ENABLED:
+        raise HTTPException(status_code=503, detail="Benchmarks are disabled")
 
     with DBManager() as db:
         target = db.get_model_provider_benchmark_target(data.model_provider_id)
@@ -2352,6 +2384,8 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
                     }
                 ),
             )
+        if db.count_active_model_benchmark_jobs() >= _BENCHMARK_MAX_CONCURRENCY:
+            raise HTTPException(status_code=409, detail="The global benchmark limit is already reached")
 
         runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
         if provider_type == "logosnode":
@@ -2373,6 +2407,7 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             "split": "test",
             "samples": data.samples,
             "max_output_tokens": data.max_output_tokens,
+            "provider_session_id": runtime_snapshot.get("session_id") if runtime_snapshot else None,
         }
         job_id = db.create_job_record(
             payload=job_payload,
@@ -2417,12 +2452,22 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             ),
             request_headers=request_headers,
             worker_preparer=worker_preparer,
+            worker_session_is_current=(
+                (
+                    lambda: (_logosnode_registry.peek_runtime_snapshot(provider_id) or {}).get("session_id")
+                    == job_payload["provider_session_id"]
+                )
+                if is_internal_worker_benchmark
+                else None
+            ),
         )
     )
     _background_tasks.add(task)
     _benchmark_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
-    task.add_done_callback(_benchmark_tasks.discard)
+    _benchmark_tasks_by_job[job_id] = task
+    if is_internal_worker_benchmark:
+        _benchmark_sessions_by_job[job_id] = (provider_id, str(job_payload["provider_session_id"]))
+    task.add_done_callback(lambda done, jid=job_id: _forget_benchmark_task(jid, done))
     return JSONResponse(
         status_code=202,
         content={
@@ -2434,6 +2479,15 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             "model_name": model_name,
         },
     )
+
+
+@app.post("/internal/model_benchmarks/jobs/{job_id}/cancel", tags=["admin"])
+async def internal_cancel_model_benchmark(job_id: int, request: Request):
+    """Cancel one active benchmark and release its lease."""
+    _require_internal_secret(request)
+    if not _cancel_benchmark_job(job_id, "Benchmark cancelled by administrator"):
+        raise HTTPException(status_code=404, detail="Active benchmark job not found")
+    return {"job_id": job_id, "status": "failed"}
 
 
 @app.post("/internal/model_benchmarks/jobs/{job_id}/v1/{path:path}", tags=["admin"])
@@ -2484,6 +2538,10 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         }
     ]
     required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
+    if _capacity_planner is None or not await _capacity_planner.prepare_benchmark_lane(
+        required_provider_id, str(target["model_name"])
+    ):
+        raise HTTPException(status_code=409, detail="Benchmark stopped to protect production traffic")
     deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
     if not deployments:
         raise HTTPException(status_code=503, detail="Selected benchmark worker is not serving the model")
@@ -2501,6 +2559,7 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         environment="model-provider-benchmark",
         log_level="NONE",
         settings={},
+        default_priority=1,
     )
     request_id = secrets.token_urlsafe(16)
     return await _execute_cancelling_on_disconnect(
@@ -4879,6 +4938,11 @@ def _benchmark_provider_affinity(
         raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
     if payload_provider_id != provider_id or str(payload.get("model_name") or "") != model_name:
         raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    expected_session_id = payload.get("provider_session_id")
+    if expected_session_id:
+        snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        if snapshot is None or snapshot.get("session_id") != expected_session_id:
+            raise HTTPException(status_code=409, detail="Benchmark provider restarted or disconnected")
 
     if not any(
         deployment["provider_id"] == provider_id and deployment["model_id"] == payload_model_id
@@ -5478,10 +5542,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
 
     await websocket.accept()
     try:
-        await _logosnode_registry.attach_session(ticket, websocket)
+        session = await _logosnode_registry.attach_session(ticket, websocket)
     except LogosNodeSessionConflictError as exc:
         await websocket.close(code=1008, reason=str(exc))
         return
+    _cancel_benchmarks_for_changed_session(ticket.provider_id, session.session_id)
 
     try:
         while True:
@@ -5557,6 +5622,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
         pass
     finally:
         await _logosnode_registry.detach_session(ticket.provider_id, websocket)
+        current = _logosnode_registry.peek_runtime_snapshot(ticket.provider_id)
+        _cancel_benchmarks_for_changed_session(
+            ticket.provider_id,
+            str(current["session_id"]) if current else None,
+        )
 
 
 @app.post("/logosdb/providers/logosnode/status", tags=["logosnode"])

@@ -41,6 +41,7 @@ BENCHMARK_PROVIDER_HEADER = "x-logos-benchmark-provider-id"
 BENCHMARK_TOKEN_HEADER = "x-logos-benchmark-token"
 BENCHMARK_PHASE_HEADER = "x-logos-benchmark-phase"
 BENCHMARK_TIMEOUT_SECONDS = 7200
+BENCHMARK_LEASE_HEARTBEAT_SECONDS = 15
 
 
 def credential_transport_is_secure(url: str) -> bool:
@@ -321,6 +322,7 @@ async def run_benchmark_job(
     serving_configuration_getter: Callable[[], dict[str, Any]] | None = None,
     request_headers: dict[str, str] | None = None,
     worker_preparer: Callable[[], Awaitable[bool]] | None = None,
+    worker_session_is_current: Callable[[], bool] | None = None,
 ) -> None:
     """Execute GuideLLM outside the event loop and update the shared job row."""
     from logos.dbutils.dbmanager import DBManager
@@ -333,6 +335,25 @@ async def run_benchmark_job(
             result_payload={"stage": "preparing_worker", "started_samples": 0, "total_samples": samples},
         )
 
+    owner_task = asyncio.current_task()
+
+    async def renew_lease() -> None:
+        while True:
+            await asyncio.sleep(BENCHMARK_LEASE_HEARTBEAT_SECONDS)
+            try:
+                with DBManager() as db:
+                    active = db.touch_model_benchmark_job(job_id)
+            except Exception:
+                active = False
+            session_current = worker_session_is_current is None or worker_session_is_current()
+            if not active or not session_current:
+                if owner_task is not None:
+                    owner_task.cancel(
+                        "Provider restarted or disconnected" if active else "Benchmark cancelled or lease expired"
+                    )
+                return
+
+    lease_task = asyncio.create_task(renew_lease())
     try:
         guidellm_bin = shutil.which("guidellm")
         if guidellm_bin is None:
@@ -430,12 +451,12 @@ async def run_benchmark_job(
                 result_payload={"stage": "completed", "benchmark_id": benchmark_id},
                 error_message=None,
             )
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as exc:
         with DBManager() as db:
             db.update_job_status(
                 job_id,
                 JobStatus.FAILED.value,
-                error_message="Benchmark cancelled before completion",
+                error_message=str(exc) or "Benchmark cancelled before completion",
             )
         raise
     except Exception as exc:
@@ -444,3 +465,6 @@ async def run_benchmark_job(
             message = message.replace(api_key, "[redacted]")
         with DBManager() as db:
             db.update_job_status(job_id, JobStatus.FAILED.value, error_message=message[:1000])
+    finally:
+        lease_task.cancel()
+        await asyncio.gather(lease_task, return_exceptions=True)

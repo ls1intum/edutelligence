@@ -527,6 +527,16 @@
                         @if (run.status === 'failed' && run.error_message) {
                           <small>{{ run.error_message }}</small>
                         }
+                        @if (isBenchmarkActive(run)) {
+                          <button
+                            class="benchmark-delete-button"
+                            type="button"
+                            (click)="cancelBenchmark(run)"
+                            [disabled]="benchmarkCancellingJobId() === run.id"
+                          >
+                            {{ benchmarkCancellingJobId() === run.id ? 'Cancelling…' : 'Cancel' }}
+                          </button>
+                        }
                       } @else if (!pair.endpoint_configured) {
                         <span class="run-status run-status--failed">Endpoint missing</span>
                         <small>Add it under Providers before running a benchmark.</small>

@@ -1098,33 +1098,29 @@ class CapacityPlanner:
         model_name: str,
         timeout_seconds: float = 600.0,
     ) -> bool:
-        """Make one exact worker/model pair ready before an internal benchmark."""
+        """Accept a benchmark only on an already-loaded, idle worker/model pair."""
         if self._registry and not self._registry.has_received_first_status(provider_id):
             return False
 
         target = self._pick_request_target_lane(provider_id, model_name)
-        if target is not None and target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping":
-            return True
+        return target is not None and self.benchmark_lane_is_safe(provider_id, target)
 
-        if target is not None and target.runtime_state == "starting":
-            return await self._wait_for_benchmark_lane_ready(
-                provider_id,
-                model_name,
-                timeout_seconds,
-            )
-
-        if target is not None and target.runtime_state == "sleeping":
-            return (
-                await self._prepare_existing_lane(
-                    provider_id,
-                    model_name,
-                    target,
-                    timeout_seconds,
-                )
-                is not None
-            )
-
-        return await self._cold_load_for_request(provider_id, model_name, timeout_seconds) is not None
+    def benchmark_lane_is_safe(self, provider_id: int, target: LaneSchedulerSignals) -> bool:
+        """Return whether a benchmark can run without competing with production."""
+        if target.runtime_state not in {"loaded", "running"} or target.sleep_state == "sleeping":
+            return False
+        max_ttft = float(os.getenv("LOGOS_BENCHMARK_MAX_TTFT_SECONDS", "5"))
+        max_e2e = float(os.getenv("LOGOS_BENCHMARK_MAX_E2E_SECONDS", "30"))
+        lanes = self._safe_get_lanes(provider_id)
+        for lane in lanes:
+            if lane.active_requests > 0 or lane.requests_running > 0 or lane.queue_waiting > 0:
+                return False
+            if self._facade.get_scheduler_queue_depth_by_model_name(lane.model_name, provider_id) > 0:
+                return False
+        return not (
+            (getattr(target, "ttft_p95_seconds", 0) > max_ttft)
+            or (getattr(target, "e2e_latency_p50_seconds", 0) > max_e2e)
+        )
 
     async def _wait_for_benchmark_lane_ready(
         self,

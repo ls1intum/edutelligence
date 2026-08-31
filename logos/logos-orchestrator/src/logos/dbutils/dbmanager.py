@@ -525,7 +525,11 @@ class DBManager:
         return dict(row) if row else None
 
     def lock_model_benchmark_provider(self, provider_id: int) -> None:
-        """Serialize benchmark admission for one provider within this transaction."""
+        """Serialize global and per-provider benchmark admission in this transaction."""
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:namespace, 0)"),
+            {"namespace": 1428947001},
+        )
         self.session.execute(
             text("SELECT pg_advisory_xact_lock(:namespace, :provider_id)"),
             {"namespace": 1428947001, "provider_id": int(provider_id)},
@@ -534,7 +538,7 @@ class DBManager:
     def find_active_model_benchmark_job(
         self,
         provider_id: int,
-        stale_after_seconds: int = 7200,
+        stale_after_seconds: int = 60,
     ) -> Optional[Dict[str, Any]]:
         """Expire stale benchmark rows, then return the newest active job."""
         stale_after_seconds = max(1, int(stale_after_seconds))
@@ -581,6 +585,71 @@ class DBManager:
             .first()
         )
         return dict(row) if row else None
+
+    def count_active_model_benchmark_jobs(self, stale_after_seconds: int = 60) -> int:
+        """Return the number of benchmark leases that are currently active."""
+        self.session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'failed', error_message = 'Benchmark lease expired',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                  AND COALESCE(updated_at, created_at)
+                      < CURRENT_TIMESTAMP - CAST(:seconds AS integer) * INTERVAL '1 second'
+                """
+            ),
+            {"seconds": max(1, int(stale_after_seconds))},
+        )
+        row = (
+            self.session.execute(
+                text(
+                    """
+                SELECT COUNT(*) AS count
+                FROM jobs
+                WHERE environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                """
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return int(row["count"] if row else 0)
+
+    def touch_model_benchmark_job(self, job_id: int) -> bool:
+        """Renew one active benchmark lease."""
+        updated = self.session.execute(
+            text(
+                """
+                UPDATE jobs SET updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                """
+            ),
+            {"job_id": int(job_id)},
+        )
+        self.session.commit()
+        return bool(updated.rowcount)
+
+    def cancel_model_benchmark_job(self, job_id: int, reason: str) -> bool:
+        """Fail one active benchmark job and release its logical lease."""
+        updated = self.session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'failed', error_message = :reason, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                """
+            ),
+            {"job_id": int(job_id), "reason": reason[:1000]},
+        )
+        self.session.commit()
+        return bool(updated.rowcount)
 
     def insert_model_provider_benchmark(
         self,

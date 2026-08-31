@@ -77,5 +77,5 @@ def test_active_benchmark_lookup_expires_stale_rows_before_selecting():
     assert "UPDATE jobs" in expire_statement
     assert "COALESCE(updated_at, created_at)" in expire_statement
     assert expire_params["provider_id"] == 23
-    assert expire_params["stale_after_seconds"] == 7200
+    assert expire_params["stale_after_seconds"] == 60
     db.session.commit.assert_not_called()

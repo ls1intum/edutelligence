@@ -317,6 +317,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly performanceLoading = signal(false);
   readonly performanceError = signal(false);
   readonly benchmarkStartingPairId = signal<number | null>(null);
+  readonly benchmarkCancellingJobId = signal<number | null>(null);
   readonly benchmarkStartError = signal<string | null>(null);
   readonly benchmarkSampleSize = signal(5);
   readonly benchmarkSampleLabel = computed(
@@ -642,6 +643,19 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       await this.loadPerformance(this.modelId(), true);
     } finally {
       this.benchmarkStartingPairId.set(null);
+    }
+  }
+
+  async cancelBenchmark(run: ModelBenchmarkRun): Promise<void> {
+    this.benchmarkCancellingJobId.set(run.id);
+    this.benchmarkStartError.set(null);
+    try {
+      await this.modelService.cancelBenchmark(run.id);
+      await this.loadPerformance(this.modelId(), true);
+    } catch {
+      this.benchmarkStartError.set('Could not cancel the benchmark.');
+    } finally {
+      this.benchmarkCancellingJobId.set(null);
     }
   }
 

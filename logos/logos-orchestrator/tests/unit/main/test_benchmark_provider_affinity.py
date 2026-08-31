@@ -19,6 +19,20 @@ def _job(*, status="running", provider_id=20, model_id=1, model_name="org/model"
     }
 
 
+@pytest.mark.asyncio
+async def test_cancel_benchmark_releases_job(monkeypatch):
+    request = MagicMock()
+    request.headers = {"authorization": "Bearer internal-secret"}
+    cancel = MagicMock(return_value=True)
+    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(main, "_cancel_benchmark_job", cancel)
+
+    response = await main.internal_cancel_model_benchmark(7, request)
+
+    assert response == {"job_id": 7, "status": "failed"}
+    cancel.assert_called_once_with(7, "Benchmark cancelled by administrator")
+
+
 def _install_job_db(monkeypatch, job):
     started = []
 
@@ -78,12 +92,16 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
         def lock_model_benchmark_provider(self, provider_id):
             assert provider_id == 20
 
+        def count_active_model_benchmark_jobs(self):
+            return 0
+
         def create_job_record(self, **kwargs):
             return 7
 
     runner = AsyncMock()
     registry = MagicMock()
     registry.peek_runtime_snapshot.return_value = {
+        "session_id": "session-1",
         "last_heartbeat": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "first_status_received": True,
         "runtime": {"lanes": []},
@@ -94,6 +112,7 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
     request.headers = {"authorization": "Bearer internal-secret"}
 
     monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(main, "_BENCHMARKS_ENABLED", True)
     monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_logosnode_registry", registry)
     monkeypatch.setattr(main, "_capacity_planner", planner)
@@ -135,6 +154,7 @@ async def test_external_benchmark_rejects_api_key_over_plaintext_http(monkeypatc
     request = MagicMock()
     request.headers = {"authorization": "Bearer internal-secret"}
     monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(main, "_BENCHMARKS_ENABLED", True)
     monkeypatch.setattr(main, "DBManager", DummyDB)
 
     with pytest.raises(main.HTTPException) as exc_info:
@@ -145,6 +165,22 @@ async def test_external_benchmark_rejects_api_key_over_plaintext_http(monkeypatc
 
     assert exc_info.value.status_code == 409
     assert "HTTPS" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_benchmark_start_is_disabled_by_default(monkeypatch):
+    request = MagicMock()
+    request.headers = {"authorization": "Bearer internal-secret"}
+    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(main, "_BENCHMARKS_ENABLED", False)
+
+    with pytest.raises(main.HTTPException) as exc_info:
+        await main.internal_run_model_benchmark(
+            main._InternalBenchmarkRequest(model_provider_id=31),
+            request,
+        )
+
+    assert exc_info.value.status_code == 503
 
 
 def test_internal_secret_rejects_non_ascii_token_without_compare_digest_type_error(monkeypatch):
@@ -173,6 +209,27 @@ def test_valid_running_job_resolves_required_worker(monkeypatch):
 
     assert provider_id == 20
     assert started == [7]
+
+
+def test_worker_session_change_invalidates_benchmark(monkeypatch):
+    job = _job()
+    job["request_payload"]["provider_session_id"] = "old-session"
+    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        MagicMock(peek_runtime_snapshot=MagicMock(return_value={"session_id": "new-session"})),
+    )
+    _install_job_db(monkeypatch, job)
+
+    with pytest.raises(main.HTTPException) as exc_info:
+        main._benchmark_provider_affinity(
+            _headers(),
+            {"model": "org/model"},
+            [{"model_id": 1, "provider_id": 20, "type": "logosnode"}],
+        )
+
+    assert exc_info.value.status_code == 409
 
 
 def test_warmup_request_does_not_advance_measurement_progress(monkeypatch):
