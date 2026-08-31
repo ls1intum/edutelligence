@@ -777,17 +777,13 @@ def parse_gpu_indices(gpu_devices: str) -> list[int] | None:
 
 
 _BAKED_QUANT_METHODS_FILENAME = "vllm_quantization_methods.json"
-# Generous headroom above torch+transformers' actual ~1-2 GB import
-# footprint — mmap-style virtual address reservations can run higher than
-# what's really used. A too-tight limit just means an earlier fail-open.
-_QUANT_QUERY_MEM_LIMIT_BYTES = 4 * 1024**3
 
 
 def query_vllm_quantization_methods(vllm_binary: str) -> list[str]:
     """Quantization method names this vLLM install recognizes — name
-    only, not a platform/hardware check. Prefers a build-time-baked
-    JSON file next to vllm_binary (see the Dockerfile); falls back to
-    querying the venv's own Python. Raises only if both fail."""
+    only, not a platform/hardware check. Doesn't see plugin-registered
+    methods (see the caller: a miss is informational, never blocking).
+    Build-time-baked file only; [] if it isn't there (see Dockerfile)."""
     # A bare command (no path separator, e.g. the "vllm" default) needs a
     # real PATH search, like the OS does when spawning it — Path(...).
     # resolve() alone silently resolves it against the CWD instead.
@@ -796,32 +792,12 @@ def query_vllm_quantization_methods(vllm_binary: str) -> list[str]:
         resolved = shutil.which(vllm_binary) or vllm_binary
     venv_bin = Path(resolved).resolve().parent
     baked = venv_bin / _BAKED_QUANT_METHODS_FILENAME
-    if baked.exists():
-        try:
-            return json.loads(baked.read_text())
-        except (OSError, ValueError):
-            pass  # corrupt/unreadable — fall through to the live query
-    # nice: never compete with live inference for CPU. RLIMIT_AS: a torch+
-    # transformers import gone wrong (or huge) fails inside this disposable
-    # subprocess instead of pressuring host memory shared with real lanes.
-    limit = _QUANT_QUERY_MEM_LIMIT_BYTES
-    raw = subprocess.check_output(
-        [
-            "nice",
-            "-n",
-            "19",
-            str(venv_bin / "python"),
-            "-c",
-            "import resource\n"
-            f"resource.setrlimit(resource.RLIMIT_AS, ({limit}, {limit}))\n"
-            "from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS\n"
-            "import json\n"
-            "print(json.dumps(QUANTIZATION_METHODS))",
-        ],
-        text=True,
-        timeout=60,
-    )
-    return json.loads(raw)
+    if not baked.exists():
+        return []
+    try:
+        return json.loads(baked.read_text())
+    except (OSError, ValueError):
+        return []  # corrupt/unreadable — nothing to compare against
 
 
 # ---------------------------------------------------------------------------
@@ -1615,6 +1591,11 @@ def calibrate_model(
         weight_per_gpu_mb = (float(hf_weight_bytes) / (1024 * 1024)) / max(tp, 1)
         hf_kv_ceiling_mb = max_kv_mb - weight_per_gpu_mb
         if hf_kv_ceiling_mb > 0:
+            # Below the min step, the sweep's floor(.../1024)*1024 rounding
+            # would collapse this to a 0 MB ceiling — clamp to the floor so
+            # the required 1 GiB probe survives instead of disabling the
+            # search entirely.
+            hf_kv_ceiling_mb = max(hf_kv_ceiling_mb, _KV_CACHE_MIN_STEP_MB)
             logger.info(
                 "  HF-derived weights ≈%.0f MB/GPU at tp=%d — narrowing KV search ceiling %.0f → %.0f MB",
                 weight_per_gpu_mb,

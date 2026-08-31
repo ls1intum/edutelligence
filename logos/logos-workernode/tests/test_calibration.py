@@ -1309,39 +1309,47 @@ def test_hf_weight_bytes_narrows_kv_cache_ceiling(caplog):
     assert _narrowing_logs(30 * 1024 * 1024 * 1024) == []
 
 
-def test_query_vllm_quantization_methods_parses_registry_json():
-    """Queries the venv's own Python (sibling of vllm_binary) rather than
-    importing vllm here — this module has no vllm dependency of its own."""
+def test_hf_weight_bytes_narrowing_clamps_to_min_kv_step(caplog):
+    """A raw ceiling below _KV_CACHE_MIN_STEP_MB (1024) must be clamped up
+    to it, not passed through — the sweep's floor(.../1024)*1024 rounding
+    would otherwise collapse a small positive ceiling to a 0 MB search,
+    disabling the KV sweep instead of running the required 1 GiB probe."""
+    import logging
+
+    from logos_worker_node.calibration import _KV_CACHE_MIN_STEP_MB
+
+    patches = _patch_calibration_infra(wait_ready_side_effect=[None])
+    # Single GPU, 24000 MB total → cap = 19200 MB. 19100 MB/GPU of
+    # HF-reported weights at tp=1 leaves a raw ceiling of only 100 MB.
+    plan = _make_plan(_hf_weight_bytes=19100 * 1024 * 1024)
+    with caplog.at_level(logging.INFO):
+        result, _ = _run_calibrate(patches, plan=plan)
+    assert result.success
+
+    logs = [r.message for r in caplog.records if "narrowing KV search ceiling" in r.message]
+    assert len(logs) == 1
+    assert logs[0].endswith(f"{_KV_CACHE_MIN_STEP_MB:.0f} MB")
+
+
+def test_query_vllm_quantization_methods_reads_baked_file(tmp_path):
+    """The build-time-baked file (see the Dockerfile's 'Bake vLLM's
+    quantization-method registry' step) is the only source — no
+    subprocess, no torch/transformers import at runtime."""
     from logos_worker_node.calibration import query_vllm_quantization_methods
 
-    fake_methods = ["awq", "gptq", "fp8"]
-    with patch("logos_worker_node.calibration.subprocess.check_output") as mock_check_output:
-        mock_check_output.return_value = json.dumps(fake_methods)
-        result = query_vllm_quantization_methods("/opt/venv/bin/vllm")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "vllm_quantization_methods.json").write_text(json.dumps(["awq", "gptq"]))
 
-    assert result == fake_methods
-    called_cmd = mock_check_output.call_args.args[0]
-    assert called_cmd[:3] == ["nice", "-n", "19"]  # never competes with live inference for CPU
-    assert called_cmd[3] == "/opt/venv/bin/python"
-    assert "resource.setrlimit" in called_cmd[5]  # caps memory before importing torch
-    assert "QUANTIZATION_METHODS" in called_cmd[5]
+    result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
 
-
-def test_query_vllm_quantization_methods_propagates_failure():
-    """Never swallows errors — callers (the precheck) decide how to degrade,
-    same convention as query_gpu_vram."""
-    from logos_worker_node.calibration import query_vllm_quantization_methods
-
-    with patch("logos_worker_node.calibration.subprocess.check_output", side_effect=OSError("no such venv")):
-        with pytest.raises(OSError, match="no such venv"):
-            query_vllm_quantization_methods("/opt/venv/bin/vllm")
+    assert result == ["awq", "gptq"]
 
 
 def test_query_vllm_quantization_methods_resolves_bare_command_via_path(tmp_path, monkeypatch):
     """_DEFAULT_VLLM in production is bare "vllm", not a full path —
     resolving it against the CWD instead of a real PATH search would
-    silently break both the baked-file lookup and the subprocess
-    fallback."""
+    silently break the baked-file lookup."""
     from logos_worker_node.calibration import query_vllm_quantization_methods
 
     bin_dir = tmp_path / "bin"
@@ -1359,39 +1367,32 @@ def test_query_vllm_quantization_methods_resolves_bare_command_via_path(tmp_path
     assert result == ["awq"]
 
 
-def test_query_vllm_quantization_methods_prefers_baked_file(tmp_path):
-    """A Docker-build-time-baked file next to vllm_binary must be used
-    instead of spawning a subprocess — that's the whole point (see the
-    Dockerfile's 'Bake vLLM's quantization-method registry' step)."""
+def test_query_vllm_quantization_methods_returns_empty_without_baked_file(tmp_path):
+    """No baked file (e.g. a dev environment outside the Docker GPU
+    image) — nothing to compare against, so it stays silent rather
+    than raising; the check is informational-only anyway."""
     from logos_worker_node.calibration import query_vllm_quantization_methods
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "vllm_quantization_methods.json").write_text(json.dumps(["awq", "gptq"]))
 
-    with patch("logos_worker_node.calibration.subprocess.check_output") as mock_check_output:
-        result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
+    result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
 
-    assert result == ["awq", "gptq"]
-    mock_check_output.assert_not_called()
+    assert result == []
 
 
-def test_query_vllm_quantization_methods_falls_back_on_corrupt_baked_file(tmp_path):
+def test_query_vllm_quantization_methods_returns_empty_on_corrupt_baked_file(tmp_path):
     """A corrupted baked file (shouldn't normally happen — build-time-only,
-    no concurrent writers) must not crash the precheck; fall back to the
-    live subprocess query instead."""
+    no concurrent writers) must not crash the precheck."""
     from logos_worker_node.calibration import query_vllm_quantization_methods
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "vllm_quantization_methods.json").write_text("not valid json")
 
-    with patch("logos_worker_node.calibration.subprocess.check_output") as mock_check_output:
-        mock_check_output.return_value = json.dumps(["fp8"])
-        result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
+    result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
 
-    assert result == ["fp8"]
-    mock_check_output.assert_called_once()
+    assert result == []
 
 
 @pytest.mark.asyncio

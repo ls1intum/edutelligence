@@ -1413,11 +1413,9 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
 @pytest.mark.asyncio
 async def test_run_compatibility_precheck_survives_a_broken_profile_store(tmp_path, monkeypatch, caplog):
     """A profile-store write failure must only discard that precheck's
-    persistence, never propagate — _run_hf_compatibility_precheck's own
-    docstring promises it never raises, and the calibration session loop
-    that calls it has no try/except around that call: an uncaught
-    exception here would abort every remaining model that session, not
-    just skip this one."""
+    persistence, never propagate. The calibration loop that calls this
+    has no try/except around it — an uncaught exception here would
+    abort every remaining model that session, not just skip this one."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.hf_model_info import HfModelMetadata
 
@@ -1480,12 +1478,15 @@ async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_run_compatibility_precheck_skips_unsupported_quantization_without_querying_vram(tmp_path, monkeypatch):
-    """A quantization method the installed vLLM doesn't recognize by name
-    can never load, independent of VRAM — skip before querying it, and mark
-    a real (persisted) verdict, same as model-not-found."""
+async def test_run_compatibility_precheck_warns_but_never_blocks_unrecognized_quantization(
+    tmp_path, monkeypatch, caplog
+):
+    """A quantization method vLLM doesn't recognize is informational
+    only — never marked unsupported, never skipped, VRAM still queried.
+    The registry can miss a method for reasons unrelated to the model
+    (e.g. a plugin not loaded here) — the real load attempt decides."""
     from logos_worker_node import config as _wcfg
-    from logos_worker_node.hf_model_info import REASON_UNSUPPORTED_QUANTIZATION, HfModelMetadata
+    from logos_worker_node.hf_model_info import HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
@@ -1502,18 +1503,21 @@ async def test_run_compatibility_precheck_skips_unsupported_quantization_without
         "logos_worker_node.calibration.query_vllm_quantization_methods",
         lambda *a, **k: ["awq", "gptq", "fp8"],
     )
-    gpu_query = MagicMock(side_effect=AssertionError("must not query VRAM for an unsupported quant method"))
-    monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", gpu_query)
-
-    response = await client._execute_command(  # noqa: SLF001
-        "run_compatibility_precheck", {"model": "org/future-quant-model"}
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
     )
 
-    assert response["unsupported_reason"] == REASON_UNSUPPORTED_QUANTIZATION
-    gpu_query.assert_not_called()
+    with caplog.at_level(logging.WARNING):
+        response = await client._execute_command(  # noqa: SLF001
+            "run_compatibility_precheck", {"model": "org/future-quant-model"}
+        )
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
     profile = app.state.model_profiles.get_profile("org/future-quant-model")
-    assert profile.calibration_unsupported is True
-    assert profile.calibration_unsupported_reason == REASON_UNSUPPORTED_QUANTIZATION
+    assert profile is None or profile.calibration_unsupported is not True
+    assert any("not found in the installed vLLM's registry" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio

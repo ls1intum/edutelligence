@@ -832,7 +832,6 @@ class LogosBridgeClient:
             REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
             REASON_MODEL_GATED,
             REASON_MODEL_NOT_FOUND,
-            REASON_UNSUPPORTED_QUANTIZATION,
             fetch_hf_model_metadata,
             min_feasible_tp,
         )
@@ -897,26 +896,24 @@ class LogosBridgeClient:
             result["unsupported_reason"] = REASON_MODEL_GATED
             return result
 
-        # An unrecognized quant method can never load — check before VRAM.
-        # Name-level only; see query_vllm_quantization_methods for the
-        # platform-check gap. A failed OR empty query leaves this unset
-        # (fail-open) — an empty list is not proof nothing is supported.
+        # Informational only — never blocks or persists. A registry miss
+        # can mean "unsupported" or "a plugin didn't register it here"
+        # (see query_vllm_quantization_methods) — can't tell those apart,
+        # so the real load attempt is left to decide authoritatively.
         if hf_meta is not None and hf_meta.quantization_method:
             supported_methods = await self._get_vllm_quant_methods(model_name)
             if supported_methods:
                 canonical_method = hf_meta.quantization_method.strip().lower()
                 canonical_supported = {m.strip().lower() for m in supported_methods}
                 if canonical_method not in canonical_supported:
-                    result["unsupported_reason"] = REASON_UNSUPPORTED_QUANTIZATION
-                    if persist:
-                        await self._persist_precheck(
-                            model_name,
-                            model_profiles.mark_calibration_unsupported,
-                            model_name,
-                            True,
-                            REASON_UNSUPPORTED_QUANTIZATION,
-                        )
-                    return result
+                    logger.warning(
+                        "[Precheck] %s declares quantization method %r, not found "
+                        "in the installed vLLM's registry — proceeding anyway; "
+                        "a genuine incompatibility will surface at the real load "
+                        "attempt instead.",
+                        model_name,
+                        hf_meta.quantization_method,
+                    )
 
         if hf_meta is None or not hf_meta.weight_bytes:
             return result

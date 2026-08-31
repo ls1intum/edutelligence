@@ -42,7 +42,6 @@ REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS = "insufficient-vram-for-weights"
 REASON_INSUFFICIENT_VRAM_FOR_MIN_KV = "insufficient-vram-for-min-kv-cache"
 REASON_MODEL_NOT_FOUND = "model-not-found"
 REASON_MODEL_GATED = "model-gated"
-REASON_UNSUPPORTED_QUANTIZATION = "unsupported-quantization-method"
 
 _DTYPE_BYTES = {
     "float32": 4,
