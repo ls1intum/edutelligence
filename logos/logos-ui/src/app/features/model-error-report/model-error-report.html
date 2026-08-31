@@ -33,7 +33,7 @@
         </h1>
 
         <p class="model-desc">
-          Model Error Report
+          Model Details
         </p>
 
       </div>
@@ -402,6 +402,339 @@
               <p>
                 No calibration logs have been recorded for this model yet.
               </p>
+
+            </div>
+
+          }
+
+        }
+
+        <!-- Performance -->
+        @case ('performance') {
+
+          <div class="performance-header">
+            <div>
+              <h2>Provider Performance</h2>
+              <p>Statistics for this model grouped by provider configuration.</p>
+            </div>
+            <span class="performance-live">
+              <i class="pi pi-circle-fill" aria-hidden="true"></i>
+              Updates automatically
+            </span>
+          </div>
+
+          <details class="performance-glossary">
+            <summary>
+              <span>
+                <i class="pi pi-info-circle" aria-hidden="true"></i>
+                Glossary &amp; abbreviations
+              </span>
+              <small>Metrics and vLLM parameters</small>
+            </summary>
+
+            <dl class="glossary-grid">
+              <div><dt>TTFT</dt><dd>Time To First Token</dd></div>
+              <div><dt>TPOT</dt><dd>Time Per Output Token</dd></div>
+              <div><dt>Latency</dt><dd>Full request duration</dd></div>
+              <div><dt>Throughput</dt><dd>Output tokens per second</dd></div>
+              <div><dt>p50 / p95 / p100</dt><dd>Median / 95% / slowest</dd></div>
+              <div><dt>Prefix hit</dt><dd>Reused prompt-prefix rate</dd></div>
+              <div><dt>MTP accept</dt><dd>Multi-Token Prediction acceptance</dd></div>
+              <div><dt>AWQ</dt><dd>Activation-aware Weight Quantization</dd></div>
+              <div><dt>KV cache</dt><dd>Cached attention keys and values</dd></div>
+              <div><dt>GSM8K</dt><dd>Grade School Math 8K dataset</dd></div>
+              <div><dt>CUDA</dt><dd>Compute Unified Device Architecture</dd></div>
+              <div><dt>vLLM</dt><dd>Model-serving engine</dd></div>
+              <div><dt><code>tensor_parallel_size</code></dt><dd>GPUs sharing tensor work</dd></div>
+              <div><dt><code>pipeline_parallel_size</code></dt><dd>Model-layer pipeline stages</dd></div>
+              <div><dt><code>kv_cache_dtype</code></dt><dd>KV-cache precision</dd></div>
+              <div><dt><code>kv_cache_memory</code></dt><dd>Memory reserved for KV cache</dd></div>
+              <div><dt><code>max_num_seqs</code></dt><dd>Concurrent sequences</dd></div>
+              <div><dt><code>max_num_batched_tokens</code></dt><dd>Tokens per batch</dd></div>
+              <div><dt><code>enable_prefix_caching</code></dt><dd>Reuse common prompt starts</dd></div>
+              <div><dt><code>max_model_len</code></dt><dd>Maximum context length</dd></div>
+              <div><dt><code>gpu_memory_utilization</code></dt><dd>vLLM GPU-memory fraction</dd></div>
+              <div><dt><code>quantization</code></dt><dd>Weight-compression format</dd></div>
+              <div><dt><code>dtype</code></dt><dd>Calculation precision</dd></div>
+              <div><dt><code>enforce_eager</code></dt><dd>Disable CUDA graph execution</dd></div>
+              <div><dt><code>disable_custom_all_reduce</code></dt><dd>Use standard GPU reduction</dd></div>
+              <div><dt><code>hf_overrides</code></dt><dd>Hugging Face config overrides</dd></div>
+            </dl>
+          </details>
+
+          @if (benchmarkPairs().length > 0) {
+            <section class="benchmark-runner">
+              <header class="benchmark-runner__header">
+                <div>
+                  <h3>Run benchmark</h3>
+                  <p>GSM8K main/test · 512 max output tokens · includes one unmeasured warm-up request</p>
+                </div>
+                <span>One active run per provider</span>
+              </header>
+
+              <div class="benchmark-sample-control">
+                <div class="benchmark-sample-control__heading">
+                  <label class="benchmark-sample-control__label" for="benchmark-sample-size">Sample size</label>
+                  <output class="benchmark-sample-control__value" for="benchmark-sample-size">
+                    {{ benchmarkSampleSize() }}
+                  </output>
+                </div>
+                <input
+                  #sampleSize
+                  id="benchmark-sample-size"
+                  type="range"
+                  min="1"
+                  max="100"
+                  step="1"
+                  [value]="benchmarkSampleSize()"
+                  [style.--sample-progress]="benchmarkSampleProgress()"
+                  (input)="setBenchmarkSampleSize(sampleSize.value)"
+                />
+                <div class="benchmark-sample-control__ticks" aria-hidden="true">
+                  @for (tick of benchmarkSampleTicks; track tick) {
+                    <span
+                      class="benchmark-sample-control__tick"
+                      [style.left.%]="((tick - 1) / 99) * 100"
+                    >
+                      <i></i>
+                      <small>{{ tick }}</small>
+                    </span>
+                  }
+                </div>
+              </div>
+
+              <div class="benchmark-runner__pairs">
+                @for (pair of benchmarkPairs(); track pair.model_provider_id) {
+                  <div class="benchmark-pair">
+                    <div class="benchmark-pair__identity">
+                      <strong>{{ pair.provider_name }}</strong>
+                      <span>{{ pair.model_name }}</span>
+                      <div class="benchmark-order-summary" aria-label="Benchmark configuration">
+                        <small>GSM8K</small>
+                        <small>{{ benchmarkSampleLabel() }}</small>
+                        <small>512 max tokens</small>
+                      </div>
+                    </div>
+
+                    <div class="benchmark-pair__state">
+                      @if (latestBenchmarkRun(pair.model_provider_id); as run) {
+                        <span class="run-status" [ngClass]="'run-status--' + run.status">
+                          @if (isBenchmarkActive(run)) {
+                            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                          }
+                          {{ benchmarkStatusLabel(run) }}
+                        </span>
+                        @if (run.status === 'failed' && run.error_message) {
+                          <small>{{ run.error_message }}</small>
+                        }
+                        @if (isBenchmarkActive(run)) {
+                          <button
+                            class="benchmark-delete-button"
+                            type="button"
+                            (click)="cancelBenchmark(run)"
+                            [disabled]="benchmarkCancellingJobId() === run.id"
+                          >
+                            {{ benchmarkCancellingJobId() === run.id ? 'Cancelling…' : 'Cancel' }}
+                          </button>
+                        }
+                      } @else if (!pair.endpoint_configured) {
+                        <span class="run-status run-status--failed">Endpoint missing</span>
+                        <small>Add it under Providers before running a benchmark.</small>
+                      } @else {
+                        <span class="run-status">Ready</span>
+                      }
+                    </div>
+
+                    <button
+                      class="benchmark-run-button"
+                      type="button"
+                      (click)="startBenchmark(pair)"
+                      [disabled]="benchmarkStartingPairId() === pair.model_provider_id || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
+                      [attr.title]="!pair.endpoint_configured
+                        ? 'Configure the provider endpoint first'
+                        : 'Run benchmark on ' + pair.provider_name + ' · ' + pair.model_name + ' · ' + benchmarkSampleLabel()"
+                    >
+                      @if (benchmarkStartingPairId() === pair.model_provider_id) {
+                        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                        Starting…
+                      } @else if (providerHasActiveBenchmark(pair.provider_id)) {
+                        Running…
+                      } @else {
+                        <i class="pi pi-play" aria-hidden="true"></i>
+                        Run benchmark
+                      }
+                    </button>
+                  </div>
+                }
+              </div>
+
+              @if (benchmarkStartError(); as error) {
+                <p class="benchmark-runner__error">{{ error }}</p>
+              }
+            </section>
+          }
+
+          @if (performanceLoading()) {
+
+            <div class="performance-message">Loading performance…</div>
+
+          } @else if (performanceError()) {
+
+            <app-error-message
+              variant="banner"
+              message="Failed to load model performance."
+            />
+
+          } @else if (performance().length === 0) {
+
+            <div class="empty-state">
+              <h2>No benchmark results available</h2>
+              <p>No provider configuration has performance data for this model yet.</p>
+            </div>
+
+          } @else {
+
+            @if (benchmarkDeleteError(); as error) {
+              <app-error-message variant="banner" [message]="error" />
+            }
+
+            <div class="performance-list">
+
+              @for (group of benchmarkGroups(); track group.modelProviderId) {
+
+                @if (group.selected; as benchmark) {
+
+                <article class="performance-card">
+
+                  <header class="performance-card__header">
+                    <div>
+                      <h3>{{ benchmark.provider_name }}</h3>
+                      <p>{{ benchmark.model_name }} · {{ formatSampleCount(benchmark.sample_size) }}</p>
+                    </div>
+
+                    <div class="performance-card__actions">
+                      <label class="benchmark-run-selector">
+                        <span>Show run from:</span>
+                        <select
+                          #runSelector
+                          [value]="benchmark.id"
+                          (change)="selectBenchmark(group.modelProviderId, runSelector.value)"
+                        >
+                          @for (run of group.benchmarks; track run.id) {
+                            <option [value]="run.id">{{ formatBenchmarkTimestamp(run.recorded_at) }}</option>
+                          }
+                        </select>
+                      </label>
+
+                      <button
+                        class="benchmark-delete-button"
+                        type="button"
+                        (click)="deleteBenchmark(benchmark)"
+                        [disabled]="benchmarkDeletingId() === benchmark.id"
+                        [attr.aria-label]="'Delete benchmark run from ' + formatBenchmarkTimestamp(benchmark.recorded_at)"
+                        title="Delete selected run"
+                      >
+                        <i
+                          class="pi"
+                          [class.pi-spin]="benchmarkDeletingId() === benchmark.id"
+                          [class.pi-spinner]="benchmarkDeletingId() === benchmark.id"
+                          [class.pi-trash]="benchmarkDeletingId() !== benchmark.id"
+                          aria-hidden="true"
+                        ></i>
+                      </button>
+                    </div>
+                  </header>
+
+                  <div class="metric-grid">
+
+                    <section class="metric">
+                      <strong>TTFT</strong>
+                      <span>p50 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p50') }}</b></span>
+                      <span>p95 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p95') }}</b></span>
+                      <span>p100 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_to_first_token_ms, 'p100') }}</b></span>
+                    </section>
+
+                    <section class="metric">
+                      <strong>TPOT</strong>
+                      <span>p50 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p50') }}</b></span>
+                      <span>p95 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p95') }}</b></span>
+                      <span>p100 <b>{{ formatBenchmarkDuration(benchmark.metrics.time_per_output_token_ms, 'p100') }}</b></span>
+                    </section>
+
+                    <section class="metric">
+                      <strong>Request latency</strong>
+                      <span>p50 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p50', 'seconds') }}</b></span>
+                      <span>p95 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p95', 'seconds') }}</b></span>
+                      <span>p100 <b>{{ formatBenchmarkDuration(benchmark.metrics.request_latency, 'p100', 'seconds') }}</b></span>
+                    </section>
+
+                    <section class="metric">
+                      <strong>Output throughput</strong>
+                      <span>Mean <b>{{ formatBenchmarkRate(benchmark.metrics.output_tokens_per_second, 'mean') }}</b></span>
+                      <span>p50 <b>{{ formatBenchmarkRate(benchmark.metrics.output_tokens_per_second, 'p50') }}</b></span>
+                      <span>p95 <b>{{ formatBenchmarkRate(benchmark.metrics.output_tokens_per_second, 'p95') }}</b></span>
+                    </section>
+
+                  </div>
+
+                  <details class="benchmark-configuration">
+                    <summary>
+                      <span>Configuration</span>
+                      <small>Benchmark and serving setup</small>
+                    </summary>
+
+                    <div class="benchmark-configuration__content">
+                      <div class="configuration-headings">
+                        <h4>GuideLLM benchmark</h4>
+                        <div>
+                          <h4>vLLM serving</h4>
+                          <small>Snapshot at benchmark time</small>
+                        </div>
+                      </div>
+
+                      <dl class="configuration-grid">
+                        @for (row of configurationRows(benchmark); track $index) {
+                          <div class="configuration-comparison-row">
+                            <div class="configuration-row">
+                              @if (row.benchmark; as item) {
+                                <dt><code>{{ item.key }}</code></dt>
+                                <dd [class.configuration-value--missing]="!item.captured">
+                                  {{ item.value }}
+                                </dd>
+                              }
+                            </div>
+
+                            <div class="configuration-row">
+                              @if (row.serving; as item) {
+                                <dt><code>{{ item.key }}</code></dt>
+                                <dd [class.configuration-value--missing]="!item.captured">
+                                  {{ item.value }}
+                                </dd>
+                              }
+                            </div>
+                          </div>
+                        }
+                      </dl>
+
+                      @if (servingCommand(benchmark); as command) {
+                        <div class="serving-command">
+                          <strong>vLLM command</strong>
+                          <pre><code>{{ command }}</code></pre>
+                        </div>
+                      }
+                    </div>
+                  </details>
+
+                  <footer class="performance-card__footer">
+                    {{ benchmark.dataset }} · {{ benchmarkProfile(benchmark) }} ·
+                    {{ formatBenchmarkTimestamp(benchmark.recorded_at) }}
+                  </footer>
+
+                </article>
+
+                }
+
+              }
 
             </div>
 

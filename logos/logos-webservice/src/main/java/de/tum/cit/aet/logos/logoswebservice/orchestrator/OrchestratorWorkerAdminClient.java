@@ -56,6 +56,21 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/logosnode/lanes/add", Map.of("provider_id", providerId, "lane", lane));
     }
 
+    public ResponseEntity<Map> startModelBenchmark(int modelProviderId, int sampleSize, int maxOutputTokens) {
+        return post(
+            "/internal/model_benchmarks/run",
+            Map.of(
+                "model_provider_id", modelProviderId,
+                "samples", sampleSize,
+                "max_output_tokens", maxOutputTokens
+            )
+        );
+    }
+
+    public ResponseEntity<Map> cancelModelBenchmark(int jobId) {
+        return post("/internal/model_benchmarks/jobs/" + jobId + "/cancel", Map.of());
+    }
+
     private ResponseEntity<Map> post(String path, Map<String, Object> body) {
         if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
             throw new IllegalStateException("Orchestrator URL or internal secret not configured");

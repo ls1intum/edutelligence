@@ -57,6 +57,14 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void providerPerformanceIndexExists() {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "idx_log_entry_performance_window");
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
     void migration003_backfillsKeyForKeylessMembership() {
         // A current membership with no developer key for that team (the legacy
         // logos_admin case) must receive exactly one active developer key whose
