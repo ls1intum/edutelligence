@@ -613,6 +613,47 @@ def test_partial_result_sender_clears_draft_on_reset_and_uses_run_state():
     assert all("activities" not in post["json"] for post in posts)
 
 
+def test_partials_are_posted_through_the_transform():
+    """Citation handles must be expanded before a draft reaches the client."""
+    posts = []
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    # Stands in for CitationRegistry.render: hides the handle until the
+    # enrichment behind it is "ready", then expands it in place.
+    ready = threading.Event()
+
+    def transform(text, final=False):  # pylint: disable=unused-argument
+        return text.replace("[cite:1]", "[cite:L:42:7:::K:S]" if ready.is_set() else "")
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=transform,
+        )
+        sender.start()
+        sender.on_delta("Gradients flow.[cite:1]")
+        _wait_until(lambda: len(posts) == 1)
+
+        # The enrichment finishing changes the rendered text without any new
+        # delta arriving, so the sender must re-run the transform each tick and
+        # de-duplicate on its output rather than on the raw buffer.
+        ready.set()
+        _wait_until(lambda: len(posts) == 2)
+
+        sender.stop()
+
+    assert [post["partialResult"] for post in posts] == [
+        "Gradients flow.",
+        "Gradients flow.[cite:L:42:7:::K:S]",
+    ]
+    assert [post["partialSeq"] for post in posts] == [1, 2]
+
+
 def test_partial_post_timeout_is_bounded_by_stop_drain_budget():
     # The stop drain budget must strictly exceed the per-POST timeout, otherwise
     # stop() could return while a partial POST is still in flight and let a
@@ -771,9 +812,9 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
     title_pipeline.tokens = None
     pipeline.session_title_pipeline = title_pipeline
 
-    citation_pipeline = MagicMock()
-    citation_pipeline.tokens = []
-    pipeline.citation_pipeline = citation_pipeline
+    # No enricher: the citation registry still hands out and expands handles,
+    # it just leaves keyword/summary empty instead of calling a model.
+    pipeline.citation_enricher = None
 
     suggestion_pipeline = MagicMock(return_value=["suggestion 1"])
     suggestion_pipeline.tokens = None
@@ -827,10 +868,11 @@ def _run_stubbed_pipeline_details(
     class FakeSender:
         """Stands in for PartialResultSender to record wiring calls."""
 
-        def __init__(self, url, run_id, interval_seconds=0.35):
+        def __init__(self, url, run_id, interval_seconds=0.35, transform=None):
             self.url = url
             self.run_id = run_id
             self.interval_seconds = interval_seconds
+            self.transform = transform
             self.deltas = []
             sender_instances.append(self)
 
@@ -888,6 +930,9 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.run_id == "run-1"
     assert created_args[0].stream_handler == sender.on_delta
+    # Partials go through the citation registry so handles the model writes are
+    # expanded into markers before the draft reaches the client.
+    assert sender.transform is not None
     assert events.index("sender.start") < events.index("sender.stop")
     assert events.index("sender.stop") < events.index("callback.finish")
 

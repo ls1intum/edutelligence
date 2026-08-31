@@ -14,7 +14,7 @@ The RAG lifecycle has two separate phases:
 
 ```text
 Ingestion: Artemis webhook -> Iris ingestion pipeline -> Iris Weaviate collections
-Retrieval: user query -> rewrite/HyDE -> vector retrieval -> reranking -> agent tool result -> optional citations
+Retrieval: user query -> rewrite/HyDE -> vector retrieval -> reranking -> agent tool result (with citation handles) -> inline citations while the answer streams
 ```
 
 Ingestion callbacks report processing state to Artemis. Retrieval classes are internal `SubPipeline` implementations: the owning chat or global-search-answer pipeline decides when to invoke them and owns the final callback.
@@ -88,7 +88,7 @@ Retrieval requests carry course, lecture, lecture-unit, and Artemis-instance sco
 
 `FaqRetrieval` searches the `Faqs` collection for a course-scoped FAQ context. Chat modes and tools decide whether FAQ retrieval is available for a particular request.
 
-After a response uses lecture or FAQ material, the nested citation pipeline can generate source attribution for the parent response. Citation generation is post-processing inside the parent pipeline, not an independently callable Artemis endpoint.
+Retrieved lecture and FAQ material is registered with the request's `CitationRegistry`, which hands the answer model a short handle (`[cite:3]`) next to each piece of content. The model writes those handles inline while it generates, and the registry expands them into the full citation markers the client renders — during streaming as well as in the final answer. Keyword and summary enrichment for a handle starts as soon as the handle appears in the stream, so it runs alongside answer generation rather than after it. Citations are part of the parent pipeline, not an independently callable Artemis endpoint.
 
 ## Vector database lifecycle
 

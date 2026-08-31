@@ -20,6 +20,7 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.activity_callback_handler import ActivityCallbackHandler
 from iris.pipeline.shared.activity_tracker import ActivityTracker
+from iris.pipeline.shared.citation_registry import CitationRegistry
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.tracing import (
     TracingContext,
@@ -63,6 +64,10 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     lecture_content_storage: dict
     faq_storage: dict
     accessed_memory_storage: list
+    # Maps the inline ``[cite:N]`` handles the answer model writes back to the
+    # retrieved sources. Present on every run; pipelines that never register a
+    # source simply render nothing.
+    citation_registry: CitationRegistry
     allow_lecture_tool: bool
     allow_faq_tool: bool
     allow_memiris_tool: bool
@@ -475,6 +480,20 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 )
         return final_output
 
+    def create_citation_registry(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+    ) -> CitationRegistry:
+        """
+        CAN override: Build the citation registry for this run.
+
+        The default registry has no enricher, so it registers nothing and drops
+        every citation handle it renders. Pipelines that cite override this to
+        supply an enricher and the user's language.
+        """
+        del state
+        return CitationRegistry()
+
     def _create_partial_result_sender(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
@@ -485,6 +504,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         return PartialResultSender(
             state.callback.url,
             state.callback.run_id,
+            transform=state.citation_registry.render,
         )
 
     def _start_partial_result_sender(
@@ -657,6 +677,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.lecture_content_storage = {}
         state.faq_storage = {}
         state.accessed_memory_storage = []
+        state.citation_registry = self.create_citation_registry(state)
         state.allow_lecture_tool = False
         state.allow_faq_tool = False
         state.allow_memiris_tool = False
@@ -776,5 +797,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 len(state.tools),
             )
         finally:
+            # Release the citation enrichment workers. Done here rather than in
+            # post_agent_hook so the pools also go away when the agent loop
+            # raised before the hook ran.
+            state.citation_registry.close()
             # Clean up tracing context to prevent memory leaks
             clear_current_context()

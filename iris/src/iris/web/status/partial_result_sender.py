@@ -1,7 +1,7 @@
 """Ephemeral partial-result status callback sender."""
 
 from threading import Event, Lock, Thread
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 
@@ -36,11 +36,22 @@ class PartialResultSender(Thread):
         url: str,
         run_id: str,
         interval_seconds: float = 0.35,
+        transform: Optional[Callable[[str], str]] = None,
     ):
+        """
+        Args:
+            transform: Applied to the accumulated draft before it is posted.
+                Used to expand inline citation handles into the markers the
+                client renders, and to hide a marker the model is still typing.
+                Its output may change even when no new deltas arrived (a
+                citation's enrichment finishing is exactly that case), so the
+                de-duplication below compares transformed text.
+        """
         super().__init__(daemon=True)
         self.url = url
         self.run_id = run_id
         self.interval_seconds = interval_seconds
+        self._transform = transform
         self._lock = Lock()
         self._stop_event = Event()
         self._accumulated = ""
@@ -95,18 +106,27 @@ class PartialResultSender(Thread):
         with self._lock:
             if self._stopped_permanently:
                 return None
-
-            text = self._accumulated
+            raw = self._accumulated
             epoch = self._epoch
+
+        # Transform outside the lock: it may block briefly, and it never calls
+        # back into this sender.
+        text = self._transform(raw) if self._transform is not None else raw
+
+        with self._lock:
+            if self._stopped_permanently:
+                return None
 
             # Already delivered exactly this text at this epoch -> nothing new.
             if text == self._last_posted_text and epoch == self._last_posted_epoch:
                 return None
 
-            # An empty buffer is only worth sending as a *clearing* partial when
-            # a non-empty draft is currently visible on the client (e.g. a
+            # Empty text is only worth sending as a *clearing* partial when a
+            # non-empty draft is currently visible on the client (e.g. a
             # tool-call preamble or a retried stream was posted, then reset via
-            # on_delta(None)). Emitting an empty partialResult with a higher
+            # on_delta(None); or the model has so far only written the opening
+            # of a citation marker, which the transform hides). Emitting an
+            # empty partialResult with a higher
             # partialSeq tells Artemis to wipe that stale draft. We suppress the
             # initial empty state and duplicate consecutive empty resets so we
             # do not spam Artemis with redundant clears.

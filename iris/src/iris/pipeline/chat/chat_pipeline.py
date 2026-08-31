@@ -38,7 +38,11 @@ from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
-from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.citation_registry import (
+    CITE_TYPE_LECTURE,
+    CitationEnricher,
+    CitationRegistry,
+)
 from ..shared.mcq_generation_pipeline import McqGenerationPipeline
 from ..shared.utils import datetime_to_string, format_custom_instructions
 from .code_feedback_pipeline import CodeFeedbackPipeline
@@ -109,44 +113,6 @@ def _support_level(dto: ChatPipelineExecutionDTO) -> str:
     return dto.settings.support_level if dto.settings else "moderate"
 
 
-def _dedup_by_uuid(items: list) -> list:
-    """Return items de-duplicated by their ``uuid``, preserving order."""
-    seen: set = set()
-    result = []
-    for item in items:
-        if item.uuid not in seen:
-            result.append(item)
-            seen.add(item.uuid)
-    return result
-
-
-def _merge_lecture_content(
-    current_view: Optional[LectureRetrievalDTO],
-    retrieved: Optional[LectureRetrievalDTO],
-) -> Optional[LectureRetrievalDTO]:
-    """Merge the current-view content with the lecture tool's retrieved content.
-
-    Either source may be ``None`` (no current view, or the agent never called the
-    lecture retrieval tool). Items present in both (e.g. the current slide page
-    also returned by RAG) are de-duplicated by uuid so they are not cited twice.
-    """
-    if current_view is None:
-        return retrieved
-    if retrieved is None:
-        return current_view
-    return LectureRetrievalDTO(
-        lecture_unit_segments=_dedup_by_uuid(
-            current_view.lecture_unit_segments + retrieved.lecture_unit_segments
-        ),
-        lecture_transcriptions=_dedup_by_uuid(
-            current_view.lecture_transcriptions + retrieved.lecture_transcriptions
-        ),
-        lecture_unit_page_chunks=_dedup_by_uuid(
-            current_view.lecture_unit_page_chunks + retrieved.lecture_unit_page_chunks
-        ),
-    )
-
-
 def _tool_activity_snapshot(
     state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
 ) -> tuple[list[ActivityDTO], int]:
@@ -166,7 +132,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         ("advanced", "Advanced", "Uses a larger model, balancing speed and quality."),
     ]
     DEPENDENCIES = [
-        Dep("citation_pipeline", variant="same"),
+        # Citations only need the small keyword/summary model now that the
+        # answer model places them itself, and that model is not variant-bound.
+        Dep("citation_pipeline"),
         Dep("session_title_generation_pipeline"),
         Dep("interaction_suggestion_pipeline", variant="course"),
         Dep("interaction_suggestion_pipeline", variant="exercise"),
@@ -181,7 +149,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     chat_mode: IrisChatMode
     event: Optional[str]
     session_title_pipeline: SessionTitleGenerationPipeline
-    citation_pipeline: CitationPipeline
+    citation_enricher: CitationEnricher
     suggestion_pipeline: Optional[InteractionSuggestionPipeline]
     code_feedback_pipeline: Optional[CodeFeedbackPipeline]
     mcq_pipeline: McqGenerationPipeline
@@ -202,7 +170,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         # Initialize pipelines & retrievers
         self.session_title_pipeline = SessionTitleGenerationPipeline(local=local)
-        self.citation_pipeline = CitationPipeline(local=local)
+        self.citation_enricher = CitationEnricher(local=local)
         suggestion_variant = _SUGGESTION_VARIANT.get(self.chat_mode, "course")
         self.suggestion_pipeline = InteractionSuggestionPipeline(
             variant=suggestion_variant, local=local
@@ -315,6 +283,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         del state
         return self.chat_mode is not IrisChatMode.EXERCISE
 
+    def create_citation_registry(
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+    ) -> CitationRegistry:
+        user = getattr(state.dto, "user", None)
+        return CitationRegistry(
+            self.citation_enricher,
+            user_language=getattr(user, "lang_key", None) or "en",
+        )
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -336,9 +313,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
 
-            # Add citations if applicable
+            # Expand the citation handles the model wrote while generating into
+            # the markers the client turns into bubbles. The enrichment behind
+            # them has been running since each handle first appeared in the
+            # stream, so this is normally a pure substitution.
             with timed_span("ChatPipeline", "citations", state.start_time):
-                result = self._add_citations(state, result)
+                result = state.citation_registry.render(result, final=True)
+                for token in state.citation_registry.tokens:
+                    self._track_tokens(state, token)
             state.result = result
             # Snapshot for title generation: the same post-citation, pre-MCQ
             # text the title was generated from before the deferral (the MCQ
@@ -681,16 +663,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             for item in (*page_chunks, *transcriptions)
         }
 
-        # Store the content under a dedicated key so answers about the current
-        # position get citations even without a tool call. It is kept separate
-        # from the lecture retrieval tool's "content" so the tool stays
-        # completely independent of the viewing context; both are merged only
-        # when citations are built (see _add_citations).
+        # Store the content so other consumers can still see what the student is
+        # looking at. Citations no longer read it: the chunks are registered
+        # below and cited inline by their handle.
         state.lecture_content_storage["current_view"] = LectureRetrievalDTO(
             lecture_unit_segments=[],
             lecture_transcriptions=list(transcriptions),
             lecture_unit_page_chunks=list(page_chunks),
         )
+
+        registry = state.citation_registry
 
         # Group the page chunks by slide page so all chunks of one page are
         # bundled into a single block under that page's position description.
@@ -704,100 +686,57 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # One block per viewed position: position description first, then the
         # corresponding lecture material directly below it.
         for p in context_pages:
-            chunks = chunks_by_page.get((p["lecture_unit_id"], p["page"]))
+            unit_id = p["lecture_unit_id"]
+            page = p["page"]
+            chunks = chunks_by_page.get((unit_id, page))
             if not chunks:
                 continue
             text = "\n".join(chunk.page_text_content for chunk in chunks)
+            # The chunks of one page share a block, so they share one handle:
+            # registering the merged text keeps the keyword and summary aligned
+            # with what the model actually read.
+            handle = registry.register(
+                CITE_TYPE_LECTURE,
+                unit_id,
+                text,
+                page=page,
+                dedup_key=f"view-page:{unit_id}:{page}",
+            )
             blocks.append(
-                f'The student is currently viewing page {p["page"]} of the lecture '
-                f'slides of the lecture unit {names[p["lecture_unit_id"]]} '
-                f'(lecture unit ID: {p["lecture_unit_id"]}). '
+                f"The student is currently viewing page {page} of the lecture "
+                f"slides of the lecture unit {names[unit_id]} "
+                f"(lecture unit ID: {unit_id}, Citation id: {handle}). "
                 f"The content of this slide:\n---\n{text}\n---"
             )
         for t in context_timestamps:
+            unit_id = t["lecture_unit_id"]
+            timestamp = t["timestamp"]
             segments = [
                 tr
                 for tr in transcriptions
-                if tr.lecture_unit_id == t["lecture_unit_id"]
-                and tr.segment_start_time <= t["timestamp"] < tr.segment_end_time
+                if tr.lecture_unit_id == unit_id
+                and tr.segment_start_time <= timestamp < tr.segment_end_time
             ]
             if not segments:
                 continue
             text = "\n".join(tr.segment_text for tr in segments)
+            handle = registry.register(
+                CITE_TYPE_LECTURE,
+                unit_id,
+                text,
+                page=segments[0].page_number,
+                start=int(min(tr.segment_start_time for tr in segments)),
+                end=int(max(tr.segment_end_time for tr in segments)),
+                dedup_key=f"view-video:{unit_id}:{timestamp}",
+            )
             blocks.append(
-                f'The student is currently at {t["timestamp"]} seconds in the '
-                f'lecture video of the lecture unit {names[t["lecture_unit_id"]]} '
-                f'(lecture unit ID: {t["lecture_unit_id"]}). '
+                f"The student is currently at {timestamp} seconds in the "
+                f"lecture video of the lecture unit {names[unit_id]} "
+                f"(lecture unit ID: {unit_id}, Citation id: {handle}). "
                 f"The transcript at this point:\n---\n{text}\n---"
             )
 
         return blocks
-
-    def _add_citations(
-        self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-        result: str,
-    ) -> str:
-        """
-        Add citations to the response if applicable.
-
-        Args:
-            state: The current pipeline execution state.
-            result: The current result string.
-
-        Returns:
-            The result with citations added.
-        """
-
-        try:
-            # Add FAQ citations
-            if state.faq_storage.get("faqs"):
-                base_url = (
-                    state.dto.settings.artemis_base_url if state.dto.settings else ""
-                )
-                result = self.citation_pipeline(
-                    state.faq_storage["faqs"],
-                    result,
-                    InformationType.FAQS,
-                    variant=state.variant.id,
-                    user_language=state.dto.user.lang_key,
-                    base_url=base_url,
-                )
-
-            # Add lecture content citations. Merge the content the student is
-            # currently viewing (stored before the agent ran) with whatever the
-            # lecture retrieval tool retrieved, de-duplicating by uuid so the
-            # same paragraph is not cited twice. Either source may be absent.
-            lecture_content = _merge_lecture_content(
-                state.lecture_content_storage.get("current_view"),
-                state.lecture_content_storage.get("content"),
-            )
-            if lecture_content:
-                base_url = (
-                    state.dto.settings.artemis_base_url if state.dto.settings else ""
-                )
-                result = self.citation_pipeline(
-                    lecture_content,
-                    result,
-                    InformationType.PARAGRAPHS,
-                    variant=state.variant.id,
-                    user_language=state.dto.user.lang_key,
-                    base_url=base_url,
-                )
-
-            # Track tokens from citation pipeline
-            if (
-                hasattr(self.citation_pipeline, "tokens")
-                and self.citation_pipeline.tokens
-            ):
-                for token in self.citation_pipeline.tokens:
-                    self._track_tokens(state, token)
-
-            return result
-
-        except Exception as e:
-            logger.error("Error adding citations", exc_info=e)
-            return result
 
     def _generate_session_title(
         self,

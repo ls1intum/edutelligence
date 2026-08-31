@@ -117,7 +117,7 @@ pipeline/
 ├── autonomous_tutor_pipeline.py           # Autonomous tutor agent
 ├── session_title_generation_pipeline.py   # Generate chat session titles
 ├── shared/                                # Shared pipeline utilities
-│   ├── citation_pipeline.py               # Citation generation sub-pipeline
+│   ├── citation_registry.py               # Inline citation handles + keyword/summary enrichment
 │   └── utils.py                           # Tool generation, date formatting
 └── prompts/                               # Prompt templates
     ├── templates/                         # Jinja2 templates (.j2 files)

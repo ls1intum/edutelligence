@@ -3,8 +3,8 @@
 ``LectureRetrieval.fetch_context_content`` looks up the exact slide page chunks
 and transcription segments referenced by the student's current position so they
 can be pasted directly into the prompt, independently of the RAG lecture tool.
-This content is also stored for the citation pipeline so it can be cited without
-the agent calling the lecture retrieval tool.
+Each position is also registered with the citation registry, so the answer model
+can cite what the student is looking at without calling the retrieval tool.
 """
 
 # pylint: skip-file
@@ -15,11 +15,11 @@ from uuid import uuid4
 
 from iris.domain.data.lecture_context_dto import SlidesContextDTO, VideoContextDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
-    LectureRetrievalDTO,
     LectureTranscriptionRetrievalDTO,
     LectureUnitPageChunkRetrievalDTO,
 )
-from iris.pipeline.chat.chat_pipeline import ChatPipeline, _merge_lecture_content
+from iris.pipeline.chat.chat_pipeline import ChatPipeline
+from iris.pipeline.shared.citation_registry import CitationRegistry
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 
 
@@ -134,6 +134,7 @@ def test_current_view_content_is_stored_for_citations():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -146,11 +147,12 @@ def test_current_view_content_is_stored_for_citations():
     # corresponding material directly below it.
     assert blocks == [
         "The student is currently viewing page 3 of the lecture slides of the "
-        "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
+        "lecture unit Test Unit (lecture unit ID: 1, Citation id: [cite:1]). "
+        "The content of this slide:"
         "\n---\nPage 3 content\n---",
         "The student is currently at 50.0 seconds in the lecture video of the "
-        "lecture unit Test Unit (lecture unit ID: 1). The transcript at this "
-        "point:\n---\nTranscript 45-55\n---",
+        "lecture unit Test Unit (lecture unit ID: 1, Citation id: [cite:2]). "
+        "The transcript at this point:\n---\nTranscript 45-55\n---",
     ]
     stored = state.lecture_content_storage["current_view"]
     assert stored.lecture_unit_page_chunks == [page_chunk]
@@ -172,6 +174,7 @@ def test_multiple_chunks_on_same_page_share_one_block():
         lecture_contexts=[SlidesContextDTO(type="slides", lectureUnitId=1, page=2)],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -183,7 +186,8 @@ def test_multiple_chunks_on_same_page_share_one_block():
     # Both chunks of page 2 are bundled into a single block under one position.
     assert blocks == [
         "The student is currently viewing page 2 of the lecture slides of the "
-        "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
+        "lecture unit Test Unit (lecture unit ID: 1, Citation id: [cite:1]). "
+        "The content of this slide:"
         "\n---\nFirst half\nSecond half\n---"
     ]
 
@@ -201,6 +205,7 @@ def test_position_omitted_when_material_not_ingested():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -233,6 +238,7 @@ def test_only_ingested_positions_are_described():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -243,41 +249,44 @@ def test_only_ingested_positions_are_described():
 
     assert blocks == [
         "The student is currently viewing page 3 of the lecture slides of the "
-        "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
+        "lecture unit Test Unit (lecture unit ID: 1, Citation id: [cite:1]). "
+        "The content of this slide:"
         "\n---\nPage 3 content\n---",
     ]
 
 
-def test_merge_combines_current_view_and_retrieved_content_deduped():
-    """Current-view and retrieved content are merged for citations, deduped."""
-    current_page = _make_page_chunk(3, "Current page 3")
-    rag_page = _make_page_chunk(7, "RAG page 7")
+def test_each_viewed_position_gets_its_own_citation_handle():
+    """Two viewed pages must be citable independently of each other."""
+    pipeline = ChatPipeline.__new__(ChatPipeline)
 
-    current_view = LectureRetrievalDTO(
-        lecture_unit_segments=[],
-        lecture_transcriptions=[],
-        lecture_unit_page_chunks=[current_page],
-    )
-    # RAG returns the current page again plus a new one.
-    retrieved = LectureRetrievalDTO(
-        lecture_unit_segments=[],
-        lecture_transcriptions=[],
-        lecture_unit_page_chunks=[current_page, rag_page],
+    retriever = MagicMock()
+    retriever.fetch_context_content.return_value = (
+        [_make_page_chunk(3, "Page 3 content"), _make_page_chunk(5, "Page 5 content")],
+        [],
     )
 
-    merged = _merge_lecture_content(current_view, retrieved)
-
-    assert merged.lecture_unit_page_chunks == [current_page, rag_page]
-
-
-def test_merge_returns_other_source_when_one_is_absent():
-    """When only one source exists (no current view, or no tool call) it is used."""
-    only = LectureRetrievalDTO(
-        lecture_unit_segments=[],
-        lecture_transcriptions=[],
-        lecture_unit_page_chunks=[_make_page_chunk(1, "Only page")],
+    registry = CitationRegistry()
+    state = SimpleNamespace(
+        lecture_contexts=[
+            SlidesContextDTO(type="slides", lectureUnitId=1, page=3),
+            SlidesContextDTO(type="slides", lectureUnitId=1, page=5),
+        ],
+        lecture_retriever=retriever,
+        lecture_content_storage={},
+        citation_registry=registry,
+        dto=SimpleNamespace(
+            settings=SimpleNamespace(artemis_base_url="http://example.com"),
+            course=SimpleNamespace(id=1),
+        ),
     )
 
-    assert _merge_lecture_content(only, None) is only
-    assert _merge_lecture_content(None, only) is only
-    assert _merge_lecture_content(None, None) is None
+    blocks = pipeline._build_current_view(state)
+
+    assert "Citation id: [cite:1]" in blocks[0]
+    assert "Citation id: [cite:2]" in blocks[1]
+    # Both handles resolve to their own page of the same lecture unit.
+    # Without an enricher the keyword and summary fields stay empty, but the
+    # page coordinates the client links to differ per handle.
+    assert registry.render("a[cite:1] b[cite:2]", final=True) == (
+        "a[cite:L:1:3::::] b[cite:L:1:5::::]"
+    )
