@@ -1385,6 +1385,7 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
     """A nonexistent HF repo can never work on any node — skip immediately,
     without even querying GPU VRAM, and mark it a real (idle-based) verdict."""
     from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import is_model_unsupported
     from logos_worker_node.hf_model_info import REASON_MODEL_NOT_FOUND, HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
@@ -1408,6 +1409,14 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
     profile = app.state.model_profiles.get_profile("org/does-not-exist")
     assert profile.calibration_unsupported is True
     assert profile.calibration_unsupported_reason == REASON_MODEL_NOT_FOUND
+
+    # Must also land in the authoritative registry — a profile-only flag
+    # gets silently cleared by the next heartbeat's reconciliation
+    # (runtime.build_runtime_status) since it isn't backed by this file.
+    log_dir = tmp_path / "calibration_logs"
+    entry = is_model_unsupported(log_dir, "org/does-not-exist")
+    assert entry is not None
+    assert entry.reason_code == REASON_MODEL_NOT_FOUND
 
 
 @pytest.mark.asyncio
@@ -1691,12 +1700,14 @@ async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, m
     — daytime congestion isn't a permanent node property. A model too big
     even for an empty node IS marked unsupported — that's a real verdict."""
     from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import is_model_unsupported
     from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS, HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
     client = LogosBridgeClient(app, cfg)
+    log_dir = tmp_path / "calibration_logs"
 
     # 10 GB of weights: fits on an empty 24 GB GPU (total_mb), but not
     # alongside 20 GB already in live use (free_mb only 4 GB).
@@ -1715,6 +1726,7 @@ async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, m
     assert response["unsupported_reason"] is None
     profile = app.state.model_profiles.get_profile("org/model")
     assert profile.calibration_unsupported is not True
+    assert is_model_unsupported(log_dir, "org/model") is None
 
     # 200 GB of weights: doesn't fit even on an empty node — real
     # verdict this time.
@@ -1731,6 +1743,12 @@ async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, m
     assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
     profile = app.state.model_profiles.get_profile("org/too-big")
     assert profile.calibration_unsupported is True
+
+    # Must also land in the authoritative registry — see the model-not-found
+    # test's comment for why a profile-only flag isn't enough.
+    entry = is_model_unsupported(log_dir, "org/too-big")
+    assert entry is not None
+    assert entry.reason_code == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
 
 
 # ── Streaming: defer stream_start until first token byte (wake-readiness fix) ──

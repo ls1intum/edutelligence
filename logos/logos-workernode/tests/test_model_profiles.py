@@ -1,5 +1,6 @@
 """Tests for ModelProfileRegistry — observation-only, no estimation."""
 
+import threading
 import time
 
 import pytest
@@ -578,6 +579,36 @@ def test_apply_hf_precheck_respects_manual_override():
     assert profile.residency_source == "override"
     # kv_per_token_bytes has no override, so the HF value still lands.
     assert profile.kv_per_token_bytes == 1024
+
+
+def test_apply_hf_precheck_does_not_overwrite_an_override_added_mid_call():
+    """Regression: the manual-overrides lookup must happen inside the
+    same lock add_overrides uses. Simulates the model's first override
+    landing in the window between an unlocked lookup and the lock —
+    whichever order the two calls serialize in, the override must win."""
+    registry = ModelProfileRegistry()
+    registry.seed_capabilities(["org/model"])
+    override_applied = threading.Event()
+
+    def _add_override_from_another_thread():
+        registry.add_overrides({"org/model": {"kv_per_token_bytes": 999}})
+        override_applied.set()
+
+    class _RacyOverrides(dict):
+        def get(self, key, default=None):
+            stale = dict.get(self, key, default)
+            if key == "org/model" and "org/model" not in self:
+                threading.Thread(target=_add_override_from_another_thread).start()
+                override_applied.wait(timeout=0.2)
+            return stale
+
+    registry._manual_overrides = _RacyOverrides(registry._manual_overrides)  # noqa: SLF001
+
+    registry.apply_hf_precheck("org/model", kv_per_token_bytes=1024)
+    override_applied.wait(timeout=1.0)
+
+    profile = registry.get_profile("org/model")
+    assert profile.kv_per_token_bytes == 999
 
 
 def test_apply_hf_precheck_persists_across_restart(tmp_path):

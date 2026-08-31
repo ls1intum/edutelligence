@@ -140,3 +140,31 @@ async def test_one_providers_unexpected_failure_does_not_lose_the_others(monkeyp
     by_provider = {r["provider_id"]: r for r in body["results"]}
     assert by_provider[1]["ok"] is False
     assert by_provider[2]["fit_tp_idle"] == 2
+
+
+@pytest.mark.asyncio
+async def test_null_result_payload_does_not_lose_the_others(monkeypatch):
+    """send_command's type hint promises a dict, but an explicit
+    "result": null in the worker's reply bypasses its own .get() default
+    (see logosnode_registry.send_command) and comes back as None — must
+    not TypeError on **result and take every other provider down with it."""
+    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    registry = MagicMock()
+    registry.active_provider_ids = lambda: [1, 2]
+    registry.peek_runtime_snapshot = lambda pid: {"worker_id": f"node-{pid}"}
+
+    async def _send_command(pid, action, params, timeout_seconds):
+        if pid == 1:
+            return None
+        return {"fit_tp_idle": pid, "fit_tp_current": pid, "unsupported_reason": None}
+
+    registry.send_command = AsyncMock(side_effect=_send_command)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+
+    response = await main_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
+    body = json.loads(response.body)
+
+    by_provider = {r["provider_id"]: r for r in body["results"]}
+    assert by_provider[1]["ok"] is False
+    assert "unexpected response type" in by_provider[1]["error"]
+    assert by_provider[2]["fit_tp_idle"] == 2

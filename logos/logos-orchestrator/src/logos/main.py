@@ -2362,6 +2362,18 @@ async def internal_compatibility_precheck(model_name: str, request: Request, pro
             result = await _logosnode_registry.send_command(
                 pid, "run_compatibility_precheck", params={"model": model_name}, timeout_seconds=30
             )
+            # A worker reply with "result": null bypasses send_command's
+            # dict type hint (a present null isn't its .get() default) and
+            # would otherwise raise **result below, outside this try —
+            # taking every other provider's result down with it.
+            if not isinstance(result, dict):
+                return {
+                    "provider_id": pid,
+                    "provider_name": pname,
+                    "ok": False,
+                    "error": f"Worker returned an unexpected response type: {type(result).__name__}",
+                }
+            return {"provider_id": pid, "provider_name": pname, **result}
         except LogosNodeOfflineError:
             return {"provider_id": pid, "provider_name": pname, "ok": False, "error": "Worker not connected"}
         except LogosNodeCommandError as exc:
@@ -2371,7 +2383,6 @@ async def internal_compatibility_precheck(model_name: str, request: Request, pro
             # results already gathered for every other one — see below.
             logger.exception("[Precheck] unexpected failure checking provider %s for %s", pid, model_name)
             return {"provider_id": pid, "provider_name": pname, "ok": False, "error": f"Unexpected error: {exc}"}
-        return {"provider_id": pid, "provider_name": pname, **result}
 
     results = await asyncio.gather(*(_check_one(pid) for pid in provider_ids))
     return JSONResponse(status_code=200, content=jsonable_encoder({"model": model_name, "results": list(results)}))

@@ -837,8 +837,11 @@ class ModelProfileRegistry:
         higher-priority writer to conflict with, so they're set unconditionally
         (subject only to the manual-override check).
         """
-        overrides = self._manual_overrides.get(model_name) or {}
         with self._lock:
+            # Read under the lock too — add_overrides also runs under it, and
+            # reading this beforehand risks a stale empty dict racing a
+            # just-added override, letting the HF value overwrite it below.
+            overrides = self._manual_overrides.get(model_name) or {}
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
             changed = False
 

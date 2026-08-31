@@ -807,6 +807,30 @@ class LogosBridgeClient:
         except Exception:  # noqa: BLE001
             logger.warning("[Precheck] failed to persist result for %s", model_name, exc_info=True)
 
+    async def _persist_permanent_unsupported(self, model_name: str, reason_code: str, description: str) -> None:
+        """Writes calibration_unsupported_models.txt first, then mirrors
+        the flag onto the profile. Skipping the file write lets the next
+        heartbeat's reconciliation (runtime.build_runtime_status) silently
+        clear the profile flag again — see calibration.py's own fatal-error path."""
+        from logos_worker_node.calibration import (  # noqa: PLC0415
+            _UNSUPPORTED_MODELS_FILE,
+            UnsupportedModelEntry,
+            _record_unsupported_model,
+        )
+        from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+
+        path = get_state_dir() / "calibration_logs" / _UNSUPPORTED_MODELS_FILE
+        entry = UnsupportedModelEntry(
+            model=model_name,
+            reason_code=reason_code,
+            recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            description=description,
+        )
+        await self._persist_precheck(model_name, _record_unsupported_model, path, entry)
+        await self._persist_precheck(
+            model_name, self._app.state.model_profiles.mark_calibration_unsupported, model_name, True, reason_code
+        )
+
     async def _run_hf_compatibility_precheck(self, model_name: str, *, persist: bool = True) -> dict[str, Any]:
         """Best-effort HF compatibility check for one model on this node.
 
@@ -883,8 +907,8 @@ class LogosBridgeClient:
         if hf_meta is not None and hf_meta.source == "error:model-not-found":
             result["unsupported_reason"] = REASON_MODEL_NOT_FOUND
             if persist:
-                await self._persist_precheck(
-                    model_name, model_profiles.mark_calibration_unsupported, model_name, True, REASON_MODEL_NOT_FOUND
+                await self._persist_permanent_unsupported(
+                    model_name, REASON_MODEL_NOT_FOUND, "HF compatibility precheck: repo not found on the Hub."
                 )
             return result
 
@@ -969,9 +993,11 @@ class LogosBridgeClient:
                 max_context_length=hf_meta.max_context_length,
             )
             if unsupported_reason is not None:
-                await self._persist_precheck(
-                    model_name, model_profiles.mark_calibration_unsupported, model_name, True, unsupported_reason
-                )
+                if unsupported_reason == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS:
+                    description = "HF compatibility precheck: weights alone exceed per-GPU VRAM at every TP size."
+                else:
+                    description = "HF compatibility precheck: no VRAM left for a min KV cache at every TP size."
+                await self._persist_permanent_unsupported(model_name, unsupported_reason, description)
 
         return result
 
