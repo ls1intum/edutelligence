@@ -109,6 +109,7 @@
       @if (expandedId() === provider.id) {
         <div class="expanded-row" role="row">
           <div class="expanded-content">
+            <section class="connections-section" aria-label="Connected models">
             <div class="expanded-header">
               <span class="expanded-title">Connected Models</span>
               <button class="btn-primary" type="button" (click)="openConnectDialog(provider)">
@@ -150,6 +151,7 @@
                 }
               </div>
             }
+            </section>
           </div>
         </div>
       }
