@@ -29,6 +29,7 @@ def _planner(target):
     planner._facade.get_scheduler_queue_depth_by_model_name.return_value = 0
     planner._pick_request_target_lane = MagicMock(return_value=target)
     planner._safe_get_lanes = MagicMock(return_value=[])
+    planner._safe_get_profiles = MagicMock(return_value={})
     planner._prepare_existing_lane = AsyncMock()
     planner._cold_load_for_request = AsyncMock()
     return planner
@@ -44,33 +45,49 @@ async def test_benchmark_lane_reuses_ready_lane_on_exact_worker():
 
 
 @pytest.mark.asyncio
-async def test_benchmark_lane_does_not_wake_sleeping_lane():
+async def test_benchmark_lane_wakes_sleeping_lane_without_reclaim():
     target = _lane("sleeping", "sleeping")
+    ready = _lane("loaded", "awake")
     planner = _planner(target)
+    planner._pick_request_target_lane.side_effect = [target, ready]
     planner._prepare_existing_lane.return_value = {"lane_id": "model-lane"}
 
-    assert await planner.prepare_benchmark_lane(7, "org/model", 30.0) is False
-    planner._prepare_existing_lane.assert_not_awaited()
+    assert await planner.prepare_benchmark_lane(7, "org/model", 30.0) is True
+    planner._prepare_existing_lane.assert_awaited_once_with(
+        7,
+        "org/model",
+        target,
+        30.0,
+        allow_reclaim=False,
+    )
     planner._cold_load_for_request.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_benchmark_lane_does_not_cold_load():
+async def test_benchmark_lane_cold_loads_without_reclaim():
+    ready = _lane("loaded", "awake")
     planner = _planner(None)
+    planner._pick_request_target_lane.side_effect = [None, ready]
     planner._cold_load_for_request.return_value = {"lane_id": "model-lane"}
 
-    assert await planner.prepare_benchmark_lane(7, "org/model", 30.0) is False
-    planner._cold_load_for_request.assert_not_awaited()
+    assert await planner.prepare_benchmark_lane(7, "org/model", 30.0) is True
+    planner._cold_load_for_request.assert_awaited_once_with(
+        7,
+        "org/model",
+        30.0,
+        allow_reclaim=False,
+    )
 
 
 @pytest.mark.asyncio
-async def test_benchmark_lane_does_not_wait_for_starting_lane():
+async def test_benchmark_lane_waits_for_starting_lane():
     starting = _lane("starting", "unsupported")
     ready = _lane("loaded", "awake")
     planner = _planner(starting)
+    planner._pick_request_target_lane.side_effect = [starting, ready]
     planner._safe_get_lanes.return_value = [ready]
 
-    assert await planner.prepare_benchmark_lane(7, "org/model", 30.0) is False
+    assert await planner.prepare_benchmark_lane(7, "org/model", 30.0) is True
     planner._prepare_existing_lane.assert_not_awaited()
     planner._cold_load_for_request.assert_not_awaited()
 
@@ -83,6 +100,16 @@ async def test_benchmark_lane_rejects_production_load():
     planner._safe_get_lanes.return_value = [target]
 
     assert await planner.prepare_benchmark_lane(7, "org/model") is False
+
+
+@pytest.mark.asyncio
+async def test_benchmark_lane_does_not_load_while_production_request_is_queued():
+    planner = _planner(None)
+    planner._safe_get_profiles.return_value = {"org/model": MagicMock()}
+    planner._facade.get_scheduler_queue_depth_by_model_name.return_value = 1
+
+    assert await planner.prepare_benchmark_lane(7, "org/model") is False
+    planner._cold_load_for_request.assert_not_awaited()
 
 
 @pytest.mark.asyncio

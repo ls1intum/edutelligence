@@ -1098,12 +1098,55 @@ class CapacityPlanner:
         model_name: str,
         timeout_seconds: float = 600.0,
     ) -> bool:
-        """Accept a benchmark only on an already-loaded, idle worker/model pair."""
+        """Prepare an idle benchmark lane without reclaiming production capacity."""
         if self._registry and not self._registry.has_received_first_status(provider_id):
             return False
 
         target = self._pick_request_target_lane(provider_id, model_name)
+        if target is not None and target.runtime_state in {"loaded", "running"}:
+            return self.benchmark_lane_is_safe(provider_id, target)
+        if not self._benchmark_provider_is_idle(provider_id, model_name):
+            return False
+        if target is not None and target.runtime_state == "starting":
+            if not await self._wait_for_benchmark_lane_ready(provider_id, model_name, timeout_seconds):
+                return False
+        elif target is not None and target.runtime_state in {"sleeping", "cold"}:
+            if (
+                await self._prepare_existing_lane(
+                    provider_id,
+                    model_name,
+                    target,
+                    timeout_seconds,
+                    allow_reclaim=False,
+                )
+                is None
+            ):
+                return False
+        elif (
+            await self._cold_load_for_request(
+                provider_id,
+                model_name,
+                timeout_seconds,
+                allow_reclaim=False,
+            )
+            is None
+        ):
+            return False
+
+        target = self._pick_request_target_lane(provider_id, model_name)
         return target is not None and self.benchmark_lane_is_safe(provider_id, target)
+
+    def _benchmark_provider_is_idle(self, provider_id: int, model_name: str) -> bool:
+        """Reject preparation as soon as production work exists on the provider."""
+        lanes = self._safe_get_lanes(provider_id)
+        for lane in lanes:
+            if lane.active_requests > 0 or lane.requests_running > 0 or lane.queue_waiting > 0:
+                return False
+        queued_models = {model_name, *(lane.model_name for lane in lanes), *self._safe_get_profiles(provider_id)}
+        for queued_model in queued_models:
+            if self._facade.get_scheduler_queue_depth_by_model_name(queued_model, provider_id) > 0:
+                return False
+        return True
 
     def benchmark_lane_is_safe(self, provider_id: int, target: LaneSchedulerSignals) -> bool:
         """Return whether a benchmark can run without competing with production."""
@@ -1111,12 +1154,8 @@ class CapacityPlanner:
             return False
         max_ttft = float(os.getenv("LOGOS_BENCHMARK_MAX_TTFT_SECONDS", "5"))
         max_e2e = float(os.getenv("LOGOS_BENCHMARK_MAX_E2E_SECONDS", "30"))
-        lanes = self._safe_get_lanes(provider_id)
-        for lane in lanes:
-            if lane.active_requests > 0 or lane.requests_running > 0 or lane.queue_waiting > 0:
-                return False
-            if self._facade.get_scheduler_queue_depth_by_model_name(lane.model_name, provider_id) > 0:
-                return False
+        if not self._benchmark_provider_is_idle(provider_id, target.model_name):
+            return False
         return not (
             (getattr(target, "ttft_p95_seconds", 0) > max_ttft)
             or (getattr(target, "e2e_latency_p50_seconds", 0) > max_e2e)
@@ -1152,6 +1191,7 @@ class CapacityPlanner:
         model_name: str,
         target: LaneSchedulerSignals,
         timeout_seconds: float,
+        allow_reclaim: bool = True,
     ) -> dict[str, Any] | None:
         """Wake or prepare an existing lane for a request."""
         profile = self._safe_get_profiles(provider_id).get(model_name)
@@ -1168,9 +1208,11 @@ class CapacityPlanner:
                 target=target,
                 profile=profile,
                 timeout_seconds=timeout_seconds,
+                allow_reclaim=allow_reclaim,
             )
             if not ok:
-                self._pending_capacity[model_name] = (provider_id, time.time())
+                if allow_reclaim:
+                    self._pending_capacity[model_name] = (provider_id, time.time())
                 return None
 
         if target.runtime_state == "sleeping":
@@ -1356,6 +1398,7 @@ class CapacityPlanner:
         provider_id: int,
         model_name: str,
         timeout_seconds: float,
+        allow_reclaim: bool = True,
     ) -> dict[str, Any] | None:
         """Load a model that has no lane at all (request-time cold load)."""
         profile = self._safe_get_profiles(provider_id).get(model_name)
@@ -1451,7 +1494,8 @@ class CapacityPlanner:
                 # the operator (or another planner cycle) frees enough host
                 # RAM — e.g. by stopping an unused lane — the retry will
                 # pass the gate naturally. We do NOT stop lanes here.
-                self._pending_capacity[model_name] = (provider_id, time.time())
+                if allow_reclaim:
+                    self._pending_capacity[model_name] = (provider_id, time.time())
                 return None
 
         # Use the same reclaim engine as wake — it checks aggregate + per-GPU
@@ -1478,6 +1522,7 @@ class CapacityPlanner:
             target=synthetic_target,
             profile=profile,
             timeout_seconds=timeout_seconds,
+            allow_reclaim=allow_reclaim,
         )
         if not ok:
             logger.info(
@@ -1485,7 +1530,8 @@ class CapacityPlanner:
                 model_name,
                 self._facade.get_provider_name(provider_id) or provider_id,
             )
-            self._pending_capacity[model_name] = (provider_id, time.time())
+            if allow_reclaim:
+                self._pending_capacity[model_name] = (provider_id, time.time())
             return None
 
         logger.info(
@@ -4249,6 +4295,7 @@ class CapacityPlanner:
         target: LaneSchedulerSignals,
         profile: Optional[ModelProfile],
         timeout_seconds: float,
+        allow_reclaim: bool = True,
     ) -> bool:
         # Convert to an absolute deadline once so accumulated sleeps reduce the
         # remaining budget correctly on every subsequent loop iteration.
@@ -4484,6 +4531,14 @@ class CapacityPlanner:
                         target.model_name,
                     )
                     return True
+
+                if not allow_reclaim:
+                    logger.info(
+                        "Cannot prepare benchmark lane for worker=%s model=%s " "without reclaiming existing capacity",
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name,
+                    )
+                    return False
 
                 lanes = self._safe_get_lanes(provider_id)
                 profiles = self._safe_get_profiles(provider_id)

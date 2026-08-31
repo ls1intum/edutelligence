@@ -2489,7 +2489,7 @@ class DBManager:
 
     def log_usage(
         self,
-        api_key_id: int,
+        api_key_id: Optional[int],
         team_id: Optional[int],
         user_id: Optional[int],
         environment: Optional[str],

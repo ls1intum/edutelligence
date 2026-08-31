@@ -335,7 +335,7 @@ async def test_internal_benchmark_proxy_does_not_resolve_a_user_api_key(monkeypa
         team_id=None,
         user_id=None,
         environment="model-provider-benchmark",
-        log_level="NONE",
+        log_level="BILLING",
         settings={},
     )
     deployment = {"model_id": 1, "provider_id": 20, "type": "logosnode"}
@@ -353,6 +353,61 @@ async def test_internal_benchmark_proxy_does_not_resolve_a_user_api_key(monkeypa
     assert response == "response"
     assert execute.await_args.kwargs["deployments"] == [deployment]
     assert execute.await_args.kwargs["allowed_models_override"] == [1]
+
+
+@pytest.mark.asyncio
+async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch):
+    logged = []
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get_job(self, job_id):
+            return {"request_payload": {"model_provider_id": 31}}
+
+        def get_model_provider_benchmark_target(self, model_provider_id):
+            return {
+                "model_id": 1,
+                "provider_id": 20,
+                "provider_type": "logosnode",
+                "model_name": "org/model",
+            }
+
+        def log_usage(self, **kwargs):
+            logged.append(kwargs)
+            return {"log-id": 99}, 200
+
+    request = MagicMock()
+    request.json = AsyncMock(return_value={"model": "org/model"})
+    request.headers = {main.BENCHMARK_JOB_HEADER: "7"}
+    planner = MagicMock()
+    planner.prepare_benchmark_lane = AsyncMock(return_value=True)
+    execute = AsyncMock(return_value="response")
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(main, "_benchmark_provider_affinity", MagicMock(return_value=20))
+    monkeypatch.setattr(main, "_capacity_planner", planner)
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", AsyncMock(side_effect=lambda rows, payload: rows))
+    monkeypatch.setattr(main, "_execute_cancelling_on_disconnect", execute)
+
+    response = await main.internal_model_benchmark_completion(7, "chat/completions", request)
+
+    assert response == "response"
+    assert logged == [
+        {
+            "api_key_id": None,
+            "team_id": None,
+            "user_id": None,
+            "environment": "model-provider-benchmark",
+            "log_level": "BILLING",
+            "request_id": execute.await_args.kwargs["request_id"],
+        }
+    ]
+    assert execute.await_args.kwargs["log_id"] == 99
+    assert execute.await_args.kwargs["auth"].default_priority == 1
 
 
 @pytest.mark.asyncio

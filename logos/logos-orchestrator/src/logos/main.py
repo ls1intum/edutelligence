@@ -2557,11 +2557,21 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         team_id=None,
         user_id=None,
         environment="model-provider-benchmark",
-        log_level="NONE",
+        log_level="BILLING",
         settings={},
         default_priority=1,
     )
     request_id = secrets.token_urlsafe(16)
+    with DBManager() as db:
+        log_result, _ = db.log_usage(
+            api_key_id=None,
+            team_id=None,
+            user_id=None,
+            environment=auth.environment,
+            log_level=auth.log_level,
+            request_id=request_id,
+        )
+    log_id = int(log_result["log-id"])
     return await _execute_cancelling_on_disconnect(
         request,
         deployments=deployments,
@@ -2569,7 +2579,7 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         headers=headers,
         auth=auth,
         path=f"v1/{path.strip('/')}",
-        log_id=None,
+        log_id=log_id,
         request_id=request_id,
         required_provider_id=required_provider_id,
     )
