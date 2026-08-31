@@ -101,6 +101,46 @@ def test_resolver_rejects_an_ambiguous_alias():
     assert main._resolve_requested_model_name("local-most-powerful", models) is None
 
 
+def test_resolver_prefers_stored_alias_over_planner_alias():
+    # A stored alias is an explicit assignment and must win over the
+    # planner-sanitized form of a model whose name happens to normalize to
+    # the same string — previously both landed in one match set and the
+    # request 404ed instead of resolving the stored alias.
+    models = [
+        {"name": "acme/foo", "aliases": []},
+        {"name": "other-model", "aliases": ["acme_foo"]},
+    ]
+
+    assert main._resolve_requested_model_name("acme_foo", models) == "other-model"
+
+
+def test_resolver_ambiguous_stored_alias_does_not_fall_through_to_planner():
+    # Several stored aliases match: that is ambiguous even though a planner
+    # alias of a third model would also match — stored names are evaluated
+    # as a level, not merged into one pool.
+    models = [
+        {"name": "model-a", "aliases": ["acme_foo"]},
+        {"name": "model-b", "aliases": ["ACME_FOO"]},
+        {"name": "Acme Foo", "aliases": []},
+    ]
+
+    assert main._resolve_requested_model_name("acme_foo", models) is None
+
+
+def test_resolver_rejects_duplicate_normalized_model_names():
+    # The schema does not enforce case-insensitive uniqueness of model names,
+    # so two models differing only in case make a canonical request
+    # ambiguous — picking the first row would be arbitrary.
+    models = [
+        {"name": "Foo", "aliases": []},
+        {"name": "FOO", "aliases": []},
+    ]
+
+    assert main._resolve_requested_model_name("foo", models) is None
+    assert main._resolve_requested_model_name("Foo", models) is None
+    assert main._resolve_requested_model_name("foo", [{"name": "Foo", "aliases": []}]) == "Foo"
+
+
 def test_resolver_returns_none_for_unknown_or_empty_names():
     models = [{"name": "gpt-4", "aliases": ["fast"]}]
 

@@ -11,10 +11,12 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ModelCapabilitiesDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
@@ -34,6 +36,12 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
 
 @Service
 public class ModelService {
+
+    /**
+     * Arbitrary stable key identifying the shared model-name/alias namespace
+     * to {@code pg_advisory_xact_lock}; the value itself is meaningless.
+     */
+    private static final long MODEL_ALIAS_NAMESPACE_LOCK_KEY = 0x4C4F47414C494153L; // "LOGALIAS"
 
     private final ModelRepository modelRepository;
     private final ModelWeightService weightService;
@@ -102,6 +110,7 @@ public class ModelService {
 
     @Transactional
     public Map<String, Object> addModel(AddModelRequestDTO req) {
+        lockModelAliasNamespace();
         Model model = new Model();
         model.setName(req.name());
         model.setTags(req.tags() != null ? req.tags() : "");
@@ -124,6 +133,7 @@ public class ModelService {
 
     @Transactional
     public Map<String, Object> updateModelInfo(UpdateModelRequestDTO req) {
+        lockModelAliasNamespace();
         Model model = modelRepository.findById(req.modelId())
             .orElseThrow(() -> new IllegalArgumentException("Model not found: " + req.modelId()));
         if (req.name() != null) model.setName(req.name());
@@ -198,6 +208,23 @@ public class ModelService {
      * A null/empty name (e.g. an update that does not change the name) is a
      * no-op.
      */
+    /**
+     * Serializes mutations of the shared model-name/alias namespace.
+     * {@link #addModel} and {@link #updateModelInfo} each perform cross-table
+     * checks before their inserts (model name vs. existing alias, alias vs.
+     * existing model name, alias vs. alias of another model), but those checks
+     * take no locks on the rows they read. Under READ COMMITTED two concurrent
+     * requests can therefore pass both checks and commit conflicting rows
+     * (e.g. a model created while another request assigns the same name as an
+     * alias), which would make case-insensitive resolution ambiguous. The
+     * transaction-scoped advisory lock makes a second request wait until the
+     * first one commits; its checks then see the committed row and reject it.
+     * The lock is released automatically when the surrounding transaction ends.
+     */
+    private void lockModelAliasNamespace() {
+        modelAliasRepository.lockModelAliasNamespace(MODEL_ALIAS_NAMESPACE_LOCK_KEY);
+    }
+
     private void ensureNameDoesNotCollideWithAlias(String name) {
         if (name == null || name.trim().isEmpty()) {
             return;
@@ -256,13 +283,22 @@ public class ModelService {
                 modelAliasRepository.delete(stored);
             }
         }
-        for (String alias : normalized) {
-            if (!existingLower.contains(alias.toLowerCase(Locale.ROOT))) {
-                ModelAlias stored = new ModelAlias();
-                stored.setModelId(modelId);
-                stored.setAlias(alias);
-                modelAliasRepository.save(stored);
+        try {
+            for (String alias : normalized) {
+                if (!existingLower.contains(alias.toLowerCase(Locale.ROOT))) {
+                    ModelAlias stored = new ModelAlias();
+                    stored.setModelId(modelId);
+                    stored.setAlias(alias);
+                    modelAliasRepository.save(stored);
+                }
             }
+        } catch (DataIntegrityViolationException e) {
+            // A concurrent assignment passed the case-insensitive duplicate
+            // check before this transaction reached the insert and won the
+            // race on the unique index. Surface it as a conflict the client
+            // can retry instead of an opaque 500.
+            throw new ConflictException(
+                "Alias assignment conflicted with a concurrent request; retry the request");
         }
     }
 
