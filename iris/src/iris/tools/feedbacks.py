@@ -41,6 +41,14 @@ def create_tool_get_feedbacks(
         feedbacks = submission.latest_result.feedbacks
 
         def _format(feedback) -> str:
+            if feedback.has_test_case is None:
+                # Artemis did not send hasTestCase (every release before ls1intum/Artemis#13023).
+                # Say nothing about the outcome rather than guess it: this reproduces the line
+                # exactly as it read before the field existed.
+                return (
+                    f"Case: {feedback.test_case_name}. "
+                    f"Credits: {feedback.credits}. Info: {feedback.text}"
+                )
             if not feedback.has_test_case:
                 outcome = "non-test feedback"
             elif feedback.positive is None:

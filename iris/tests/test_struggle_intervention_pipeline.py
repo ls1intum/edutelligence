@@ -712,3 +712,172 @@ def test_inline_hint_is_clamped_to_the_gutter_budget():
         ).inline_hint
         is None
     )
+
+
+def _hook_state(result, intent, tokens=None):
+    """A minimal AgentPipelineExecutionState stand-in for post_agent_hook.
+
+    The pipeline is built via __new__ so no LLM/config is touched (same approach as
+    test_chat_latency_ordering.py); post_agent_hook only reads dto/result/tokens/callback.
+    """
+    callback = MagicMock()
+    callback.status = SimpleNamespace(
+        action=None,
+        rationale=None,
+        anchor_file=None,
+        anchor_line=None,
+        inline_hint=None,
+        resolved=None,
+        closing_sentence=None,
+        episode_label=None,
+    )
+    state = SimpleNamespace(
+        dto=SimpleNamespace(intent=intent),
+        result=result,
+        tokens=tokens if tokens is not None else ["tok"],
+        callback=callback,
+    )
+    return StruggleInterventionPipeline.__new__(StruggleInterventionPipeline), state
+
+
+def test_post_agent_hook_decide_maps_fields_and_carries_tokens():
+    """
+    post_agent_hook is the only place that maps a GateResult onto the status DTO and calls
+    finish(). It was untested, which is exactly where the token bug of c26e4052 lived: a
+    relapse to self.tokens drops the usage without raising, so nothing would turn red.
+    """
+    pipeline, state = _hook_state(
+        '{"action":"active","message":"Look at line 50.","confidence":0.9,'
+        '"anchor":{"file":"src/A.java","line":50},"inlineHint":"still returns -1",'
+        '"rationale":"stub"}',
+        "decide",
+        tokens=["usage-1"],
+    )
+    out = pipeline.post_agent_hook(state)
+
+    assert out == "Look at line 50."
+    assert state.callback.status.action == "active"
+    assert state.callback.status.anchor_file == "src/A.java"
+    assert state.callback.status.anchor_line == 50
+    assert state.callback.status.inline_hint == "still returns -1"
+    assert state.callback.status.rationale == "stub"
+    _, kwargs = state.callback.finish.call_args
+    assert kwargs["result"] == "Look at line 50."
+    assert kwargs["confidence"] == 0.9
+    # finish() is terminal, so it must carry the accumulated usage from the state.
+    assert kwargs["tokens"] == ["usage-1"]
+
+
+def test_post_agent_hook_confirm_close_maps_fields_and_carries_tokens():
+    pipeline, state = _hook_state(
+        '{"resolved":true,"closingSentence":"Nice, the helper is gone.",'
+        '"episodeLabel":"missing helper method"}',
+        "confirm_close",
+        tokens=["usage-2"],
+    )
+    out = pipeline.post_agent_hook(state)
+
+    assert out == "Nice, the helper is gone."
+    assert state.callback.status.resolved is True
+    assert state.callback.status.closing_sentence == "Nice, the helper is gone."
+    assert state.callback.status.episode_label == "missing helper method"
+    _, kwargs = state.callback.finish.call_args
+    assert kwargs["tokens"] == ["usage-2"]
+
+
+def test_post_agent_hook_help_request_fails_run_on_unusable_output():
+    """
+    A help_request was explicitly asked for and its template forbids "silent". Collapsing an
+    unparseable answer into the silent fail-safe reached Artemis as result==null and was
+    delivered as silentDecide: the ask vanished with no hint and no error, indistinguishable
+    from a silence the model chose. It must fail the run instead.
+    """
+    pipeline, state = _hook_state("the model rambled without json", "help_request")
+    out = pipeline.post_agent_hook(state)
+
+    assert out == ""
+    state.callback.finish.assert_not_called()
+    args, kwargs = state.callback.fail.call_args
+    assert "unusable model output" in args[0]
+    # fail() is terminal, so it carries the accumulated usage itself.
+    assert kwargs["tokens"] == ["tok"]
+    assert state.callback.status.rationale == "unparseable model output"
+
+
+def test_post_agent_hook_help_request_honours_a_deliberate_silent():
+    """The counter-case: valid JSON asking for silence is a decision, not a failure."""
+    pipeline, state = _hook_state(
+        '{"action":"silent","message":null,"confidence":0.4,"rationale":"already said"}',
+        "help_request",
+    )
+    pipeline.post_agent_hook(state)
+
+    state.callback.fail.assert_not_called()
+    state.callback.finish.assert_called_once()
+    assert state.callback.status.action == "silent"
+
+
+def test_parse_gate_result_marks_only_fail_safes_as_parse_failures():
+    assert parse_gate_result("no json here").parse_failed is True
+    assert parse_gate_result('{"action":"nope"}').parse_failed is True
+    assert parse_gate_result('{"action":"active","message":""}').parse_failed is True
+    assert parse_gate_result(None).parse_failed is True
+    assert (
+        parse_gate_result('{"action":"silent","confidence":0.3}').parse_failed is False
+    )
+
+
+def test_inline_hint_keeps_a_cue_whose_word_boundary_sits_at_the_limit():
+    """
+    A cue of 59 characters plus a space plus another word has a valid 60-char truncation.
+    Searching only the first 59 characters found no space and dropped the cue entirely.
+    """
+    cue = "x" * 59 + " next"
+    out = parse_gate_result(
+        '{"action":"ambient","message":"m","confidence":0.5,"inlineHint":"' + cue + '"}'
+    ).inline_hint
+    assert out == "x" * 59 + "…"
+    assert len(out) == INLINE_HINT_MAX_CHARS
+
+
+def test_struggle_pipeline_is_registered_for_health_checks():
+    """
+    The pipeline was in the variants endpoint but in neither Features nor PIPELINE_BY_FEATURE,
+    so check_pipelines_health() never evaluated it: health kept reporting all pipelines valid
+    while this one's LLM config could be missing or broken, surfacing only at request time.
+    """
+    from iris.web.routers.health.Pipelines.features import Features
+    from iris.web.routers.health.Pipelines.registery import PIPELINE_BY_FEATURE
+
+    assert Features.STRUGGLE_INTERVENTION in PIPELINE_BY_FEATURE
+    assert (
+        PIPELINE_BY_FEATURE[Features.STRUGGLE_INTERVENTION]
+        is StruggleInterventionPipeline
+    )
+    # evaluate_feature() reads these off the class; without them the entry is inert.
+    assert StruggleInterventionPipeline.PIPELINE_ID == "struggle_intervention_pipeline"
+    assert StruggleInterventionPipeline.VARIANT_DEFS
+
+
+def test_prompts_do_not_promise_code_tools_without_a_submission():
+    """
+    get_tools registers the code/build/feedback tools only `if submission is not None`, and
+    Artemis sends none before the first submission. Both prompts claimed those tools
+    unconditionally and the decide prompt then made anchor+inlineHint REQUIRED, which is
+    impossible without them.
+    """
+    pipeline = StruggleInterventionPipeline()
+    for template in (pipeline.system_prompt_template, pipeline.help_request_template):
+        rendered = template.render(
+            course_name="Algorithms",
+            signal_summary="primary boundary: FM; severity sBase=0.80; path=armed.",
+            episode=None,
+        )
+        assert "WHEN the student has already" in rendered
+        assert "those code and build tools are simply absent" in rendered
+    decide = pipeline.system_prompt_template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: FM; severity sBase=0.80; path=armed.",
+        episode=None,
+    )
+    assert "Without those tools you cannot name a line" in decide

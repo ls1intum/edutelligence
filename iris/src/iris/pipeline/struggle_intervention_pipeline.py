@@ -73,9 +73,12 @@ def _clean_inline_hint(raw: str) -> Optional[str]:
         return None
     if len(cue) <= INLINE_HINT_MAX_CHARS:
         return cue
-    head = cue[: INLINE_HINT_MAX_CHARS - 1].rstrip()
+    # Search the full budget, not one char less: a cue whose last space sits exactly at the
+    # boundary still has a valid MAX-char form ("x"*59 + "…"), and excluding that position
+    # dropped the cue entirely instead of truncating it.
+    head = cue[:INLINE_HINT_MAX_CHARS]
     cut = head.rfind(" ")
-    return f"{head[:cut]}…" if cut > 0 else None
+    return f"{head[:cut].rstrip()}…" if cut > 0 else None
 
 
 @dataclass
@@ -86,6 +89,10 @@ class GateResult:
     rationale: Optional[str]
     anchor: Optional[dict] = None
     inline_hint: Optional[str] = None
+    # True when "silent" is the fail-safe for unusable model output, not a decision the model made.
+    # The two are otherwise indistinguishable downstream, and on help_request they must not be:
+    # the student asked for the hint, so a parse failure has to surface as a failed run.
+    parse_failed: bool = False
 
 
 @dataclass
@@ -99,18 +106,26 @@ class ConfirmCloseResult:
 def parse_gate_result(raw: Optional[str]) -> GateResult:
     """Parse the LLM's JSON gate decision. Fail safe to silent on any problem."""
     if not raw:
-        return GateResult("silent", None, 0.0, None)
+        return GateResult("silent", None, 0.0, None, parse_failed=True)
     obj = _extract_json_object(raw)
     if obj is None:
-        return GateResult("silent", None, 0.0, "unparseable model output")
+        return GateResult(
+            "silent", None, 0.0, "unparseable model output", parse_failed=True
+        )
     action = obj.get("action")
     if action not in ("silent", "ambient", "active"):
-        return GateResult("silent", None, 0.0, "invalid action")
+        return GateResult("silent", None, 0.0, "invalid action", parse_failed=True)
     message = None
     if action != "silent":
         message = obj.get("message")
         if not isinstance(message, str) or not message.strip():
-            return GateResult("silent", None, 0.0, "non-silent action without message")
+            return GateResult(
+                "silent",
+                None,
+                0.0,
+                "non-silent action without message",
+                parse_failed=True,
+            )
     try:
         confidence = float(obj.get("confidence", 0.0))
     except (TypeError, ValueError):
@@ -299,6 +314,23 @@ class StruggleInterventionPipeline(
             cb.finish(tokens=state.tokens)
             return cc.closing_sentence or ""
         gate = parse_gate_result(state.result)
+        if intent == "help_request" and gate.parse_failed:
+            # The student explicitly asked for this hint, and the help_request template forbids
+            # "silent" outright. Finishing with an empty result here would reach Artemis as
+            # `result == null` and be delivered as silentDecide, i.e. the ask would vanish with
+            # no hint and no error. Fail the run instead: Artemis already completes the client's
+            # in-flight request on a terminal FAILED frame, so nothing hangs, and the failure
+            # stays distinguishable from a silence the model actually chose.
+            logger.warning(
+                "help_request produced unusable model output (%s); failing the run",
+                gate.rationale,
+            )
+            status.rationale = gate.rationale
+            cb.fail(
+                "Struggle-intervention help request produced unusable model output.",
+                tokens=state.tokens,
+            )
+            return ""
         status.action = gate.action
         status.rationale = gate.rationale
         status.anchor_file = gate.anchor["file"] if gate.anchor else None

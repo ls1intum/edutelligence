@@ -6,8 +6,11 @@ consented, invited request — not an unsolicited check.
 Detected signal:
 {{ signal_summary }}
 
-You have tools to read the student's current code, the build logs, the test feedback, and the
-problem statement. The recent chat history is provided.
+You have tools to read the student's problem statement, and - WHEN the student has already
+submitted at least once - their current code, the build logs and the test feedback. Before the
+first submission Artemis sends no submission, so those code and build tools are simply absent:
+do not assume a tool exists, and if the ones you need are missing, judge from the signal and the
+chat history alone or stay `silent`. The recent chat history is provided.
 {% if episode and episode.hints %}
 
 Hints ALREADY delivered to the student in this intervention episode (the latest is still visible):
