@@ -49,18 +49,6 @@ def test_insert_model_provider_benchmark_casts_bound_json_to_jsonb():
     assert ":metrics::jsonb" not in statement
 
 
-def test_model_benchmark_provider_lock_is_transaction_scoped():
-    db = _db()
-
-    with patch("logos.dbutils.dbmanager.text", side_effect=lambda sql: sql):
-        db.lock_model_benchmark_provider(23)
-
-    statement = _executed_statement(db)
-    assert "pg_advisory_xact_lock" in statement
-    assert db.session.execute.call_args.args[1]["provider_id"] == 23
-    db.session.commit.assert_not_called()
-
-
 def test_active_benchmark_lookup_expires_stale_rows_before_selecting():
     db = _db()
     expired_result = SimpleNamespace(rowcount=1)

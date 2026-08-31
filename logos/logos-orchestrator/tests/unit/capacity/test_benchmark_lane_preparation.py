@@ -113,16 +113,6 @@ async def test_benchmark_lane_does_not_load_while_production_request_is_queued()
 
 
 @pytest.mark.asyncio
-async def test_benchmark_lane_rejects_elevated_latency():
-    target = _lane("loaded", "awake")
-    target.ttft_p95_seconds = 6
-    planner = _planner(target)
-    planner._safe_get_lanes.return_value = [target]
-
-    assert await planner.prepare_benchmark_lane(7, "org/model") is False
-
-
-@pytest.mark.asyncio
 async def test_benchmark_lane_fails_fast_when_an_existing_start_errors():
     starting = _lane("starting", "unsupported")
     planner = _planner(starting)

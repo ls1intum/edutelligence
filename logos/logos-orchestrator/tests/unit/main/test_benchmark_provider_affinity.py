@@ -89,12 +89,6 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
             assert provider_id == 20
             return None
 
-        def lock_model_benchmark_provider(self, provider_id):
-            assert provider_id == 20
-
-        def count_active_model_benchmark_jobs(self):
-            return 0
-
         def create_job_record(self, **kwargs):
             return 7
 

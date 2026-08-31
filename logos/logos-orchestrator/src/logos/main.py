@@ -116,6 +116,7 @@ _background_tasks: Set[asyncio.Task] = set()
 _benchmark_tasks: Set[asyncio.Task] = set()
 _benchmark_tasks_by_job: dict[int, asyncio.Task] = {}
 _benchmark_sessions_by_job: dict[int, tuple[int, str]] = {}
+_benchmark_admission_lock = threading.Lock()
 
 
 def _forget_benchmark_task(job_id: int, task: asyncio.Task) -> None:
@@ -1761,10 +1762,6 @@ async def lifespan(app: FastAPI):
 # Prometheus metrics auth: set PROMETHEUS_API_KEY env var to require auth; if unset, deny all.
 _PROMETHEUS_API_KEY = os.getenv("PROMETHEUS_API_KEY")
 _INTERNAL_SECRET = os.getenv("LOGOS_INTERNAL_SECRET")
-try:
-    _BENCHMARK_MAX_CONCURRENCY = max(1, int(os.getenv("LOGOS_BENCHMARK_MAX_CONCURRENCY", "1")))
-except ValueError:
-    _BENCHMARK_MAX_CONCURRENCY = 1
 
 # Initialize FastAPI app with lifespan
 app = FastAPI(
@@ -2365,7 +2362,10 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
     """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
     _require_internal_secret(request)
 
-    with DBManager() as db:
+    # One orchestrator process owns benchmark execution. Serialize the short
+    # check-and-create section in memory so simultaneous starts cannot both
+    # admit a benchmark for the same provider.
+    with _benchmark_admission_lock, DBManager() as db:
         target = db.get_model_provider_benchmark_target(data.model_provider_id)
         if target is None:
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
@@ -2381,7 +2381,6 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
                 detail="Provider credentials require HTTPS (plain HTTP is allowed only on loopback)",
             )
 
-        db.lock_model_benchmark_provider(provider_id)
         active = db.find_active_model_benchmark_job(provider_id)
         if active is not None:
             return JSONResponse(
@@ -2394,9 +2393,6 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
                     }
                 ),
             )
-        if db.count_active_model_benchmark_jobs() >= _BENCHMARK_MAX_CONCURRENCY:
-            raise HTTPException(status_code=409, detail="The global benchmark limit is already reached")
-
         runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
         if provider_type == "logosnode":
             if runtime_snapshot is None or not _logosnode_snapshot_is_connected(runtime_snapshot):

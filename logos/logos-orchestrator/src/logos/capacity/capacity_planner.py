@@ -1152,14 +1152,7 @@ class CapacityPlanner:
         """Return whether a benchmark can run without competing with production."""
         if target.runtime_state not in {"loaded", "running"} or target.sleep_state == "sleeping":
             return False
-        max_ttft = float(os.getenv("LOGOS_BENCHMARK_MAX_TTFT_SECONDS", "5"))
-        max_e2e = float(os.getenv("LOGOS_BENCHMARK_MAX_E2E_SECONDS", "30"))
-        if not self._benchmark_provider_is_idle(provider_id, target.model_name):
-            return False
-        return not (
-            (getattr(target, "ttft_p95_seconds", 0) > max_ttft)
-            or (getattr(target, "e2e_latency_p50_seconds", 0) > max_e2e)
-        )
+        return self._benchmark_provider_is_idle(provider_id, target.model_name)
 
     async def _wait_for_benchmark_lane_ready(
         self,
