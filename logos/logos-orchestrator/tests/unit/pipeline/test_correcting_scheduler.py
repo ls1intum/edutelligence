@@ -182,6 +182,29 @@ def _make_request(candidates, deployments, request_id="req-1"):
     )
 
 
+@pytest.mark.asyncio
+async def test_required_provider_affinity_selects_exact_worker_for_shared_model():
+    logosnode = MockLogosNodeFacade()
+    for provider_id in (10, 20):
+        logosnode.set_view(1, provider_id, _make_view(model_id=1, provider_id=provider_id))
+        logosnode.set_reserve(1, provider_id, True)
+
+    scheduler = _make_scheduler(logosnode=logosnode)
+    request = _make_request(
+        [(1, 1.0, 5)],
+        [
+            {"model_id": 1, "provider_id": 10, "type": "logosnode"},
+            {"model_id": 1, "provider_id": 20, "type": "logosnode"},
+        ],
+    )
+    request.required_provider_id = 20
+
+    result = await scheduler.schedule(request)
+
+    assert result is not None
+    assert result.provider_id == 20
+
+
 # ---------------------------------------------------------------------------
 # Scenario E: Azure candidate selected when local is cold
 # ---------------------------------------------------------------------------

@@ -303,6 +303,7 @@ class ProviderSession:
     provider_id: int
     worker_id: str
     websocket: WebSocket
+    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     capabilities_models: set[str] = field(default_factory=set)
     # Full set of models the worker is configured to serve, including those
     # without a valid profile yet. Used by the calibration orchestrator to
@@ -1250,6 +1251,7 @@ class LogosNodeRuntimeRegistry:
         session = await self._get_active_session(provider_id, stale_after_seconds)
         return {
             "provider_id": session.provider_id,
+            "session_id": session.session_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
             "configured_models": sorted(session.configured_models),
@@ -1269,6 +1271,7 @@ class LogosNodeRuntimeRegistry:
             return None
         return {
             "provider_id": session.provider_id,
+            "session_id": session.session_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
             "configured_models": sorted(session.configured_models),

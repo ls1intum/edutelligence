@@ -57,6 +57,14 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void providerPerformanceIndexExists() {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "idx_log_entry_performance_window");
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
     void migration018_providerSnapshotsTableRenamed() {
         assertThat(tableExists("provider_snapshots")).isTrue();
         assertThat(tableExists("ollama_provider_snapshots")).isFalse();
