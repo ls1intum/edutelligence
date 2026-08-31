@@ -116,10 +116,9 @@ class LogosBridgeClient:
         # instance instead of re-reading it from disk every time.
         self._hf_info_cache: Any | None = None
         # Cached result of query_vllm_quantization_methods (see
-        # _get_vllm_quant_methods) — the registry only changes when this
-        # vLLM install is upgraded, which requires a redeploy that restarts
-        # this process anyway, so a plain process-lifetime cache is exact,
-        # not just an approximation. None means "not fetched yet".
+        # _get_vllm_quant_methods) — only changes on a vLLM upgrade, which
+        # restarts this process anyway, so caching for its lifetime is
+        # exact, not an approximation. None means "not fetched yet".
         self._vllm_quant_methods: list[str] | None = None
 
     @property
@@ -875,7 +874,10 @@ class LogosBridgeClient:
         if hf_meta is not None and hf_meta.source == "error:model-not-found":
             result["unsupported_reason"] = REASON_MODEL_NOT_FOUND
             if persist:
-                model_profiles.mark_calibration_unsupported(model_name, True, REASON_MODEL_NOT_FOUND)
+                # Rewrites the whole model_profiles.yml — off the event loop.
+                await asyncio.to_thread(
+                    model_profiles.mark_calibration_unsupported, model_name, True, REASON_MODEL_NOT_FOUND
+                )
             return result
 
         # Gating is temporary (a token can be added later), so this is
@@ -894,14 +896,21 @@ class LogosBridgeClient:
             if supported_methods is not None and hf_meta.quantization_method not in supported_methods:
                 result["unsupported_reason"] = REASON_UNSUPPORTED_QUANTIZATION
                 if persist:
-                    model_profiles.mark_calibration_unsupported(model_name, True, REASON_UNSUPPORTED_QUANTIZATION)
+                    await asyncio.to_thread(
+                        model_profiles.mark_calibration_unsupported,
+                        model_name,
+                        True,
+                        REASON_UNSUPPORTED_QUANTIZATION,
+                    )
                 return result
 
         if hf_meta is None or not hf_meta.weight_bytes:
             return result
 
         try:
-            gpu_snap = query_gpu_vram()
+            # nvidia-smi subprocess with a 30s timeout — off the event loop,
+            # or a slow/hung GPU query stalls live serving on this node too.
+            gpu_snap = await asyncio.to_thread(query_gpu_vram)
         except Exception:  # noqa: BLE001
             gpu_snap = {}
             logger.debug("[Precheck] live VRAM query failed for %s", model_name, exc_info=True)
@@ -939,7 +948,10 @@ class LogosBridgeClient:
         )
 
         if persist:
-            model_profiles.apply_hf_precheck(
+            # Both rewrite the whole model_profiles.yml — off the event loop,
+            # same reasoning as the mark_calibration_unsupported calls above.
+            await asyncio.to_thread(
+                model_profiles.apply_hf_precheck,
                 model_name,
                 disk_size_bytes=hf_meta.weight_bytes,
                 base_residency_mb=hf_meta.weight_bytes / (1024 * 1024),
@@ -947,7 +959,9 @@ class LogosBridgeClient:
                 max_context_length=hf_meta.max_context_length,
             )
             if unsupported_reason is not None:
-                model_profiles.mark_calibration_unsupported(model_name, True, unsupported_reason)
+                await asyncio.to_thread(
+                    model_profiles.mark_calibration_unsupported, model_name, True, unsupported_reason
+                )
 
         return result
 
