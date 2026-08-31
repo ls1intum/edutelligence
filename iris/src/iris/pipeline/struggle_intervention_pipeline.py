@@ -143,10 +143,17 @@ def parse_gate_result(raw: Optional[str]) -> GateResult:
                 "non-silent action without message",
                 parse_failed=True,
             )
-    try:
-        confidence = float(obj.get("confidence", 0.0))
-    except (TypeError, ValueError):
+    raw_confidence = obj.get("confidence", 0.0)
+    # bool is a subclass of int, so float(True) is 1.0: `"confidence": true` would arrive as
+    # maximum certainty and clear Artemis's confidence threshold for an unsolicited
+    # intervention. Same guard the anchor line below already carries.
+    if isinstance(raw_confidence, bool):
         confidence = 0.0
+    else:
+        try:
+            confidence = float(raw_confidence)
+        except (TypeError, ValueError):
+            confidence = 0.0
     if not math.isfinite(confidence):
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))

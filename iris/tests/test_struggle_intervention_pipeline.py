@@ -940,3 +940,23 @@ def test_help_request_prompt_offers_no_silent_escape_without_tools():
     assert "send them to a human tutor" in rendered
     assert "chat history alone or stay `silent`" not in rendered
     assert "NEVER SILENT" in rendered
+
+
+def test_parse_gate_result_rejects_boolean_confidence():
+    """
+    bool is a subclass of int, so float(True) is 1.0. A malformed `"confidence": true` would
+    reach Artemis as maximum certainty and clear its threshold for an UNSOLICITED
+    intervention. The anchor line already guards against exactly this; confidence must too.
+    """
+    for raw in (
+        '{"action":"active","message":"m","confidence":true}',
+        '{"action":"active","message":"m","confidence":false}',
+    ):
+        assert parse_gate_result(raw).confidence == 0.0
+    # a real number still passes through untouched
+    assert (
+        parse_gate_result(
+            '{"action":"active","message":"m","confidence":0.87}'
+        ).confidence
+        == 0.87
+    )
