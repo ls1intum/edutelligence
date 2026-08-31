@@ -1,10 +1,12 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -25,12 +27,14 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.InvalidDataAccessResourceUsageException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.Trigger;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -63,7 +67,9 @@ class ModelMetricsControllerTest {
     ModelMetricsService modelMetricsService;
     @Autowired
     JdbcTemplate jdbc;
-    @Autowired
+    // Spied (not replaced) so one test can make a single guarded weight
+    // update fail and prove the whole weight phase rolls back.
+    @MockitoSpyBean
     ModelRepository modelRepository;
     @MockitoBean
     JwtDecoder jwtDecoder;
@@ -252,6 +258,29 @@ class ModelMetricsControllerTest {
         jdbc.update("UPDATE models SET weight_overrides = '{\"latency\": true}' WHERE id = 5101");
         assertThat(modelRepository.updateWeightLatencyGuarded(5101, 9)).isEqualTo(0);
         assertThat(jdbc.queryForObject("SELECT weight_latency FROM models WHERE id = 5101", Integer.class)).isEqualTo(7);
+    }
+
+    @Test
+    void weightPhaseFailure_rollsBackAllWeightWritesAndSkipsNotification() {
+        // First run commits the derived weights. Reset the stored values so
+        // the failing run below has real writes that a rollback must undo.
+        modelMetricsService.deriveAllMetrics();
+        jdbc.update("UPDATE models SET weight_latency = 0, weight_cost = 0 WHERE id IN (5101, 5102)");
+        clearInvocations(orchestratorNotificationService);
+        // A failure on one row of the weight loop must roll back the whole
+        // compare-and-update phase, including the earlier successful writes.
+        doThrow(new InvalidDataAccessResourceUsageException("simulated mid-loop failure"))
+            .when(modelRepository).updateWeightCostGuarded(eq(5102), anyInt());
+
+        modelMetricsService.deriveAllMetrics();
+
+        // Nothing of the failed run survived: no half re-ranked fleet...
+        for (int id : new int[] {5101, 5102}) {
+            assertThat(jdbc.queryForObject("SELECT weight_latency FROM models WHERE id = ?", Integer.class, id)).isZero();
+            assertThat(jdbc.queryForObject("SELECT weight_cost FROM models WHERE id = ?", Integer.class, id)).isZero();
+        }
+        // ...and no orchestrator notification for a run that rolled back.
+        verifyNoInteractions(orchestratorNotificationService);
     }
 
     @Test

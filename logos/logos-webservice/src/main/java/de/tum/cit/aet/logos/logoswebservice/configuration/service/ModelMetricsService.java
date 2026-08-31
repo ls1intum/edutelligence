@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelProvider;
@@ -70,6 +71,12 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  * re-checks the override map at write time, so a pin committed concurrently
  * with a derivation run survives, and runs where no value moved are no-ops
  * that do not notify the orchestrator.
+ *
+ * The whole compare-and-update phase of a weight run executes in a single
+ * rollback-capable transaction: a mid-loop failure rolls back every write of
+ * that run, so the fleet is never left half re-ranked (which would defeat the
+ * full-population gating), and the orchestrator is notified only after the
+ * transaction committed.
  */
 @Service
 public class ModelMetricsService {
@@ -94,19 +101,22 @@ public class ModelMetricsService {
     private final ModelWeightService modelWeightService;
     private final PriceUpdaterService priceUpdaterService;
     private final OrchestratorNotificationService orchestratorNotificationService;
+    private final TransactionTemplate transactionTemplate;
 
     public ModelMetricsService(ModelProviderRepository modelProviderRepository,
                                ProviderRepository providerRepository,
                                ModelRepository modelRepository,
                                ModelWeightService modelWeightService,
                                PriceUpdaterService priceUpdaterService,
-                               OrchestratorNotificationService orchestratorNotificationService) {
+                               OrchestratorNotificationService orchestratorNotificationService,
+                               TransactionTemplate transactionTemplate) {
         this.modelProviderRepository = modelProviderRepository;
         this.providerRepository = providerRepository;
         this.modelRepository = modelRepository;
         this.modelWeightService = modelWeightService;
         this.priceUpdaterService = priceUpdaterService;
         this.orchestratorNotificationService = orchestratorNotificationService;
+        this.transactionTemplate = transactionTemplate;
     }
 
     /**
@@ -242,64 +252,71 @@ public class ModelMetricsService {
      * across their pairs wins) onto the standard weight scale and store the
      * result. See class javadoc for the full rules: fleet-wide scale gating,
      * cloud-only cost ranking, and race-safe, guarded, targeted writes that
-     * skip manual pins and no-op when nothing moved.
+     * skip manual pins and no-op when nothing moved. The complete
+     * compare-and-update phase runs in a single rollback-capable transaction:
+     * a mid-loop failure rolls back every write of this run, so the fleet is
+     * never left half re-ranked, and the caller notifies the orchestrator
+     * only after this committed.
      * Returns true when any weight actually changed.
      */
     boolean applyDerivedWeights() {
-        // Build the per-dimension populations from the pairs table:
-        // latency = all pairs, but cost ranking = only cloud pairs.
-        Set<Integer> pairedModelIds = new HashSet<>();
-        Set<Integer> cloudPairedModelIds = new HashSet<>();
-        Set<Integer> cloudProviderIds = providerRepository.findAll().stream()
-            .filter(p -> p.getCloudProviderType() != null)
-            .map(Provider::getId).collect(Collectors.toSet());
-        Map<Integer, Double> latencyValues = new HashMap<>();
-        Map<Integer, Double> costValues = new HashMap<>();
-        for (ModelProvider pair : modelProviderRepository.findAll()) {
-            pairedModelIds.add(pair.getModelId());
-            if (cloudProviderIds.contains(pair.getProviderId())) cloudPairedModelIds.add(pair.getModelId());
+        Boolean changed = transactionTemplate.execute(status -> {
+            // Build the per-dimension populations from the pairs table:
+            // latency = all pairs, but cost ranking = only cloud pairs.
+            Set<Integer> pairedModelIds = new HashSet<>();
+            Set<Integer> cloudPairedModelIds = new HashSet<>();
+            Set<Integer> cloudProviderIds = providerRepository.findAll().stream()
+                .filter(p -> p.getCloudProviderType() != null)
+                .map(Provider::getId).collect(Collectors.toSet());
+            Map<Integer, Double> latencyValues = new HashMap<>();
+            Map<Integer, Double> costValues = new HashMap<>();
+            for (ModelProvider pair : modelProviderRepository.findAll()) {
+                pairedModelIds.add(pair.getModelId());
+                if (cloudProviderIds.contains(pair.getProviderId())) cloudPairedModelIds.add(pair.getModelId());
 
-            if (pair.getDerivedSamples() != null && pair.getDerivedSamples() >= MIN_LATENCY_SAMPLES
-                    && pair.getDerivedTotalLatencyMs() != null) {
-                latencyValues.merge(pair.getModelId(), pair.getDerivedTotalLatencyMs().doubleValue(), Math::min);
+                if (pair.getDerivedSamples() != null && pair.getDerivedSamples() >= MIN_LATENCY_SAMPLES
+                        && pair.getDerivedTotalLatencyMs() != null) {
+                    latencyValues.merge(pair.getModelId(), pair.getDerivedTotalLatencyMs().doubleValue(), Math::min);
+                }
+                // Only the cloud cost in $/M tokens is commensurable across pairs,
+                // so only it feeds the model-level cost ranking; the local $/request
+                // proxy stays display-only on the pair row.
+                if (pair.getDerivedCostUsd() != null && cloudProviderIds.contains(pair.getProviderId())) {
+                    costValues.merge(pair.getModelId(), pair.getDerivedCostUsd().doubleValue(), Double::min);
+                }
             }
-            // Only the cloud cost in $/M tokens is commensurable across pairs,
-            // so only it feeds the model-level cost ranking; the local $/request
-            // proxy stays display-only on the pair row.
-            if (pair.getDerivedCostUsd() != null && cloudProviderIds.contains(pair.getProviderId())) {
-                costValues.merge(pair.getModelId(), pair.getDerivedCostUsd().doubleValue(), Double::min);
-            }
-        }
 
-        // A model without a pair is not in either population, so models without
-        // data or traffic stay on their current (manual/default) weight.
-        // Under-sampled models are in the latency population (paired) but not in
-        // the latency data set (not enough samples), so they'd create a mixed
-        // scale -> hold the write for that dimension until full coverage.
-        boolean latencyFull = !pairedModelIds.isEmpty() && latencyValues.keySet().containsAll(pairedModelIds);
-        boolean costFull = !cloudPairedModelIds.isEmpty() && costValues.keySet().containsAll(cloudPairedModelIds);
-        if (!latencyFull && !costFull) return false;
-        Map<Integer, Integer> latencyWeights = latencyFull ? modelWeightService.rankValuesToWeights(latencyValues) : Map.of();
-        Map<Integer, Integer> costWeights = costFull ? modelWeightService.rankValuesToWeights(costValues) : Map.of();
+            // A model without a pair is not in either population, so models without
+            // data or traffic stay on their current (manual/default) weight.
+            // Under-sampled models are in the latency population (paired) but not in
+            // the latency data set (not enough samples), so they'd create a mixed
+            // scale -> hold the write for that dimension until full coverage.
+            boolean latencyFull = !pairedModelIds.isEmpty() && latencyValues.keySet().containsAll(pairedModelIds);
+            boolean costFull = !cloudPairedModelIds.isEmpty() && costValues.keySet().containsAll(cloudPairedModelIds);
+            if (!latencyFull && !costFull) return false;
+            Map<Integer, Integer> latencyWeights = latencyFull ? modelWeightService.rankValuesToWeights(latencyValues) : Map.of();
+            Map<Integer, Integer> costWeights = costFull ? modelWeightService.rankValuesToWeights(costValues) : Map.of();
 
-        int updated = 0;
-        for (Model model : modelRepository.findAll()) {
-            // Compare first, so a steady-state run is a no-op and we don't
-            // saveAll/notify needlessly (even though the entity is loaded in the
-            // transaction, we don't dirty it unless there's a real change).
-            Integer latencyWeight = latencyWeights.get(model.getId());
-            if (latencyWeight != null && !latencyWeight.equals(model.getWeightLatency())) {
-                updated += modelRepository.updateWeightLatencyGuarded(model.getId(), latencyWeight);
+            int updated = 0;
+            for (Model model : modelRepository.findAll()) {
+                // Compare first, so a steady-state run is a no-op and we don't
+                // saveAll/notify needlessly (even though the entity is loaded in the
+                // transaction, we don't dirty it unless there's a real change).
+                Integer latencyWeight = latencyWeights.get(model.getId());
+                if (latencyWeight != null && !latencyWeight.equals(model.getWeightLatency())) {
+                    updated += modelRepository.updateWeightLatencyGuarded(model.getId(), latencyWeight);
+                }
+                Integer costWeight = costWeights.get(model.getId());
+                if (costWeight != null && !costWeight.equals(model.getWeightCost())) {
+                    updated += modelRepository.updateWeightCostGuarded(model.getId(), costWeight);
+                }
             }
-            Integer costWeight = costWeights.get(model.getId());
-            if (costWeight != null && !costWeight.equals(model.getWeightCost())) {
-                updated += modelRepository.updateWeightCostGuarded(model.getId(), costWeight);
-            }
-        }
-        if (updated == 0) return false;
-        log.info("metrics_derivation: updated {} model weights (latency ranked: {} models, cost ranked: {} models)",
-            updated, latencyWeights.size(), costWeights.size());
-        return true;
+            if (updated == 0) return false;
+            log.info("metrics_derivation: updated {} model weights (latency ranked: {} models, cost ranked: {} models)",
+                updated, latencyWeights.size(), costWeights.size());
+            return true;
+        });
+        return Boolean.TRUE.equals(changed);
     }
 
     private static Integer roundMs(Double ms) {
