@@ -73,6 +73,9 @@ class PipelineRequest:
     # context resolver to build the forward URL for cloud upstream providers,
     # which serve the same OpenAI-shaped surface as our /v1 routes.
     request_path: Optional[str] = None
+    # Trusted internal benchmark affinity. Public callers cannot populate
+    # this directly; the HTTP boundary validates a signed, active job first.
+    required_provider_id: Optional[int] = None
     # The requesting API key's default_priority (see auth.AuthContext). The key
     # owner's queue-priority choice for their traffic. 0 means "not set": the
     # policy-level priority applies instead (see resolve_queue_priority).
@@ -243,6 +246,7 @@ class RequestPipeline:
             deployments=deployments,
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
+            required_provider_id=request.required_provider_id,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
         )
 
@@ -300,6 +304,41 @@ class RequestPipeline:
                     "error": "No available model",
                 },
                 error="All candidate models unavailable (rate-limited or no capacity)",
+            )
+
+        if request.required_provider_id is not None and scheduling_result.provider_id != request.required_provider_id:
+            logger.error(
+                "Scheduler violated provider affinity for request %s: required=%s selected=%s",
+                request_id,
+                request.required_provider_id,
+                scheduling_result.provider_id,
+            )
+            try:
+                self._scheduler.release(
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
+                    scheduling_result.provider_type,
+                    request_id,
+                )
+            except Exception:
+                logger.warning("Failed to release mismatched provider reservation", exc_info=True)
+            self.record_completion(
+                request_id=request_id,
+                result_status="error",
+                error_message="Required provider affinity could not be satisfied",
+            )
+            return PipelineResult(
+                success=False,
+                model_id=scheduling_result.model_id,
+                provider_id=scheduling_result.provider_id,
+                execution_context=None,
+                classification_stats=classification_result.stats,
+                scheduling_stats={
+                    "request_id": request_id,
+                    "required_provider_id": request.required_provider_id,
+                    "selected_provider_id": scheduling_result.provider_id,
+                },
+                error="Required provider affinity could not be satisfied",
             )
 
         # Record scheduled
@@ -617,13 +656,19 @@ class RequestPipeline:
         result_status: str,
         error_message: Optional[str] = None,
         cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
     ):
-        """Record request completion."""
+        """Record request completion.
+
+        ``usage_tokens`` (the ``extract_token_usage`` dict) feeds the token
+        counters and the per-model context-window histogram when present.
+        """
         self._monitoring.record_complete(
             request_id=request_id,
             result_status=result_status,
             error_message=error_message,
             cold_start=cold_start,
+            usage_tokens=usage_tokens,
         )
 
     def discard_request(self, request_id: str, result_status: str) -> None:

@@ -158,9 +158,15 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         6. If none immediately available: queue on best logosnode candidate
         """
         affinity = self._resolve_affinity(request)
+        deployments = request.deployments
+        if request.required_provider_id is not None:
+            deployments = [
+                deployment for deployment in deployments if deployment["provider_id"] == request.required_provider_id
+            ]
+
         scored = self._compute_candidate_scores(
             request.classified_models or [],
-            request.deployments,
+            deployments,
             affinity,
         )
 
@@ -766,6 +772,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             provider_id,
             priority,
             is_cold_at_queue=is_cold_at_queue,
+            provider_affinity=request.required_provider_id,
         )
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(

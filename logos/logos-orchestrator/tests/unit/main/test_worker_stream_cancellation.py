@@ -526,6 +526,14 @@ async def test_a_stream_the_client_walked_away_from_is_not(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_closing_after_done_is_a_success(monkeypatch):
+    """GuideLLM closes after [DONE]; that is completion, not a disconnect."""
+    calls = await _run_streamer(monkeypatch, abandon_after=3)
+    assert calls[-1]["result_status"] == "success"
+    assert calls[-1]["error_message"] is None
+
+
+@pytest.mark.asyncio
 async def test_the_recorded_reason_says_how_far_it_got(monkeypatch):
     """Distinguishes "left immediately" from "read most of it", which is what
     makes the number actionable."""

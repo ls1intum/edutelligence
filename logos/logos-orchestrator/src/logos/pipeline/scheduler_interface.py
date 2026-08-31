@@ -78,6 +78,9 @@ class SchedulingRequest:
     deployments: list[Deployment]
     classified_models: Optional[List[Tuple[int, float, int]]] = None  # (model_id, weight, priority)
     timeout_s: Optional[float] = None
+    required_provider_id: Optional[int] = None
+    """Trusted internal affinity. When set, scheduling and queue dispatch
+    must never fall back to another provider."""
     # Chained prefix-block hashes identifying the request's "stream"
     # (api key + actual prompt prefix), deepest block first. Used for
     # prefix-cache-aware placement; empty/None means "route as before".

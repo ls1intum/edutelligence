@@ -19,9 +19,17 @@ RUN uv venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# ── Dependency layer (cached unless pyproject.toml or shared/ changes) ──
+# ── Dependency layer (cached unless pyproject.toml or the shared package changes) ──
+# Copy ONLY the files `uv pip install .` reads to build the `shared` path
+# dependency: its metadata (pyproject.toml), its declared readme (required
+# by the poetry-core build backend) and the package source itself. The rest
+# of shared/ (its own poetry.lock, .flake8, ...) is NOT an input to this
+# install — copying it would invalidate this layer (and re-run the whole
+# dependency install) on every unrelated shared/ change.
 COPY logos/logos-orchestrator/pyproject.toml ./
-COPY shared/ ./shared/
+COPY shared/pyproject.toml ./shared/pyproject.toml
+COPY shared/README.md ./shared/README.md
+COPY shared/shared/ ./shared/shared/
 
 # Create a minimal package stub so the poetry-core build backend can
 # resolve metadata without needing the real source tree.
@@ -36,8 +44,17 @@ RUN mkdir -p src/logos && echo '__version__ = "0.1.0"' > src/logos/__init__.py \
 # torch is pinned to PyTorch's CPU-only wheel index via tool.uv.sources + an
 # explicit index in pyproject.toml, so no extra install-time flags are needed
 # here to steer it away from PyPI's default CUDA build.
+#
+# --refresh-package shared: rebuild the local `shared` path dependency from
+# current source. Without it, uv's build cache can serve a STALE wheel for
+# that dependency: the cache entry is keyed by path+version, not content, so
+# after a shared/ source change the (re-run) install layer would silently
+# install the previously built code. Reproduced with uv 0.11.3 and 0.12.5.
+# The narrow flag invalidates exactly that one build-cache entry — index
+# resolution and the cached registry wheels stay untouched, so two builds
+# of the same commit keep resolving to the same dependency versions.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install .
+    uv pip install --refresh-package shared .
 
 # ──────────────────────────────────────────────────────────
 # Stage 2: Runtime – slim image without compilers or build tools

@@ -21,19 +21,36 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos.auth import authenticate_api_key
+from logos.auth import AuthContext, authenticate_api_key
+from logos.benchmarks.guidellm_runner import (
+    BENCHMARK_JOB_HEADER,
+    BENCHMARK_PHASE_HEADER,
+    BENCHMARK_PROVIDER_HEADER,
+    BENCHMARK_TOKEN_HEADER,
+)
+from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
+from logos.benchmarks.guidellm_runner import (
+    benchmark_affinity_headers,
+    benchmark_affinity_token,
+    credential_transport_is_secure,
+    extract_serving_configuration,
+    internal_benchmark_target,
+    resolve_benchmark_target,
+    run_benchmark_job,
+)
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.context_budget import required_context_tokens
-from logos.dbutils.dbmanager import DBManager
+from logos.context_budget import estimate_prompt_tokens, required_context_tokens
+from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
 from logos.dbutils.types import (
@@ -99,6 +116,33 @@ _SERVER_START_TIME = int(time.time())
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
+_benchmark_tasks: Set[asyncio.Task] = set()
+_benchmark_tasks_by_job: dict[int, asyncio.Task] = {}
+_benchmark_sessions_by_job: dict[int, tuple[int, str]] = {}
+_benchmark_admission_lock = threading.Lock()
+
+
+def _forget_benchmark_task(job_id: int, task: asyncio.Task) -> None:
+    _background_tasks.discard(task)
+    _benchmark_tasks.discard(task)
+    _benchmark_tasks_by_job.pop(job_id, None)
+    _benchmark_sessions_by_job.pop(job_id, None)
+
+
+def _cancel_benchmark_job(job_id: int, reason: str) -> bool:
+    """Persist cancellation first, then stop the local GuideLLM process."""
+    with DBManager() as db:
+        cancelled = db.cancel_model_benchmark_job(job_id, reason)
+    task = _benchmark_tasks_by_job.get(job_id)
+    if task is not None and not task.done():
+        task.cancel(reason)
+    return cancelled
+
+
+def _cancel_benchmarks_for_changed_session(provider_id: int, session_id: str | None) -> None:
+    for job_id, (job_provider_id, expected_session_id) in list(_benchmark_sessions_by_job.items()):
+        if job_provider_id == provider_id and expected_session_id != session_id:
+            _cancel_benchmark_job(job_id, "Provider restarted or disconnected")
 
 
 def _resolve_provider_name(provider_id: int) -> str:
@@ -872,8 +916,12 @@ def _capture_logosnode_provider_snapshot(
                 try:
                     db.upsert_model_profiles(provider_id, model_profiles)
                 except Exception:
-                    logger.debug(
-                        "Failed to upsert model profiles for provider %s",
+                    db.session.rollback()
+                    logger.warning(
+                        "Failed to upsert model profiles for provider %s, the "
+                        "entire row update (base_residency_mb, loaded_vram_mb, "
+                        "kv_budget_mb, measurement_count, last_measured_at) is "
+                        "lost until this recovers",
                         _resolve_provider_name(provider_id),
                         exc_info=True,
                     )
@@ -1142,7 +1190,7 @@ _STRUCTURED_DELTA_KEYS = ("tool_calls", "function_call", "audio")
 
 
 class _LiveStreamRegistry:
-    """Token counts of the streams running right now, keyed by request id.
+    """Token counts of the requests running right now, keyed by request id.
 
     A finished request's usage is in the database; one still running is
     nowhere, and "nowhere" is what the statistics page showed for the whole
@@ -1150,31 +1198,66 @@ class _LiveStreamRegistry:
     and on the orchestrator, because that is the only process that sees the
     chunks go past.
 
-    Bounded by construction: an entry exists only while its request is
-    streaming and is dropped in the same ``finally`` that logs the completion.
+    Bounded by construction: an entry exists only while its request is in
+    flight and is dropped in the same ``finally`` that logs the completion.
     """
 
     def __init__(self, now: Any = time.time) -> None:
         self._streams: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
+        # Bumped on every mutation so a subscriber (the SSE stream) can tell
+        # that something moved without diffing the whole table.
+        self._version = 0
         # Injected rather than read off the module so a test can drive the clock
         # without patching time.time for everything else running in-process.
         self._now = now
 
-    def start(self, request_id: Optional[str], model_name: Optional[str]) -> None:
+    @property
+    def version(self) -> int:
+        with self._lock:
+            return self._version
+
+    def start(
+        self,
+        request_id: Optional[str],
+        model_name: Optional[str] = None,
+        prompt_tokens: int = 0,
+        prompt_estimated: bool = False,
+    ) -> None:
+        """Register a request as in-flight; non-destructive for known ids.
+
+        A request is tracked from the moment it arrives, long before its
+        response starts streaming: while it queues, the only figure available
+        is the prompt estimate the context routing already computes. When the
+        streamer later calls this with the model name, the entry must keep its
+        counters and start time rather than resetting them — the numbers on
+        the page would jump backwards.
+        """
         if not request_id:
             return
         with self._lock:
-            self._streams[request_id] = {
-                "model_name": model_name,
-                "started_at": self._now(),
-                # Set on the first delta, not here: the wait for a lane to warm
-                # up is not generation, and averaging over it would report a
-                # rate no one is seeing.
-                "first_token_at": None,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-            }
+            entry = self._streams.get(request_id)
+            if entry is None:
+                self._streams[request_id] = {
+                    "model_name": model_name,
+                    "started_at": self._now(),
+                    # Set on the first delta, not here: the wait for a lane to warm
+                    # up is not generation, and averaging over it would report a
+                    # rate no one is seeing.
+                    "first_token_at": None,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": 0,
+                    # True until the upstream states the real prompt size; the
+                    # page shows such a figure as an estimate, not a fact.
+                    "prompt_estimated": prompt_estimated and prompt_tokens > 0,
+                }
+            else:
+                if model_name:
+                    entry["model_name"] = model_name
+                if prompt_tokens > 0 and entry["prompt_tokens"] == 0:
+                    entry["prompt_tokens"] = prompt_tokens
+                    entry["prompt_estimated"] = prompt_estimated
+            self._version += 1
 
     def update(self, request_id: Optional[str], tokens: Dict[str, int]) -> None:
         if not request_id:
@@ -1186,17 +1269,24 @@ class _LiveStreamRegistry:
             completion = tokens.get("completion_tokens", 0)
             if completion > 0 and entry["first_token_at"] is None:
                 entry["first_token_at"] = self._now()
-            entry["prompt_tokens"] = tokens.get("prompt_tokens", 0)
+            prompt = tokens.get("prompt_tokens", 0)
+            if prompt > 0:
+                # The upstream has stated the prompt size; the estimate it
+                # stood in for is no longer an estimate.
+                entry["prompt_tokens"] = prompt
+                entry["prompt_estimated"] = False
             entry["completion_tokens"] = completion
+            self._version += 1
 
     def finish(self, request_id: Optional[str]) -> None:
         if not request_id:
             return
         with self._lock:
-            self._streams.pop(request_id, None)
+            if self._streams.pop(request_id, None) is not None:
+                self._version += 1
 
     def snapshot(self) -> list[dict[str, Any]]:
-        """Every running stream, with the rate it is generating at."""
+        """Every running request, with the rate it is generating at."""
         now = self._now()
         out: list[dict[str, Any]] = []
         with self._lock:
@@ -1210,6 +1300,7 @@ class _LiveStreamRegistry:
                     "request_id": request_id,
                     "model_name": entry["model_name"],
                     "prompt_tokens": entry["prompt_tokens"],
+                    "prompt_estimated": entry["prompt_estimated"],
                     "completion_tokens": completion,
                     # Measured from the first token, so it is the generation
                     # rate rather than an average dragged down by queueing.
@@ -1249,6 +1340,14 @@ class _StreamingLogAccumulator:
     # earlier — see _consume_messages_event.
     messages_usage: Optional[Dict[str, Any]] = None
     _saw_messages_events: bool = False
+    # True once message_delta's usage has arrived — the only event whose
+    # output_tokens is settled. message_start's is a one-token placeholder
+    # that must not stand in for the running count; see streamed_tokens.
+    _messages_final_usage: bool = False
+    # The client may close immediately after receiving the protocol's terminal
+    # event. Treat that as a completed response, even if the worker transport's
+    # following stream_end frame has not been consumed yet.
+    terminal_event_received: bool = False
     # Text deltas seen so far. The exact completion count only arrives with the
     # terminal usage event, which is no help to anyone watching the request run
     # — so the delta count stands in for it until then. See streamed_tokens.
@@ -1298,9 +1397,15 @@ class _StreamingLogAccumulator:
         """
         usage = self.usage()
         prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         if not isinstance(prompt, int):
             prompt = 0
+        # A Messages stream's message_start already carries an
+        # ``output_tokens`` figure — but it is a one-token placeholder, not a
+        # count, and trusting it pins the live figure at 1 for the whole
+        # generation. Until message_delta settles it, the deltas are the count.
+        if self._saw_messages_events and not self._messages_final_usage:
+            return {"prompt_tokens": prompt, "completion_tokens": self.delta_count}
+        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         if not isinstance(completion, int) or completion <= 0:
             completion = self.delta_count
         return {"prompt_tokens": prompt, "completion_tokens": completion}
@@ -1363,7 +1468,12 @@ class _StreamingLogAccumulator:
 
     def _consume_line(self, line: str) -> None:
         stripped = line.strip()
-        if not stripped or stripped == "data: [DONE]" or not stripped.startswith("data: "):
+        if not stripped:
+            return
+        if stripped == "data: [DONE]":
+            self.terminal_event_received = True
+            return
+        if not stripped.startswith("data: "):
             return
         try:
             blob = json.loads(stripped[6:])
@@ -1374,9 +1484,13 @@ class _StreamingLogAccumulator:
 
         event_type = blob.get("type")
         if isinstance(event_type, str) and event_type.startswith("response."):
+            if event_type in {"response.completed", "response.incomplete", "response.failed"}:
+                self.terminal_event_received = True
             self._consume_responses_event(event_type, blob)
             return
         if isinstance(event_type, str) and event_type in _MESSAGES_EVENT_TYPES:
+            if event_type == "message_stop":
+                self.terminal_event_received = True
             self._consume_messages_event(event_type, blob)
             return
 
@@ -1445,6 +1559,8 @@ class _StreamingLogAccumulator:
         if not isinstance(usage, dict):
             return
 
+        if event_type == "message_delta":
+            self._messages_final_usage = True
         merged = dict(self.messages_usage or {})
         merged.update(usage)
         # Anthropic omits a total — it is the sum, so it says it once. Logos
@@ -1675,6 +1791,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    benchmark_tasks = list(_benchmark_tasks)
+    for task in benchmark_tasks:
+        task.cancel()
+    if benchmark_tasks:
+        await asyncio.gather(*benchmark_tasks, return_exceptions=True)
     if _capacity_planner:
         await _capacity_planner.stop()
     if _calibration_orchestrator:
@@ -1887,6 +2008,45 @@ async def _generic_exception_handler(request: Request, exc: Exception) -> JSONRe
     return openai_error_response(500, "Internal server error")
 
 
+_HEALTH_STATUS_RANK: Dict[str, int] = {"DOWN": 0, "DEGRADED": 1, "UP": 2}
+
+
+def _model_deployment_status(
+    deployment: Dict[str, Any], provider_id: int, worker_ids: set[int], snapshots: Dict[int, Dict[str, Any]]
+) -> str:
+    """Serveability of one model deployment for the per-model health breakdown.
+
+    Deployments outside the local provider inventory are cloud — UP whenever
+    configured, because Logos does not probe cloud providers (matching the
+    overall /health behaviour). Worker-backed
+    deployments are UP when the worker is online, the model is calibrated, and
+    a lane is loaded/running or sleeping (a wake is fast). A model that only
+    needs a cold load, or that lives on a worker reporting an unhealthy node,
+    is DEGRADED; a missing/stale worker or missing calibration is DOWN.
+    """
+    if provider_id not in worker_ids:
+        return "UP"
+    snapshot = snapshots.get(provider_id)
+    if snapshot is None:
+        return "DOWN"
+    model_name = str(deployment.get("model_name") or "")
+    if model_name not in (snapshot.get("capabilities_models") or []):
+        return "DOWN"
+    runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else {}
+    node_health = runtime.get("node_health")
+    if isinstance(node_health, dict) and node_health.get("healthy") is False:
+        return "DEGRADED"
+    states = {
+        str(lane.get("runtime_state") or "").strip()
+        for lane in (runtime.get("lanes") or [])
+        if isinstance(lane, dict) and str(lane.get("model") or "").strip() == model_name
+    }
+    if states & {"loaded", "running", "sleeping"}:
+        return "UP"
+    # No loaded/running/sleeping lane: a full cold load is needed first.
+    return "DEGRADED"
+
+
 @app.get("/health", tags=["monitoring"])
 async def health():
     """Report overall health plus a breakdown of what is serveable.
@@ -1901,6 +2061,11 @@ async def health():
     exactly is down: ``local_models`` (logosnode workers) and ``cloud_models``
     (Azure/cloud deployments). Cloud may still be serveable even while local is
     down, which the ``detail`` message makes explicit.
+
+    This endpoint stays a lean liveness signal: it is public (its own Traefik
+    router on the secure entrypoint, and liveness probes call it), so it must
+    not carry the model catalogue. The per-model view applications need lives
+    on the secret-gated /internal/model_health endpoint instead.
     """
     local_ok = False
     cloud_ok = False
@@ -1908,19 +2073,22 @@ async def health():
         with DBManager() as db:
             inventory = db.list_local_providers()
             deployments = db.get_all_deployments()
-        # Cloud is serveable if any non-logosnode deployment is configured.
-        cloud_ok = any(str(d.get("type")) != "logosnode" for d in deployments)
-        # Local is serveable if an online worker declares at least one capable model.
+        worker_ids: set[int] = set()
         for provider in inventory:
             provider_id = int(provider.get("provider_id") or 0)
             if provider_id <= 0:
                 continue
+            worker_ids.add(provider_id)
             snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
             if not _logosnode_snapshot_is_connected(snapshot):
                 continue
+            # Local is serveable if an online worker declares at least one capable model.
             if snapshot.get("capabilities_models"):
                 local_ok = True
-                break
+        # Cloud is serveable if any deployment lives outside the local provider
+        # inventory — by type alone this would miscount legacy local worker
+        # types (ollama, node, ...) as cloud.
+        cloud_ok = any(int(d.get("provider_id") or 0) not in worker_ids for d in deployments)
     except Exception:
         logger.exception("Health check failed to evaluate provider state")
         local_ok = False
@@ -1938,6 +2106,72 @@ async def health():
     return JSONResponse(status_code=200 if local_ok else 503, content=payload)
 
 
+@app.get("/internal/model_health", tags=["admin"])
+async def internal_model_health(request: Request):
+    """Current per-model health, for the Spring webservice.
+
+    Lane state, worker connection state, and node health exist only in the
+    orchestrator's worker registry, so the webservice's get_model_health
+    endpoint (API-key authenticated, permission filtered) is served from this
+    payload. It is secret-gated rather than part of /health because /health is
+    public: the full model catalogue must not be readable without a credential.
+
+    Status codes mirror /health — 503 while every local worker is down, whose
+    body still carries the breakdown (cloud models may be serveable) — and the
+    entries expose only model names and statuses, best across deployments
+    (see :func:`_model_deployment_status`).
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal model health endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    local_ok = False
+    model_status: Dict[str, str] = {}
+    try:
+        with DBManager() as db:
+            inventory = db.list_local_providers()
+            deployments = db.get_all_deployments_with_names()
+        worker_ids: set[int] = set()
+        snapshots: Dict[int, Dict[str, Any]] = {}
+        for provider in inventory:
+            provider_id = int(provider.get("provider_id") or 0)
+            if provider_id <= 0:
+                continue
+            worker_ids.add(provider_id)
+            snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+            if not _logosnode_snapshot_is_connected(snapshot):
+                continue
+            snapshots[provider_id] = snapshot
+            if snapshot.get("capabilities_models"):
+                local_ok = True
+        for deployment in deployments:
+            model_name = str(deployment.get("model_name") or "").strip()
+            if not model_name:
+                continue
+            status = _model_deployment_status(
+                deployment, int(deployment.get("provider_id") or 0), worker_ids, snapshots
+            )
+            current = model_status.get(model_name)
+            if current is None or _HEALTH_STATUS_RANK[status] > _HEALTH_STATUS_RANK[current]:
+                model_status[model_name] = status
+    except Exception:
+        logger.exception("Model health check failed to evaluate provider state")
+        local_ok = False
+        model_status = {}
+
+    return JSONResponse(
+        status_code=200 if local_ok else 503,
+        content={"models": [{"name": name, "status": model_status[name]} for name in sorted(model_status)]},
+    )
+
+
 @app.get("/metrics", tags=["monitoring"])
 async def prometheus_metrics(request: Request):
     """Prometheus metrics endpoint. Requires PROMETHEUS_API_KEY env var to be set.
@@ -1949,7 +2183,7 @@ async def prometheus_metrics(request: Request):
         )
     auth = request.headers.get("authorization", "")
     token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else auth.strip()
-    if not hmac.compare_digest(token, _PROMETHEUS_API_KEY):
+    if not hmac.compare_digest(token.encode("utf-8"), _PROMETHEUS_API_KEY.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing metrics API key")
     body, content_type = _prometheus_metrics_response()
     from starlette.responses import Response
@@ -1971,7 +2205,7 @@ async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Requ
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     if not _pipeline or not _logosnode_facade or not _azure_facade:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
@@ -1996,7 +2230,7 @@ async def internal_provider_status(request: Request):
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     with DBManager() as db:
@@ -2047,7 +2281,7 @@ async def internal_model_context_windows(request: Request):
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     stats = _served_context_window_stats()
@@ -2055,6 +2289,20 @@ async def internal_model_context_windows(request: Request):
         "windows": {model: entry["current_min"] for model, entry in stats.items() if "current_min" in entry},
         "stats": stats,
     }
+
+
+def _require_internal_secret(request: Request) -> None:
+    """Authenticate an /internal/* call: the shared secret, no user context."""
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
 
 @app.get("/internal/live_streams", tags=["admin"])
@@ -2069,17 +2317,47 @@ async def internal_live_streams(request: Request):
     Cheap by construction: a dict of the in-flight requests, no database work,
     and the webservice already polls on the cadence it pushes the feed at.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     return {"streams": _live_streams.snapshot()}
+
+
+# How often the live-stream SSE connection checks for a changed snapshot. The
+# push is event-driven in effect — a token delta bumps the registry's version
+# and the very next check sends it — but the check itself is a short poll so
+# the endpoint stays a plain generator instead of event plumbing.
+_LIVE_STREAMS_SSE_TICK_S = 0.2
+
+
+@app.get("/internal/live_streams/stream", tags=["admin"])
+async def internal_live_streams_stream(request: Request):
+    """The live view as an SSE stream: the current snapshot, then one event
+    per change.
+
+    The statistics page's token counts used to move at the webservice's poll
+    interval; this lets the webservice forward a change the moment it happens
+    and push it to its websocket clients in real time. The payload is the
+    same shape as ``/internal/live_streams`` so both clients parse one way.
+    """
+    _require_internal_secret(request)
+
+    async def events():
+        version = -1
+        while True:
+            current = _live_streams.version
+            if current != version:
+                version = current
+                yield f"data: {json.dumps({'streams': _live_streams.snapshot()})}\n\n"
+            else:
+                # A comment line: keeps idle (but healthy) connections from
+                # being reaped by anything in the middle.
+                yield ": ping\n\n"
+            await asyncio.sleep(_LIVE_STREAMS_SSE_TICK_S)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/internal/calibration_probe_logs", tags=["admin"])
@@ -2120,6 +2398,242 @@ class _InternalAddLaneRequest(BaseModel):
     lane: dict[str, Any]
 
 
+class _InternalBenchmarkRequest(BaseModel):
+    model_provider_id: int = Field(gt=0)
+    samples: int = Field(default=5, gt=0, le=100)
+    max_output_tokens: int = Field(default=512, gt=0, le=4096)
+
+
+@app.post("/internal/model_benchmarks/run", tags=["admin"])
+async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request: Request):
+    """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
+    _require_internal_secret(request)
+
+    # One orchestrator process owns benchmark execution. Serialize the short
+    # check-and-create section in memory so simultaneous starts cannot both
+    # admit a benchmark for the same provider.
+    with _benchmark_admission_lock, DBManager() as db:
+        target = db.get_model_provider_benchmark_target(data.model_provider_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Provider-model pair not found")
+        provider_id = int(target["provider_id"])
+        provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
+        endpoint = str(target.get("target") or "").strip()
+        if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
+            raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
+        api_key = str(target.get("api_key") or "").strip()
+        if provider_type != "logosnode" and api_key and not credential_transport_is_secure(endpoint):
+            raise HTTPException(
+                status_code=409,
+                detail="Provider credentials require HTTPS (plain HTTP is allowed only on loopback)",
+            )
+
+        active = db.find_active_model_benchmark_job(provider_id)
+        if active is not None:
+            return JSONResponse(
+                status_code=409,
+                content=jsonable_encoder(
+                    {
+                        "error": f"A benchmark is already running on {target['provider_name']}",
+                        "job_id": active["id"],
+                        "status": active["status"],
+                    }
+                ),
+            )
+        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        if provider_type == "logosnode":
+            if runtime_snapshot is None or not _logosnode_snapshot_is_connected(runtime_snapshot):
+                raise HTTPException(status_code=503, detail=f"Provider {target['provider_name']} is offline")
+            if not runtime_snapshot.get("first_status_received"):
+                raise HTTPException(status_code=503, detail="Provider has not sent its first status yet")
+
+        model_name = str(target["model_name"])
+        serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
+        job_payload = {
+            "model_provider_id": data.model_provider_id,
+            "provider_id": provider_id,
+            "provider_name": target["provider_name"],
+            "model_id": target["model_id"],
+            "model_name": model_name,
+            "dataset": BENCHMARK_DATASET,
+            "subset": "main",
+            "split": "test",
+            "samples": data.samples,
+            "max_output_tokens": data.max_output_tokens,
+            "provider_session_id": runtime_snapshot.get("session_id") if runtime_snapshot else None,
+        }
+        job_id = db.create_job_record(
+            payload=job_payload,
+            api_key_id=None,
+            team_id=None,
+            user_id=None,
+            environment="model-provider-benchmark",
+        )
+
+    is_internal_worker_benchmark = provider_type == "logosnode"
+    benchmark_target = (
+        internal_benchmark_target(job_id) if is_internal_worker_benchmark else resolve_benchmark_target(endpoint)
+    )
+    request_headers = (
+        benchmark_affinity_headers(
+            secret=_INTERNAL_SECRET,
+            job_id=job_id,
+            provider_id=provider_id,
+            model=model_name,
+        )
+        if is_internal_worker_benchmark
+        else None
+    )
+    worker_preparer = (
+        (lambda: _capacity_planner.prepare_benchmark_lane(provider_id, model_name))
+        if request_headers is not None and _capacity_planner is not None
+        else None
+    )
+
+    task = asyncio.create_task(
+        run_benchmark_job(
+            job_id=job_id,
+            model_provider_id=data.model_provider_id,
+            target=benchmark_target,
+            model=model_name,
+            api_key=None if is_internal_worker_benchmark else api_key or None,
+            samples=data.samples,
+            max_output_tokens=data.max_output_tokens,
+            serving_configuration=serving_configuration,
+            serving_configuration_getter=lambda: extract_serving_configuration(
+                _logosnode_registry.peek_runtime_snapshot(provider_id), model_name
+            ),
+            request_headers=request_headers,
+            worker_preparer=worker_preparer,
+            worker_session_is_current=(
+                (
+                    lambda: (_logosnode_registry.peek_runtime_snapshot(provider_id) or {}).get("session_id")
+                    == job_payload["provider_session_id"]
+                )
+                if is_internal_worker_benchmark
+                else None
+            ),
+        )
+    )
+    _background_tasks.add(task)
+    _benchmark_tasks.add(task)
+    _benchmark_tasks_by_job[job_id] = task
+    if is_internal_worker_benchmark:
+        _benchmark_sessions_by_job[job_id] = (provider_id, str(job_payload["provider_session_id"]))
+    task.add_done_callback(lambda done, jid=job_id: _forget_benchmark_task(jid, done))
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": "pending",
+            "provider_id": provider_id,
+            "provider_name": target["provider_name"],
+            "model_provider_id": data.model_provider_id,
+            "model_name": model_name,
+        },
+    )
+
+
+@app.post("/internal/model_benchmarks/jobs/{job_id}/cancel", tags=["admin"])
+async def internal_cancel_model_benchmark(job_id: int, request: Request):
+    """Cancel one active benchmark and release its lease."""
+    _require_internal_secret(request)
+    if not _cancel_benchmark_job(job_id, "Benchmark cancelled by administrator"):
+        raise HTTPException(status_code=404, detail="Active benchmark job not found")
+    return {"job_id": job_id, "status": "failed"}
+
+
+@app.post("/internal/model_benchmarks/jobs/{job_id}/v1/{path:path}", tags=["admin"])
+async def internal_model_benchmark_completion(job_id: int, path: str, request: Request):
+    """Execute one signed benchmark request without a user API key."""
+    if path.strip("/") != "chat/completions":
+        raise HTTPException(status_code=404, detail="Unsupported benchmark operation")
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON payload must be an object")
+
+    headers = dict(request.headers)
+    header_job_id = headers.get(BENCHMARK_JOB_HEADER)
+    if header_job_id != str(job_id):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    with DBManager() as db:
+        job = db.get_job(job_id)
+        payload = job.get("request_payload") if job else None
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+        try:
+            model_provider_id = int(payload["model_provider_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+        target = db.get_model_provider_benchmark_target(model_provider_id)
+
+    if target is None or _normalize_provider_type(str(target.get("provider_type") or "")) != "logosnode":
+        raise HTTPException(status_code=404, detail="Benchmark worker deployment no longer exists")
+
+    raw_deployments: list[Deployment] = [
+        {
+            "model_id": int(target["model_id"]),
+            "provider_id": int(target["provider_id"]),
+            "type": "logosnode",
+            "privacy_level": target.get("privacy_level"),
+            "cloud_provider_type": target.get("cloud_provider_type"),
+            "base_url": target.get("base_url"),
+        }
+    ]
+    required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
+    deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
+    if not deployments:
+        raise HTTPException(status_code=503, detail="Selected benchmark worker is not serving the model")
+
+    # This context is created only after the active job's HMAC and exact
+    # provider-model pair have been validated above. It intentionally has no
+    # user/team limits or billing identity: benchmarks are Logos-internal work.
+    auth = AuthContext(
+        key_value="",
+        api_key_id=-job_id,
+        api_key_name="internal-model-benchmark",
+        key_type="internal",
+        team_id=None,
+        user_id=None,
+        environment="model-provider-benchmark",
+        log_level="FULL",
+        settings={},
+        default_priority=1,
+    )
+    request_id = secrets.token_urlsafe(16)
+    with DBManager() as db:
+        log_result, _ = db.log_usage(
+            api_key_id=None,
+            team_id=None,
+            user_id=None,
+            environment=auth.environment,
+            log_level=auth.log_level,
+            request_id=request_id,
+        )
+    log_id = int(log_result["log-id"])
+    return await _execute_cancelling_on_disconnect(
+        request,
+        deployments=deployments,
+        body=body,
+        headers=headers,
+        auth=auth,
+        path=f"v1/{path.strip('/')}",
+        log_id=log_id,
+        request_id=request_id,
+        required_provider_id=required_provider_id,
+    )
+
+
 class _InternalSleepLaneRequest(BaseModel):
     provider_id: int
     lane_id: str
@@ -2141,7 +2655,7 @@ async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequ
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
@@ -2192,7 +2706,7 @@ async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, reque
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
@@ -2212,7 +2726,7 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     model = str(data.lane.get("model") or "").strip()
@@ -2266,7 +2780,7 @@ async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
@@ -2312,7 +2826,7 @@ async def internal_logosnode_wake_lane(data: _InternalWakeLaneRequest, request: 
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
@@ -3362,9 +3876,14 @@ async def _streaming_response(
                             with DBManager() as db:
                                 db.set_time_at_first_token(log_id)
                         ttft_recorded = True
-                    yield first_chunk
+                    # Feed before yielding so a stream that terminates in its
+                    # very first chunk is already marked complete when the
+                    # engine tears the connection down right after [DONE].
                     stream_log.feed(first_chunk)
+                    if stream_log.terminal_event_received:
+                        stream_completed = True
                     _live_streams.update(request_id, stream_log.streamed_tokens())
+                    yield first_chunk
                 while True:
                     try:
                         # Closing `open_iter` in the finally below is what
@@ -3376,17 +3895,32 @@ async def _streaming_response(
                         # what sends the cancellation) would run at some
                         # unspecified later point.
                         async for chunk in open_iter:
-                            yield chunk
+                            # Parse before yielding: GuideLLM closes its HTTP
+                            # stream as soon as it receives [DONE]. If the
+                            # completion flag were set afterwards, that normal
+                            # close would be misreported as a disconnect.
+                            stream_log.feed(chunk)
+                            if stream_log.terminal_event_received:
+                                stream_completed = True
                             if chunk and not ttft_recorded:
                                 if log_id:
                                     with DBManager() as db:
                                         db.set_time_at_first_token(log_id)
                                 ttft_recorded = True
-                            stream_log.feed(chunk)
                             _live_streams.update(request_id, stream_log.streamed_tokens())
+                            yield chunk
                         stream_completed = True
                         break  # stream completed without raising
                     except Exception as e:
+                        # A terminal event means the answer reached the
+                        # client in full — GuideLLM, for instance, tears its
+                        # HTTP stream down as soon as it sends [DONE], which
+                        # surfaces as a close error on the final read. There
+                        # is nothing left to recover: close out as completed
+                        # rather than resuming an answer that is over.
+                        if stream_log.terminal_event_received:
+                            stream_completed = True
+                            break
                         # Mid-flight failure: tokens already reached the
                         # client, so the only recovery is continuing the
                         # generation after the partial answer on a node that
@@ -3447,9 +3981,11 @@ async def _streaming_response(
                                             resumed = True
                                             resume_opened = True
                                             if resumed_first is not None:
-                                                yield resumed_first
                                                 stream_log.feed(resumed_first)
+                                                if stream_log.terminal_event_received:
+                                                    stream_completed = True
                                                 _live_streams.update(request_id, stream_log.streamed_tokens())
+                                                yield resumed_first
                                         else:
                                             # The takeover could not open a
                                             # stream either: release its slot
@@ -3523,6 +4059,7 @@ async def _streaming_response(
                         result_status="error" if error_message else "success",
                         error_message=error_message,
                         cold_start=scheduling_stats.get("is_cold_start"),
+                        usage_tokens=usage_tokens,
                     )
                 _log_request_completion(
                     model_id=model_id,
@@ -3688,6 +4225,7 @@ async def _streaming_response(
                     result_status="error" if failed else "success",
                     error_message=error_message,
                     cold_start=scheduling_stats.get("is_cold_start"),
+                    usage_tokens=usage_tokens,
                 )
             _log_request_completion(
                 model_id=model_id,
@@ -3906,6 +4444,7 @@ async def _sync_response(
                     error_message if timed_out else (exec_result.error if not exec_result.success else None)
                 ),
                 cold_start=scheduling_stats.get("is_cold_start"),
+                usage_tokens=usage_tokens,
             )
 
         if rl_key:
@@ -4167,6 +4706,8 @@ async def _execute_proxy_mode(
     is_async_job: bool,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
+    priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -4178,25 +4719,33 @@ async def _execute_proxy_mode(
     if not requested_model_name:
         raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
 
-    with DBManager() as db:
-        models_info = db.get_models_info(auth.key_value)
+    is_internal_benchmark = auth.environment == "model-provider-benchmark" and required_provider_id is not None
+    if is_internal_benchmark:
+        matching_deployments = [
+            deployment for deployment in deployments if deployment["provider_id"] == required_provider_id
+        ]
+        model_id = matching_deployments[0]["model_id"] if len(matching_deployments) == 1 else None
+        model_name = requested_model_name if model_id is not None else None
+    else:
+        with DBManager() as db:
+            models_info = db.get_models_info(auth.key_value)
 
-    model_name = _resolve_requested_model_name(
-        requested_model_name,
-        [str(row["name"]) for row in models_info if row.get("name")],
-    )
-    if model_name is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Model '{requested_model_name}' not available for this key",
+        model_name = _resolve_requested_model_name(
+            requested_model_name,
+            [str(row["name"]) for row in models_info if row.get("name")],
         )
+        if model_name is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model '{requested_model_name}' not available for this key",
+            )
 
-    model_id = None
-    for row in models_info:
-        mid, name = row["id"], row["name"]
-        if name == model_name:
-            model_id = mid
-            break
+        model_id = None
+        for row in models_info:
+            mid, name = row["id"], row["name"]
+            if name == model_name:
+                model_id = mid
+                break
 
     if model_id is None:
         raise HTTPException(
@@ -4227,6 +4776,8 @@ async def _execute_proxy_mode(
         request_id=request_id,
         request_path=request_path,
         skip_laura=True,
+        priority=priority,
+        required_provider_id=required_provider_id,
     )
 
 
@@ -4305,6 +4856,8 @@ async def _execute_resource_mode(
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
     skip_laura: bool = False,
+    priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -4358,6 +4911,7 @@ async def _execute_resource_mode(
         deployments=deployments,
         skip_laura=skip_laura,
         request_path=request_path,
+        required_provider_id=required_provider_id,
         # The key owner's queue priority; 0 falls back to the
         # policy-level priority inside the pipeline.
         default_priority=auth.default_priority,
@@ -4596,6 +5150,8 @@ async def route_and_execute(
     log_id: Optional[int],
     is_async_job: bool = False,
     request_id: Optional[str] = None,
+    priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -4658,10 +5214,16 @@ async def route_and_execute(
         else:
             raise HTTPException(status_code=404, detail="No models available for this API key.")
 
+    # Jobs reach this point without going through handle_sync_request, so they
+    # publish their live view here. start() is non-destructive, so a request
+    # that already arrived on the sync path keeps the entry it has.
+    _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(body), prompt_estimated=True)
+
+    response = None
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
         if body.get("model"):
-            return await _execute_proxy_mode(
+            response = await _execute_proxy_mode(
                 body=body,
                 headers=headers,
                 auth=auth,
@@ -4670,19 +5232,25 @@ async def route_and_execute(
                 is_async_job=is_async_job,
                 request_id=request_id,
                 request_path=path,
+                priority=priority,
+                required_provider_id=required_provider_id,
             )
 
-        # RESOURCE mode (no body["model"] → classification + scheduling)
-        return await _execute_resource_mode(
-            deployments=deployments,
-            body=body,
-            headers=headers,
-            auth=auth,
-            log_id=log_id,
-            is_async_job=is_async_job,
-            request_id=request_id,
-            request_path=path,
-        )
+        else:
+            # RESOURCE mode (no body["model"] → classification + scheduling)
+            response = await _execute_resource_mode(
+                deployments=deployments,
+                body=body,
+                headers=headers,
+                auth=auth,
+                log_id=log_id,
+                is_async_job=is_async_job,
+                request_id=request_id,
+                request_path=path,
+                priority=priority,
+                required_provider_id=required_provider_id,
+            )
+        return response
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
         if is_async_job:
@@ -4691,6 +5259,11 @@ async def route_and_execute(
     except Exception as exc:
         _record_log_failure(log_id, request_id, str(exc), result_status="error")
         raise
+    finally:
+        # Same hand-off as handle_sync_request: a stream keeps its entry until
+        # the streamer ends it, everything else ends here.
+        if not isinstance(response, StreamingResponse):
+            _live_streams.finish(request_id)
 
 
 _CLIENT_DISCONNECT_POLL_SECONDS = 1.0
@@ -4775,6 +5348,94 @@ async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
     # 499, as nginx uses it: the client closed the request. Nobody is left to
     # read this, but the status keeps the access log honest.
     return JSONResponse(status_code=499, content={"detail": "Client closed request"})
+
+
+def _benchmark_provider_affinity(
+    headers: Dict[str, str],
+    body: Dict[str, Any],
+    deployments: list[Deployment],
+) -> Optional[int]:
+    """Validate a signed active benchmark job and return its required worker."""
+
+    normalized_headers = {str(name).lower(): str(value) for name, value in headers.items()}
+    job_value = normalized_headers.get(BENCHMARK_JOB_HEADER)
+    provider_value = normalized_headers.get(BENCHMARK_PROVIDER_HEADER)
+    token = normalized_headers.get(BENCHMARK_TOKEN_HEADER)
+    phase = normalized_headers.get(BENCHMARK_PHASE_HEADER, "measurement")
+    affinity_values = (job_value, provider_value, token)
+
+    if not any(affinity_values):
+        return None
+    if not all(affinity_values) or not _INTERNAL_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    if phase not in {"warmup", "measurement"}:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    try:
+        job_id = int(job_value)
+        provider_id = int(provider_value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if job_id <= 0 or provider_id <= 0:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    model_name = str(body.get("model") or "").strip()
+    expected_token = benchmark_affinity_token(
+        secret=_INTERNAL_SECRET,
+        job_id=job_id,
+        provider_id=provider_id,
+        model=model_name,
+    )
+    if not hmac.compare_digest(token.encode("utf-8"), expected_token.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    with DBManager() as db:
+        job = db.get_job(job_id)
+    if not job or job.get("environment") != "model-provider-benchmark":
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    job_status = job.get("status")
+    if hasattr(job_status, "value"):
+        job_status = job_status.value
+    if job_status != JobStatus.RUNNING.value:
+        raise HTTPException(status_code=409, detail="Benchmark job is no longer running")
+
+    payload = job.get("request_payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    try:
+        payload_provider_id = int(payload.get("provider_id"))
+        payload_model_id = int(payload.get("model_id"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if payload_provider_id != provider_id or str(payload.get("model_name") or "") != model_name:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    expected_session_id = payload.get("provider_session_id")
+    if expected_session_id:
+        snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        if snapshot is None or snapshot.get("session_id") != expected_session_id:
+            raise HTTPException(status_code=409, detail="Benchmark provider restarted or disconnected")
+
+    if not any(
+        deployment["provider_id"] == provider_id and deployment["model_id"] == payload_model_id
+        for deployment in deployments
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Benchmark API key cannot access the required provider-model pair",
+        )
+
+    if phase == "measurement":
+        with DBManager() as db:
+            db.record_benchmark_request_started(job_id)
+
+    return provider_id
 
 
 # How often the startup grace period re-checks for a (re)connected worker.
@@ -4878,51 +5539,75 @@ async def handle_sync_request(path: str, request: Request):
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
 
+    # Publish the request to the live view from the moment it is known, so the
+    # statistics feed shows its (estimated) prompt size while it waits for a
+    # deployment or a reconnecting worker instead of sitting as a blank row.
+    _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(body), prompt_estimated=True)
+
+    response = None
     try:
-        with DBManager() as db:
-            if log_id:
-                db.update_log_entry_metrics(
-                    log_id=log_id,
-                    request_id=request_id,
-                    timeout_s=body.get("timeout_s"),
-                )
-            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
-    except PermissionError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        raise HTTPException(status_code=401, detail=str(e))
-    except ValueError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        raise HTTPException(status_code=400, detail=str(e))
+        try:
+            with DBManager() as db:
+                if log_id:
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        request_id=request_id,
+                        timeout_s=body.get("timeout_s"),
+                    )
+                raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+            required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
+            if required_provider_id is not None:
+                raw_deployments = [
+                    deployment for deployment in raw_deployments if deployment["provider_id"] == required_provider_id
+                ]
+            deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
+        except HTTPException as e:
+            _record_log_failure(log_id, request_id, str(e.detail), result_status="error")
+            raise
+        except PermissionError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            raise HTTPException(status_code=401, detail=str(e))
+        except ValueError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            raise HTTPException(status_code=400, detail=str(e))
 
-    if not deployments and raw_deployments:
-        # The key is granted models that no worker serves right now — either
-        # the orchestrator just (re)started and the workers are still
-        # (re)attaching, or a worker dropped a moment ago (reboot) and its
-        # models are unroutable until it comes back. Give the missing
-        # workers a chance to (re)connect instead of failing instantly; the
-        # window stays in effect even though other workers may already have
-        # re-attached.
-        deployments = await _wait_for_worker_connect(
-            raw_deployments, payload=body, request=request, client_timeout_s=_client_timeout_s(body)
+        if not deployments and raw_deployments:
+            # The key is granted models that no worker serves right now — either
+            # the orchestrator just (re)started and the workers are still
+            # (re)attaching, or a worker dropped a moment ago (reboot) and its
+            # models are unroutable until it comes back. Give the missing
+            # workers a chance to (re)connect instead of failing instantly; the
+            # window stays in effect even though other workers may already have
+            # re-attached.
+            deployments = await _wait_for_worker_connect(
+                raw_deployments, payload=body, request=request, client_timeout_s=_client_timeout_s(body)
+            )
+
+        if not deployments:
+            requested_model = body.get("model", "unknown")
+            msg = f"No available model deployments for model '{requested_model}' for this key"
+            _record_log_failure(log_id, request_id, msg, result_status="error")
+            raise HTTPException(status_code=404, detail=msg)
+
+        execute_kwargs = dict(
+            deployments=deployments,
+            body=body,
+            headers=headers,
+            auth=auth,
+            path=path,
+            log_id=log_id,
+            request_id=request_id,
+            required_provider_id=required_provider_id,
         )
-
-    if not deployments:
-        requested_model = body.get("model", "unknown")
-        msg = f"No available model deployments for model '{requested_model}' for this key"
-        _record_log_failure(log_id, request_id, msg, result_status="error")
-        raise HTTPException(status_code=404, detail=msg)
-
-    execute_kwargs = dict(
-        deployments=deployments,
-        body=body,
-        headers=headers,
-        auth=auth,
-        path=path,
-        log_id=log_id,
-        request_id=request_id,
-    )
-    return await _execute_cancelling_on_disconnect(request, **execute_kwargs)
+        response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)
+        return response
+    finally:
+        # A streaming response hands the live entry to its generator: the
+        # streamer drops it when the stream ends. Every other outcome — sync
+        # response, an error raise, the client walking away — ends the request
+        # here.
+        if not isinstance(response, StreamingResponse):
+            _live_streams.finish(request_id)
 
 
 async def auth_parse_log(request: Request, use_profile_auth: bool = False):
@@ -5162,48 +5847,58 @@ async def execute_proxy_job(
 
     request_id = secrets.token_urlsafe(16)
 
-    # Get available models for this API key
+    # Same early publication as the sync path: the moment the job has a
+    # request id, its (estimated) prompt is on the feed instead of the row
+    # sitting blank through the worker wait below.
+    _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(json_data), prompt_estimated=True)
     try:
-        with DBManager() as db:
-            if log_id:
-                db.update_log_entry_metrics(
-                    log_id=log_id,
-                    request_id=request_id,
-                    timeout_s=json_data.get("timeout_s"),
-                )
-            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
-    except PermissionError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        _, err_body = coerce_upstream_error(401, {"error": str(e)})
-        return {"status_code": 401, "data": err_body}
-    except ValueError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        _, err_body = coerce_upstream_error(400, {"error": str(e)})
-        return {"status_code": 400, "data": err_body}
+        # Get available models for this API key
+        try:
+            with DBManager() as db:
+                if log_id:
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        request_id=request_id,
+                        timeout_s=json_data.get("timeout_s"),
+                    )
+                raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+            deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
+        except PermissionError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            _, err_body = coerce_upstream_error(401, {"error": str(e)})
+            return {"status_code": 401, "data": err_body}
+        except ValueError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            _, err_body = coerce_upstream_error(400, {"error": str(e)})
+            return {"status_code": 400, "data": err_body}
 
-    # Same windows as the sync path: a job submitted while no worker is
-    # connected (startup or a worker reboot) must not fail before the
-    # workers re-attach.
-    if not deployments and raw_deployments:
-        deployments = await _wait_for_worker_connect(
-            raw_deployments, payload=json_data, client_timeout_s=_client_timeout_s(json_data)
+        # Same windows as the sync path: a job submitted while no worker is
+        # connected (startup or a worker reboot) must not fail before the
+        # workers re-attach.
+        if not deployments and raw_deployments:
+            deployments = await _wait_for_worker_connect(
+                raw_deployments, payload=json_data, client_timeout_s=_client_timeout_s(json_data)
+            )
+
+        # Force non-streaming for jobs without adding unsupported multipart fields.
+        json_data = force_non_streaming_payload(json_data)
+
+        # Route and execute request
+        return await route_and_execute(
+            deployments=deployments,
+            body=json_data,
+            headers=headers,
+            auth=auth,
+            path=path,
+            log_id=log_id,
+            is_async_job=True,
+            request_id=request_id,
         )
-
-    # Force non-streaming for jobs without adding unsupported multipart fields.
-    json_data = force_non_streaming_payload(json_data)
-
-    # Route and execute request
-    return await route_and_execute(
-        deployments=deployments,
-        body=json_data,
-        headers=headers,
-        auth=auth,
-        path=path,
-        log_id=log_id,
-        is_async_job=True,
-        request_id=request_id,
-    )
+    finally:
+        # A job never streams, so nothing here hands the entry on: every way
+        # out — error dict above, route_and_execute's own finally, an
+        # unexpected raise — ends the entry here at the latest.
+        _live_streams.finish(request_id)
 
 
 # ============================================================================
@@ -5325,10 +6020,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
 
     await websocket.accept()
     try:
-        await _logosnode_registry.attach_session(ticket, websocket)
+        session = await _logosnode_registry.attach_session(ticket, websocket)
     except LogosNodeSessionConflictError as exc:
         await websocket.close(code=1008, reason=str(exc))
         return
+    _cancel_benchmarks_for_changed_session(ticket.provider_id, session.session_id)
 
     try:
         while True:
@@ -5404,6 +6100,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
         pass
     finally:
         await _logosnode_registry.detach_session(ticket.provider_id, websocket)
+        current = _logosnode_registry.peek_runtime_snapshot(ticket.provider_id)
+        _cancel_benchmarks_for_changed_session(
+            ticket.provider_id,
+            str(current["session_id"]) if current else None,
+        )
 
 
 @app.post("/logosdb/providers/logosnode/status", tags=["logosnode"])
@@ -5780,29 +6481,66 @@ def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
 def _profile_native_context_length(profile: dict) -> int:
     """Largest context window a model could ever be served with here.
 
-    The model's own architectural limit (``max_context_length``) when the
-    worker reported it, otherwise the widest window any calibrated KV point
-    reached. This is the "all-time maximum" — what the model offers when a
-    lane gets all the KV cache it wants — as opposed to the window a lane
-    happens to run with right now.
+    The widest window the model's profile reports — its own architectural
+    limit (``max_context_length``), the ``--max-model-len`` calibration settled
+    on (``calibration_max_model_len``), or the widest point of the calibrated
+    KV sweep — whichever is largest. This is the "all-time maximum" the model
+    offers, as opposed to the window a lane happens to run with right now.
+
+    Reading ``calibration_max_model_len`` matters on its own: a model
+    calibration capped its ``--max-model-len`` to fit the pinned KV budget and
+    recorded no wider KV point, so the calibrated cap is the only context the
+    profile reports. Ignoring it made such a model look context-unknown (and
+    the client fall back to a guessed window) while its worker sat connected
+    and ready to serve it at exactly that width (#829).
     """
-    if not isinstance(profile, dict):
-        return 0
+    return derived_reported_context_length(profile)
 
-    def _as_len(value) -> int:
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            return 0
-        return value if value > 0 else 0
 
-    native = _as_len(profile.get("max_context_length"))
-    pairs = profile.get("kv_cache_to_max_model_len_pairs")
-    if isinstance(pairs, list):
-        for item in pairs:
-            if isinstance(item, dict):
-                native = max(native, _as_len(item.get("max_model_len")))
-    return native
+# The high-water mark only changes when a worker snapshot arrives (a few to a
+# dozen seconds per node), and every model endpoint calls into this, so the
+# lookup result is cached for a short TTL instead of opening a fresh
+# DBManager session per call — /v1/models took two connections where it
+# previously took one. A failed lookup is never cached, so a broken database
+# recovers on the very next call. No lock is needed: every caller runs on the
+# asyncio event loop.
+_HISTORIC_MAX_CONTEXT_TTL_SECONDS = 10.0
+_historic_max_context_cache: tuple[float, dict[str, int]] | None = None
+
+
+def _clear_historic_max_context_cache() -> None:
+    """Drop the cached historic maxima (used by the tests; production never needs it)."""
+    global _historic_max_context_cache
+    _historic_max_context_cache = None
+
+
+def _historic_max_context_by_model() -> dict[str, int]:
+    """Model name -> widest context ever reported for it, from the database.
+
+    The durable counterpart of the live runtime snapshots: ``upsert_model_profiles``
+    keeps a high-water mark per (provider, model) in ``model_profiles`` on every
+    worker snapshot, so this is still what a model's context is when no
+    workernode is connected to say otherwise. Returns an empty mapping when the
+    database cannot be reached — the live figures then stand on their own, as
+    before. The result is cached for a short TTL (see above) because the value
+    only changes when a worker snapshot arrives.
+    """
+    global _historic_max_context_cache
+    now = time.monotonic()
+    cached = _historic_max_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
+    try:
+        with DBManager() as db:
+            historic = db.get_historic_max_context_by_model()
+    except Exception:
+        # Fail open — the live snapshots still stand on their own — but say so:
+        # a persistently broken lookup must not look like "no model has a
+        # historic context".
+        logger.warning("Failed to load the historic max context by model", exc_info=True)
+        return {}
+    _historic_max_context_cache = (now, historic)
+    return historic
 
 
 def _served_context_window_stats() -> dict[str, dict[str, int]]:
@@ -5821,13 +6559,18 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
                      runs at once it gets all the KV cache it asks for.
                      Independent of what is loaded at the moment, so it is
                      known even for a model with no live lane, and it is the
-                     ceiling ``current_max`` can grow to.
+                     ceiling ``current_max`` can grow to. The live snapshots
+                     only say this while a workernode is connected, so the
+                     number is topped up from the historic maximum the
+                     database keeps per model (#829): when every workernode
+                     is offline, that — not a client-side guess — is what the
+                     clients size the session from.
     """
     stats: dict[str, dict[str, int]] = {}
     try:
         provider_ids = _logosnode_registry.active_provider_ids()
     except Exception:
-        return stats
+        provider_ids = []
 
     def _record(model: str, field: str, value: int, *, keep_smallest: bool = False) -> None:
         entry = stats.setdefault(model, {})
@@ -5863,6 +6606,16 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
             model = lane["model"]
             _record(model, "current_min", window, keep_smallest=True)
             _record(model, "current_max", window)
+
+    # The live snapshots above only exist while workernodes are connected.
+    # Top the "overall" figure up with the historic maximum the database keeps
+    # per model, so it is still known when every node is offline (#829) and so
+    # a wider window reported on another node (or by an earlier calibration)
+    # is not lost while this node runs the model narrower.
+    for model, value in _historic_max_context_by_model().items():
+        entry = stats.setdefault(model, {})
+        if value > entry.get("overall", 0):
+            entry["overall"] = value
     return stats
 
 

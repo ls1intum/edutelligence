@@ -34,7 +34,12 @@ class FcfScheduler(BaseScheduler):
         target_model_id, weight, priority_int = sorted_candidates[0]
 
         # Multi-provider: find ALL deployments for the top candidate
-        matching = [d for d in request.deployments if d["model_id"] == target_model_id]
+        matching = [
+            d
+            for d in request.deployments
+            if d["model_id"] == target_model_id
+            and (request.required_provider_id is None or d["provider_id"] == request.required_provider_id)
+        ]
         if not matching:
             logger.warning("No deployment found for model_id=%s", target_model_id)
             return None
@@ -86,7 +91,13 @@ class FcfScheduler(BaseScheduler):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        entry_id = self._queue_mgr.enqueue(future, target_model_id, provider_id, priority)
+        entry_id = self._queue_mgr.enqueue(
+            future,
+            target_model_id,
+            provider_id,
+            priority,
+            provider_affinity=request.required_provider_id,
+        )
         logger.info(
             "Request %s queued for model %s provider %s (weight=%.2f, depth=%s)",
             request.request_id,
