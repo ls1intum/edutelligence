@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1264,6 +1265,55 @@ async def test_hf_precheck_failure_does_not_block_calibration(tmp_path, monkeypa
     events = [e.event for e in app.state.lane_manager._event_log]
     assert "calibration_model_skipped" not in events
     assert "calibration_model_completed" in events
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_warns_on_persistent_fetch_failure(tmp_path, monkeypatch, caplog):
+    """Not-found/gated already surface via the calibration loop's own
+    warning + skip event. Any other fetch failure (network trouble, a bad
+    HF_TOKEN, huggingface_hub missing) has no such caller-side signal, so
+    _run_hf_compatibility_precheck itself must warn — left at debug level,
+    a persistent failure degrades to a silent no-op every night."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:no-data"),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await client._execute_command("run_compatibility_precheck", {"model": "org/flaky-network"})  # noqa: SLF001
+
+    assert any("HF metadata unavailable" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_no_warning_for_not_found_or_gated(tmp_path, monkeypatch, caplog):
+    """Those two already warn (with more specific context) via the
+    calibration loop's own skip-event logging — this must not double-log."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    for source in ("error:model-not-found", "error:model-gated"):
+        monkeypatch.setattr(
+            "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+            lambda *a, source=source, **k: HfModelMetadata(source=source),
+        )
+        with caplog.at_level(logging.WARNING):
+            await client._execute_command("run_compatibility_precheck", {"model": "org/some-model"})  # noqa: SLF001
+        assert not any("HF metadata unavailable" in r.message for r in caplog.records)
+        caplog.clear()
 
 
 # ── Standalone compatibility precheck (run_compatibility_precheck RPC) ─────────

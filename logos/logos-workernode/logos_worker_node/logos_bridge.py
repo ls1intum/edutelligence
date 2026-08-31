@@ -804,12 +804,32 @@ class LogosBridgeClient:
         model_profiles = self._app.state.model_profiles
 
         try:
-            hf_meta = fetch_hf_model_metadata(
-                model_name, token=os.environ.get("HF_TOKEN") or None, cache=self._get_hf_info_cache()
+            # fetch_hf_model_metadata does blocking network I/O (HF Hub HTTP
+            # calls) — off the event loop, or a slow/hung Hub request stalls
+            # every other bridge RPC and the live vLLM proxy on this node.
+            hf_meta = await asyncio.to_thread(
+                fetch_hf_model_metadata,
+                model_name,
+                token=os.environ.get("HF_TOKEN") or None,
+                cache=self._get_hf_info_cache(),
             )
         except Exception:  # noqa: BLE001
             hf_meta = None
             logger.debug("[Precheck] HF fetch raised unexpectedly for %s", model_name, exc_info=True)
+
+        # Not-found and gated are self-explanatory, expected outcomes, warned
+        # about (with a skip event) by the calibration loop that calls this.
+        # Anything else — network trouble, a bad HF_TOKEN, huggingface_hub
+        # missing — has no such caller-side signal, and left at debug level
+        # this degrades to a silent no-op every night. Warn here so a
+        # persistent failure is visible instead of only showing up as an
+        # unexplained absence of HF-derived data.
+        if hf_meta is None or hf_meta.source not in ("hf", "error:model-not-found", "error:model-gated"):
+            logger.warning(
+                "[Precheck] HF metadata unavailable for %s (source=%s) — precheck skipped this run",
+                model_name,
+                hf_meta.source if hf_meta is not None else "error:precheck-failed",
+            )
 
         result: dict[str, Any] = {
             "model": model_name,

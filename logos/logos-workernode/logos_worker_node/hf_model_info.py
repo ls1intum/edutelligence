@@ -77,6 +77,37 @@ def _get_config_field(config: dict[str, Any], key: str) -> Any:
     return text_cfg.get(key)
 
 
+def _effective_max_context_length(config: dict[str, Any], base: int | None) -> int | None:
+    """Stretch ``base`` (the config's raw ``max_position_embeddings``) by an
+    active YaRN/linear RoPE scaling factor, when the config unambiguously
+    says ``base`` is the pre-scaling value.
+
+    HF repos are inconsistent about whether ``max_position_embeddings``
+    already includes the RoPE-scaled length or not. The only case handled
+    here is the unambiguous one: ``rope_scaling.original_max_position_embeddings``
+    equals ``base`` (proof it hasn't been folded in yet) alongside a numeric
+    ``factor``. Anything else — no ``rope_scaling``, an already-scaled
+    ``base``, or ``type``/``rope_type`` "dynamic" (which has no fixed
+    extended length; it adapts to the actual input at inference time) —
+    leaves ``base`` untouched. Best-effort, like the rest of this module.
+    """
+    if not base:
+        return base
+    rope_scaling = _get_config_field(config, "rope_scaling")
+    if not isinstance(rope_scaling, dict):
+        return base
+    rope_type = rope_scaling.get("type") or rope_scaling.get("rope_type")
+    if rope_type not in ("yarn", "linear"):
+        return base
+    original = rope_scaling.get("original_max_position_embeddings")
+    factor = rope_scaling.get("factor")
+    if not isinstance(original, (int, float)) or not isinstance(factor, (int, float)):
+        return base
+    if int(original) != int(base):
+        return base
+    return int(base * factor)
+
+
 def _derive_kv_per_token_bytes(config: dict[str, Any], kv_cache_dtype_override: str | None) -> int | None:
     num_hidden_layers = _get_config_field(config, "num_hidden_layers")
     hidden_size = _get_config_field(config, "hidden_size")
@@ -121,11 +152,13 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
     kv_per_token_bytes: int | None = None
     max_context_length: int | None = None
     try:
-        config_path = hf_hub_download(model_name, filename="config.json", token=token)
+        # etag_timeout only bounds the existence check, not the (tiny)
+        # config.json transfer itself — hf_hub_download has no knob for that.
+        config_path = hf_hub_download(model_name, filename="config.json", token=token, etag_timeout=timeout_s)
         with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
         kv_per_token_bytes = _derive_kv_per_token_bytes(config, None)
-        max_context_length = _get_config_field(config, "max_position_embeddings")
+        max_context_length = _effective_max_context_length(config, _get_config_field(config, "max_position_embeddings"))
     except GatedRepoError as exc:
         gated = True
         logger.debug("[HF precheck] config.json gated for %s: %s", model_name, exc)

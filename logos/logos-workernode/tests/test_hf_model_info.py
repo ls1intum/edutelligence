@@ -13,6 +13,7 @@ from logos_worker_node.hf_model_info import (
     HfModelInfoCache,
     HfModelMetadata,
     _derive_kv_per_token_bytes,
+    _effective_max_context_length,
     fetch_hf_model_metadata,
     min_feasible_tp,
 )
@@ -56,6 +57,39 @@ def test_derive_kv_per_token_bytes():
     # Missing required fields → None, never a guess.
     assert _derive_kv_per_token_bytes({}, None) is None
     assert _derive_kv_per_token_bytes({"num_hidden_layers": 10}, None) is None
+
+
+def test_effective_max_context_length():
+    # Unambiguous YaRN: original_max_position_embeddings matches base exactly
+    # → base wasn't folded in yet, so it's stretched by factor.
+    yarn = {"rope_scaling": {"type": "yarn", "factor": 4.0, "original_max_position_embeddings": 32768}}
+    assert _effective_max_context_length(yarn, 32768) == 131072
+
+    # Same, but the newer "rope_type" key name.
+    yarn_new_key = {"rope_scaling": {"rope_type": "yarn", "factor": 2.0, "original_max_position_embeddings": 8192}}
+    assert _effective_max_context_length(yarn_new_key, 8192) == 16384
+
+    # Linear scaling handled the same way.
+    linear = {"rope_scaling": {"type": "linear", "factor": 2.0, "original_max_position_embeddings": 4096}}
+    assert _effective_max_context_length(linear, 4096) == 8192
+
+    # base already differs from original_max_position_embeddings → looks
+    # already-scaled (or something else is going on) — left untouched.
+    already_scaled = {"rope_scaling": {"type": "yarn", "factor": 4.0, "original_max_position_embeddings": 32768}}
+    assert _effective_max_context_length(already_scaled, 131072) == 131072
+
+    # Dynamic NTK has no fixed extended length — never touched.
+    dynamic = {"rope_scaling": {"type": "dynamic", "factor": 4.0, "original_max_position_embeddings": 32768}}
+    assert _effective_max_context_length(dynamic, 32768) == 32768
+
+    # No rope_scaling at all, or missing/malformed fields → base unchanged.
+    assert _effective_max_context_length({}, 32768) == 32768
+    assert _effective_max_context_length({"rope_scaling": "not-a-dict"}, 32768) == 32768
+    assert _effective_max_context_length({"rope_scaling": {"type": "yarn"}}, 32768) == 32768
+    assert _effective_max_context_length({"rope_scaling": {"type": "yarn", "factor": 4.0}}, 32768) == 32768
+
+    # No base at all → nothing to stretch.
+    assert _effective_max_context_length(yarn, None) is None
 
 
 def _fake_sibling(rfilename: str, size: int | None):
