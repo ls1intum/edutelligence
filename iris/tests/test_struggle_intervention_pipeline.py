@@ -5,6 +5,9 @@ from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.struggle.episode_dto import EpisodeDTO, EpisodeHintDTO
 from iris.domain.struggle.struggle_signal_dto import StruggleSignal
 from iris.pipeline.struggle_intervention_pipeline import (
+    CONFIRM_CLOSE_FALLBACK_LABEL,
+    CONFIRM_CLOSE_FALLBACK_SENTENCE,
+    DEGRADED_CLOSE_RATIONALE,
     INLINE_HINT_MAX_CHARS,
     StruggleInterventionPipeline,
     parse_confirm_close_result,
@@ -882,25 +885,44 @@ def test_prompts_do_not_promise_code_tools_without_a_submission():
     assert "Without those tools you cannot name a line" in decide
 
 
-def test_confirm_close_blank_student_fields_collapse_to_none():
+def test_confirm_close_supplies_its_own_fallback_and_marks_the_close_degraded():
     """
-    A resolved close whose student-visible fields are blank must not ship "" downstream:
-    "" is not a closing sentence, and the empty-vs-missing distinction has no consumer.
-    The close itself still stands - Artemis substitutes its own acknowledgement for a
-    missing sentence, so refusing the close would leave the student with nothing at all.
+    A resolved close owes the student a sentence and a fold label. Artemis substitutes its
+    own text when they are missing, but that is a separate repo on its own deployment
+    schedule and no part of this response contract, so Pyris must not depend on it.
+
+    The close itself still stands: refusing it (returning resolved=false) would turn a
+    formatting failure into a substantively unresolved episode. What must not happen is the
+    silent version, where malformed output enters the evaluation data as an ordinary
+    RECOVERED - hence the degraded flag and the marker on the rationale.
     """
+    for raw in (
+        '{"resolved":true}',
+        '{"resolved":true,"closingSentence":"   ","episodeLabel":""}',
+    ):
+        r = parse_confirm_close_result(raw)
+        assert r.resolved is True
+        assert r.degraded is True
+        assert r.closing_sentence == CONFIRM_CLOSE_FALLBACK_SENTENCE
+        assert r.episode_label == CONFIRM_CLOSE_FALLBACK_LABEL
+        assert r.rationale == DEGRADED_CLOSE_RATIONALE
+
+
+def test_confirm_close_degraded_marker_keeps_a_model_rationale():
+    r = parse_confirm_close_result('{"resolved":true,"rationale":"tests are green"}')
+    assert r.degraded is True
+    assert DEGRADED_CLOSE_RATIONALE in r.rationale
+    assert "tests are green" in r.rationale
+
+
+def test_confirm_close_complete_response_is_not_degraded():
     r = parse_confirm_close_result(
-        '{"resolved":true,"closingSentence":"   ","episodeLabel":""}'
+        '{"resolved":true,"closingSentence":"The helper is gone.","episodeLabel":"missing helper"}'
     )
-    assert r.resolved is True
-    assert r.closing_sentence is None
-    assert r.episode_label is None
-
-
-def test_confirm_close_keeps_resolved_without_student_fields():
-    r = parse_confirm_close_result('{"resolved":true}')
-    assert r.resolved is True
-    assert r.closing_sentence is None and r.episode_label is None
+    assert r.degraded is False
+    assert r.closing_sentence == "The helper is gone."
+    assert r.episode_label == "missing helper"
+    assert r.rationale is None
 
 
 def test_help_request_prompt_offers_no_silent_escape_without_tools():

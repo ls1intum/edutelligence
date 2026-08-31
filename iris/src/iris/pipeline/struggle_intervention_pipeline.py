@@ -99,12 +99,25 @@ class GateResult:
     parse_failed: bool = False
 
 
+# A resolved close owes the student two fields. Artemis substitutes its own text when they are
+# missing, but that lives in a separate repo on its own deployment schedule and in no part of
+# this response contract, so Pyris carries its own fallback and keeps Artemis's as a second net.
+CONFIRM_CLOSE_FALLBACK_SENTENCE = "Nice work, that looks resolved."
+CONFIRM_CLOSE_FALLBACK_LABEL = "Resolved"
+DEGRADED_CLOSE_RATIONALE = "degraded close: model omitted closingSentence/episodeLabel"
+
+
 @dataclass
 class ConfirmCloseResult:
     resolved: bool
     closing_sentence: Optional[str]
     episode_label: Optional[str]
     rationale: Optional[str]
+    # True when the close stands but the model did not supply its student-visible fields. Kept
+    # separate from the close itself: refusing the close would turn a formatting failure into a
+    # substantively unresolved episode, while counting it as an ordinary RECOVERED would let
+    # malformed output pass into the evaluation data as a normal recovery.
+    degraded: bool = False
 
 
 def parse_gate_result(raw: Optional[str]) -> GateResult:
@@ -171,12 +184,29 @@ def parse_confirm_close_result(raw: str) -> ConfirmCloseResult:
     if not isinstance(resolved, bool):
         return ConfirmCloseResult(False, None, None, _as_opt_str(obj.get("rationale")))
     if resolved:
-        return ConfirmCloseResult(
-            True,
-            _as_opt_str(obj.get("closingSentence")),
-            _as_opt_str(obj.get("episodeLabel")),
-            _as_opt_str(obj.get("rationale")),
-        )
+        sentence = _as_opt_str(obj.get("closingSentence"))
+        label = _as_opt_str(obj.get("episodeLabel"))
+        rationale = _as_opt_str(obj.get("rationale"))
+        if sentence is None or label is None:
+            logger.warning(
+                "confirm_close returned resolved=true without %s; using the fallback",
+                "closingSentence" if sentence is None else "episodeLabel",
+            )
+            # rationale is normally empty on a resolved close, so it is free to carry the
+            # marker to Artemis and on into the client's evaluation log without a DTO change.
+            rationale = (
+                f"{DEGRADED_CLOSE_RATIONALE} ({rationale})"
+                if rationale
+                else DEGRADED_CLOSE_RATIONALE
+            )
+            return ConfirmCloseResult(
+                True,
+                sentence or CONFIRM_CLOSE_FALLBACK_SENTENCE,
+                label or CONFIRM_CLOSE_FALLBACK_LABEL,
+                rationale,
+                degraded=True,
+            )
+        return ConfirmCloseResult(True, sentence, label, rationale)
     return ConfirmCloseResult(False, None, None, _as_opt_str(obj.get("rationale")))
 
 
