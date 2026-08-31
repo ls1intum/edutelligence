@@ -1321,8 +1321,10 @@ def test_query_vllm_quantization_methods_parses_registry_json():
 
     assert result == fake_methods
     called_cmd = mock_check_output.call_args.args[0]
-    assert called_cmd[0] == "/opt/venv/bin/python"
-    assert "QUANTIZATION_METHODS" in called_cmd[2]
+    assert called_cmd[:3] == ["nice", "-n", "19"]  # never competes with live inference for CPU
+    assert called_cmd[3] == "/opt/venv/bin/python"
+    assert "resource.setrlimit" in called_cmd[5]  # caps memory before importing torch
+    assert "QUANTIZATION_METHODS" in called_cmd[5]
 
 
 def test_query_vllm_quantization_methods_propagates_failure():

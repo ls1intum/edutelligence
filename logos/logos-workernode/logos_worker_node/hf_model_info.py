@@ -216,21 +216,32 @@ class HfModelInfoCache:
         except Exception:  # noqa: BLE001
             logger.debug("[HF precheck] could not read cache at %s", self._path, exc_info=True)
 
+    @staticmethod
+    def _is_expired(entry: dict[str, Any]) -> bool:
+        ttl = _SUCCESS_CACHE_TTL_S if entry.get("source") == "hf" else _ERROR_CACHE_TTL_S
+        return time.time() - (entry.get("fetched_at") or 0) > ttl
+
     def get(self, model_name: str) -> HfModelMetadata | None:
         with self._lock:
             self._ensure_loaded()
             entry = self._entries.get(model_name)
             if entry is None:
                 return None
-            meta = HfModelMetadata(**entry)
-            ttl = _SUCCESS_CACHE_TTL_S if meta.source == "hf" else _ERROR_CACHE_TTL_S
-            if time.time() - meta.fetched_at > ttl:
+            if self._is_expired(entry):
+                # Drop it here too, not just on the next put() sweep — a
+                # model checked often should never accumulate stale copies.
+                del self._entries[model_name]
                 return None
-            return meta
+            return HfModelMetadata(**entry)
 
     def put(self, model_name: str, meta: HfModelMetadata) -> None:
         with self._lock:
             self._ensure_loaded()
+            # Sweep everything past its TTL, not just model_name — otherwise
+            # a model dropped from configured_models (so never looked up
+            # again) would keep its stale entry forever.
+            for name in [n for n, e in self._entries.items() if self._is_expired(e)]:
+                del self._entries[name]
             self._entries[model_name] = {
                 "weight_bytes": meta.weight_bytes,
                 "kv_per_token_bytes": meta.kv_per_token_bytes,

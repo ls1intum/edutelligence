@@ -777,6 +777,10 @@ def parse_gpu_indices(gpu_devices: str) -> list[int] | None:
 
 
 _BAKED_QUANT_METHODS_FILENAME = "vllm_quantization_methods.json"
+# Generous headroom above torch+transformers' actual ~1-2 GB import
+# footprint — mmap-style virtual address reservations can run higher than
+# what's really used. A too-tight limit just means an earlier fail-open.
+_QUANT_QUERY_MEM_LIMIT_BYTES = 4 * 1024**3
 
 
 def query_vllm_quantization_methods(vllm_binary: str) -> list[str]:
@@ -797,10 +801,19 @@ def query_vllm_quantization_methods(vllm_binary: str) -> list[str]:
             return json.loads(baked.read_text())
         except (OSError, ValueError):
             pass  # corrupt/unreadable — fall through to the live query
+    # nice: never compete with live inference for CPU. RLIMIT_AS: a torch+
+    # transformers import gone wrong (or huge) fails inside this disposable
+    # subprocess instead of pressuring host memory shared with real lanes.
+    limit = _QUANT_QUERY_MEM_LIMIT_BYTES
     raw = subprocess.check_output(
         [
+            "nice",
+            "-n",
+            "19",
             str(venv_bin / "python"),
             "-c",
+            "import resource\n"
+            f"resource.setrlimit(resource.RLIMIT_AS, ({limit}, {limit}))\n"
             "from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS\n"
             "import json\n"
             "print(json.dumps(QUANTIZATION_METHODS))",

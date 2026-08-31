@@ -228,6 +228,36 @@ def test_cache_round_trip_and_ttl(tmp_path):
     assert cache.get("stale-error") is None
 
 
+def test_cache_prunes_expired_entries_instead_of_growing_forever(tmp_path):
+    """A model dropped from configured_models is never get()'d again, so
+    pruning can't rely on that path alone — put() must sweep everything
+    past its TTL, or the cache (in memory and on disk) grows forever."""
+    cache = HfModelInfoCache(tmp_path)
+    stale = HfModelMetadata(weight_bytes=1, source="hf", fetched_at=time.time() - 25 * 3600)
+    cache.put("removed-from-config", stale)
+    assert "removed-from-config" in cache._entries  # noqa: SLF001
+
+    # A later put() for an unrelated model must sweep it out, without ever
+    # calling get("removed-from-config") again.
+    cache.put("org/other-model", HfModelMetadata(weight_bytes=2, source="hf"))
+
+    assert "removed-from-config" not in cache._entries  # noqa: SLF001
+    reloaded = HfModelInfoCache(tmp_path)
+    assert reloaded.get("removed-from-config") is None
+    assert "removed-from-config" not in reloaded._entries  # noqa: SLF001
+
+
+def test_cache_get_prunes_the_single_stale_entry_it_finds(tmp_path):
+    """A frequently-checked model should never accumulate a stale copy of
+    itself while waiting for the next put() sweep."""
+    cache = HfModelInfoCache(tmp_path)
+    stale = HfModelMetadata(weight_bytes=1, source="hf", fetched_at=time.time() - 25 * 3600)
+    cache.put("org/model", stale)
+
+    assert cache.get("org/model") is None
+    assert "org/model" not in cache._entries  # noqa: SLF001
+
+
 def test_fetch_hf_model_metadata_uses_cache_without_refetching(tmp_path):
     cache = HfModelInfoCache(tmp_path)
     cache.put("org/model", HfModelMetadata(weight_bytes=999, source="hf"))
