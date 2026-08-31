@@ -627,6 +627,11 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     if (this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
       return;
     }
+    const confirmed = window.confirm(
+      `Start the benchmark on ${pair.provider_name} · ${pair.model_name}?\n\nConfirm that this provider is currently safe for benchmark traffic. The benchmark runs at low priority and stops automatically when production load is detected.`,
+    );
+    if (!confirmed) return;
+
     this.benchmarkStartingPairId.set(pair.model_provider_id);
     this.benchmarkStartError.set(null);
     try {
