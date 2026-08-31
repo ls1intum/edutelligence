@@ -295,9 +295,8 @@ Fix one of these before rerunning:
    docker compose down
    source .venv/bin/activate
    python -m logos_worker_node.main
-2) Or rebuild Docker mode with vLLM enabled:
+2) Or rebuild the Docker image (vLLM is always included now):
    cd /home/ge84ciq/logos-workernode-test/edutelligence/logos/logos-workernode
-   echo "INSTALL_VLLM=1" >> .env
    ./start.sh
 PREFLIGHT
       exit 1
