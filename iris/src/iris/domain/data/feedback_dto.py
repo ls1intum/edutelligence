@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 
 
 class FeedbackDTO(BaseModel):
+    """One feedback item of a submission's latest result, as Artemis sends it."""
+
     text: Optional[str] = None
     test_case_name: Optional[str] = Field(alias="testCaseName", default=None)
     credits: float

@@ -11,6 +11,8 @@ from iris.pipeline.struggle_intervention_pipeline import (
     parse_gate_result,
     summarize_signal,
 )
+from iris.web.routers.health.Pipelines.features import Features
+from iris.web.routers.health.Pipelines.registery import PIPELINE_BY_FEATURE
 
 
 def test_parse_gate_result_active():
@@ -846,9 +848,6 @@ def test_struggle_pipeline_is_registered_for_health_checks():
     so check_pipelines_health() never evaluated it: health kept reporting all pipelines valid
     while this one's LLM config could be missing or broken, surfacing only at request time.
     """
-    from iris.web.routers.health.Pipelines.features import Features
-    from iris.web.routers.health.Pipelines.registery import PIPELINE_BY_FEATURE
-
     assert Features.STRUGGLE_INTERVENTION in PIPELINE_BY_FEATURE
     assert (
         PIPELINE_BY_FEATURE[Features.STRUGGLE_INTERVENTION]
