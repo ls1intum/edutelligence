@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
+import { ModelBenchmarkResponse, StartModelBenchmarkResponse } from '../../shared/models/provider.model';
 
 @Injectable({ providedIn: 'root' })
 export class ModelManagementService {
@@ -9,6 +10,46 @@ export class ModelManagementService {
 
   getModels(): Promise<Model[]> {
     return firstValueFrom(this.http.post<Model[]>('/api/logosdb/get_models', {}));
+  }
+
+  getBenchmarks(modelId: number): Promise<ModelBenchmarkResponse> {
+    return firstValueFrom(
+      this.http.post<ModelBenchmarkResponse>(
+        '/api/logosdb/model_benchmarks',
+        { model_id: modelId },
+      ),
+    );
+  }
+
+  startBenchmark(modelProviderId: number, sampleSize: number): Promise<StartModelBenchmarkResponse> {
+    return firstValueFrom(
+      this.http.post<StartModelBenchmarkResponse>(
+        '/api/logosdb/model_benchmarks/run',
+        {
+          model_provider_id: modelProviderId,
+          sample_size: sampleSize,
+          max_output_tokens: 512,
+        },
+      ),
+    );
+  }
+
+  cancelBenchmark(jobId: number): Promise<{ job_id: number; status: string }> {
+    return firstValueFrom(
+      this.http.post<{ job_id: number; status: string }>(
+        '/api/logosdb/model_benchmarks/cancel',
+        { id: jobId },
+      ),
+    );
+  }
+
+  deleteBenchmark(benchmarkId: number): Promise<{ deleted: boolean; id: number }> {
+    return firstValueFrom(
+      this.http.post<{ deleted: boolean; id: number }>(
+        '/api/logosdb/model_benchmarks/delete',
+        { id: benchmarkId },
+      ),
+    );
   }
 
   /** Returns the id of the newly created model (the backend replies `{ model_id }`). */
