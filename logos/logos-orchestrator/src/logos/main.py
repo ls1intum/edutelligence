@@ -2312,20 +2312,6 @@ class _InternalBenchmarkRequest(BaseModel):
     max_output_tokens: int = Field(default=512, gt=0, le=4096)
 
 
-def _require_internal_secret(request: Request) -> None:
-    """Authenticate a Spring-to-orchestrator administration call."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-
-
 @app.post("/internal/model_benchmarks/run", tags=["admin"])
 async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request: Request):
     """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
@@ -2520,6 +2506,8 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         request_id=request_id,
         required_provider_id=required_provider_id,
     )
+
+
 class _InternalSleepLaneRequest(BaseModel):
     provider_id: int
     lane_id: str
@@ -5020,9 +5008,7 @@ async def handle_sync_request(path: str, request: Request):
             required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
             if required_provider_id is not None:
                 raw_deployments = [
-                    deployment
-                    for deployment in raw_deployments
-                    if deployment["provider_id"] == required_provider_id
+                    deployment for deployment in raw_deployments if deployment["provider_id"] == required_provider_id
                 ]
             deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
         except HTTPException as e:
