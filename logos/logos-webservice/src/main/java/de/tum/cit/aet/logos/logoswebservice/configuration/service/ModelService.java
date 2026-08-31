@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -19,7 +20,11 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabiliti
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelWithPriceProjection;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProjection;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelHealthClient;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 @Service
@@ -29,20 +34,60 @@ public class ModelService {
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelCapabilitiesRepository modelCapabilitiesRepository;
+    private final OrchestratorModelHealthClient orchestratorModelHealthClient;
+    private final ApiKeyRepository apiKeyRepository;
 
     public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
-                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository) {
+                        OrchestratorNotificationService orchestratorNotificationService, ModelCapabilitiesRepository modelCapabilitiesRepository,
+                        OrchestratorModelHealthClient orchestratorModelHealthClient, ApiKeyRepository apiKeyRepository) {
         this.modelRepository = modelRepository;
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelCapabilitiesRepository = modelCapabilitiesRepository;
+        this.orchestratorModelHealthClient = orchestratorModelHealthClient;
+        this.apiKeyRepository = apiKeyRepository;
     }
 
     public List<Map<String, Object>> getModels(AuthContext auth) {
-        List<ModelWithPriceProjection> projections = isLogosAdmin(auth)
+        // last_used_at is a platform-wide usage figure, so it is only exposed to
+        // Logos admins; everyone else gets the same list without that field.
+        boolean includeLastUsed = isLogosAdmin(auth);
+        List<ModelWithPriceProjection> projections = includeLastUsed
             ? modelRepository.findAllWithPricing()
             : modelRepository.findAllWithPricingForUser(auth.userId());
-        return projections.stream().map(ModelService::toModelMap).toList();
+        return projections.stream().map(p -> toModelMap(p, includeLastUsed)).toList();
+    }
+
+    /**
+     * Current health of every model the given API key may access, as computed
+     * live by the orchestrator from its worker registry. Applications use this
+     * to check before sending traffic whether a model has a healthy/available
+     * deployment right now. Access follows the key's permissions exactly as
+     * the orchestrator resolves them for requests: the key's own model
+     * permissions when it uses custom permissions, otherwise its team's.
+     * Returns empty when the key is unknown or inactive.
+     */
+    public Optional<Map<String, Object>> getModelHealth(String keyValue) {
+        ApiKey key = apiKeyRepository.findByKeyValueAndIsActiveTrue(keyValue).orElse(null);
+        if (key == null) {
+            return Optional.empty();
+        }
+        Set<String> accessibleModels;
+        if (Boolean.TRUE.equals(key.getUseCustomPermissions())) {
+            accessibleModels = apiKeyRepository.findAccessibleModelsByKey(key.getId()).stream()
+                .map(ModelAccessProjection::getModelName)
+                .collect(Collectors.toSet());
+        } else if (key.getTeamId() != null) {
+            accessibleModels = apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId()).stream()
+                .map(ModelAccessProjection::getModelName)
+                .collect(Collectors.toSet());
+        } else {
+            accessibleModels = Set.of();
+        }
+        List<Map<String, Object>> visible = orchestratorModelHealthClient.getModelHealth().stream()
+            .filter(entry -> accessibleModels.contains(entry.get("name")))
+            .toList();
+        return Optional.of(Map.of("models", visible));
     }
 
     @Transactional
@@ -123,7 +168,7 @@ public class ModelService {
         return Role.LOGOS_ADMIN.matches(auth.role());
     }
 
-    private static Map<String, Object> toModelMap(ModelWithPriceProjection p) {
+    private static Map<String, Object> toModelMap(ModelWithPriceProjection p, boolean includeLastUsed) {
         Map<String, Object> m = new LinkedHashMap<>();
         int id = p.getId();
         String name = p.getName();
@@ -137,6 +182,9 @@ public class ModelService {
         m.put("description", p.getDescription());
         m.put("input_usd_per_million", p.getInputUsdPerMillion());
         m.put("output_usd_per_million", p.getOutputUsdPerMillion());
+        if (includeLastUsed) {
+            m.put("last_used_at", p.getLastUsedAt() != null ? p.getLastUsedAt().toString() : null);
+        }
         return m;
     }
 

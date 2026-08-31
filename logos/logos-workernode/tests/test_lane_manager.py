@@ -556,13 +556,18 @@ def test_auto_tp_caps_calibrated_tp_at_gpu_count() -> None:
     assert result.vllm_config.tensor_parallel_size == 4
 
 
-def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
-    """Calibrated tp=1 means the model fit on one GPU during calibration — no escalation."""
+def test_auto_tp_non_calibrated_tp1_falls_through_to_heuristic() -> None:
+    """A tp known only from runtime (no calibration) still defers to the heuristic.
+
+    The calibrated-TP guard must not block escalation for profiles that were
+    never calibrated: here the recorded tp=1 is the vLLM default, and the
+    large base residency still escalates.
+    """
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
     profiles = ModelProfileRegistry()
-    profiles._profiles["small/8B"] = ModelProfileRecord(
-        base_residency_mb=10_000.0,
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(
+        base_residency_mb=42_000.0,
         engine="vllm",
         tensor_parallel_size=1,
     )
@@ -575,12 +580,108 @@ def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
         model_profiles=profiles,
     )
     lane = LaneConfig(
-        model="small/8B",
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size >= 2
+
+
+def test_auto_tp_calibrated_tp1_authoritative_despite_full_footprint_base() -> None:
+    """Issue #616: a calibrated tp=1 must not be escalated by the size heuristic.
+
+    The calibrated base_residency is the FULL awake footprint (weights + KV),
+    which on a 2-GPU Ada node is most of a single card — the heuristic would
+    misread that as "does not fit one GPU" and escalate to tp=2. But the
+    calibrator probed this hardware and proved the model loads fine at tp=1,
+    so the lane must stay at tp=1.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["ms/Phi-4-reasoning"] = ModelProfileRecord(
+        base_residency_mb=46_000.0,  # full footprint vs ~50 GB per GPU
+        engine="vllm",
+        tensor_parallel_size=1,
+        residency_source="calibrated",
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 2,
+        per_gpu_vram_mb=lambda: 50_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="ms/Phi-4-reasoning",
         vllm=True,
         vllm_config=VllmConfig(tensor_parallel_size=1),
     )
     result = manager._auto_tensor_parallel(lane)
     assert result.vllm_config.tensor_parallel_size == 1
+
+
+def test_auto_tp_calibrated_tp1_overrides_incoming_tp() -> None:
+    """Issue #616: the calibrated TP wins over a stale/re-inferred TP from upstream.
+
+    The orchestrator's size-vs-VRAM inference sent tp=2 for a model the
+    calibrator decided fits at tp=1 — the worker must not serve it at tp=2
+    (and thus re-persist tp=2 over the calibrated profile).
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["ms/Phi-4-reasoning"] = ModelProfileRecord(
+        base_residency_mb=46_000.0,
+        engine="vllm",
+        tensor_parallel_size=1,
+        residency_source="calibrated",
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 2,
+        per_gpu_vram_mb=lambda: 50_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="ms/Phi-4-reasoning",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 1
+
+
+def test_auto_tp_calibrated_tp2_applies_over_incoming_tp1() -> None:
+    """A calibrated tp>1 is applied even when the incoming config says tp=1."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(
+        base_residency_mb=42_000.0,
+        engine="vllm",
+        tensor_parallel_size=2,
+        residency_source="calibrated",
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 24_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 2
 
 
 def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
@@ -734,6 +835,282 @@ async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> No
     placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
     # Floor skipped → threshold ≈ footprint (~6 GB) instead of 12288 MB, so the
     # GPU-0/1 pair (12000 free each) is feasible and the emptiest one wins.
+    assert placed.gpu_devices == "0"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_accounts_for_explicit_gmu_reservation() -> None:
+    """Reproduces the deioma scenario (3× ~96 GiB): DeepSeek-OCR-2 sits on
+    GPU 0, a tp=2 gemma-3-27b lane with an explicit
+    gpu_memory_utilization=0.95 must land on the two empty GPUs (1,2). GPU 0
+    has ~81 GB free — above the 0.5 auto-derivation floor (48.9 GB) but below
+    the 0.95 × 97.9 GB ≈ 93 GB vLLM actually reserves, so it must be treated
+    as infeasible, not merely undesirable.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["deepseek-ai/DeepSeek-OCR-2"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=16_000.0, engine="vllm"
+    )
+    profiles._profiles["google/gemma-3-27b-it"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=94_000.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: awake DeepSeek-OCR-2 lane, ~16 GB used.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=81_500.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: empty (~2 GB unknown usage).
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=96_000.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: empty (~1 GB unknown usage).
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=97_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=81_500.0 + 96_000.0 + 97_000.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-deepseek-ai_DeepSeek-OCR-2"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-deepseek-ai_DeepSeek-OCR-2",
+        LaneConfig(model="deepseek-ai/DeepSeek-OCR-2", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="google/gemma-3-27b-it",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2, gpu_memory_utilization=0.95),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-google_gemma-3-27b-it", lane)  # noqa: SLF001
+    # 0.95 × 97887 ≈ 92993 MB per GPU: GPU 0 (81500 free) fails it, so the
+    # only feasible pair is (1,2).
+    assert placed.gpu_devices == "1,2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_rejects_when_no_gpu_meets_explicit_gmu() -> None:
+    """Same node as the deioma scenario, but only one GPU has enough free
+    VRAM for the explicit 0.95 reservation: placement must fail fast with a
+    clear error instead of picking a pair that passes the 0.5 floor yet
+    crashes vLLM startup with "free memory < desired gpu_memory_utilization".
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["deepseek-ai/DeepSeek-OCR-2"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=16_000.0, engine="vllm"
+    )
+    profiles._profiles["google/gemma-3-27b-it"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=94_000.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: awake DeepSeek-OCR-2 lane.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=81_500.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: 37 GB unknown usage — above the 0.5 floor, below 0.95.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=60_000.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: the only GPU meeting the 0.95 reservation.
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=97_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=81_500.0 + 60_000.0 + 97_000.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-deepseek-ai_DeepSeek-OCR-2"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-deepseek-ai_DeepSeek-OCR-2",
+        LaneConfig(model="deepseek-ai/DeepSeek-OCR-2", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="google/gemma-3-27b-it",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2, gpu_memory_utilization=0.95),
+    )
+
+    # With the 0.5 floor the (0,1)/(0,2)/(1,2) pairs all "fit" and the lane
+    # would be spawned to crash; the 0.95 reservation leaves no tp=2 pair.
+    with pytest.raises(RuntimeError, match="no feasible GPU subset"):
+        await manager._auto_place_gpu_devices("planner-google_gemma-3-27b-it", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_explicit_gmu_below_floor_uses_operator_value() -> None:
+    """An explicit gpu_memory_utilization below the 0.5 auto-derivation floor
+    is honoured as-is (vLLM receives it unclamped), so placement must not
+    inflate it to the floor: a small model with GMU 0.25 fits into 7 GB free
+    on a 24 GB GPU even though the floor would demand 12.3 GB.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=4000.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: 7 GB free — above 0.25 × 24576 = 6144 MB, below the
+                # 0.5 floor of 12288 MB.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=7000.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: below the 0.25 reservation too.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=5000.0,
+                    extra={"index": 1},
+                ),
+            ],
+            total_memory_mb=2 * 24576.0,
+            free_memory_mb=12_000.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, gpu_memory_utilization=0.25),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    # Threshold = max(~4020 MB footprint, 6144 MB reservation) — only GPU 0
+    # clears it.
+    assert placed.gpu_devices == "0"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_gates_mixed_size_gpus_on_own_card_total() -> None:
+    """vLLM's startup gate is per card (free >= gmu × that card's total), so on
+    a mixed-size node the GMU bound must use each card's own total rather than
+    the smallest one: with explicit GMU 0.9 the 48 GB card needs 44.2 GB free
+    even though the 24 GB neighbour only needs 22.1 GB.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=6000.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: 24 GB card, 23 GB free — above 0.9 × 24576 = 22118 MB.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=23000.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: 48 GB card, 25 GB free — below 0.9 × 49152 = 44237 MB,
+                # even though a global-min threshold (22118 MB) would pass it.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=49152.0,
+                    memory_free_mb=25600.0,
+                    extra={"index": 1},
+                ),
+            ],
+            total_memory_mb=24576.0 + 49152.0,
+            free_memory_mb=23000.0 + 25600.0,
+        )
+
+    manager = LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, gpu_memory_utilization=0.9),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    # Per-card gating: GPU 1 (48 GB total) needs 0.9 × 49152 ≈ 44237 MB free
+    # and fails with 25600 MB; only the 24 GB card is feasible.
     assert placed.gpu_devices == "0"
 
 
@@ -2257,3 +2634,219 @@ def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
     merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
 
     assert merged.vllm_config is not None
+
+
+# ---------------------------------------------------------------------------
+# Calibration GPU-slice guard (issue #592)
+# ---------------------------------------------------------------------------
+
+
+def test_begin_end_calibration_session_holds_power_of_two_slice() -> None:
+    manager = LaneManager(OllamaConfig(), gpu_device_count=lambda: 3)
+    assert manager.calibration_gpu_subset is None
+
+    held = manager.begin_calibration_session()
+    assert held == frozenset({0, 1})  # 3 GPUs → largest power-of-two slice
+    assert manager.calibration_gpu_subset == frozenset({0, 1})
+
+    manager.end_calibration_session()
+    assert manager.calibration_gpu_subset is None
+
+
+def test_calibration_session_slice_on_power_of_two_node_holds_all_gpus() -> None:
+    manager = LaneManager(OllamaConfig(), gpu_device_count=lambda: 4)
+    assert manager.begin_calibration_session() == frozenset({0, 1, 2, 3})
+
+
+def test_lane_gpu_set_parses_selectors() -> None:
+    assert LaneManager._lane_gpu_set("all") is None
+    assert LaneManager._lane_gpu_set("") is None
+    assert LaneManager._lane_gpu_set(None) is None
+    assert LaneManager._lane_gpu_set("none") == frozenset()
+    assert LaneManager._lane_gpu_set("0,1") == frozenset({0, 1})
+    assert LaneManager._lane_gpu_set(" 2 ") == frozenset({2})
+
+
+def test_lane_touches_gpus_intersection() -> None:
+    manager = LaneManager(OllamaConfig())
+    # "all"/blank spans every GPU → intersects any non-empty slice.
+    assert manager._lane_touches_gpus("all", {2}) is True
+    assert manager._lane_touches_gpus("", {2}) is True
+    assert manager._lane_touches_gpus("0,1", {0, 1}) is True
+    assert manager._lane_touches_gpus("2", {0, 1}) is False
+    assert manager._lane_touches_gpus("none", {0, 1}) is False
+
+
+class _StubHandle:
+    def __init__(self, lane_config: LaneConfig) -> None:
+        self.lane_config = lane_config
+        self.destroyed = False
+        self.closed = False
+
+    async def destroy(self) -> None:
+        self.destroyed = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _manager_with_handles(handles: dict) -> LaneManager:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15200, lane_port_end=15210)
+    manager._handles.update(handles)  # noqa: SLF001
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_destroy_lanes_on_gpus_stops_only_slice_vllm_lanes() -> None:
+    slice_lane = _StubHandle(LaneConfig(model="m-slice", vllm=True, gpu_devices="0,1"))
+    leftover_lane = _StubHandle(LaneConfig(model="m-left", vllm=True, gpu_devices="2"))
+    ollama_lane = _StubHandle(LaneConfig(model="m-ollama", vllm=False, gpu_devices="0"))
+
+    manager = _manager_with_handles({"a": slice_lane, "b": leftover_lane, "c": ollama_lane})
+    stopped = await manager.destroy_lanes_on_gpus({0, 1})
+
+    assert stopped == 1
+    assert slice_lane.destroyed is True
+    assert "a" not in manager._handles  # noqa: SLF001
+    # Leftover and non-vLLM lanes are untouched and keep serving.
+    assert leftover_lane.destroyed is False
+    assert "b" in manager._handles  # noqa: SLF001
+    assert "c" in manager._handles  # noqa: SLF001
+
+
+def _snapshot_3gpu(free: dict) -> DeviceSummary:
+    return DeviceSummary(
+        timestamp=datetime.now(timezone.utc),
+        mode="nvidia",
+        nvidia_smi_available=True,
+        devices=[
+            DeviceInfo(
+                device_id=f"gpu{i}",
+                kind="nvidia",
+                memory_total_mb=24576.0,
+                memory_free_mb=free[i],
+                extra={"index": i},
+            )
+            for i in range(3)
+        ],
+        total_memory_mb=3 * 24576.0,
+        free_memory_mb=sum(free.values()),
+    )
+
+
+def _placement_manager(snapshot, n_gpus: int) -> LaneManager:
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=6000.0,
+        engine="vllm",
+    )
+    return LaneManager(
+        OllamaConfig(gpu_devices="all"),
+        lane_port_start=15200,
+        lane_port_end=15210,
+        model_profiles=profiles,
+        gpu_device_count=lambda: n_gpus,
+        gpu_snapshot=snapshot,
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_place_excludes_calibrating_slice() -> None:
+    """GPUs 0,1 are the emptiest but held by a calibration — a tp=1 lane must
+    land on the leftover GPU 2 instead (#592)."""
+
+    async def _snapshot() -> DeviceSummary:
+        return _snapshot_3gpu({0: 20000.0, 1: 19000.0, 2: 13000.0})
+
+    manager = _placement_manager(_snapshot, 3)
+    manager.begin_calibration_session()  # holds {0, 1}
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    assert placed.gpu_devices == "2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_raises_when_calibration_holds_all_gpus() -> None:
+    """On a 2-GPU node the slice is the whole node — no leftover, so a new lane
+    cannot be placed rather than silently defaulting to a held GPU."""
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(
+                    device_id=f"gpu{i}",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=20000.0,
+                    extra={"index": i},
+                )
+                for i in range(2)
+            ],
+            total_memory_mb=2 * 24576.0,
+            free_memory_mb=40000.0,
+        )
+
+    manager = _placement_manager(_snapshot, 2)
+    manager.begin_calibration_session()  # holds {0, 1} = the whole node
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    with pytest.raises(RuntimeError, match="calibration session"):
+        await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_add_lane_refuses_explicit_slice_gpu(monkeypatch) -> None:
+    """An operator-pinned gpu_devices that lands on the held slice is refused."""
+    manager = LaneManager(OllamaConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
+    manager.begin_calibration_session()  # holds {0, 1}
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    lane = LaneConfig(
+        model="org/slice-model",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+        gpu_devices="0,1",
+    )
+
+    with pytest.raises(ValueError, match="calibration session"):
+        await manager._add_lane_unlocked("org_slice-model", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
+    """The same explicit pin on a leftover GPU is allowed to proceed."""
+
+    class _RunningHandle(_StubHandle):
+        async def init(self) -> None:
+            return None
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.RUNNING)
+
+    manager = LaneManager(OllamaConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
+    manager.begin_calibration_session()  # holds {0, 1}, leftover = {2}
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *a, **k: _RunningHandle(a[4]))
+    lane = LaneConfig(
+        model="org/left-model",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+        gpu_devices="2",
+    )
+
+    await manager._add_lane_unlocked("org_left-model", lane)  # noqa: SLF001
+    assert "org_left-model" in manager._handles  # noqa: SLF001
+    manager.end_calibration_session()

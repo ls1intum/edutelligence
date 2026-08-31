@@ -5,6 +5,9 @@
     @if (unloadError()) {
       <div class="action-error">{{ unloadError() }}</div>
     }
+    @if (sleepWakeError()) {
+      <div class="action-error">{{ sleepWakeError() }}</div>
+    }
     @if (lanes.length === 0) {
       <div class="lane-empty">No lanes loaded.</div>
     }
@@ -30,6 +33,37 @@
                   >
                     {{ unloadingLaneId() === row.laneId ? 'Unloading…' : 'Unload' }}
                   </button>
+                  <!-- Wake/Sleep reach the two states the capacity planner also
+                       reaches on its own — the tooltip says so outright, because
+                       a woken lane with no demand goes back to sleep on the next
+                       idle check, and a slept lane with queued demand is woken
+                       straight back up. -->
+                  @switch (sleepAction(row.lane)) {
+                    <!-- The handlers take only one wake/sleep at a time and drop a
+                         second silently, so while one is in flight the buttons of
+                         the other lanes are disabled instead of looking clickable.
+                         The spinner stays on the lane that was actually clicked. -->
+                    @case ('wake') {
+                      <button
+                        class="btn-lane-action"
+                        [disabled]="wakingLaneId() !== null"
+                        (click)="handleWake(row.laneId)"
+                        title="Wake this lane (weights stay resident, no cold load). The capacity planner decides on its own and may put it back to sleep once it goes idle."
+                      >
+                        {{ wakingLaneId() === row.laneId ? 'Waking…' : 'Wake' }}
+                      </button>
+                    }
+                    @case ('sleep') {
+                      <button
+                        class="btn-lane-action"
+                        [disabled]="sleepingLaneId() !== null"
+                        (click)="handleSleep(row.laneId)"
+                        title="Put this lane to sleep (weights stay resident, no cold load on wake). The capacity planner decides on its own and may wake it as soon as demand returns."
+                      >
+                        {{ sleepingLaneId() === row.laneId ? 'Sleeping…' : 'Sleep' }}
+                      </button>
+                    }
+                  }
                 }
               </div>
             </div>

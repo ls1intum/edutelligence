@@ -16,6 +16,7 @@ import { TeamManagementService } from '../../core/services/team-management.servi
 import { AuthService } from '../../core/auth/services/auth.service';
 import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
 import { MyTeam } from '../../shared/models/team.model';
+import { formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
 import { isInteractiveClick } from '../../shared/utils/interactive-click';
 
 interface TeamWorkspace {
@@ -321,12 +322,6 @@ export class MyWorkspace implements OnInit {
   }
 
   formatLastUsed(iso: string | null): string {
-    if (!iso) return 'Never';
-    const d = new Date(iso);
-    const today = new Date();
-    const diffDays = Math.floor((today.getTime() - d.getTime()) / 86_400_000);
-    if (diffDays === 0) return 'Today';
-    if (diffDays === 1) return 'Yesterday';
-    return d.toLocaleDateString();
+    return formatLastUsedLabel(iso);
   }
 }

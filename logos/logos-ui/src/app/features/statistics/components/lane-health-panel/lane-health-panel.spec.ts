@@ -1,4 +1,5 @@
-import { formatContextWindow, messageIn } from './lane-health-panel';
+import { formatContextWindow, laneSleepAction, messageIn } from './lane-health-panel';
+import { LaneSignalData } from '../../statistics.models';
 
 /**
  * Pulling the reason out of a failed lane action.
@@ -71,15 +72,16 @@ describe('messageIn', () => {
 /**
  * The context window a lane row shows.
  *
- * Rounded thousands, because the row is a dense line of stats read to spot the
- * roomy lane — the exact token count is never what is being asked.
+ * Abbreviated on the shared K/M/B/T token scale, because the row is a dense
+ * line of stats read to spot the roomy lane — the exact token count is never
+ * what is being asked.
  */
 describe('formatContextWindow', () => {
-  it('abbreviates thousands', () => {
-    expect(formatContextWindow(262144)).toBe('262k');
-    expect(formatContextWindow(111200)).toBe('111k');
-    expect(formatContextWindow(40960)).toBe('41k');
-    expect(formatContextWindow(1000)).toBe('1k');
+  it('abbreviates on the token scale', () => {
+    expect(formatContextWindow(262144)).toBe('262.1 K');
+    expect(formatContextWindow(111200)).toBe('111.2 K');
+    expect(formatContextWindow(40960)).toBe('40.9 K');
+    expect(formatContextWindow(1000)).toBe('1 K');
   });
 
   it('leaves small windows alone', () => {
@@ -97,5 +99,64 @@ describe('formatContextWindow', () => {
     expect(formatContextWindow(0)).toBeNull();
     expect(formatContextWindow(-1)).toBeNull();
     expect(formatContextWindow(Number.NaN)).toBeNull();
+  });
+});
+
+function lane(overrides: Partial<LaneSignalData> = {}): LaneSignalData {
+  return {
+    model: 'org/model-a',
+    vllm: true,
+    runtime_state: 'loaded',
+    sleep_state: 'awake',
+    gpu_devices: null,
+    effective_gpu_devices: null,
+    num_parallel: null,
+    active_requests: 0,
+    effective_vram_mb: 0,
+    gpu_cache_usage_percent: null,
+    ttft_p95_seconds: null,
+    queue_waiting: null,
+    requests_running: null,
+    prefix_cache_hit_rate: null,
+    mtp_acceptance_rate: null,
+    max_model_len: null,
+    ...overrides,
+  };
+}
+
+/**
+ * The Wake/Sleep buttons beside Unload.
+ *
+ * The buttons reach the two states the capacity planner also reaches on its
+ * own, so they are offered only where they mean something: Wake on a lane
+ * that is actually asleep, Sleep on one that is awake and idle. A busy lane
+ * gets no Sleep button — the server would refuse it anyway, and the panel
+ * would just display the refusal.
+ */
+describe('laneSleepAction', () => {
+  it('offers Wake on a sleeping lane', () => {
+    expect(laneSleepAction(lane({ sleep_state: 'sleeping' }))).toBe('wake');
+  });
+
+  it('still offers Wake while a sleeping lane reports in-flight requests', () => {
+    // A sleeping lane should serve nothing; if the counters say otherwise,
+    // the lane is mid-transition and waking it is still the useful action.
+    expect(laneSleepAction(lane({ sleep_state: 'sleeping', active_requests: 3 }))).toBe('wake');
+  });
+
+  it('offers Sleep on an awake, idle lane', () => {
+    expect(laneSleepAction(lane({ sleep_state: 'awake' }))).toBe('sleep');
+  });
+
+  it('withholds Sleep from a lane that is serving', () => {
+    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 1 }))).toBeNull();
+  });
+
+  it('withholds both actions from a lane the backend cannot sleep', () => {
+    // Ollama lanes report "unsupported"; a vLLM lane that never slept reports
+    // "unknown" until its first transition.
+    expect(laneSleepAction(lane({ sleep_state: 'unsupported' }))).toBeNull();
+    expect(laneSleepAction(lane({ sleep_state: 'unknown' }))).toBeNull();
+    expect(laneSleepAction(lane({ sleep_state: null }))).toBeNull();
   });
 });

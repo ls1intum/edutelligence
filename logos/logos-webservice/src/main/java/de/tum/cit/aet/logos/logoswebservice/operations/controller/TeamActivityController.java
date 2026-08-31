@@ -65,4 +65,33 @@ public class TeamActivityController {
         return ResponseEntity.ok(
             teamActivityService.getTeamActivity(teamId, days, userId, cursorTs, cursorId));
     }
+
+    /**
+     * Download of the team's request traces (issue #667).
+     *
+     * Every request of the window comes back, the same slice the activity
+     * view shows. The consented ones (recorded at FULL privacy) carry their
+     * request and response content; for the billing-only rows the content
+     * columns are empty, and the envelope says whether the team has full
+     * logging activated at all. Same gate as the activity view, same window
+     * and narrowing rules, so the export never reaches further than the page
+     * it is started from.
+     */
+    @PostMapping("/logosdb/teams/{teamId}/activity/export")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> exportTeamTraces(@PathVariable Integer teamId,
+                                              @RequestBody(required = false) Map<String, Object> body,
+                                              @RequestAttribute("authContext") AuthContext auth) {
+        if (teamId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "team_id is required"));
+        }
+        if (Role.APP_ADMIN.matches(auth.role())
+                && (auth.userId() == null || !apiKeyAdminService.isTeamOwner(teamId, auth.userId()))) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        Map<String, Object> payload = body != null ? body : Map.of();
+        Integer days = payload.get("days") instanceof Number n ? n.intValue() : null;
+        Integer userId = payload.get("user_id") instanceof Number n ? n.intValue() : null;
+        return ResponseEntity.ok(teamActivityService.exportTeamTraces(teamId, days, userId));
+    }
 }

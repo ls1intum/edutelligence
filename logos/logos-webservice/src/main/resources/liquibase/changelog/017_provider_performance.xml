@@ -5,7 +5,7 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <changeSet id="014-provider-performance-index" author="logos">
+    <changeSet id="017-provider-performance-index" author="logos">
         <!-- Earlier PR deployments may already contain this index under a
              legacy changeset number. Do not attempt to recreate it there. -->
         <preConditions onFail="MARK_RAN">
