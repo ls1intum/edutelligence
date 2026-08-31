@@ -112,7 +112,6 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
     request.headers = {"authorization": "Bearer internal-secret"}
 
     monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
-    monkeypatch.setattr(main, "_BENCHMARKS_ENABLED", True)
     monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_logosnode_registry", registry)
     monkeypatch.setattr(main, "_capacity_planner", planner)
@@ -156,7 +155,6 @@ async def test_external_benchmark_rejects_api_key_over_plaintext_http(monkeypatc
     request = MagicMock()
     request.headers = {"authorization": "Bearer internal-secret"}
     monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
-    monkeypatch.setattr(main, "_BENCHMARKS_ENABLED", True)
     monkeypatch.setattr(main, "DBManager", DummyDB)
 
     with pytest.raises(main.HTTPException) as exc_info:
@@ -167,22 +165,6 @@ async def test_external_benchmark_rejects_api_key_over_plaintext_http(monkeypatc
 
     assert exc_info.value.status_code == 409
     assert "HTTPS" in exc_info.value.detail
-
-
-@pytest.mark.asyncio
-async def test_benchmark_start_is_disabled_by_default(monkeypatch):
-    request = MagicMock()
-    request.headers = {"authorization": "Bearer internal-secret"}
-    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
-    monkeypatch.setattr(main, "_BENCHMARKS_ENABLED", False)
-
-    with pytest.raises(main.HTTPException) as exc_info:
-        await main.internal_run_model_benchmark(
-            main._InternalBenchmarkRequest(model_provider_id=31),
-            request,
-        )
-
-    assert exc_info.value.status_code == 503
 
 
 def test_internal_secret_rejects_non_ascii_token_without_compare_digest_type_error(monkeypatch):

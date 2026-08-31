@@ -1761,7 +1761,6 @@ async def lifespan(app: FastAPI):
 # Prometheus metrics auth: set PROMETHEUS_API_KEY env var to require auth; if unset, deny all.
 _PROMETHEUS_API_KEY = os.getenv("PROMETHEUS_API_KEY")
 _INTERNAL_SECRET = os.getenv("LOGOS_INTERNAL_SECRET")
-_BENCHMARKS_ENABLED = os.getenv("LOGOS_BENCHMARKS_ENABLED", "false").lower() == "true"
 try:
     _BENCHMARK_MAX_CONCURRENCY = max(1, int(os.getenv("LOGOS_BENCHMARK_MAX_CONCURRENCY", "1")))
 except ValueError:
@@ -2365,8 +2364,6 @@ class _InternalBenchmarkRequest(BaseModel):
 async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request: Request):
     """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
     _require_internal_secret(request)
-    if not _BENCHMARKS_ENABLED:
-        raise HTTPException(status_code=503, detail="Benchmarks are disabled")
 
     with DBManager() as db:
         target = db.get_model_provider_benchmark_target(data.model_provider_id)
