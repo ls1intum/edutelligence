@@ -2538,10 +2538,6 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         }
     ]
     required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
-    if _capacity_planner is None or not await _capacity_planner.prepare_benchmark_lane(
-        required_provider_id, str(target["model_name"])
-    ):
-        raise HTTPException(status_code=409, detail="Benchmark stopped to protect production traffic")
     deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
     if not deployments:
         raise HTTPException(status_code=503, detail="Selected benchmark worker is not serving the model")

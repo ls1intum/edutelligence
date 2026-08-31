@@ -128,6 +128,8 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
     assert runner.await_args.kwargs["target"] == "http://127.0.0.1:8080/internal/model_benchmarks/jobs/7"
     assert runner.await_args.kwargs["api_key"] is None
     assert runner.await_args.kwargs["request_headers"][main.BENCHMARK_PROVIDER_HEADER] == "20"
+    assert await runner.await_args.kwargs["worker_preparer"]() is True
+    planner.prepare_benchmark_lane.assert_awaited_once_with(20, "org/model")
 
 
 @pytest.mark.asyncio
@@ -408,6 +410,7 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
     ]
     assert execute.await_args.kwargs["log_id"] == 99
     assert execute.await_args.kwargs["auth"].default_priority == 1
+    planner.prepare_benchmark_lane.assert_not_awaited()
 
 
 @pytest.mark.asyncio
