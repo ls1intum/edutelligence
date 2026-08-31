@@ -113,6 +113,7 @@ _SERVER_START_TIME = int(time.time())
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
+_benchmark_tasks: Set[asyncio.Task] = set()
 
 
 def _resolve_provider_name(provider_id: int) -> str:
@@ -1704,6 +1705,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    benchmark_tasks = list(_benchmark_tasks)
+    for task in benchmark_tasks:
+        task.cancel()
+    if benchmark_tasks:
+        await asyncio.gather(*benchmark_tasks, return_exceptions=True)
     if _capacity_planner:
         await _capacity_planner.stop()
     if _calibration_orchestrator:
@@ -2414,7 +2420,9 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
         )
     )
     _background_tasks.add(task)
+    _benchmark_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
+    task.add_done_callback(_benchmark_tasks.discard)
     return JSONResponse(
         status_code=202,
         content={

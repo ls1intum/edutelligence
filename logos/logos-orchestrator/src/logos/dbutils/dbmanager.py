@@ -531,8 +531,37 @@ class DBManager:
             {"namespace": 1428947001, "provider_id": int(provider_id)},
         )
 
-    def find_active_model_benchmark_job(self, provider_id: int) -> Optional[Dict[str, Any]]:
-        """Return the newest queued/running benchmark for a provider, if any."""
+    def find_active_model_benchmark_job(
+        self,
+        provider_id: int,
+        stale_after_seconds: int = 7200,
+    ) -> Optional[Dict[str, Any]]:
+        """Expire stale benchmark rows, then return the newest active job."""
+        stale_after_seconds = max(1, int(stale_after_seconds))
+        stale_error = f"Benchmark stopped updating for {stale_after_seconds} seconds"
+        expired = self.session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'failed',
+                    error_message = :stale_error,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                  AND (request_payload ->> 'provider_id')::integer = :provider_id
+                  AND COALESCE(updated_at, created_at)
+                      < CURRENT_TIMESTAMP - CAST(:stale_after_seconds AS integer) * INTERVAL '1 second'
+                """
+            ),
+            {
+                "provider_id": int(provider_id),
+                "stale_after_seconds": stale_after_seconds,
+                "stale_error": stale_error,
+            },
+        )
+        if expired.rowcount:
+            logger.warning("Expired %d stale benchmark job(s) for provider %d", expired.rowcount, provider_id)
+
         row = (
             self.session.execute(
                 text(

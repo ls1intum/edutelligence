@@ -59,3 +59,23 @@ def test_model_benchmark_provider_lock_is_transaction_scoped():
     assert "pg_advisory_xact_lock" in statement
     assert db.session.execute.call_args.args[1]["provider_id"] == 23
     db.session.commit.assert_not_called()
+
+
+def test_active_benchmark_lookup_expires_stale_rows_before_selecting():
+    db = _db()
+    expired_result = SimpleNamespace(rowcount=1)
+    select_result = MagicMock()
+    select_result.mappings.return_value.first.return_value = None
+    db.session.execute.side_effect = [expired_result, select_result]
+
+    with patch("logos.dbutils.dbmanager.text", side_effect=lambda sql: sql):
+        result = db.find_active_model_benchmark_job(23)
+
+    assert result is None
+    expire_statement = str(db.session.execute.call_args_list[0].args[0])
+    expire_params = db.session.execute.call_args_list[0].args[1]
+    assert "UPDATE jobs" in expire_statement
+    assert "COALESCE(updated_at, created_at)" in expire_statement
+    assert expire_params["provider_id"] == 23
+    assert expire_params["stale_after_seconds"] == 7200
+    db.session.commit.assert_not_called()

@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -16,9 +17,52 @@ from logos.benchmarks.guidellm_runner import (
     is_logos_benchmark_target,
     redact_secrets,
     resolve_benchmark_target,
+    run_benchmark_job,
     send_warmup_request,
     successful_summary,
 )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_benchmark_is_marked_failed(monkeypatch) -> None:
+    updates = []
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def update_job_status(self, job_id, status, **kwargs):
+            updates.append((job_id, status, kwargs))
+
+    async def cancelled_preparation():
+        raise asyncio.CancelledError
+
+    runner = importlib.import_module("logos.benchmarks.guidellm_runner")
+    dbmanager = importlib.import_module("logos.dbutils.dbmanager")
+    monkeypatch.setattr(runner.shutil, "which", lambda _: "/usr/bin/guidellm")
+    monkeypatch.setattr(dbmanager, "DBManager", DummyDB)
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_benchmark_job(
+            job_id=7,
+            model_provider_id=31,
+            target="http://127.0.0.1:8080/v1",
+            model="org/model",
+            api_key=None,
+            samples=5,
+            max_output_tokens=32,
+            serving_configuration={},
+            worker_preparer=cancelled_preparation,
+        )
+
+    assert updates[-1] == (
+        7,
+        "failed",
+        {"error_message": "Benchmark cancelled before completion"},
+    )
 
 
 def test_build_scenario_uses_fixed_gsm8k_test_split() -> None:

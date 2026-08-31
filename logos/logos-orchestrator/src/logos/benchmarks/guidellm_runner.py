@@ -40,6 +40,7 @@ BENCHMARK_JOB_HEADER = "x-logos-benchmark-job-id"
 BENCHMARK_PROVIDER_HEADER = "x-logos-benchmark-provider-id"
 BENCHMARK_TOKEN_HEADER = "x-logos-benchmark-token"
 BENCHMARK_PHASE_HEADER = "x-logos-benchmark-phase"
+BENCHMARK_TIMEOUT_SECONDS = 7200
 
 
 def credential_transport_is_secure(url: str) -> bool:
@@ -387,11 +388,18 @@ async def run_benchmark_job(
                 env=env,
             )
             try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=7200)
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=BENCHMARK_TIMEOUT_SECONDS,
+                )
             except TimeoutError:
                 process.kill()
                 await process.communicate()
                 raise RuntimeError("GuideLLM benchmark timed out after two hours")
+            except asyncio.CancelledError:
+                process.kill()
+                await process.communicate()
+                raise
             if process.returncode != 0:
                 output = (stderr or stdout).decode("utf-8", errors="replace")
                 if api_key:
@@ -422,6 +430,14 @@ async def run_benchmark_job(
                 result_payload={"stage": "completed", "benchmark_id": benchmark_id},
                 error_message=None,
             )
+    except asyncio.CancelledError:
+        with DBManager() as db:
+            db.update_job_status(
+                job_id,
+                JobStatus.FAILED.value,
+                error_message="Benchmark cancelled before completion",
+            )
+        raise
     except Exception as exc:
         message = str(exc)
         if api_key:
