@@ -9,6 +9,7 @@ import math
 import os
 import re
 import secrets
+import threading
 import time
 from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass
@@ -20,11 +21,28 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos.auth import authenticate_api_key
+from logos.auth import AuthContext, authenticate_api_key
+from logos.benchmarks.guidellm_runner import (
+    BENCHMARK_JOB_HEADER,
+    BENCHMARK_PHASE_HEADER,
+    BENCHMARK_PROVIDER_HEADER,
+    BENCHMARK_TOKEN_HEADER,
+)
+from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
+from logos.benchmarks.guidellm_runner import (
+    benchmark_affinity_headers,
+    benchmark_affinity_token,
+    credential_transport_is_secure,
+    extract_serving_configuration,
+    internal_benchmark_target,
+    resolve_benchmark_target,
+    run_benchmark_job,
+)
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
@@ -115,6 +133,33 @@ _SERVER_START_TIME = int(time.time())
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
 _background_tasks: Set[asyncio.Task] = set()
+_benchmark_tasks: Set[asyncio.Task] = set()
+_benchmark_tasks_by_job: dict[int, asyncio.Task] = {}
+_benchmark_sessions_by_job: dict[int, tuple[int, str]] = {}
+_benchmark_admission_lock = threading.Lock()
+
+
+def _forget_benchmark_task(job_id: int, task: asyncio.Task) -> None:
+    _background_tasks.discard(task)
+    _benchmark_tasks.discard(task)
+    _benchmark_tasks_by_job.pop(job_id, None)
+    _benchmark_sessions_by_job.pop(job_id, None)
+
+
+def _cancel_benchmark_job(job_id: int, reason: str) -> bool:
+    """Persist cancellation first, then stop the local GuideLLM process."""
+    with DBManager() as db:
+        cancelled = db.cancel_model_benchmark_job(job_id, reason)
+    task = _benchmark_tasks_by_job.get(job_id)
+    if task is not None and not task.done():
+        task.cancel(reason)
+    return cancelled
+
+
+def _cancel_benchmarks_for_changed_session(provider_id: int, session_id: str | None) -> None:
+    for job_id, (job_provider_id, expected_session_id) in list(_benchmark_sessions_by_job.items()):
+        if job_provider_id == provider_id and expected_session_id != session_id:
+            _cancel_benchmark_job(job_id, "Provider restarted or disconnected")
 
 
 def _resolve_provider_name(provider_id: int) -> str:
@@ -764,6 +809,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    benchmark_tasks = list(_benchmark_tasks)
+    for task in benchmark_tasks:
+        task.cancel()
+    if benchmark_tasks:
+        await asyncio.gather(*benchmark_tasks, return_exceptions=True)
     if _capacity_planner:
         await _capacity_planner.stop()
     if _calibration_orchestrator:
@@ -1066,7 +1116,7 @@ async def internal_model_health(request: Request):
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     local_ok = False
@@ -1120,7 +1170,7 @@ async def prometheus_metrics(request: Request):
         )
     auth = request.headers.get("authorization", "")
     token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else auth.strip()
-    if not hmac.compare_digest(token, _PROMETHEUS_API_KEY):
+    if not hmac.compare_digest(token.encode("utf-8"), _PROMETHEUS_API_KEY.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing metrics API key")
     body, content_type = _prometheus_metrics_response()
     from starlette.responses import Response
@@ -1138,7 +1188,7 @@ async def internal_refresh_pipeline(data: RefreshPipelineRequest, request: Reque
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     if not _pipeline or not _logosnode_facade or not _azure_facade:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
@@ -1163,7 +1213,7 @@ async def internal_provider_status(request: Request):
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     with DBManager() as db:
@@ -1214,7 +1264,7 @@ async def internal_model_context_windows(request: Request):
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     stats = _served_context_window_stats()
@@ -1234,7 +1284,7 @@ def _require_internal_secret(request: Request) -> None:
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
 
@@ -1317,6 +1367,236 @@ def internal_calibration_probe_logs(model_name: str, request: Request):
     return JSONResponse(status_code=200, content=jsonable_encoder({"logs": rows}))
 
 
+@app.post("/internal/model_benchmarks/run", tags=["admin"])
+async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: Request):
+    """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
+    _require_internal_secret(request)
+
+    # One orchestrator process owns benchmark execution. Serialize the short
+    # check-and-create section in memory so simultaneous starts cannot both
+    # admit a benchmark for the same provider.
+    with _benchmark_admission_lock, DBManager() as db:
+        target = db.get_model_provider_benchmark_target(data.model_provider_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Provider-model pair not found")
+        provider_id = int(target["provider_id"])
+        provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
+        endpoint = str(target.get("target") or "").strip()
+        if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
+            raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
+        api_key = str(target.get("api_key") or "").strip()
+        if provider_type != "logosnode" and api_key and not credential_transport_is_secure(endpoint):
+            raise HTTPException(
+                status_code=409,
+                detail="Provider credentials require HTTPS (plain HTTP is allowed only on loopback)",
+            )
+
+        active = db.find_active_model_benchmark_job(provider_id)
+        if active is not None:
+            return JSONResponse(
+                status_code=409,
+                content=jsonable_encoder(
+                    {
+                        "error": f"A benchmark is already running on {target['provider_name']}",
+                        "job_id": active["id"],
+                        "status": active["status"],
+                    }
+                ),
+            )
+        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        if provider_type == "logosnode":
+            if runtime_snapshot is None or not _logosnode_snapshot_is_connected(runtime_snapshot):
+                raise HTTPException(status_code=503, detail=f"Provider {target['provider_name']} is offline")
+            if not runtime_snapshot.get("first_status_received"):
+                raise HTTPException(status_code=503, detail="Provider has not sent its first status yet")
+
+        model_name = str(target["model_name"])
+        serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
+        job_payload = {
+            "model_provider_id": data.model_provider_id,
+            "provider_id": provider_id,
+            "provider_name": target["provider_name"],
+            "model_id": target["model_id"],
+            "model_name": model_name,
+            "dataset": BENCHMARK_DATASET,
+            "subset": "main",
+            "split": "test",
+            "samples": data.samples,
+            "max_output_tokens": data.max_output_tokens,
+            "provider_session_id": runtime_snapshot.get("session_id") if runtime_snapshot else None,
+        }
+        job_id = db.create_job_record(
+            payload=job_payload,
+            api_key_id=None,
+            team_id=None,
+            user_id=None,
+            environment="model-provider-benchmark",
+        )
+
+    is_internal_worker_benchmark = provider_type == "logosnode"
+    benchmark_target = (
+        internal_benchmark_target(job_id) if is_internal_worker_benchmark else resolve_benchmark_target(endpoint)
+    )
+    request_headers = (
+        benchmark_affinity_headers(
+            secret=_INTERNAL_SECRET,
+            job_id=job_id,
+            provider_id=provider_id,
+            model=model_name,
+        )
+        if is_internal_worker_benchmark
+        else None
+    )
+    worker_preparer = (
+        (lambda: _capacity_planner.prepare_benchmark_lane(provider_id, model_name))
+        if request_headers is not None and _capacity_planner is not None
+        else None
+    )
+
+    task = asyncio.create_task(
+        run_benchmark_job(
+            job_id=job_id,
+            model_provider_id=data.model_provider_id,
+            target=benchmark_target,
+            model=model_name,
+            api_key=None if is_internal_worker_benchmark else api_key or None,
+            samples=data.samples,
+            max_output_tokens=data.max_output_tokens,
+            serving_configuration=serving_configuration,
+            serving_configuration_getter=lambda: extract_serving_configuration(
+                _logosnode_registry.peek_runtime_snapshot(provider_id), model_name
+            ),
+            request_headers=request_headers,
+            worker_preparer=worker_preparer,
+            worker_session_is_current=(
+                (
+                    lambda: (_logosnode_registry.peek_runtime_snapshot(provider_id) or {}).get("session_id")
+                    == job_payload["provider_session_id"]
+                )
+                if is_internal_worker_benchmark
+                else None
+            ),
+        )
+    )
+    _background_tasks.add(task)
+    _benchmark_tasks.add(task)
+    _benchmark_tasks_by_job[job_id] = task
+    if is_internal_worker_benchmark:
+        _benchmark_sessions_by_job[job_id] = (provider_id, str(job_payload["provider_session_id"]))
+    task.add_done_callback(lambda done, jid=job_id: _forget_benchmark_task(jid, done))
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": "pending",
+            "provider_id": provider_id,
+            "provider_name": target["provider_name"],
+            "model_provider_id": data.model_provider_id,
+            "model_name": model_name,
+        },
+    )
+
+
+@app.post("/internal/model_benchmarks/jobs/{job_id}/cancel", tags=["admin"])
+async def internal_cancel_model_benchmark(job_id: int, request: Request):
+    """Cancel one active benchmark and release its lease."""
+    _require_internal_secret(request)
+    if not _cancel_benchmark_job(job_id, "Benchmark cancelled by administrator"):
+        raise HTTPException(status_code=404, detail="Active benchmark job not found")
+    return {"job_id": job_id, "status": "failed"}
+
+
+@app.post("/internal/model_benchmarks/jobs/{job_id}/v1/{path:path}", tags=["admin"])
+async def internal_model_benchmark_completion(job_id: int, path: str, request: Request):
+    """Execute one signed benchmark request without a user API key."""
+    if path.strip("/") != "chat/completions":
+        raise HTTPException(status_code=404, detail="Unsupported benchmark operation")
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON payload must be an object")
+
+    headers = dict(request.headers)
+    header_job_id = headers.get(BENCHMARK_JOB_HEADER)
+    if header_job_id != str(job_id):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    with DBManager() as db:
+        job = db.get_job(job_id)
+        payload = job.get("request_payload") if job else None
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+        try:
+            model_provider_id = int(payload["model_provider_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+        target = db.get_model_provider_benchmark_target(model_provider_id)
+
+    if target is None or _normalize_provider_type(str(target.get("provider_type") or "")) != "logosnode":
+        raise HTTPException(status_code=404, detail="Benchmark worker deployment no longer exists")
+
+    raw_deployments: list[Deployment] = [
+        {
+            "model_id": int(target["model_id"]),
+            "provider_id": int(target["provider_id"]),
+            "type": "logosnode",
+            "privacy_level": target.get("privacy_level"),
+            "cloud_provider_type": target.get("cloud_provider_type"),
+            "base_url": target.get("base_url"),
+        }
+    ]
+    required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
+    deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
+    if not deployments:
+        raise HTTPException(status_code=503, detail="Selected benchmark worker is not serving the model")
+
+    # This context is created only after the active job's HMAC and exact
+    # provider-model pair have been validated above. It intentionally has no
+    # user/team limits or billing identity: benchmarks are Logos-internal work.
+    auth = AuthContext(
+        key_value="",
+        api_key_id=-job_id,
+        api_key_name="internal-model-benchmark",
+        key_type="internal",
+        team_id=None,
+        user_id=None,
+        environment="model-provider-benchmark",
+        log_level="FULL",
+        settings={},
+        default_priority=1,
+    )
+    request_id = secrets.token_urlsafe(16)
+    with DBManager() as db:
+        log_result, _ = db.log_usage(
+            api_key_id=None,
+            team_id=None,
+            user_id=None,
+            environment=auth.environment,
+            log_level=auth.log_level,
+            request_id=request_id,
+        )
+    log_id = int(log_result["log-id"])
+    return await _execute_cancelling_on_disconnect(
+        request,
+        deployments=deployments,
+        body=body,
+        headers=headers,
+        auth=auth,
+        path=f"v1/{path.strip('/')}",
+        log_id=log_id,
+        request_id=request_id,
+        required_provider_id=required_provider_id,
+    )
+
+
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
 async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateRequest, request: Request):
     """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
@@ -1328,7 +1608,7 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
@@ -1379,7 +1659,7 @@ async def internal_logosnode_delete_lane(data: InternalDeleteLaneRequest, reques
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
@@ -1399,7 +1679,7 @@ async def internal_logosnode_add_lane(data: InternalAddLaneRequest, request: Req
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     model = str(data.lane.get("model") or "").strip()
@@ -1453,7 +1733,7 @@ async def internal_logosnode_sleep_lane(data: InternalSleepLaneRequest, request:
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
     snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
@@ -1499,7 +1779,7 @@ async def internal_logosnode_wake_lane(data: InternalWakeLaneRequest, request: R
         if auth_header.lower().startswith("bearer ")
         else auth_header.strip()
     )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
@@ -2363,14 +2643,20 @@ async def _streaming_response(
                         async with aclosing(_new_logosnode_chunk_iter()) as chunk_iter:
                             async for chunk in chunk_iter:
                                 produced = True
-                                yield chunk
+                                # Parse before yielding: GuideLLM closes its HTTP
+                                # stream as soon as it receives [DONE]. If the
+                                # completion flag were set afterwards, that normal
+                                # close would be misreported as a disconnect.
+                                stream_log.feed(chunk)
+                                if stream_log.terminal_event_received:
+                                    stream_completed = True
                                 if chunk and not ttft_recorded:
                                     if log_id:
                                         with DBManager() as db:
                                             db.set_time_at_first_token(log_id)
                                     ttft_recorded = True
-                                stream_log.feed(chunk)
                                 _live_streams.update(request_id, stream_log.streamed_tokens())
+                                yield chunk
                     except Exception as e:
                         # Retry ONLY if nothing has been streamed to the client yet:
                         # a pre-token failure (e.g. a just-woken level-1 lane whose
@@ -3079,6 +3365,8 @@ async def _execute_proxy_mode(
     is_async_job: bool,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
+    priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -3090,25 +3378,33 @@ async def _execute_proxy_mode(
     if not requested_model_name:
         raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
 
-    with DBManager() as db:
-        models_info = db.get_models_info(auth.key_value)
+    is_internal_benchmark = auth.environment == "model-provider-benchmark" and required_provider_id is not None
+    if is_internal_benchmark:
+        matching_deployments = [
+            deployment for deployment in deployments if deployment["provider_id"] == required_provider_id
+        ]
+        model_id = matching_deployments[0]["model_id"] if len(matching_deployments) == 1 else None
+        model_name = requested_model_name if model_id is not None else None
+    else:
+        with DBManager() as db:
+            models_info = db.get_models_info(auth.key_value)
 
-    model_name = _resolve_requested_model_name(
-        requested_model_name,
-        [str(row["name"]) for row in models_info if row.get("name")],
-    )
-    if model_name is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Model '{requested_model_name}' not available for this key",
+        model_name = _resolve_requested_model_name(
+            requested_model_name,
+            [str(row["name"]) for row in models_info if row.get("name")],
         )
+        if model_name is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model '{requested_model_name}' not available for this key",
+            )
 
-    model_id = None
-    for row in models_info:
-        mid, name = row["id"], row["name"]
-        if name == model_name:
-            model_id = mid
-            break
+        model_id = None
+        for row in models_info:
+            mid, name = row["id"], row["name"]
+            if name == model_name:
+                model_id = mid
+                break
 
     if model_id is None:
         raise HTTPException(
@@ -3139,6 +3435,8 @@ async def _execute_proxy_mode(
         request_id=request_id,
         request_path=request_path,
         skip_laura=True,
+        priority=priority,
+        required_provider_id=required_provider_id,
     )
 
 
@@ -3153,6 +3451,8 @@ async def _execute_resource_mode(
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
     skip_laura: bool = False,
+    priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -3206,6 +3506,7 @@ async def _execute_resource_mode(
         deployments=deployments,
         skip_laura=skip_laura,
         request_path=request_path,
+        required_provider_id=required_provider_id,
         # The key owner's queue priority; 0 falls back to the
         # policy-level priority inside the pipeline.
         default_priority=auth.default_priority,
@@ -3389,6 +3690,8 @@ async def route_and_execute(
     log_id: Optional[int],
     is_async_job: bool = False,
     request_id: Optional[str] = None,
+    priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -3469,7 +3772,10 @@ async def route_and_execute(
                 is_async_job=is_async_job,
                 request_id=request_id,
                 request_path=path,
+                priority=priority,
+                required_provider_id=required_provider_id,
             )
+
         else:
             # RESOURCE mode (no body["model"] → classification + scheduling)
             response = await _execute_resource_mode(
@@ -3481,6 +3787,8 @@ async def route_and_execute(
                 is_async_job=is_async_job,
                 request_id=request_id,
                 request_path=path,
+                priority=priority,
+                required_provider_id=required_provider_id,
             )
         return response
     except HTTPException as exc:
@@ -3580,6 +3888,94 @@ async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
     # 499, as nginx uses it: the client closed the request. Nobody is left to
     # read this, but the status keeps the access log honest.
     return JSONResponse(status_code=499, content={"detail": "Client closed request"})
+
+
+def _benchmark_provider_affinity(
+    headers: Dict[str, str],
+    body: Dict[str, Any],
+    deployments: list[Deployment],
+) -> Optional[int]:
+    """Validate a signed active benchmark job and return its required worker."""
+
+    normalized_headers = {str(name).lower(): str(value) for name, value in headers.items()}
+    job_value = normalized_headers.get(BENCHMARK_JOB_HEADER)
+    provider_value = normalized_headers.get(BENCHMARK_PROVIDER_HEADER)
+    token = normalized_headers.get(BENCHMARK_TOKEN_HEADER)
+    phase = normalized_headers.get(BENCHMARK_PHASE_HEADER, "measurement")
+    affinity_values = (job_value, provider_value, token)
+
+    if not any(affinity_values):
+        return None
+    if not all(affinity_values) or not _INTERNAL_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    if phase not in {"warmup", "measurement"}:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    try:
+        job_id = int(job_value)
+        provider_id = int(provider_value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if job_id <= 0 or provider_id <= 0:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    model_name = str(body.get("model") or "").strip()
+    expected_token = benchmark_affinity_token(
+        secret=_INTERNAL_SECRET,
+        job_id=job_id,
+        provider_id=provider_id,
+        model=model_name,
+    )
+    if not hmac.compare_digest(token.encode("utf-8"), expected_token.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    with DBManager() as db:
+        job = db.get_job(job_id)
+    if not job or job.get("environment") != "model-provider-benchmark":
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    job_status = job.get("status")
+    if hasattr(job_status, "value"):
+        job_status = job_status.value
+    if job_status != JobStatus.RUNNING.value:
+        raise HTTPException(status_code=409, detail="Benchmark job is no longer running")
+
+    payload = job.get("request_payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    try:
+        payload_provider_id = int(payload.get("provider_id"))
+        payload_model_id = int(payload.get("model_id"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if payload_provider_id != provider_id or str(payload.get("model_name") or "") != model_name:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    expected_session_id = payload.get("provider_session_id")
+    if expected_session_id:
+        snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        if snapshot is None or snapshot.get("session_id") != expected_session_id:
+            raise HTTPException(status_code=409, detail="Benchmark provider restarted or disconnected")
+
+    if not any(
+        deployment["provider_id"] == provider_id and deployment["model_id"] == payload_model_id
+        for deployment in deployments
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Benchmark API key cannot access the required provider-model pair",
+        )
+
+    if phase == "measurement":
+        with DBManager() as db:
+            db.record_benchmark_request_started(job_id)
+
+    return provider_id
 
 
 # How often the startup grace period re-checks for a (re)connected worker.
@@ -3699,7 +4095,15 @@ async def handle_sync_request(path: str, request: Request):
                         timeout_s=body.get("timeout_s"),
                     )
                 raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+            required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
+            if required_provider_id is not None:
+                raw_deployments = [
+                    deployment for deployment in raw_deployments if deployment["provider_id"] == required_provider_id
+                ]
             deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
+        except HTTPException as e:
+            _record_log_failure(log_id, request_id, str(e.detail), result_status="error")
+            raise
         except PermissionError as e:
             _record_log_failure(log_id, request_id, str(e), result_status="error")
             raise HTTPException(status_code=401, detail=str(e))
@@ -3733,6 +4137,7 @@ async def handle_sync_request(path: str, request: Request):
             path=path,
             log_id=log_id,
             request_id=request_id,
+            required_provider_id=required_provider_id,
         )
         response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)
         return response
@@ -4155,10 +4560,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
 
     await websocket.accept()
     try:
-        await _logosnode_registry.attach_session(ticket, websocket)
+        session = await _logosnode_registry.attach_session(ticket, websocket)
     except LogosNodeSessionConflictError as exc:
         await websocket.close(code=1008, reason=str(exc))
         return
+    _cancel_benchmarks_for_changed_session(ticket.provider_id, session.session_id)
 
     try:
         while True:
@@ -4234,6 +4640,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
         pass
     finally:
         await _logosnode_registry.detach_session(ticket.provider_id, websocket)
+        current = _logosnode_registry.peek_runtime_snapshot(ticket.provider_id)
+        _cancel_benchmarks_for_changed_session(
+            ticket.provider_id,
+            str(current["session_id"]) if current else None,
+        )
 
 
 @app.post("/logosdb/providers/logosnode/status", tags=["logosnode"])

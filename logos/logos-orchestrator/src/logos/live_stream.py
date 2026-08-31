@@ -182,6 +182,10 @@ class _StreamingLogAccumulator:
     # output_tokens is settled. message_start's is a one-token placeholder
     # that must not stand in for the running count; see streamed_tokens.
     _messages_final_usage: bool = False
+    # The client may close immediately after receiving the protocol's terminal
+    # event. Treat that as a completed response, even if the worker transport's
+    # following stream_end frame has not been consumed yet.
+    terminal_event_received: bool = False
     # Text deltas seen so far. The exact completion count only arrives with the
     # terminal usage event, which is no help to anyone watching the request run
     # — so the delta count stands in for it until then. See streamed_tokens.
@@ -298,7 +302,12 @@ class _StreamingLogAccumulator:
 
     def _consume_line(self, line: str) -> None:
         stripped = line.strip()
-        if not stripped or stripped == "data: [DONE]" or not stripped.startswith("data: "):
+        if not stripped:
+            return
+        if stripped == "data: [DONE]":
+            self.terminal_event_received = True
+            return
+        if not stripped.startswith("data: "):
             return
         try:
             blob = json.loads(stripped[6:])
@@ -309,9 +318,13 @@ class _StreamingLogAccumulator:
 
         event_type = blob.get("type")
         if isinstance(event_type, str) and event_type.startswith("response."):
+            if event_type in {"response.completed", "response.incomplete", "response.failed"}:
+                self.terminal_event_received = True
             self._consume_responses_event(event_type, blob)
             return
         if isinstance(event_type, str) and event_type in _MESSAGES_EVENT_TYPES:
+            if event_type == "message_stop":
+                self.terminal_event_received = True
             self._consume_messages_event(event_type, blob)
             return
 
