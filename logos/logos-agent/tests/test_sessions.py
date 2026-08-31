@@ -16,6 +16,7 @@ from app.config import settings
 from app.schemas import (
     ACTIVE_STATUSES,
     TERMINAL_STATUSES,
+    EventKind,
     SessionCreate,
     SessionStatus,
     WorkspaceCreate,
@@ -166,6 +167,7 @@ class TestLaunchAndSupervision:
 
         patched = replace(sessions.settings, artifact_root=str(tmp_path))
         monkeypatch.setattr(sessions, "settings", patched)
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
         created: dict = {}
         removed: list = []
 
@@ -206,6 +208,10 @@ class TestLaunchAndSupervision:
         # internal API: the session network must not reach the orchestrator.
         assert created["env"]["ANTHROPIC_BASE_URL"] == patched.session_model_url
         assert created["env"]["ANTHROPIC_BASE_URL"] != patched.orchestrator_url
+        # The bind source *is* the session's output directory, so the session
+        # writes into /artifacts itself — a per-session prefix here would put
+        # its output one directory too deep.
+        assert created["env"]["LOGOS_ARTIFACT_DIR"] == "/artifacts"
 
     async def test_paused_time_does_not_count_towards_the_session_timeout(self, monkeypatch, tmp_path):
         # A session that yields while the platform is busy must not burn its
@@ -269,3 +275,229 @@ class TestLaunchAndSupervision:
                 await supervisor
 
         assert any("exceeded" in str(payload.get("message", "")) for payload in events)
+
+    async def test_a_cancel_racing_the_launch_stops_and_removes_the_container(self, monkeypatch, tmp_path):
+        # If an operator cancels while the container is being created or
+        # started, the row leaves 'starting' before the launch can claim
+        # 'running'. The launch must give up the container it just started —
+        # no running event, no supervision, no settlement, none of the
+        # completion side effects that a live, credentialed container would
+        # otherwise still be allowed to perform.
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        stopped: list = []
+        removed: list = []
+        events: list = []
+        transitions: list = []
+
+        async def fake_transition(sid, target, **fields):
+            transitions.append(target)
+            return False
+
+        async def fake_stop(cid, **kwargs):
+            stopped.append(cid)
+
+        async def fake_remove(cid, **kwargs):
+            removed.append(cid)
+
+        async def fake_event(sid, kind, payload):
+            events.append((kind, payload))
+
+        async def fake_create(**kwargs):
+            return "cid-7"
+
+        async def noop(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", self._async_value("/vol/data"))
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+
+        await sessions.manager._launch(self.SESSION)
+
+        assert stopped == ["cid-7"]
+        assert removed == ["cid-7"]
+        # One transition attempt (to running), and no settlement afterwards:
+        # the row belongs to the cancel, not to this launch.
+        assert transitions == [SessionStatus.RUNNING]
+        assert events == []
+        assert not sessions.manager._supervisors
+
+
+class TestScreenshotOrchestration:
+    """Where and when the requested dev pages get photographed.
+
+    The screenshots must show the revision the session just deployed, so they
+    are taken by the runner during settlement — after the deploy dispatch and
+    only once the environment serves again — never from inside the session
+    container, which exits before any of that happens.
+    """
+
+    SESSION_ROW = {
+        "container_id": "cid-7",
+        "deploy_to_dev": False,
+        "branch_name": "agent/feature-work/session-7",
+        "screenshot_paths": ["/dashboard", "/models"],
+    }
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    def _patch_base(self, monkeypatch, tmp_path, *, deploy_enabled=False):
+        from app import sessions
+
+        monkeypatch.setattr(
+            sessions,
+            "settings",
+            replace(sessions.settings, artifact_root=str(tmp_path), deploy_enabled=deploy_enabled),
+        )
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", self._async_value("/vol/data"))
+        monkeypatch.setattr(sessions.db, "update_session", self._async_value(None))
+        return sessions
+
+    async def test_screenshots_are_captured_in_settlement_without_a_deploy(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        self._patch_base(monkeypatch, tmp_path)
+        created: list = []
+        removed: list = []
+        events: list = []
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return f"cid-shot-{len(created)}"
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        async def fake_start(_cid):
+            return None
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        monkeypatch.setattr(sessions.docker_engine, "create_screenshot_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.SESSION_ROW))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        base = sessions.settings.dev_base_url.rstrip("/")
+        # One one-shot container per requested page, pointed at the session's
+        # own artefact directory, and each removed afterwards.
+        assert [c["url"] for c in created] == [f"{base}/dashboard", f"{base}/models"]
+        assert [c["output_path"] for c in created] == [
+            "/artifacts/screenshots/00-dashboard.png",
+            "/artifacts/screenshots/01-models.png",
+        ]
+        assert all(c["artifact_host_path"] == "/vol/data/7" for c in created)
+        assert removed == ["cid-7", "cid-shot-1", "cid-shot-2"]
+        names = [p["name"] for k, p in events if k == EventKind.SCREENSHOT]
+        assert names == ["00-dashboard.png", "01-models.png"]
+
+    async def test_screenshots_wait_for_a_dispatched_deploy_to_finish(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        self._patch_base(monkeypatch, tmp_path, deploy_enabled=True)
+        row = {**self.SESSION_ROW, "deploy_to_dev": True, "screenshot_paths": ["/dashboard"]}
+        order: list = []
+        created: list = []
+
+        async def fake_dispatch(**_kwargs):
+            order.append("dispatch")
+            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+
+        async def fake_wait(ref, **_kwargs):
+            order.append("wait")
+            return "success", "run ended: success"
+
+        async def fake_ready(_self):
+            order.append("ready")
+            return True
+
+        async def fake_create(**kwargs):
+            order.append("screenshot")
+            created.append(kwargs)
+            return "cid-shot"
+
+        async def noop(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+        monkeypatch.setattr(sessions.github, "wait_for_dev_deploy", fake_wait)
+        monkeypatch.setattr(sessions.SessionManager, "_wait_dev_ready", fake_ready)
+        monkeypatch.setattr(sessions.docker_engine, "create_screenshot_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", self._async_value(0))
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(row))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        # The strict point of this fix: the photo comes only after the deploy
+        # has been dispatched, waited out, and the environment serves again.
+        assert order == ["dispatch", "wait", "ready", "screenshot"]
+        assert created[0]["url"].endswith("/dashboard")
+
+    async def test_screenshots_are_skipped_when_the_deploy_does_not_succeed(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        self._patch_base(monkeypatch, tmp_path, deploy_enabled=True)
+        row = {**self.SESSION_ROW, "deploy_to_dev": True}
+        events: list = []
+        created: list = []
+
+        async def fake_dispatch(**_kwargs):
+            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+
+        async def fake_wait(_ref, **_kwargs):
+            return "timeout", "still running after 1200s"
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-shot"
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def noop(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+        monkeypatch.setattr(sessions.github, "wait_for_dev_deploy", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "create_screenshot_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(row))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        # A deploy that did not succeed means nothing was deployed; a photo
+        # of the old revision would be worse than no photo.
+        assert created == []
+        skipped = [p for k, p in events if k == EventKind.SCREENSHOT and p.get("status") == "skipped"]
+        assert len(skipped) == 1
+        assert "did not succeed" in skipped[0]["reason"]

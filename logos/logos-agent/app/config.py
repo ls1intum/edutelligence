@@ -92,6 +92,10 @@ class Settings:
     session_memory_mb: int = _int("LOGOS_AGENT_SESSION_MEMORY_MB", 4096)
     session_cpus: float = _float("LOGOS_AGENT_SESSION_CPUS", 2.0)
     session_pids_limit: int = _int("LOGOS_AGENT_SESSION_PIDS_LIMIT", 512)
+    # The unprivileged user the session image runs as. The runner creates the
+    # per-session artefact directory on the host as root, so it must hand it
+    # over to this UID or the session cannot write its own output.
+    session_uid: int = _int("LOGOS_AGENT_SESSION_UID", 10001)
     # Wall-clock ceiling for one session. A stuck agent burns capacity that the
     # whole point of this runner is to reclaim, so the cap is not optional.
     session_timeout_s: int = _int("LOGOS_AGENT_SESSION_TIMEOUT_S", 3 * 3600)

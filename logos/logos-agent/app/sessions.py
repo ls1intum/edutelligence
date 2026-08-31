@@ -22,10 +22,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from . import capacity, db, docker_engine, github
 from .config import settings
@@ -61,6 +64,21 @@ def branch_for(session_id: int, workspace_name: str) -> str:
 
 def artifact_dir(session_id: int) -> Path:
     return Path(settings.artifact_root) / str(session_id)
+
+
+def _give_to_session_user(path: Path) -> None:
+    """Hand a host-side artefact path to the unprivileged session user.
+
+    This service runs as root and creates the directories; the containers
+    that write into them (sessions and screenshot containers) do not. Without
+    the handover a session cannot create its own output at all. A failure is
+    logged, not fatal: on a development machine the service itself runs
+    unprivileged and the chown cannot work there.
+    """
+    try:
+        os.chown(path, settings.session_uid, settings.session_uid)
+    except OSError as exc:
+        logger.warning("could not hand %s to session uid %s: %s", path, settings.session_uid, exc)
 
 
 class SessionManager:
@@ -233,6 +251,7 @@ class SessionManager:
             # at /artifacts, never the shared volume around it.
             directory = artifact_dir(sid)
             directory.mkdir(parents=True, exist_ok=True)
+            _give_to_session_user(directory)
             artifact_host_path = str(Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(sid))
 
             container_id = await docker_engine.create_session_container(
@@ -257,13 +276,25 @@ class SessionManager:
             await self._settle(sid, exit_code=None, error=f"launch failed: {exc}")
             return
 
-        await db.transition_session(
+        if not await db.transition_session(
             sid,
             SessionStatus.RUNNING,
             container_id=container_id,
             branch_name=branch,
             started_at=datetime.now(timezone.utc),
-        )
+        ):
+            # A cancel that raced the launch already moved the row out of
+            # 'starting'. The session is no longer ours to run: stop and
+            # remove the container we just started, and do nothing else — no
+            # running event, no supervision, no settlement side effects.
+            logger.warning("session %s was cancelled during launch; removing its container", sid)
+            try:
+                await docker_engine.stop_container(container_id, timeout_s=5)
+                await docker_engine.remove_container(container_id)
+            except Exception:
+                logger.warning("could not remove the container of cancelled session %s", sid)
+            return
+
         await db.add_event(sid, EventKind.STATUS, {"status": "running", "branch": branch})
         self._supervise(sid, container_id)
 
@@ -292,11 +323,10 @@ class SessionManager:
             "LOGOS_SESSION_OPEN_PR": "1" if session.get("open_pull_request") else "0",
             "LOGOS_REPO_URL": settings.repo_url,
             "LOGOS_REPO_SLUG": settings.repo_slug,
-            "LOGOS_ARTIFACT_DIR": f"/artifacts/{session['id']}",
-            # Screenshots are taken against the dev environment only. The
-            # container is given no credentials for anything else.
-            "LOGOS_DEV_BASE_URL": settings.dev_base_url,
-            "LOGOS_SCREENSHOT_PATHS": json.dumps(session.get("screenshot_paths") or []),
+            # The bind source *is* this session's artefact directory, so
+            # /artifacts is its output root; there is no per-session prefix
+            # to get wrong.
+            "LOGOS_ARTIFACT_DIR": "/artifacts",
         }
         if model:
             for key in (
@@ -431,13 +461,18 @@ class SessionManager:
 
         if result.get("pr_url"):
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
-        for name in self._screenshot_names(session_id):
-            await db.add_event(session_id, EventKind.SCREENSHOT, {"name": name})
+
+        deploy: str | None = None
+        if succeeded:
+            deploy = await self._maybe_deploy(session_id, result)
+
+        # Give the container back before the post-deploy wait: a deploy can
+        # take minutes, and the capacity a session holds is worth reclaiming
+        # without waiting for its screenshots.
+        await self._cleanup_container(session_id)
 
         if succeeded:
-            await self._maybe_deploy(session_id, result)
-
-        await self._cleanup_container(session_id)
+            await self._capture_screenshots(session_id, deploy)
 
     def _read_result(self, session_id: int) -> dict[str, Any]:
         """Read the result file the container writes before it exits.
@@ -454,27 +489,23 @@ class SessionManager:
             logger.warning("unreadable result file for session %s: %s", session_id, exc)
         return {}
 
-    def _screenshot_names(self, session_id: int) -> list[str]:
-        directory = artifact_dir(session_id) / "screenshots"
-        if not directory.is_dir():
-            return []
-        return sorted(
-            entry.name
-            for entry in directory.iterdir()
-            if entry.is_file() and entry.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")
-        )
+    async def _maybe_deploy(self, session_id: int, result: dict[str, Any]) -> str | None:
+        """Dispatch the dev deploy if the session asked for one.
 
-    async def _maybe_deploy(self, session_id: int, result: dict[str, Any]) -> None:
+        Returns what happened — ``"dispatched"``, ``"skipped"``, ``"failed"`` —
+        or ``None`` when the session did not request a deploy. Callers that
+        have to happen *after* the deploy (the screenshots) key off this.
+        """
         session = await db.get_session(session_id)
         if not session or not session.get("deploy_to_dev"):
-            return
+            return None
         if not settings.deploy_enabled:
             await db.add_event(
                 session_id,
                 EventKind.DEPLOY,
                 {"status": "skipped", "reason": "deploys are disabled on this runner"},
             )
-            return
+            return "skipped"
         try:
             # Dispatched from here, never from the container: the workflow-scoped
             # token stays in this service, and the workflow itself is pinned to
@@ -486,9 +517,113 @@ class SessionManager:
                 EventKind.DEPLOY,
                 {"status": "dispatched", "environment": settings.allowed_environment, "url": run_url},
             )
+            return "dispatched"
         except Exception as exc:
             logger.warning("dev deploy for session %s failed: %s", session_id, exc)
             await db.add_event(session_id, EventKind.DEPLOY, {"status": "failed", "error": str(exc)})
+            return "failed"
+
+    async def _capture_screenshots(self, session_id: int, deploy: str | None) -> None:
+        """Capture the session's requested dev pages, after everything else.
+
+        Running this in settlement — and only after a requested dev deploy has
+        finished and the environment serves again — is what makes the photos
+        show the revision the session just deployed. A session container would
+        see the previous revision: it exits long before the deploy dispatch
+        is even made.
+        """
+        session = await db.get_session(session_id)
+        paths = (session or {}).get("screenshot_paths") or []
+        if not paths:
+            return
+
+        if deploy == "dispatched":
+            status, detail = await github.wait_for_dev_deploy((session or {}).get("branch_name") or "main")
+            if status != "success":
+                await db.add_event(
+                    session_id,
+                    EventKind.SCREENSHOT,
+                    {"status": "skipped", "reason": f"dev deploy did not succeed ({status}): {detail}"},
+                )
+                return
+            if not await self._wait_dev_ready():
+                await db.add_event(
+                    session_id,
+                    EventKind.SCREENSHOT,
+                    {"status": "skipped", "reason": "dev environment was not serving after the deploy"},
+                )
+                return
+
+        for name in await self._take_screenshots(session_id, paths):
+            await db.add_event(session_id, EventKind.SCREENSHOT, {"name": name})
+
+    async def _wait_dev_ready(self, *, timeout_s: float = 5 * 60, poll_s: float = 5.0) -> bool:
+        """Wait until the dev environment serves the freshly deployed revision.
+
+        The deploy workflow ends as soon as compose has started the stack, so
+        the first moments after it are a half-started deployment. Any answer
+        from the dev host means the new revision is up and serving; whether
+        the models behind it have finished loading is a matter of what the
+        page shows, not of whether it is the new one.
+        """
+        url = settings.dev_base_url.rstrip("/") + "/"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                    response = await client.get(url)
+                if response.status_code < 400:
+                    return True
+            except Exception:
+                pass
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(poll_s)
+
+    async def _take_screenshots(self, session_id: int, paths: list[str]) -> list[str]:
+        """Render each requested page in its own one-shot container.
+
+        One container per page keeps a single slow or hung page from burning
+        the budget of the ones after it, and each container is removed as
+        soon as it is done.
+        """
+        base = settings.dev_base_url.rstrip("/")
+        directory = artifact_dir(session_id) / "screenshots"
+        directory.mkdir(parents=True, exist_ok=True)
+        _give_to_session_user(directory)
+        artifact_host_path = str(
+            Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(session_id)
+        )
+
+        taken: list[str] = []
+        for index, path in enumerate(paths[:10]):
+            name = f"{index:02d}-{re.sub(r'[^a-zA-Z0-9]+', '-', path).strip('-') or 'page'}.png"
+            container_id: str | None = None
+            try:
+                container_id = await docker_engine.create_screenshot_container(
+                    name=f"logos-agent-screenshot-{session_id}-{index}",
+                    image=settings.workspace_image,
+                    url=f"{base}{path}",
+                    output_path=f"/artifacts/screenshots/{name}",
+                    artifact_host_path=artifact_host_path,
+                    session_id=session_id,
+                )
+                await docker_engine.start_container(container_id)
+                exit_code = await docker_engine.wait_container(container_id, timeout_s=180)
+                if exit_code == 0:
+                    taken.append(name)
+                else:
+                    logger.warning("screenshot of %s%s failed (exit %s)", base, path, exit_code)
+            except Exception as exc:
+                logger.warning("screenshot of %s%s failed: %s", base, path, exc)
+            finally:
+                if container_id:
+                    try:
+                        await docker_engine.remove_container(container_id)
+                    except Exception:
+                        logger.warning("could not remove the screenshot container for session %s", session_id)
+        return taken
 
     async def _cleanup_container(self, session_id: int) -> None:
         session = await db.get_session(session_id)

@@ -360,40 +360,6 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
     return None
 
 
-def take_screenshots() -> list[str]:
-    """Capture the requested dev-environment pages, if any."""
-    raw = os.environ.get("LOGOS_SCREENSHOT_PATHS", "[]")
-    try:
-        paths = json.loads(raw)
-    except json.JSONDecodeError:
-        paths = []
-    if not paths:
-        return []
-
-    base = os.environ.get("LOGOS_DEV_BASE_URL", "").rstrip("/")
-    if not base:
-        log("no dev base URL configured; skipping screenshots")
-        return []
-
-    out_dir = Path(os.environ.get("LOGOS_ARTIFACT_DIR", "/artifacts")) / "screenshots"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    taken: list[str] = []
-    for index, path in enumerate(paths[:10]):
-        url = f"{base}{path}"
-        name = f"{index:02d}-{re.sub(r'[^a-zA-Z0-9]+', '-', path).strip('-') or 'page'}.png"
-        log(f"screenshot {url}")
-        process = run(
-            ["node", "/usr/local/lib/screenshot.js", url, str(out_dir / name)],
-            check=False,
-        )
-        if process.returncode == 0:
-            taken.append(name)
-        else:
-            fail(f"screenshot of {url} failed")
-    return taken
-
-
 def main() -> int:
     result = Result()
     try:
@@ -421,10 +387,10 @@ def main() -> int:
         else:
             log("no GitHub token provided; leaving changes uncommitted in the workspace")
 
-        screenshots = take_screenshots()
-        if screenshots:
-            log(f"captured {len(screenshots)} screenshot(s)")
-
+        # Screenshots are the runner's job, taken after settlement: a
+        # session's own view of the dev environment is stale the moment its
+        # deploy is queued, and the runner is the one that knows when the
+        # deploy has landed.
         log("session complete")
         return 0
     except Exception as exc:

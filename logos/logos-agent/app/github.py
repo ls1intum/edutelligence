@@ -9,6 +9,7 @@ letting the agent run `gh workflow run`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -63,6 +64,43 @@ async def dispatch_dev_deploy(*, ref: str, image_tag: str = "latest") -> str:
         raise GitHubError(f"workflow dispatch failed ({response.status_code}): {response.text}")
 
     return f"https://github.com/{settings.repo_slug}/actions/workflows/{workflow}"
+
+
+async def wait_for_dev_deploy(ref: str, *, timeout_s: float = 20 * 60, poll_s: float = 15.0) -> tuple[str, str]:
+    """Wait for the dev deploy run we just dispatched to reach a conclusion.
+
+    Returns ``(status, detail)``: status is ``"success"``, ``"failed"``, or
+    ``"timeout"``. The workflow itself ends as soon as ``docker compose up``
+    returns, so success means the new revision is started, not that it is
+    healthy — callers that need the environment ready still probe it.
+    """
+    url = f"{_API}/repos/{settings.repo_slug}/actions/runs"
+    params = {"workflow_id": settings.deploy_workflow, "per_page": 10}
+    deadline = asyncio.get_running_loop().time() + timeout_s
+
+    async def latest_run_for_ref() -> dict | None:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=_headers(), params=params)
+        if response.status_code != 200:
+            raise GitHubError(f"workflow run lookup failed ({response.status_code})")
+        for run in response.json().get("workflow_runs", []):
+            if run.get("head_branch") == ref:
+                return run
+        return None
+
+    try:
+        while True:
+            run = await latest_run_for_ref()
+            if run is not None and run.get("status") == "completed":
+                conclusion = run.get("conclusion") or "unknown"
+                status = "success" if conclusion == "success" else "failed"
+                return status, f"run {run.get('html_url')} ended: {conclusion}"
+            if asyncio.get_running_loop().time() >= deadline:
+                return "timeout", f"dev deploy for '{ref}' still running after {timeout_s:.0f}s"
+            await asyncio.sleep(poll_s)
+    except Exception as exc:
+        logger.warning("waiting for the dev deploy run failed: %s", exc)
+        return "failed", f"could not observe the dev deploy run: {exc}"
 
 
 async def pull_request_state(pr_url: str) -> dict[str, object] | None:

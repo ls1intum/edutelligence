@@ -78,9 +78,12 @@ async def volume_mountpoint(name: str) -> str:
     session to just its own subdirectory goes through the volume's host
     path: the daemon resolves the bind on the host, where the subdirectory
     exists (the service creates it through its own mount of the same volume).
+
+    `GET /volumes/{name}` returns the volume object itself — `Mountpoint` is
+    a top-level field, not nested under the volume's name.
     """
     response = await _request("GET", f"/volumes/{name}")
-    info = response.json().get(name, {})
+    info = response.json()
     mountpoint = info.get("Mountpoint")
     if not mountpoint:
         raise DockerError(500, f"volume {name} has no host mountpoint (driver: {info.get('Driver')})")
@@ -168,6 +171,66 @@ async def create_session_container(
         "OpenStdin": False,
         # Never run as root inside the container; the image creates this user.
         "User": "agent",
+    }
+
+    response = await _request("POST", "/containers/create", params={"name": name}, json=payload)
+    return response.json()["Id"]
+
+
+async def create_screenshot_container(
+    *,
+    name: str,
+    image: str,
+    url: str,
+    output_path: str,
+    artifact_host_path: str,
+    session_id: int,
+) -> str:
+    """Create a one-shot container that renders one page to a PNG.
+
+    Screenshots run *outside* the session, after any dev deploy has finished,
+    so this is a small dedicated container rather than part of a session: it
+    runs the same workspace image's browser tooling on the same isolation
+    footing — no socket, no capabilities, read-only rootfs, capped resources —
+    and gets exactly the session's own artefact directory to write into.
+    """
+    host_config: dict[str, Any] = {
+        "Binds": [f"{artifact_host_path}:/artifacts"],
+        "NetworkMode": settings.session_network,
+        "ReadonlyRootfs": True,
+        "Tmpfs": {"/tmp": "rw,nosuid,size=2g"},
+        "CapDrop": ["ALL"],
+        "SecurityOpt": ["no-new-privileges:true"],
+        "Memory": settings.session_memory_mb * 1024 * 1024,
+        "MemorySwap": settings.session_memory_mb * 1024 * 1024,
+        "NanoCpus": int(settings.session_cpus * 1_000_000_000),
+        "PidsLimit": settings.session_pids_limit,
+        "AutoRemove": False,  # keep exit status readable
+        "RestartPolicy": {"Name": "no"},
+    }
+
+    payload: dict[str, Any] = {
+        "Image": image,
+        # The image's entrypoint is the session harness; a screenshot has no
+        # session, so run the page-capture script directly.
+        "Entrypoint": ["node", "/usr/local/lib/screenshot.js"],
+        "Cmd": [url, output_path],
+        "Env": [
+            # HOME lives on the read-only rootfs here; /tmp is the scratch
+            # space Chromium and Node need.
+            "HOME=/tmp",
+            "PLAYWRIGHT_BROWSERS_PATH=/opt/playwright",
+        ],
+        "Labels": {
+            "logos.agent.session": str(session_id),
+            "logos.agent.screenshot": "true",
+            "logos.agent.managed": "true",
+        },
+        "WorkingDir": "/tmp",
+        "HostConfig": host_config,
+        "User": "agent",
+        "Tty": False,
+        "OpenStdin": False,
     }
 
     response = await _request("POST", "/containers/create", params={"name": name}, json=payload)

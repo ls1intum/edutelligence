@@ -184,3 +184,8 @@ an `Authorization` header, and the token is what authorises the read.
   stops it and records the reason.
 - **Nothing merges itself.** Pull requests are opened as drafts, and a person
   approves and merges exactly as they do for human work.
+- **Screenshots follow the deploy.** A session that asks for dev screenshots
+  gets them only after the runner has dispatched its dev deploy and watched
+  the environment serve again — the runner captures the pages in one-shot
+  containers, so the photos show the revision the session just deployed, not
+  the one that was live while the session ran.
