@@ -880,3 +880,41 @@ def test_prompts_do_not_promise_code_tools_without_a_submission():
         episode=None,
     )
     assert "Without those tools you cannot name a line" in decide
+
+
+def test_confirm_close_blank_student_fields_collapse_to_none():
+    """
+    A resolved close whose student-visible fields are blank must not ship "" downstream:
+    "" is not a closing sentence, and the empty-vs-missing distinction has no consumer.
+    The close itself still stands - Artemis substitutes its own acknowledgement for a
+    missing sentence, so refusing the close would leave the student with nothing at all.
+    """
+    r = parse_confirm_close_result(
+        '{"resolved":true,"closingSentence":"   ","episodeLabel":""}'
+    )
+    assert r.resolved is True
+    assert r.closing_sentence is None
+    assert r.episode_label is None
+
+
+def test_confirm_close_keeps_resolved_without_student_fields():
+    r = parse_confirm_close_result('{"resolved":true}')
+    assert r.resolved is True
+    assert r.closing_sentence is None and r.episode_label is None
+
+
+def test_help_request_prompt_offers_no_silent_escape_without_tools():
+    """
+    The no-submission fallback added for the tool-availability finding must not hand back
+    the escape the NEVER SILENT contract closes 27 lines further down in the same template.
+    """
+    pipeline = StruggleInterventionPipeline()
+    rendered = pipeline.help_request_template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: STATE; severity sBase=0.90; path=e6.",
+        episode=None,
+    )
+    assert "Missing tools never buy you a way out of answering" in rendered
+    assert "send them to a human tutor" in rendered
+    assert "chat history alone or stay `silent`" not in rendered
+    assert "NEVER SILENT" in rendered

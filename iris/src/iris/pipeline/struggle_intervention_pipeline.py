@@ -46,8 +46,12 @@ def _extract_json_object(raw: str) -> Optional[dict]:
 
 
 def _as_opt_str(v) -> Optional[str]:
-    """Return v if it is a string, else None."""
-    return v if isinstance(v, str) else None
+    """Return v if it is a non-blank string, else None.
+
+    Blank collapses to None on purpose: "" is not a closing sentence or a fold label, and
+    passing it on would only push the empty-vs-missing distinction downstream.
+    """
+    return v if isinstance(v, str) and v.strip() else None
 
 
 # The gutter cue is drawn inline after the anchored line of the student's own code, so its
