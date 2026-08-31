@@ -110,6 +110,10 @@ class QueueEntry:
     before the rest, which keep plain arrival order (see
     PriorityQueueManager)."""
 
+    provider_affinity: int | None = None
+    """When set, only this provider may dispatch the entry. Normal requests
+    leave this unset and retain the model-wide, cross-provider queue behavior."""
+
     @property
     def wait_time_seconds(self) -> float:
         """Calculate how long this entry has been waiting in queue."""

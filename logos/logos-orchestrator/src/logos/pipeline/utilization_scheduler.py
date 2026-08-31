@@ -50,9 +50,15 @@ class UtilizationAwareScheduler(BaseScheduler):
         3. **Async Wait**: The method awaits until the request is dequeued by a release()
            call from another request.
         """
+        deployments = request.deployments
+        if request.required_provider_id is not None:
+            deployments = [
+                deployment for deployment in deployments if deployment["provider_id"] == request.required_provider_id
+            ]
+
         best_candidate = self._select_best_candidate(
             request.classified_models,
-            request.deployments,
+            deployments,
             request.request_id,
         )
 
@@ -77,7 +83,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         target_model_id = None
         priority_int = None
         for mid, _, pint in sorted_candidates:
-            matching = [d for d in request.deployments if d["model_id"] == mid]
+            matching = [d for d in deployments if d["model_id"] == mid]
             # Prefer logosnode for queueing (cloud providers don't queue)
             logosnode_dep = next((d for d in matching if d["type"] == "logosnode"), None)
             if logosnode_dep is not None:
@@ -103,6 +109,7 @@ class UtilizationAwareScheduler(BaseScheduler):
             provider_id,
             priority,
             background_app=request.background_app,
+            provider_affinity=request.required_provider_id,
         )
         logger.info(
             "Request %s queued for model %s provider %s (depth=%s)",

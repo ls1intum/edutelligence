@@ -281,6 +281,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         request_path=None,
         skip_laura=False,
         priority=1,
+        required_provider_id=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -338,6 +339,7 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
         request_path=None,
         skip_laura=False,
         priority=1,
+        required_provider_id=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -423,6 +425,66 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
     assert result.provider_id == 12
     assert len(scheduler.released) == 1
     assert scheduler.released[0][0:3] == (27, 12, "cloud")
+
+
+async def test_pipeline_rejects_scheduler_result_from_wrong_required_provider():
+    class FakeClassifier:
+        def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
+            return [(27, 1.0, 1)]
+
+    class FakeScheduler:
+        def __init__(self):
+            self.released = []
+
+        async def schedule(self, request):
+            assert request.required_provider_id == 20
+            return SchedulingResult(
+                model_id=27,
+                provider_id=10,
+                provider_type="logosnode",
+                queue_entry_id=None,
+                was_queued=False,
+                queue_depth_at_schedule=0,
+            )
+
+        def release(self, model_id, provider_id, provider_type, request_id):
+            self.released.append((model_id, provider_id, provider_type, request_id))
+
+        def get_total_queue_depth(self):
+            return 0
+
+        def update_provider_stats(self, model_id, provider_id, headers):  # noqa: ARG002
+            return None
+
+    context_resolver = MagicMock()
+    scheduler = FakeScheduler()
+    pipeline = RequestPipeline(
+        classifier=FakeClassifier(),
+        scheduler=scheduler,
+        executor=MagicMock(),
+        context_resolver=context_resolver,
+        monitoring=MagicMock(),
+    )
+
+    result = await pipeline.process(
+        PipelineRequest(
+            payload={"messages": [{"role": "user", "content": "hi"}]},
+            headers={},
+            allowed_models=[27],
+            deployments=[
+                {"model_id": 27, "provider_id": 10, "type": "logosnode"},
+                {"model_id": 27, "provider_id": 20, "type": "logosnode"},
+            ],
+            policy=None,
+            request_id="benchmark-1",
+            required_provider_id=20,
+        )
+    )
+
+    assert result.success is False
+    assert result.error == "Required provider affinity could not be satisfied"
+    assert scheduler.released == [(27, 10, "logosnode", "benchmark-1")]
+    context_resolver.resolve_context.assert_not_called()
 
 
 async def test_pipeline_releases_capacity_when_context_resolution_raises():

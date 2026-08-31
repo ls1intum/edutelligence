@@ -190,6 +190,44 @@ def _json_for_jsonb(value: Any) -> str:
     return json.dumps(_strip_nul(value))
 
 
+def derived_reported_context_length(profile: Any) -> int:
+    """Widest context window a worker profile dict has reported, in tokens.
+
+    A profile can carry the model's context in up to three places, and any of
+    them may be the only one set:
+
+    * ``max_context_length`` — the model's own architectural limit, when the
+      operator pinned it (manual override).
+    * ``calibration_max_model_len`` — the ``--max-model-len`` calibration
+      settled on when the model's default did not fit the pinned KV budget.
+    * ``kv_cache_to_max_model_len_pairs`` — the per-KV sweep calibration ran,
+      whose largest point is the widest window the node proved reachable.
+
+    The maximum across all of them is "the largest context this model has ever
+    been reported to run at" — the number the orchestrator falls back to when
+    no live lane says otherwise. 0 when the profile is not a dict or none of
+    the fields is a positive length.
+    """
+    if not isinstance(profile, dict):
+        return 0
+
+    def _as_len(value: Any) -> int:
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return value if value > 0 else 0
+
+    native = _as_len(profile.get("max_context_length"))
+    native = max(native, _as_len(profile.get("calibration_max_model_len")))
+    pairs = profile.get("kv_cache_to_max_model_len_pairs")
+    if isinstance(pairs, list):
+        for item in pairs:
+            if isinstance(item, dict):
+                native = max(native, _as_len(item.get("max_model_len")))
+    return native
+
+
 # noinspection PyUnresolvedReferences
 class DBManager:
     def __init__(self):
@@ -425,7 +463,7 @@ class DBManager:
     def create_job_record(
         self,
         payload: dict,
-        api_key_id: int,
+        api_key_id: Optional[int],
         team_id: Optional[int],
         user_id: Optional[int],
         environment: Optional[str],
@@ -441,7 +479,7 @@ class DBManager:
             text(
                 """
                  INSERT INTO jobs (status, request_payload, api_key_id, team_id, user_id, environment)
-                 VALUES (:status, :payload::jsonb, :aki, :tid, :uid, :env) RETURNING id
+                 VALUES (:status, CAST(:payload AS jsonb), :aki, :tid, :uid, :env) RETURNING id
                  """
             ),
             {
@@ -455,6 +493,154 @@ class DBManager:
         ).fetchone()
         self.session.commit()
         return row.id
+
+    def get_model_provider_benchmark_target(self, model_provider_id: int) -> Optional[Dict[str, Any]]:
+        """Resolve the endpoint and credential for one exact provider-model pair."""
+        row = (
+            self.session.execute(
+                text(
+                    """
+                SELECT mp.id AS model_provider_id,
+                       m.id AS model_id,
+                       m.name AS model_name,
+                       p.id AS provider_id,
+                       p.name AS provider_name,
+                       p.provider_type AS provider_type,
+                       p.privacy_level AS privacy_level,
+                       p.cloud_provider_type AS cloud_provider_type,
+                       p.base_url AS base_url,
+                       COALESCE(NULLIF(mp.endpoint, ''), NULLIF(p.base_url, '')) AS target,
+                       COALESCE(NULLIF(mp.api_key, ''), NULLIF(p.api_key, '')) AS api_key
+                FROM model_provider mp
+                JOIN models m ON m.id = mp.model_id
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE mp.id = :model_provider_id
+                """
+                ),
+                {"model_provider_id": int(model_provider_id)},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def find_active_model_benchmark_job(
+        self,
+        provider_id: int,
+        stale_after_seconds: int = 60,
+    ) -> Optional[Dict[str, Any]]:
+        """Expire stale benchmark rows, then return the newest active job."""
+        stale_after_seconds = max(1, int(stale_after_seconds))
+        stale_error = f"Benchmark stopped updating for {stale_after_seconds} seconds"
+        expired = self.session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'failed',
+                    error_message = :stale_error,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                  AND (request_payload ->> 'provider_id')::integer = :provider_id
+                  AND COALESCE(updated_at, created_at)
+                      < CURRENT_TIMESTAMP - CAST(:stale_after_seconds AS integer) * INTERVAL '1 second'
+                """
+            ),
+            {
+                "provider_id": int(provider_id),
+                "stale_after_seconds": stale_after_seconds,
+                "stale_error": stale_error,
+            },
+        )
+        if expired.rowcount:
+            logger.warning("Expired %d stale benchmark job(s) for provider %d", expired.rowcount, provider_id)
+
+        row = (
+            self.session.execute(
+                text(
+                    """
+                SELECT id, status, request_payload, created_at, updated_at
+                FROM jobs
+                WHERE environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                  AND (request_payload ->> 'provider_id')::integer = :provider_id
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+                ),
+                {"provider_id": int(provider_id)},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def touch_model_benchmark_job(self, job_id: int) -> bool:
+        """Renew one active benchmark lease."""
+        updated = self.session.execute(
+            text(
+                """
+                UPDATE jobs SET updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                """
+            ),
+            {"job_id": int(job_id)},
+        )
+        self.session.commit()
+        return bool(updated.rowcount)
+
+    def cancel_model_benchmark_job(self, job_id: int, reason: str) -> bool:
+        """Fail one active benchmark job and release its logical lease."""
+        updated = self.session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'failed', error_message = :reason, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                """
+            ),
+            {"job_id": int(job_id), "reason": reason[:1000]},
+        )
+        self.session.commit()
+        return bool(updated.rowcount)
+
+    def insert_model_provider_benchmark(
+        self,
+        *,
+        model_provider_id: int,
+        configuration: Dict[str, Any],
+        dataset: str,
+        sample_size: int,
+        metrics: Dict[str, Any],
+        recorded_at: datetime.datetime,
+    ) -> int:
+        """Persist one complete benchmark summary and return its id."""
+        row = self.session.execute(
+            text(
+                """
+                INSERT INTO model_provider_benchmarks
+                    (model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
+                VALUES
+                    (:model_provider_id, CAST(:configuration AS jsonb), :dataset, :sample_size,
+                     CAST(:metrics AS jsonb), :recorded_at)
+                RETURNING id
+                """
+            ),
+            {
+                "model_provider_id": int(model_provider_id),
+                "configuration": _json_for_jsonb(configuration),
+                "dataset": dataset,
+                "sample_size": int(sample_size),
+                "metrics": _json_for_jsonb(metrics),
+                "recorded_at": recorded_at,
+            },
+        ).fetchone()
+        self.session.commit()
+        return int(row.id)
 
     def update_job_status(
         self,
@@ -482,6 +668,31 @@ class DBManager:
                 error_message if isinstance(error_message, str) else _stringify_error_message(error_message)
             )
         self.update("jobs", job_id, update_data)
+
+    def record_benchmark_request_started(self, job_id: int) -> None:
+        """Atomically advance an active benchmark's visible sample progress."""
+        self.session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET result_payload = jsonb_set(
+                        COALESCE(result_payload, '{}'::jsonb),
+                        '{started_samples}',
+                        to_jsonb(LEAST(
+                            COALESCE((result_payload->>'started_samples')::integer, 0) + 1,
+                            COALESCE((result_payload->>'total_samples')::integer, 0)
+                        )),
+                        true
+                    ),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND status = 'running'
+                  AND result_payload->>'stage' = 'benchmarking'
+                """
+            ),
+            {"job_id": int(job_id)},
+        )
+        self.session.commit()
 
     def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -1063,6 +1274,17 @@ class DBManager:
     ) -> int:
         """Upsert model profiles from worker runtime into the model_profiles table.
 
+        ``max_reported_context_length`` is maintained as the historic maximum:
+        the ON CONFLICT clause keeps the larger of the stored value and the
+        freshly derived one, so a later calibration that reports a narrower
+        window (e.g. on a node with less VRAM) cannot shrink the widest window
+        this model has ever been reported at. That high-water mark is what the
+        orchestrator falls back to for a model's context when every workernode
+        is offline. Rows created before the column existed hold NULL, and
+        GREATEST with a NULL argument returns NULL in Postgres — hence the
+        COALESCE, so one upsert after the migration settles the mark instead
+        of leaving it NULL forever.
+
         Args:
             provider_id: Provider ID (FK to providers.id)
             profiles: Dict of model_name -> profile dict (from runtime_payload.model_profiles)
@@ -1080,6 +1302,7 @@ class DBManager:
                 base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
                 kv_budget_mb, disk_size_bytes, engine,
                 tensor_parallel_size, kv_per_token_bytes, max_context_length,
+                max_reported_context_length,
                 residency_source, measurement_count, last_measured_at,
                 observed_gpu_memory_utilization, min_gpu_memory_utilization_to_load,
                 updated_at
@@ -1088,6 +1311,7 @@ class DBManager:
                 :base_residency_mb, :loaded_vram_mb, :sleeping_residual_mb,
                 :kv_budget_mb, :disk_size_bytes, :engine,
                 :tensor_parallel_size, :kv_per_token_bytes, :max_context_length,
+                :max_reported_context_length,
                 :residency_source, :measurement_count, :last_measured_at,
                 :observed_gpu_memory_utilization, :min_gpu_memory_utilization_to_load,
                 CURRENT_TIMESTAMP
@@ -1102,6 +1326,10 @@ class DBManager:
                 tensor_parallel_size = EXCLUDED.tensor_parallel_size,
                 kv_per_token_bytes = EXCLUDED.kv_per_token_bytes,
                 max_context_length = EXCLUDED.max_context_length,
+                max_reported_context_length = GREATEST(
+                    COALESCE(model_profiles.max_reported_context_length, 0),
+                    EXCLUDED.max_reported_context_length
+                ),
                 residency_source = EXCLUDED.residency_source,
                 measurement_count = EXCLUDED.measurement_count,
                 last_measured_at = EXCLUDED.last_measured_at,
@@ -1133,6 +1361,7 @@ class DBManager:
                     "tensor_parallel_size": data.get("tensor_parallel_size"),
                     "kv_per_token_bytes": data.get("kv_per_token_bytes"),
                     "max_context_length": data.get("max_context_length"),
+                    "max_reported_context_length": derived_reported_context_length(data),
                     "residency_source": data.get("residency_source"),
                     "measurement_count": int(data.get("measurement_count", 0) or 0),
                     "last_measured_at": last_measured_at,
@@ -1143,6 +1372,36 @@ class DBManager:
             count += 1
         self.session.commit()
         return count
+
+    def get_historic_max_context_by_model(self) -> Dict[str, int]:
+        """Model name -> widest context ever reported for it, across providers.
+
+        Reads the ``max_reported_context_length`` high-water mark
+        :meth:`upsert_model_profiles` maintains and reduces each model to the
+        maximum over every provider that has ever reported it. Only models with
+        a positive (i.e. actually reported) window are returned; a model that
+        was never calibrated to a known context is absent, so callers treat a
+        missing entry as "unknown" rather than zero.
+
+        This is the orchestrator's durable view of a model's context: it
+        survives every workernode going offline and an orchestrator restart,
+        which is exactly when a live runtime snapshot would say nothing.
+        """
+        sql = text(
+            """
+            SELECT model_name, MAX(max_reported_context_length) AS max_context
+            FROM model_profiles
+            WHERE max_reported_context_length > 0
+            GROUP BY model_name
+        """
+        )
+        result = self.session.execute(sql)
+        historic: Dict[str, int] = {}
+        for model_name, max_context in result:
+            value = int(max_context or 0)
+            if value > 0:
+                historic[str(model_name)] = value
+        return historic
 
     def upsert_calibration_probe_log(
         self,
@@ -1706,6 +1965,43 @@ class DBManager:
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
+    def get_all_deployments_with_names(self) -> list[Dict[str, Any]]:
+        """
+        Get all model deployments with model and provider names.
+
+        Same deployment set as get_all_deployments() — cloud/azure providers
+        need model_provider + model_api_keys, logosnode providers need
+        model_provider + logosnode_provider_keys — plus the display names the
+        model-level health check reports per deployment.
+        """
+        sql = text(
+            """
+                   SELECT m.id               as model_id,
+                          m.name             as model_name,
+                          p.id               as provider_id,
+                          p.name             as provider_name,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                   WHERE p.provider_type != 'logosnode'
+                   UNION
+                   SELECT m.id               as model_id,
+                          m.name             as model_name,
+                          p.id               as provider_id,
+                          p.name             as provider_name,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                            JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
+                   WHERE p.provider_type = 'logosnode'
+                   ORDER BY model_id, provider_id
+                   """
+        )
+        rows = self.session.execute(sql, {}).mappings().all()
+        return [dict(row) for row in rows]
+
     def get_models_for_api_key(self, api_key_id: int) -> list[Dict[str, Any]]:
         """
         Get all models that an api key has access to.
@@ -2150,7 +2446,7 @@ class DBManager:
 
     def log_usage(
         self,
-        api_key_id: int,
+        api_key_id: Optional[int],
         team_id: Optional[int],
         user_id: Optional[int],
         environment: Optional[str],

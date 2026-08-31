@@ -162,7 +162,7 @@ export class Models implements OnInit {
   }
 
   openReport(model: Model): void {
-    this.router.navigate(['/models', model.id, 'errors']);
+    this.router.navigate(['/models', model.id, 'details']);
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

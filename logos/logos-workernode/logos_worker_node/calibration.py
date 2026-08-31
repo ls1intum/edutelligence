@@ -1244,6 +1244,33 @@ class CalibrationResult:
     # makes sleeping and the model cache compete for one pool. None when the
     # run skipped the sleep phases, or when /proc/meminfo was unreadable.
     host_ram_residual_mb: float | None = None
+    # Wall-clock seconds from the final measurement probe's successful spawn
+    # attempt (the same configuration the serving lane runs with — final KV
+    # size, resolved max_model_len, ...) until the first request it served
+    # completed: the Phase 2.5 warmup 1-token completion. The anchor is the
+    # successful attempt itself: _try_start recurses through its
+    # max_model_len / max_num_seqs retries and a rejected start typically
+    # fails only after loading the weights, so anchoring before the first
+    # attempt would bill those near-full loads to the interval. The span
+    # covers vLLM startup, the weight load, and the first-request overhead
+    # (CUDA graph capture, JIT, KV page allocation). CAVEAT: this is a
+    # page-cache-WARM figure — the KV search spawns the same model once per
+    # candidate before the final spawn (and prior runs on this host
+    # otherwise leave the weights resident), so the load is served from the
+    # OS page cache, not from disk. It is therefore a LOWER BOUND on a true
+    # from-disk cold load; a deliberately cold reading (dropping the host
+    # page cache) is out of scope here, and consumers must not substitute
+    # this value for a from-disk cold-start constant (estimator-side
+    # consumption is tracked in #860). None when the warmup request did not
+    # serve: a value that never actually served a request must not pose as a
+    # cold-load measurement.
+    cold_load_time_s: float | None = None
+    # Wall-clock seconds from the Phase 5.5 /wake_up trigger until the
+    # post-wake test request completed — the same "trigger → first served
+    # request" interval as cold_load_time_s, for the path a lane takes when a
+    # request finds it asleep. None when the run skipped the sleep phases,
+    # the wake failed verification, or the post-wake request did not serve.
+    wake_from_sleep_time_s: float | None = None
     # Set when calibrate_model bails because the model itself can never
     # load on this worker (bad repo id, gated repo, unsupported architecture).
     # Caller persists the model into model_profiles.yml so the master's
@@ -1657,7 +1684,7 @@ def calibrate_model(
             model-identity-level failure (see ``_unsupported_box``) or a
             node-level transient failure (see ``_node_unhealthy_box``).
         """
-        nonlocal hf_home, _ram_cached
+        nonlocal hf_home, _ram_cached, final_spawn_at
         # Short-circuit: a prior probe already proved this model can't load,
         # or proved the node itself is degraded.
         if _unsupported_box or _node_unhealthy_box:
@@ -1701,6 +1728,7 @@ def calibrate_model(
         # parses THIS probe rather than the tail of the shared append log.
         _spawn_log_offset = _log_size(log_path)
         _last_probe_log_offset[0] = _spawn_log_offset
+        t_spawn = time.perf_counter()  # cold-load anchor candidate: this attempt's spawn
         proc, cmd = spawn_vllm(
             planned,
             vllm_binary,
@@ -1721,6 +1749,11 @@ def calibrate_model(
         t0 = time.perf_counter()
         try:
             wait_ready(base_url, ready_timeout_s, proc, gpu_indices, cancel_event=cancel_event)
+            # This attempt actually came up — anchor the cold-load
+            # measurement at ITS spawn, not before the outer call: the
+            # retry attempts that recursed into this one each cost a
+            # near-full weight load before failing.
+            final_spawn_at = t_spawn
             logger.info(
                 "        OK kv_cache=%s ready in %.1fs",
                 kv_str,
@@ -1917,6 +1950,15 @@ def calibrate_model(
             return None
 
     proc: subprocess.Popen[str] | None = None
+    # perf_counter anchor for the cold-load measurement: the spawn time of
+    # the successful attempt, set by _try_start when wait_ready comes back
+    # on it. _try_start recurses through its max_model_len / max_num_seqs
+    # retries and a rejected start typically fails only after loading the
+    # weights, so the anchor must be the successful attempt's spawn —
+    # arming it before the outer call would bill those near-full loads to
+    # the span. None until a spawn has actually succeeded.
+    final_spawn_at: float | None = None
+    cold_load_time_s: float | None = None
 
     if kv_search:
         search_lo = _KV_CACHE_MIN_STEP_MB  # 1 GB floor
@@ -2356,6 +2398,20 @@ def calibrate_model(
                 "        warmup done in %.1fs — graphs/JIT/KV pools allocated",
                 warmup_dt,
             )
+            # The warmup IS the first request the probe served, so this point
+            # is the end of the load a client would experience for a lane
+            # spawned with this exact configuration: final_spawn_at → here
+            # spans vLLM startup, weight load, and the first-request overhead
+            # (CUDA graph capture, JIT, KV page allocation). The weights
+            # themselves were already in the OS page cache by now (the search
+            # probes — or prior runs on this host — loaded them), so this is
+            # a cache-warm figure: a lower bound on a from-disk cold load.
+            if final_spawn_at is not None:
+                cold_load_time_s = time.perf_counter() - final_spawn_at
+                logger.info(
+                    "        cold load (spawn → first served request, page-cache-warm) = %.1fs",
+                    cold_load_time_s,
+                )
         else:
             logger.warning(
                 "        warmup failed (%.1fs) — awake VRAM may underestimate peak",
@@ -2403,6 +2459,7 @@ def calibrate_model(
         sleep_transient_mb: float | None = None
         host_ram_residual_mb: float | None = None
         sleep_mode_disabled: bool | None = None
+        wake_from_sleep_time_s: float | None = None
         if sleep_level <= 0:
             logger.info(
                 "  [4/6 + 5/6 + 5.5/6] Sleep phases skipped (sleep mode disabled for this model) — "
@@ -2536,6 +2593,10 @@ def calibrate_model(
                     partial.error = "cancelled"
                     return partial
                 logger.info("  [5.5/6] Waking model and verifying it serves again...")
+                # Anchor for the wake measurement: from this trigger to the
+                # post-wake test request serving is exactly what a request
+                # queued on the sleeping lane waits for.
+                wake_t0 = time.perf_counter()
                 wake_status, _ = _post(f"{base_url}/wake_up", timeout_s=_SLEEP_TIMEOUT_S)
                 if wake_status not in (200, 204):
                     sleep_phase_failed = True
@@ -2568,6 +2629,15 @@ def calibrate_model(
                             "did not serve either — no evidence of a wake regression (the "
                             "request type may simply be unsupported by this model, e.g. an "
                             "embedding lane); accepting wake on /is_sleeping evidence"
+                        )
+                    else:
+                        # First request served after the wake completed — the
+                        # interval from the /wake_up trigger to here is the
+                        # awake-from-sleep time a queued request pays.
+                        wake_from_sleep_time_s = time.perf_counter() - wake_t0
+                        logger.info(
+                            "        wake (wake_up → first served request) = %.1fs",
+                            wake_from_sleep_time_s,
                         )
             if sleep_phase_failed:
                 # A residual measured for a sleep that cannot be reversed must
@@ -2612,6 +2682,20 @@ def calibrate_model(
                 "    host_ram_residual_mb = %.0f MB  (held on the host for the whole sleep)",
                 host_ram_residual_mb,
             )
+        if cold_load_time_s is None:
+            logger.info("    cold_load_time_s     = n/a  (first served request did not complete)")
+        else:
+            logger.info(
+                "    cold_load_time_s     = %.1fs  (spawn → first served request, page-cache-warm)",
+                cold_load_time_s,
+            )
+        if wake_from_sleep_time_s is None:
+            logger.info("    wake_from_sleep_time_s = n/a  (sleep phases skipped or post-wake request did not serve)")
+        else:
+            logger.info(
+                "    wake_from_sleep_time_s = %.1fs  (wake_up → first served request after wake)",
+                wake_from_sleep_time_s,
+            )
         logger.info(
             "    Scheduler uses base_residency directly — no KV added on top",
         )
@@ -2631,6 +2715,8 @@ def calibrate_model(
             sleep_l1_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 1 else None),
             sleep_l2_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 2 else None),
             host_ram_residual_mb=host_ram_residual_mb,
+            cold_load_time_s=cold_load_time_s,
+            wake_from_sleep_time_s=wake_from_sleep_time_s,
             min_kv_cache_mb=min_kv_observed_mb,
             max_kv_cache_mb=max_kv_observed_mb,
             max_model_len=partial.max_model_len,
@@ -2695,6 +2781,15 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
             round(r.sleep_l2_transient_host_ram_mb, 1) if r.sleep_l2_transient_host_ram_mb is not None else None
         ),
         "host_ram_residual_mb": (round(r.host_ram_residual_mb, 1) if r.host_ram_residual_mb is not None else None),
+        # Cold-load and wake timings (see CalibrationResult): what a client
+        # waits for when it finds the model cold or asleep. None when the run
+        # that produced this result did not complete the request each
+        # interval is anchored on — merge_profile then keeps the value an
+        # earlier calibration recorded, same as the other sleep fields.
+        "cold_load_time_s": (round(r.cold_load_time_s, 1) if r.cold_load_time_s is not None else None),
+        "wake_from_sleep_time_s": (
+            round(r.wake_from_sleep_time_s, 1) if r.wake_from_sleep_time_s is not None else None
+        ),
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
         # Discovered KV cache size for use by the lane manager at runtime
@@ -2910,6 +3005,53 @@ def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
     return 1 << (n.bit_length() - 1)
 
 
+def calibration_gpu_slice(available_gpus: int) -> list[int]:
+    """Return the GPU indices a calibration run should be pinned to.
+
+    The largest power-of-two slice of the node's GPUs, starting at index 0
+    (3 GPUs → ``[0, 1]``, 5 → ``[0, 1, 2, 3]``, 8 → ``[0..7]``). The slice
+    length equals the maximum tensor-parallel size the node supports, so the
+    existing max-first TP escalation fits inside it unchanged.
+
+    Pinning the calibration to this concrete slice (issue #592) leaves the
+    leftover GPUs (``slice_size..N-1``) free for production lanes, which would
+    otherwise sit idle for the entire calibration window, and makes the VRAM
+    baseline a well-defined sum over exactly the GPUs the probe uses.
+    """
+    n = int(available_gpus) if available_gpus else 0
+    if n < 1:
+        return []
+    slice_size = 1 << (n.bit_length() - 1)
+    return list(range(slice_size))
+
+
+def _plan_needs_gpu_pin(gpu_devices: str) -> bool:
+    """True when a plan's ``gpu_devices`` is still the 'use every GPU' default.
+
+    Blank and "all" mean the plan has not been pinned yet, so the calibration
+    slice may be filled in. A specific set ("0,1") or "none" is an explicit
+    operator choice and is never overridden.
+    """
+    return (gpu_devices or "").strip().lower() in {"", "all"}
+
+
+def pin_plan_gpu_devices(plan: dict[str, Any], available_gpus: int) -> dict[str, Any]:
+    """Return *plan* with a concrete ``gpu_devices`` slice.
+
+    A plan that already names a specific GPU set — or "none" — is returned
+    unchanged: the operator's choice is authoritative. A plan left at
+    "all"/blank is pinned to the node's calibration slice so the probe only
+    touches that slice (``CUDA_VISIBLE_DEVICES``) and its VRAM baseline is
+    measured over a well-defined set of GPUs (issue #592).
+    """
+    if not _plan_needs_gpu_pin(str(plan.get("gpu_devices") or "")):
+        return plan
+    slice_ = calibration_gpu_slice(available_gpus)
+    if not slice_:
+        return plan
+    return {**plan, "gpu_devices": ",".join(str(i) for i in slice_)}
+
+
 def _reset_calibration_log(log_dir: Path, model_name: str) -> None:
     log_path = log_dir / f"{model_name.replace('/', '__')}.log"
     try:
@@ -2995,6 +3137,12 @@ def calibrate_with_tp_escalation(
             available_gpus = len(query_gpu_vram())
         except Exception:
             available_gpus = 1
+
+    # Pin the run to a concrete GPU slice before any probe: with "all"/blank
+    # the probe sees every GPU and its VRAM baseline sums them all, so a
+    # production lane on a leftover GPU silently inflates base_residency_mb.
+    # The slice length equals the max TP below, so the escalation is unchanged.
+    plan = pin_plan_gpu_devices(plan, available_gpus)
 
     original_tp = int(plan.get("tensor_parallel_size", 1))
     max_tp = _max_tp_for_plan(plan, available_gpus)

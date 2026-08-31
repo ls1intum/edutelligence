@@ -652,6 +652,8 @@ class LogosNodeDataProvider:
                 residency_source=data.get("residency_source"),
                 sleep_l1_transient_host_ram_mb=data.get("sleep_l1_transient_host_ram_mb"),
                 sleep_l2_transient_host_ram_mb=data.get("sleep_l2_transient_host_ram_mb"),
+                cold_load_time_s=data.get("cold_load_time_s"),
+                wake_from_sleep_time_s=data.get("wake_from_sleep_time_s"),
                 host_ram_residual_mb=data.get("host_ram_residual_mb"),
                 sleep_mode_disabled=data.get("sleep_mode_disabled"),
                 calibration_unsupported=data.get("calibration_unsupported"),
