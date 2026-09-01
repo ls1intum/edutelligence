@@ -426,6 +426,110 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
     assert called["allowed_models_override"] == [32]
 
 
+async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
+    """A request pinned to an alt tag routes to the model carrying it."""
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get_models_info(api_key_id=None):
+            return [{"id": 32, "name": "llama-3.1-70b", "aliases": ["local-most-powerful"]}]
+
+    called = {}
+
+    async def fake_resource_mode(  # noqa: ARG001
+        deployments,
+        body,
+        headers,
+        auth,
+        log_id,
+        is_async_job,
+        allowed_models_override=None,
+        request_id=None,
+        request_path=None,
+        skip_laura=False,
+        priority=1,
+        required_provider_id=None,
+    ):
+        called["deployments"] = deployments
+        called["body"] = body
+        called["allowed_models_override"] = allowed_models_override
+        return {"status": "resource"}
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
+
+    result = await main._execute_proxy_mode(
+        body={"model": "local-most-powerful", "stream": True},
+        headers={"Authorization": "Bearer x"},
+        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        deployments=[
+            {"model_id": 32, "provider_id": 13},
+            {"model_id": 99, "provider_id": 1},
+        ],
+        log_id=None,
+        is_async_job=False,
+    )
+
+    assert result == {"status": "resource"}
+    assert called["deployments"] == [{"model_id": 32, "provider_id": 13}]
+    # The payload is rewritten to the canonical model name the provider expects.
+    assert called["body"]["model"] == "llama-3.1-70b"
+    assert called["allowed_models_override"] == [32]
+
+
+async def test_execute_proxy_mode_resolves_model_name_case_insensitively(monkeypatch):
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get_models_info(api_key_id=None):
+            return [{"id": 27, "name": "gemma2:2b", "aliases": []}]
+
+    called = {}
+
+    async def fake_resource_mode(  # noqa: ARG001
+        deployments,
+        body,
+        headers,
+        auth,
+        log_id,
+        is_async_job,
+        allowed_models_override=None,
+        request_id=None,
+        request_path=None,
+        skip_laura=False,
+        priority=1,
+        required_provider_id=None,
+    ):
+        called["body"] = body
+        return {"status": "resource"}
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
+
+    result = await main._execute_proxy_mode(
+        body={"model": "GEMMA2:2B", "stream": False},
+        headers={"Authorization": "Bearer x"},
+        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        deployments=[{"model_id": 27, "provider_id": 12}],
+        log_id=None,
+        is_async_job=False,
+    )
+
+    assert result == {"status": "resource"}
+    assert called["body"]["model"] == "gemma2:2b"
+
+
 async def test_pipeline_releases_capacity_when_context_resolution_fails():
     """A scheduled reservation is released if context resolution fails afterwards."""
 
