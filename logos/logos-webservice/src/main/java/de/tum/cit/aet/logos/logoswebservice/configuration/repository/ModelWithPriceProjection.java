@@ -11,6 +11,7 @@ public interface ModelWithPriceProjection {
     Integer getWeightCost();
     Integer getWeightQuality();
     String getTags();
+    String getAliases();
     String getDescription();
     BigDecimal getInputUsdPerMillion();
     BigDecimal getOutputUsdPerMillion();

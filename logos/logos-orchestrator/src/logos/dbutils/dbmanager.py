@@ -2040,7 +2040,11 @@ class DBManager:
                 FROM team_model_permissions tmp, key_info ki
                 WHERE tmp.team_id = ki.tid AND ki.custom = false
             )
-           SELECT DISTINCT m.id, m.name, m.description
+           SELECT DISTINCT m.id, m.name, m.description,
+           (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+            FROM model_aliases a
+            WHERE a.model_id = m.id
+           ) AS aliases
            FROM models m
            JOIN effective_models em ON m.id = em.model_id
            JOIN model_provider mp ON m.id = mp.model_id
@@ -2049,7 +2053,19 @@ class DBManager:
        """
         )
         rows = self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
-        return [dict(row) for row in rows]
+        models = []
+        for row in rows:
+            model = dict(row)
+            model["aliases"] = self._split_alias_list(model.get("aliases"))
+            models.append(model)
+        return models
+
+    @staticmethod
+    def _split_alias_list(raw: Optional[str]) -> list[str]:
+        """Turn the comma-joined aliases column of a model row into a list."""
+        if not raw:
+            return []
+        return [alias.strip() for alias in str(raw).split(",") if alias.strip()]
 
     def get_model_for_api_key(self, api_key_id: int, model_name: str) -> Optional[Dict[str, Any]]:
         """
@@ -2196,6 +2212,11 @@ class DBManager:
                               m.weight_cost,
                               m.weight_quality,
                               m.tags,
+                              (
+                                  SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                                  FROM model_aliases a
+                                  WHERE a.model_id = m.id
+                              ) AS aliases,
                               m.description,
                               (
                                   SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -2262,6 +2283,11 @@ class DBManager:
                                 m.weight_cost,
                                 m.weight_quality,
                                 m.tags,
+                                (
+                                    SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                                    FROM model_aliases a
+                                    WHERE a.model_id = m.id
+                                ) AS aliases,
                                 m.description,
                                 (
                                     SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
@@ -2306,6 +2332,7 @@ class DBManager:
                 "weight_cost": r.weight_cost,
                 "weight_quality": r.weight_quality,
                 "tags": r.tags,
+                "aliases": self._split_alias_list(r.aliases),
                 "description": r.description,
                 "input_usd_per_million": r.input_usd_per_million,
                 "output_usd_per_million": r.output_usd_per_million,

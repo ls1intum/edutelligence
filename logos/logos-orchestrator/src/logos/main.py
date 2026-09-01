@@ -335,33 +335,64 @@ def _planner_model_alias(model_name: str) -> str:
 
 def _resolve_requested_model_name(
     requested_name: str,
-    available_model_names: list[str],
+    available_models: list[Dict[str, Any]],
 ) -> Optional[str]:
-    """Resolve user-supplied model ids to canonical DB model names.
+    """Resolve a user-supplied model id to a canonical DB model name.
 
-    Accepts exact OpenAI-style model names as stored in the DB and also the
-    planner-safe alias form where ``/``, ``:``, and spaces are rewritten as
-    underscores. This lets users copy model ids from lane names or worker logs
-    without breaking access-controlled model lookup.
+    ``available_models`` are the accessible model rows (each with a ``name``
+    and, optionally, an ``aliases`` list of stored alternative names).
+
+    Matches, in order of precedence:
+    1. the canonical name as stored in the DB,
+    2. a stored alias of the model (e.g. a logical tag like
+       ``local-most-powerful`` that can be re-pointed at another model),
+    3. the planner-safe alias form where ``/``, ``:``, and spaces are
+       rewritten as underscores (lets users copy model ids from lane names
+       or worker logs without breaking access-controlled model lookup).
+
+    All matching is case-insensitive. Every level must resolve to a single
+    unambiguous model to be accepted: the schema does not enforce
+    case-insensitive uniqueness of model names, so two models whose names
+    only differ in case make a canonical request ambiguous, and a stored
+    alias that matches several models does not fall through to the planner
+    aliases (a stored name is an explicit assignment and wins over the
+    derived form). Ambiguous requests resolve to ``None``.
     """
     requested = str(requested_name or "").strip()
     if not requested:
         return None
+    requested_lc = requested.lower()
 
-    alias_matches: set[str] = set()
-    for raw_name in available_model_names:
-        canonical = str(raw_name or "").strip()
+    canonical_matches: set[str] = set()
+    stored_alias_matches: set[str] = set()
+    planner_alias_matches: set[str] = set()
+    for entry in available_models:
+        canonical = str((entry or {}).get("name") or "").strip()
         if not canonical:
             continue
-        if canonical == requested:
-            return canonical
+        if canonical.lower() == requested_lc:
+            canonical_matches.add(canonical)
+            continue
 
         sanitized = _planner_model_alias(canonical)
-        if requested in {sanitized, f"planner-{sanitized}"}:
-            alias_matches.add(canonical)
+        if requested_lc in {sanitized.lower(), f"planner-{sanitized.lower()}"}:
+            planner_alias_matches.add(canonical)
+        for alias in entry.get("aliases") or []:
+            if str(alias).strip().lower() == requested_lc:
+                stored_alias_matches.add(canonical)
 
-    if len(alias_matches) == 1:
-        return next(iter(alias_matches))
+    if len(canonical_matches) == 1:
+        return next(iter(canonical_matches))
+    if canonical_matches:
+        # duplicate normalized model names — no way to tell which one was meant
+        return None
+    if len(stored_alias_matches) == 1:
+        return next(iter(stored_alias_matches))
+    if stored_alias_matches:
+        # an ambiguous stored alias must not fall through to planner aliases
+        return None
+    if len(planner_alias_matches) == 1:
+        return next(iter(planner_alias_matches))
     return None
 
 
@@ -4406,10 +4437,7 @@ async def _execute_proxy_mode(
         with DBManager() as db:
             models_info = db.get_models_info(auth.key_value)
 
-        model_name = _resolve_requested_model_name(
-            requested_model_name,
-            [str(row["name"]) for row in models_info if row.get("name")],
-        )
+        model_name = _resolve_requested_model_name(requested_model_name, models_info)
         if model_name is None:
             raise HTTPException(
                 status_code=404,
@@ -6239,6 +6267,9 @@ async def list_models(request: Request):
 
     Returns an OpenAI-compatible response listing all models the user's
     current API key has access to (Union of Team models and specific API Key models).
+    Stored aliases of an accessible model are listed as additional model ids
+    right after their model, so logical names (e.g. 'local-most-powerful')
+    can be discovered and used directly in requests.
 
     Returns:
         JSONResponse matching the OpenAI GET /v1/models spec.
@@ -6249,16 +6280,30 @@ async def list_models(request: Request):
         models = db.get_models_for_api_key(auth.api_key_id)
 
     stats = _served_context_window_stats()
-    data = [
-        {
-            "id": model["name"],
-            "object": "model",
-            "created": _SERVER_START_TIME,
-            "owned_by": "logos",
-            **_model_context_fields(stats.get(model["name"])),
-        }
-        for model in models
-    ]
+    data = []
+    for model in models:
+        name = model["name"]
+        # Aliases resolve to the same model, so they carry the context-window
+        # fields of the lanes serving it.
+        data.append(
+            {
+                "id": name,
+                "object": "model",
+                "created": _SERVER_START_TIME,
+                "owned_by": "logos",
+                **_model_context_fields(stats.get(name)),
+            }
+        )
+        for alias in model.get("aliases") or []:
+            data.append(
+                {
+                    "id": alias,
+                    "object": "model",
+                    "created": _SERVER_START_TIME,
+                    "owned_by": "logos",
+                    **_model_context_fields(stats.get(name)),
+                }
+            )
 
     return JSONResponse(content={"object": "list", "data": data})
 
@@ -6288,10 +6333,7 @@ async def retrieve_model(model_id: str, request: Request):
         model = db.get_model_for_api_key(auth.api_key_id, model_id)
         if not model:
             models = db.get_models_for_api_key(auth.api_key_id)
-            canonical_model_name = _resolve_requested_model_name(
-                model_id,
-                [str(entry.get("name") or "").strip() for entry in models],
-            )
+            canonical_model_name = _resolve_requested_model_name(model_id, models)
             if canonical_model_name is not None:
                 model = next(
                     (entry for entry in models if entry.get("name") == canonical_model_name),
@@ -6317,18 +6359,15 @@ def _resolve_accessible_model_name(api_key_id: int, model_id: str) -> Optional[s
     """Canonical name of ``model_id`` if this key may use it, else None.
 
     Shared by the model endpoints below: they all have to accept the same
-    aliases (planner-sanitized underscores, case differences) and all have to
-    refuse a model the key has no permission for.
+    aliases (stored alternative names, planner-sanitized underscores, case
+    differences) and all have to refuse a model the key has no permission for.
     """
     with DBManager() as db:
         model = db.get_model_for_api_key(api_key_id, model_id)
         if model:
             return model["name"]
         models = db.get_models_for_api_key(api_key_id)
-        return _resolve_requested_model_name(
-            model_id,
-            [str(entry.get("name") or "").strip() for entry in models],
-        )
+        return _resolve_requested_model_name(model_id, models)
 
 
 @app.post("/v1/models/{model_id:path}/warmup", tags=["user-facing"])
