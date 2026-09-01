@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Issue #672, part two. The same /me/keys usage window
+         (ApiKeyRepository.findRateLimitUsageForUser) that migration 020 indexes
+         also cuts the token metric on timestamp_response — requests count when
+         they complete, so a request admitted just before the window edge but
+         completing inside it counts its tokens. The row predicate is
+
+             api_key_id = <key>
+             AND (timestamp_forwarding >= :since OR timestamp_response >= :since)
+
+         020 added (api_key_id, timestamp_forwarding), which serves only the
+         first disjunct. The second one (timestamp_response >= :since) is
+         unsatisfiable from that index, so Postgres falls back to scanning every
+         historical row of each of the user's keys to test the OR — the exact
+         "filter each key's historical rows" the review flagged, and it grows
+         with each key's age.
+
+         (api_key_id, timestamp_response) closes that gap: Postgres can now
+         bitmap-OR two index range scans (forwarding >= :since on the 020 index,
+         response >= :since here) and reach only each key's recent rows. Column
+         order matches the predicate — the api_key_id equality prefix, then the
+         timestamp_response range — so both the admission and completion halves
+         of the window are index-driven.
+
+         Numbered 021: the highest migration on this branch is 020, and
+         LiquibaseChangelogOrderTest requires strictly increasing numbers in
+         master.xml (019 stays free; no existing migration is renumbered).
+
+         Runs outside a transaction so CONCURRENTLY can build the index without
+         locking log_entry against the logos-orchestrator, which keeps writing
+         to this table while logos-webservice is redeployed (same rationale as
+         012/014/020). -->
+    <changeSet id="021-log-entry-api-key-response-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_api_key_timestamp_response"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_api_key_timestamp_response
+                ON log_entry (api_key_id, timestamp_response);
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_api_key_timestamp_response;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

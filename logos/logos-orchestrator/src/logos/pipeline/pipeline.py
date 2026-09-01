@@ -605,6 +605,10 @@ class RequestPipeline:
         """Close out a request whose terminal log row was written elsewhere."""
         self._monitoring.discard(request_id, result_status)
 
+    def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
+        """Persist the limiter's admission decision on the request's log row."""
+        self._monitoring.record_rate_limit_admission(request_id, admitted)
+
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider statistics (e.g. rate limits) from response headers.

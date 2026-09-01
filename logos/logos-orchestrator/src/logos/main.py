@@ -1117,6 +1117,23 @@ def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
         logger.debug("Failed to discard in-flight state for %s", request_id, exc_info=True)
 
 
+def _record_rate_limit_admission(request_id: Optional[str], admitted: bool) -> None:
+    """Persist whether the key's rate limiter admitted the request (issue #672).
+
+    Same monitoring semantics as `_discard_in_flight`: failures are logged
+    and never break the request path.
+    """
+    if not request_id:
+        return
+    pipeline = globals().get("_pipeline")
+    if pipeline is None:
+        return
+    try:
+        pipeline.record_rate_limit_admission(request_id, admitted)
+    except Exception:  # noqa: BLE001 — monitoring must never break a request
+        logger.debug("Failed to record rate-limit admission for %s", request_id, exc_info=True)
+
+
 def _record_log_failure(
     log_id: Optional[int],
     request_id: Optional[str],
@@ -4574,6 +4591,12 @@ async def _execute_resource_mode(
         if rl_info:
             rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
             allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
+            # Persist the admission decision before execution: the /me/keys
+            # usage window (issue #672) counts an admitted request while it is
+            # still running, and must skip the ones this check rejects — the
+            # log row already carries timestamp_forwarding from scheduling, so
+            # without the flag a rejected request would show up as usage.
+            _record_rate_limit_admission(result.scheduling_stats.get("request_id") or request_id, allowed)
             if not allowed:
                 try:
                     _pipeline.scheduler.release(

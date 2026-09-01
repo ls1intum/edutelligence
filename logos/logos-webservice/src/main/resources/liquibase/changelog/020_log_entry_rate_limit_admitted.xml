@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Issue #672: the /me/keys page shows each key's request/token usage
+         inside the limiter's window. The window query
+         (ApiKeyRepository.findRateLimitUsageForUser) counts rows by
+         timestamp_forwarding, but the orchestrator writes that column during
+         record_scheduled() — BEFORE the rate limiter's check_and_record()
+         runs. A request the limiter then rejects (429) already satisfies the
+         window predicate, so repeated rejected attempts would inflate the
+         displayed usage above what the limiter actually enforces.
+
+         rate_limit_admitted persists the verdict at the decision point:
+           TRUE  — the limiter admitted the request (counted from then on,
+                   including while it is still running);
+           FALSE — the limiter rejected it after scheduling (excluded);
+           NULL  — no limit configured for that key/provider class, or a
+                   pre-migration row (never rejected, so counted).
+         The query filters `IS DISTINCT FROM FALSE` accordingly. -->
+    <changeSet id="020-log-entry-rate-limit-admitted" author="logos">
+        <addColumn tableName="log_entry">
+            <column name="rate_limit_admitted" type="BOOLEAN"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="log_entry" columnName="rate_limit_admitted"/>
+        </rollback>
+    </changeSet>
+
+    <!-- The same query also range-scans timestamp_forwarding for the caller's
+         key ids. idx_log_entry_api_key_id alone cannot serve the
+         `timestamp_forwarding >= now - 60s` predicate, so Postgres visits
+         every historical row of each key before the usage joins — every
+         /me/keys load gets more expensive as a high-volume key ages.
+         (api_key_id, timestamp_forwarding) lets it seek straight to the recent
+         slice of each key.
+
+         Numbered 020 on purpose: 018/019 are claimed by the in-flight
+         Ollama-removal branch (#865), and LiquibaseChangelogOrderTest requires
+         strictly increasing numbers in master.xml.
+
+         Runs outside a transaction so CONCURRENTLY can build the index without
+         locking log_entry against the logos-orchestrator, which keeps writing
+         to this table while logos-webservice is redeployed (same rationale as
+         012). -->
+    <changeSet id="020-log-entry-api-key-forwarding-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_api_key_timestamp_forwarding"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_api_key_timestamp_forwarding
+                ON log_entry (api_key_id, timestamp_forwarding);
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_api_key_timestamp_forwarding;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -11,6 +11,12 @@ from typing import Optional, Tuple
 class RateLimitConfig:
     rpm: Optional[int] = None
     tpm: Optional[int] = None
+    # Sliding window the rpm/tpm limits are enforced over. This default is
+    # the source of truth: the webservice keeps a copy of it in
+    # logos/logos-webservice/.../identity/service/MeKeysService.java
+    # (RATE_LIMIT_WINDOW_SECONDS) so its usage figures come from the same
+    # window. Change both together — the webservice test
+    # RateLimitWindowConsistencyTest fails if the two drift.
     window_seconds: int = 60
 
 
@@ -29,10 +35,27 @@ class InMemoryRateLimiter:
             dq.popleft()
 
     def check_and_record(self, key: str, config: RateLimitConfig) -> Tuple[bool, str]:
+        # The TPM check runs before the RPM slot is recorded. A request the
+        # TPM limit rejects must not consume an RPM slot: the /me/keys usage
+        # window (issue #672) displays admitted requests only, so a TPM
+        # reject that still appended its RPM timestamp would leave the
+        # displayed RPM below the enforced one — the UI showing headroom
+        # while the limiter keeps returning 429.
         now = time.monotonic()
         cutoff = now - config.window_seconds
 
         with self._lock:
+            if config.tpm is not None:
+                tok_dq = self._token_windows.setdefault(key, deque())
+                self._prune_tokens(tok_dq, cutoff)
+
+                total = sum(tokens for _, tokens in tok_dq)
+                if total >= config.tpm:
+                    return (
+                        False,
+                        f"TPM limit reached ({config.tpm}/{config.window_seconds}s)",
+                    )
+
             if config.rpm is not None:
                 req_dq = self._request_windows.setdefault(key, deque())
                 self._prune_requests(req_dq, cutoff)
@@ -44,17 +67,6 @@ class InMemoryRateLimiter:
                     )
 
                 req_dq.append(now)
-
-            if config.tpm is not None:
-                tok_dq = self._token_windows.setdefault(key, deque())
-                self._prune_tokens(tok_dq, cutoff)
-
-                total = sum(tokens for _, tokens in tok_dq)
-                if total >= config.tpm:
-                    return (
-                        False,
-                        f"TPM limit reached ({config.tpm}/{config.window_seconds}s)",
-                    )
 
         return True, ""
 

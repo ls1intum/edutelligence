@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.repository;
 
+import java.sql.Timestamp;
 import java.util.List;
 import java.util.Optional;
 
@@ -12,6 +13,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.MyKeyProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProjection;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.RateLimitUsageProjection;
 
 public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
     Optional<ApiKey> findByKeyValueAndIsActiveTrue(String keyValue);
@@ -139,6 +141,86 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         ORDER BY ak.id
         """, nativeQuery = true)
     List<MyKeyProjection> findKeysForUser(@Param("userId") int userId);
+
+    /**
+     * Per-key request and token counts inside one rate-limit window (issue
+     * #672), split the way the orchestrator's limiter enforces the limits:
+     * per key, and cloud vs. local by the provider type the request was
+     * actually served on ({@code logosnode} is local, everything else
+     * cloud).
+     *
+     * Each metric is cut on the timestamp the limiter charges it by:
+     *
+     * <ul>
+     * <li>Requests count when they are *admitted* —
+     * {@code timestamp_forwarding}, written at scheduling, is when
+     * {@code check_and_record} records the RPM slot (the request is charged
+     * while it is still running). Cutting on {@code timestamp_request}
+     * instead would drop exactly the requests that waited in the queue,
+     * under-reporting precisely when developers look at it to understand a
+     * 429.</li>
+     * <li>Tokens count when the request *completes* —
+     * {@code timestamp_response}: the limiter's {@code record_tokens} runs
+     * at completion, so its TPM window holds completed requests. A request
+     * admitted just before the window edge but completing inside it counts
+     * its tokens (and only them); an in-flight request counts its request
+     * and no tokens yet.</li>
+     * </ul>
+     *
+     * The outer predicate is therefore the union of both windows; each
+     * metric applies its own inside the {@code FILTER}. Requests that never
+     * reached scheduling (still queued) have neither timestamp and are left
+     * out, matching the limiter.
+     *
+     * The per-request token figure mirrors the limiter's fallback in the
+     * {@code record_tokens} call sites (main.py):
+     * {@code total_tokens or (prompt_tokens + completion_tokens)} — Python
+     * {@code or}, so a missing *or zero* total falls back to the two parts,
+     * and a non-zero total wins over the parts (which may not add up to it,
+     * e.g. cached tokens). Computed per log row in the LATERAL so one
+     * request contributes exactly one figure.
+     *
+     * Rate-limiter rejects are excluded by the persisted admission verdict,
+     * not by the timestamp: the orchestrator writes
+     * {@code timestamp_forwarding} during {@code record_scheduled()} —
+     * *before* {@code check_and_record()} runs — so a request the limiter
+     * rejects afterwards (429) already satisfies the admission-window
+     * predicate. The orchestrator persists {@code rate_limit_admitted} at
+     * the decision point (TRUE admitted, FALSE rejected, NULL when no limit
+     * is configured or for pre-migration rows), and the
+     * {@code IS DISTINCT FROM FALSE} filter counts everything except the
+     * explicit rejects — unlimited keys keep showing their usage. (The
+     * limiter only records an RPM slot after both checks pass, so no
+     * rejected request consumes budget the display would then miss.)
+     */
+    @Query(value = """
+        SELECT le.api_key_id AS keyId,
+               COUNT(DISTINCT le.id) FILTER (WHERE p.provider_type = 'cloud' AND le.timestamp_forwarding >= :since) AS cloudRequests,
+               COALESCE(SUM(ut.tokens) FILTER (WHERE p.provider_type = 'cloud' AND le.timestamp_response >= :since), 0) AS cloudTokens,
+               COUNT(DISTINCT le.id) FILTER (WHERE p.provider_type = 'logosnode' AND le.timestamp_forwarding >= :since) AS localRequests,
+               COALESCE(SUM(ut.tokens) FILTER (WHERE p.provider_type = 'logosnode' AND le.timestamp_response >= :since), 0) AS localTokens
+        FROM log_entry le
+        JOIN api_keys ak ON ak.id = le.api_key_id
+        LEFT JOIN providers p ON p.id = le.provider_id
+        LEFT JOIN LATERAL (
+            SELECT CASE
+                     WHEN COALESCE(SUM(CASE WHEN tt.name = 'total_tokens' THEN ut2.token_count END), 0) > 0
+                         THEN SUM(CASE WHEN tt.name = 'total_tokens' THEN ut2.token_count END)
+                     ELSE COALESCE(SUM(CASE WHEN tt.name IN ('prompt_tokens', 'completion_tokens') THEN ut2.token_count END), 0)
+                   END AS tokens
+            FROM usage_tokens ut2
+            LEFT JOIN token_types tt ON tt.id = ut2.type_id
+            WHERE ut2.log_entry_id = le.id
+        ) ut ON true
+        WHERE ak.user_id = :userId
+          AND ak.is_active = true
+          AND (le.timestamp_forwarding >= :since OR le.timestamp_response >= :since)
+          AND le.rate_limit_admitted IS DISTINCT FROM FALSE
+        GROUP BY le.api_key_id
+        """, nativeQuery = true)
+    List<RateLimitUsageProjection> findRateLimitUsageForUser(
+            @Param("userId") int userId,
+            @Param("since") Timestamp since);
 
     @Query(value = """
         SELECT m.name AS model_name, p.name AS provider_name, p.provider_type::text AS provider_type

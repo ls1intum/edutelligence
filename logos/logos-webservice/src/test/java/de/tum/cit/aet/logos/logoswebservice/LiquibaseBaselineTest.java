@@ -65,6 +65,30 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration020_rateLimitAdmittedColumnAndForwardingIndexExist() {
+        // The /me/keys usage window filters log_entry on both of these
+        // (issue #672): rejected requests are excluded via the column, and
+        // the (api_key_id, timestamp_forwarding) range needs its index.
+        assertThat(columnExists("log_entry", "rate_limit_admitted")).isTrue();
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "idx_log_entry_api_key_timestamp_forwarding");
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void migration021_rateLimitCompletionResponseIndexExists() {
+        // The completion half of the /me/keys usage window filters log_entry on
+        // timestamp_response per key (issue #672); it needs its own
+        // (api_key_id, timestamp_response) index, since the 020 forwarding index
+        // cannot satisfy the `timestamp_response >= :since` OR disjunct.
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "idx_log_entry_api_key_timestamp_response");
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
     void migration003_backfillsKeyForKeylessMembership() {
         // A current membership with no developer key for that team (the legacy
         // logos_admin case) must receive exactly one active developer key whose
