@@ -53,10 +53,9 @@ Options:
 
 What this script does:
   1) Clears all LogosWorkerNode lanes.
-  2) Calls /admin/ollama/destroy to release managed Ollama resources.
-  3) Waits for lanes to be empty and VRAM to fall below threshold.
-  4) Runs varied requests at concurrency 32 and 64 through a DeepSeek vLLM lane.
-  5) Writes benchmark JSON/CSV plus:
+  2) Waits for lanes to be empty and VRAM to fall below threshold.
+  3) Runs varied requests at concurrency 32 and 64 through a DeepSeek vLLM lane.
+  4) Writes benchmark JSON/CSV plus:
      - summary_tokps_latency.csv
      - summary_tokps_latency.md
      - requests_used.csv
@@ -93,19 +92,8 @@ controller_post_json() {
     "${CONTROLLER_URL%/}${path}"
 }
 
-controller_post_no_body() {
-  local path="$1"
-  curl -fsS -X POST \
-    -H "Authorization: Bearer $API_KEY" \
-    "${CONTROLLER_URL%/}${path}"
-}
-
 clear_all_lanes() {
   controller_post_json "/admin/lanes/apply" '{"lanes":[]}' >/dev/null
-}
-
-destroy_managed_ollama_best_effort() {
-  controller_post_no_body "/admin/ollama/destroy" >/dev/null 2>&1 || true
 }
 
 wait_for_empty_lanes() {
@@ -464,13 +452,6 @@ echo "Clearing LogosWorkerNode lanes..."
 clear_all_lanes
 wait_for_empty_lanes 120
 
-echo "Destroying managed Ollama (best effort) to release LogosWorkerNode resources..."
-destroy_managed_ollama_best_effort
-
-echo "Re-clearing lanes after Ollama destroy..."
-clear_all_lanes
-wait_for_empty_lanes 120
-
 echo "Waiting for VRAM to become idle..."
 wait_for_idle_vram "$IDLE_VRAM_MB_PER_GPU" "$VRAM_WAIT_TIMEOUT_S"
 
@@ -492,8 +473,6 @@ bench_cmd=(
   --controller-url "$CONTROLLER_URL"
   --api-key "$API_KEY"
   --output-dir "$OUT_DIR"
-  --include-vllm
-  --no-include-ollama
   --concurrency "$CONCURRENCY"
   --warmup "$WARMUP"
   --max-tokens "$MAX_TOKENS"

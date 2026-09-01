@@ -56,9 +56,9 @@ All five hang off a single root, resolved at boot:
 2. otherwise `worker.cache_path` from `config.yml` (recommended config-file
    knob — see `config.example.yml`).
 3. otherwise `worker.models_path` (default in `config.yml`:
-   `/usr/share/ollama/.ollama/models`) — used because the standard
+   `/usr/share/logos/models`) — used because the standard
    `docker-compose.yml` already mounts that path as a named volume
-   (`ollama-models`).
+   (`logos-models`).
 
 Layout under `<root>/`:
 
@@ -71,7 +71,7 @@ Layout under `<root>/`:
 
 **Default deployment** — leave both `LOGOS_WORKER_CACHE_ROOT` and
 `worker.cache_path` unset; everything defaults to
-`worker.models_path` and is preserved by the `ollama-models`
+`worker.models_path` and is preserved by the `logos-models`
 named volume in `docker-compose.yml` (the path keeps its historical name).
 This is the expected setup for ASE/Ansible deployments.
 

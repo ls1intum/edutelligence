@@ -43,7 +43,7 @@ services:
       # Stuck-detection dwell (seconds) before a no-progress lane may be killed
       # (empty = code default 180s). Raise to reduce false positives on slow lanes.
       LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
-      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      HF_HOME: /usr/share/logos/models/.hf_cache
       # ── GPU / CUDA ────────────────────────────────────────────────────
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
@@ -77,7 +77,7 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ./data:/app/data
-      - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
+      - ${LOGOS_MODELS_MOUNT:-logos-models}:/usr/share/logos/models
       - ./certs:/app/certs:ro
       # Custom Jinja chat templates, referenced per model via
       # engines.vllm.model_overrides.<model>.chat_template in config.yml.
@@ -135,7 +135,7 @@ services:
       # (empty = code default 180s). Raise to reduce false positives on slow lanes.
       LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
       HF_TOKEN: ${HF_TOKEN:-}
-      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      HF_HOME: /usr/share/logos/models/.hf_cache
       LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
@@ -150,7 +150,7 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ./data:/app/data
-      - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
+      - ${LOGOS_MODELS_MOUNT:-logos-models}:/usr/share/logos/models
       - ./tools:/app/tools:ro
       - ./calibration_logs:/app/calibration_logs
       # tmpfs RAM cache for calibration — models load faster from RAM
@@ -160,4 +160,4 @@ services:
           size: ${TMPFS_SIZE:-0}
 
 volumes:
-  ollama-models:
+  logos-models:

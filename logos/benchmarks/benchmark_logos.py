@@ -154,7 +154,7 @@ def _load_config_attr(attr: str, default):
 class GPUTracker:
     """
     GPU energy tracking via local NVML calls.
-    Use when the GPU is on the same machine as this script (e.g. direct Ollama).
+    Use when the GPU is on the same machine as this script (direct-backend scenarios).
     """
 
     def __init__(self, device_indices: list[int], poll_interval_ms: float = 100.0):
@@ -887,7 +887,7 @@ class RequestResult:
     energy_wall_j: Optional[float] = None
     scenario: str = ""
     # Scheduler view at decision time, from Logos response headers
-    # (X-Logos-Warmth-State / X-Logos-ETTFT-Ms); None for direct Ollama.
+    # (X-Logos-Warmth-State / X-Logos-ETTFT-Ms); None for direct backends.
     # warmth_state: -1 = cold, 0 = warm but not running, 1+x = running with
     # x requests queued.
     warmth_state: Optional[int] = None
@@ -2848,8 +2848,8 @@ def _stop_workernode_via_ssh(
 
     Before tearing the container down, dump its full docker logs to
     ``{workernode_dir}/saved_logs/worker-<UTC timestamp>.log`` on the GPU host so
-    the worker-side record survives container removal (e.g. when the ollama
-    scenario replaces it) and can be analyzed after the run.
+    the worker-side record survives container removal and can be analyzed after
+    the run.
     """
     sudo = "sudo " if use_sudo else ""
     save_dir = f"{workernode_dir}/saved_logs"
@@ -2897,43 +2897,6 @@ def _start_workernode_via_ssh(
         print(f"  [logos] {host}: workernode started.")
 
 
-def _stop_logos_workernodes_if_running_via_ssh(
-    hosts: list[str],
-    ssh_user: str,
-    ssh_key: Optional[str],
-    workernode_dir: str,
-    use_sudo: bool,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
-) -> None:
-    """Stop logos-workernode containers if any are running on the given hosts.
-
-    Called before starting Ollama when --only-ollama is set, so the workernode
-    doesn't hold GPU memory that Ollama needs. Safe to call even when the
-    workernode directory does not exist on the host.
-    """
-    sudo = "sudo " if use_sudo else ""
-    remote_cmd = (
-        f"if [ -d {shlex.quote(workernode_dir)} ]; then "
-        f"  cd {shlex.quote(workernode_dir)} && "
-        f"  running=$({sudo}docker compose ps -q 2>/dev/null | tr -d '[:space:]') && "
-        f'  if [ -n "$running" ]; then '
-        f"    echo '[ollama] logos-workernode containers found — stopping ...'; "
-        f"    {sudo}docker compose down; "
-        f"  else "
-        f"    echo '[ollama] No logos-workernode containers running.'; "
-        f"  fi; "
-        f"else "
-        f"  echo '[ollama] Workernode dir not found — skipping workernode check.'; "
-        f"fi"
-    )
-    for host in hosts:
-        print(f"  [ollama] {host}: Checking for running logos-workernode containers ...")
-        subprocess.run(
-            _build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user)
-        )  # non-fatal — best-effort only
-
-
 # ── Benchmark config patching (filter models + disable RAM cache) ──────────
 
 
@@ -2951,7 +2914,7 @@ def _apply_benchmark_workernode_config_via_ssh(
     """Back up config.yml and .env, then apply benchmark-only patches:
 
     config.yml: filter logos.capabilities_models to benchmark_models only.
-    .env: set OLLAMA_MODELS_MOUNT to local_cache_path (if given), clear
+    .env: set LOGOS_MODELS_MOUNT to local_cache_path (if given), clear
           LOGOS_TMPFS_CACHE_PATH and TMPFS_SIZE=0 to disable the RAM pre-pop
           that otherwise fills 400 GB of RAM before any lane can start.
     """
@@ -3049,8 +3012,8 @@ def _apply_benchmark_workernode_config_via_ssh(
                 new_lines.append("LOGOS_TMPFS_CACHE_PATH=")
             elif stripped.startswith("TMPFS_SIZE="):
                 new_lines.append("TMPFS_SIZE=0")
-            elif local_cache_path and stripped.startswith("OLLAMA_MODELS_MOUNT="):
-                new_lines.append(f"OLLAMA_MODELS_MOUNT={local_cache_path}")
+            elif local_cache_path and stripped.startswith("LOGOS_MODELS_MOUNT="):
+                new_lines.append(f"LOGOS_MODELS_MOUNT={local_cache_path}")
             else:
                 new_lines.append(line)
         new_env = "\n".join(new_lines) + "\n"
@@ -3071,7 +3034,7 @@ def _apply_benchmark_workernode_config_via_ssh(
             raise RuntimeError(f"  [config] {host}: Cannot write .env: {env_write_res.stderr.decode().strip()}")
         msg = "disabled RAM cache (TMPFS_SIZE=0, LOGOS_TMPFS_CACHE_PATH=)"
         if local_cache_path:
-            msg += f", OLLAMA_MODELS_MOUNT={local_cache_path}"
+            msg += f", LOGOS_MODELS_MOUNT={local_cache_path}"
         print(f"  [config] {host}: .env: {msg}")
 
 
@@ -5096,9 +5059,9 @@ def _wipe_calibration_and_weights_via_ssh(
         (``calibration_failed_commands.txt`` / ``calibration_succeeded_commands.txt``)
         and ``calibration_unsupported_models.txt``.
       - everything under the model weight cache (``weight_cache_path``, i.e. the
-        ``OLLAMA_MODELS_MOUNT`` vLLM downloads into) so every model re-downloads
+        ``LOGOS_MODELS_MOUNT`` vLLM downloads into) so every model re-downloads
         from scratch. When ``weight_cache_path`` is not given it is read from
-        ``{workernode_dir}/.env`` (``OLLAMA_MODELS_MOUNT``).
+        ``{workernode_dir}/.env`` (``LOGOS_MODELS_MOUNT``).
     """
     sudo = "sudo " if use_sudo else ""
     data_dir = shlex.quote(f"{workernode_dir}/data")
@@ -5117,11 +5080,11 @@ def _wipe_calibration_and_weights_via_ssh(
             weight_note = f" + weights ({weight_cache_path})"
         else:
             parts.append(
-                f'{sudo}sh -c \'wp=$(grep -E "^OLLAMA_MODELS_MOUNT=" {env_path} 2>/dev/null '
+                f'{sudo}sh -c \'wp=$(grep -E "^LOGOS_MODELS_MOUNT=" {env_path} 2>/dev/null '
                 f'| head -1 | cut -d= -f2- | tr -d \\"); '
                 f'if [ -n "$wp" ] && [ "$wp" != "/" ]; then rm -rf "$wp"/* "$wp"/.[!.]* 2>/dev/null; fi; true\''
             )
-            weight_note = " + weights (from .env OLLAMA_MODELS_MOUNT)"
+            weight_note = " + weights (from .env LOGOS_MODELS_MOUNT)"
         remote_cmd = " ; ".join(parts)
         print(f"  [calib] {host}: wiping calibration state + model weights ...")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
@@ -6740,7 +6703,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path on the GPU nodes to redirect the model cache during the benchmark "
         "(e.g. /mnt/nvme/model_cache). When set, the benchmark config patch writes this "
         "path into .env so vLLM uses local NVMe instead of Ceph. "
-        "Omit to leave the existing OLLAMA_MODELS_MOUNT unchanged.",
+        "Omit to leave the existing LOGOS_MODELS_MOUNT unchanged.",
     )
     svc_grp.add_argument(
         "--reset-calibration",

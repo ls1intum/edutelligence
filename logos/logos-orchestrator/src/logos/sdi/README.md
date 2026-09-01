@@ -51,7 +51,7 @@ SDI provides a **pure data interface** for accessing real-time scheduling inform
 
 *Data Models:*
 - **ModelStatus**: Common model status (used by both provider types)
-- **OllamaCapacity**: VRAM capacity info (legacy class name — holds worker capacity)
+- **WorkerCapacity**: VRAM capacity info (legacy class name — holds worker capacity)
 - **AzureCapacity**: Per-deployment rate limit info
 - **LaneSchedulerSignals**: Per-lane engine signals (KV pressure, TTFT, concurrency)
 - **ModelSchedulerView**: Aggregated per-model view across a provider's lanes
@@ -85,7 +85,7 @@ if status.is_loaded and status.queue_depth < 3:
     # Good candidate: warm and not overloaded
     schedule_to_model(1)
 
-# Get capacity info (returns OllamaCapacity dataclass)
+# Get capacity info (returns WorkerCapacity dataclass)
 capacity = facade.get_capacity_info(1)
 if capacity.available_vram_mb > 4096:
     # Enough VRAM to load new model
@@ -141,7 +141,7 @@ facade.update_rate_limits(10, 'gpt-4o', response.headers)
 **LogosNodeSchedulingDataFacade API:**
 - `register_model(model_id, provider_name, logosnode_admin_url, model_name, total_vram_mb, provider_id)` - Register worker model
 - `get_model_status(model_id, provider_id)` → `ModelStatus` - Get current status (returns dataclass)
-- `get_capacity_info(provider_id)` → `OllamaCapacity` - Get VRAM availability (returns dataclass)
+- `get_capacity_info(provider_id)` → `WorkerCapacity` - Get VRAM availability (returns dataclass)
 - `get_model_scheduler_view(model_id, provider_id)` → `ModelSchedulerView` - Aggregated lane view
 - `get_all_provider_lane_signals(provider_id)` → `list[LaneSchedulerSignals]` - All lanes on a worker
 - `get_model_profiles(provider_id)` → `dict[str, ModelProfile]` - Calibrated profiles

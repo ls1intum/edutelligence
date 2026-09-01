@@ -1,10 +1,8 @@
 # =============================================================================
 # Logos Worker Node
 #
-# Single build target — vLLM is always installed. There is no longer a
-# CPU/Ollama-only variant (the Ollama engine was dropped). Build args:
+# Single build target — vLLM is always installed. Build args:
 #   BASE_IMAGE      (default ubuntu:24.04 — a base whose default Python is 3.12)
-#   INSTALL_OLLAMA  (default 1 — set 0 to skip bundling the Ollama binary)
 #
 # Design notes
 # ────────────
@@ -71,55 +69,12 @@ ARG VLLM_PIP_SPEC="vllm==v0.28.0"
 # PyPI torch was CPU-only.
 ARG TORCH_INDEX_URL=
 ARG NCCL_PIP_SPEC=
-ARG INSTALL_OLLAMA=1
 
 # ---------------------------------------------------------------------------
 # uv — pinned to a specific version to mitigate supply-chain risk (update
 # explicitly). Used via RUN --mount so the binary is never stored in a layer.
 # ---------------------------------------------------------------------------
 FROM ghcr.io/astral-sh/uv:0.12.5 AS uv
-
-# ---------------------------------------------------------------------------
-# Stage: Fetch latest Ollama release binary (no GPU libs needed here)
-# ---------------------------------------------------------------------------
-FROM debian:bookworm-slim AS ollama-builder
-ARG INSTALL_OLLAMA
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tar jq zstd \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p /ollama-root/usr/local/bin /ollama-root/usr/local/lib \
-    && if [ "$INSTALL_OLLAMA" = "1" ]; then \
-        arch="$(dpkg --print-architecture)"; \
-        case "$arch" in \
-          amd64) ollama_arch="amd64" ;; \
-          arm64) ollama_arch="arm64" ;; \
-          *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; \
-        esac; \
-        asset="ollama-linux-${ollama_arch}.tar.zst"; \
-        release_json="$(curl -fsSL https://api.github.com/repos/ollama/ollama/releases/latest)"; \
-        download_url="$(printf '%s' "$release_json" | jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .browser_download_url' | head -n1)"; \
-        if [ -z "$download_url" ] || [ "$download_url" = "null" ]; then \
-          tag="$(printf '%s' "$release_json" | jq -r '.tag_name')"; \
-          test -n "$tag" && test "$tag" != "null" || { echo "Could not resolve latest Ollama release tag" >&2; exit 1; }; \
-          download_url="https://github.com/ollama/ollama/releases/download/${tag}/${asset}"; \
-        fi; \
-        curl -fsSL "$download_url" -o /tmp/ollama.tar.zst; \
-        mkdir -p /tmp/ollama-extract; \
-        tar --zstd -xf /tmp/ollama.tar.zst -C /tmp/ollama-extract; \
-        if [ -x /tmp/ollama-extract/bin/ollama ]; then \
-          cp /tmp/ollama-extract/bin/ollama /ollama-root/usr/local/bin/ollama; \
-        elif [ -x /tmp/ollama-extract/ollama ]; then \
-          cp /tmp/ollama-extract/ollama /ollama-root/usr/local/bin/ollama; \
-        else \
-          echo "Ollama binary not found in archive" >&2; exit 1; \
-        fi; \
-        if [ -d /tmp/ollama-extract/lib/ollama ]; then \
-          cp -a /tmp/ollama-extract/lib/ollama /ollama-root/usr/local/lib/ollama; \
-        fi; \
-        chmod +x /ollama-root/usr/local/bin/ollama; \
-      fi
 
 # ---------------------------------------------------------------------------
 # Final image
@@ -134,7 +89,6 @@ FROM ${BASE_IMAGE}
 ARG VLLM_PIP_SPEC
 ARG TORCH_INDEX_URL
 ARG NCCL_PIP_SPEC
-ARG INSTALL_OLLAMA
 
 # ── Python ────────────────────────────────────────────────────────────────────
 # Install Python 3.12 on bases that ship without Python (ubuntu:24.04).
@@ -282,16 +236,13 @@ RUN set -e; \
     } > /etc/ld.so.conf.d/pip-cuda-libs.conf \
     && ldconfig
 
-# ── Bake vLLM's quantization-method registry (GPU builds only) ──────────────
+# ── Bake vLLM's quantization-method registry ─────────────────────────────────
 # The only source query_vllm_quantization_methods reads — no live
 # fallback; the check is informational-only, not worth a runtime
 # torch+transformers import. Best-effort, never fails the build.
-RUN if [ "$INSTALL_VLLM" = "1" ]; then \
-        /opt/venv/bin/python -c "from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS; import json; json.dump(QUANTIZATION_METHODS, open('/opt/venv/bin/vllm_quantization_methods.json', 'w'))" \
-        || echo "WARNING: could not bake vLLM quantization methods — the check will have nothing to compare against" >&2; \
-    fi
+RUN /opt/venv/bin/python -c "from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS; import json; json.dump(QUANTIZATION_METHODS, open('/opt/venv/bin/vllm_quantization_methods.json', 'w'))" \
+    || echo "WARNING: could not bake vLLM quantization methods — the check will have nothing to compare against" >&2
 
-COPY --from=ollama-builder /ollama-root/ /
 COPY logos_worker_node/ /app/logos_worker_node/
 COPY tools/ /app/tools/
 RUN mkdir -p /app/certs /app/data
@@ -300,8 +251,6 @@ RUN mkdir -p /app/certs /app/data
 # Runtime environment
 # ---------------------------------------------------------------------------
 ENV PYTHONUNBUFFERED=1
-ENV LOGOS_WORKER_NODE_HAS_VLLM=1
-ENV LOGOS_WORKER_NODE_HAS_OLLAMA=${INSTALL_OLLAMA}
 ENV LOGOS_WORKER_NODE_CONFIG=/app/config.yml
 ENV LOGOS_STATE_DIR=/app/data
 
