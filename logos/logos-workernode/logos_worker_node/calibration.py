@@ -58,10 +58,11 @@ except ImportError:
 
 from logos_worker_node.gguf import (
     GgufServeSpec,
+    effective_hf_home,
     fetch_repo_gguf_files,
     is_explicit_gguf_ref,
-    is_gguf_repo_name,
     list_cached_gguf_files,
+    needs_hub_listing,
     repo_id_of,
     resolve_gguf_spec,
 )
@@ -927,6 +928,24 @@ def _build_vllm_cmd(
     return cmd
 
 
+def _default_hf_home() -> str:
+    """Resolved persistent HF cache root: ``<cache root>/.hf_cache``.
+
+    The cache root is ``LOGOS_WORKER_CACHE_ROOT`` when set, else the ollama
+    models_path — the same root the startup prefetch populates. Empty when
+    neither is available, in which case the caller falls back to the Hub.
+    """
+    cache_root = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
+    if not cache_root:
+        try:
+            from logos_worker_node.config import get_config  # noqa: PLC0415
+
+            cache_root = str(get_config().engines.ollama.models_path or "").strip()
+        except Exception:  # noqa: BLE001
+            cache_root = ""
+    return str(Path(cache_root) / ".hf_cache") if cache_root else ""
+
+
 def _resolve_gguf_calibration_spec(plan: dict[str, Any], hf_home: str | None) -> GgufServeSpec | None:
     """Resolve the GGUF serve reference for a calibration plan.
 
@@ -938,8 +957,16 @@ def _resolve_gguf_calibration_spec(plan: dict[str, Any], hf_home: str | None) ->
     model = plan["model"]
     file_names: list[str] | None = None
     if not is_explicit_gguf_ref(model):
-        file_names = list_cached_gguf_files(hf_home, model)
-        if not file_names and is_gguf_repo_name(model):
+        # Respect the inherited HF_HOME (and the explicit cache root) before
+        # the resolved default, so the local listing is consulted before the
+        # Hub — matching the serving lane.
+        effective = effective_hf_home(hf_home)
+        if not effective:
+            effective = _default_hf_home()
+        file_names = list_cached_gguf_files(effective, model)
+        # An authoritative (possibly empty) local listing stays local; only an
+        # absent one falls back to the Hub.
+        if needs_hub_listing(file_names, model):
             try:
                 file_names = list(fetch_repo_gguf_files(repo_id_of(model)))
             except Exception:  # noqa: BLE001

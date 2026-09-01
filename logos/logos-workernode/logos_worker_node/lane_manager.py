@@ -367,7 +367,10 @@ class LaneManager:
         from logos_worker_node import gguf  # noqa: PLC0415 — single cache-dir key
 
         missing = []
-        hf_home = os.environ.get("HF_HOME", os.path.join(self._global_config.models_path, ".hf"))
+        # Same HF cache root the startup prefetch populates (.hf_cache), so a
+        # freshly prefetched model is found; a different default here would
+        # flag prefetched models as missing.
+        hf_home = os.environ.get("HF_HOME", os.path.join(self._global_config.models_path, ".hf_cache"))
         models_path = self._global_config.models_path
         for model_name in capabilities_models:
             # Check HF cache (transformers style: models--org--name). Keyed on

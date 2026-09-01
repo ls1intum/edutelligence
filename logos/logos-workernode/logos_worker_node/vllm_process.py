@@ -1626,13 +1626,18 @@ class VllmProcessHandle:
             logger.debug("[%s] gguf module import failed", self.lane_id, exc_info=True)
             return
 
-        hf_home = self.hf_home_override or self._resolve_hf_home(
-            self._resolve_persistent_cache_root(self._global_config)
-        )
+        # Respect the inherited HF_HOME (and the explicit override) before
+        # falling back to the resolved default, so the local listing is
+        # consulted in the same directory the lane actually loads from.
+        hf_home = gguf.effective_hf_home(self.hf_home_override)
+        if not hf_home:
+            hf_home = self._resolve_hf_home(self._resolve_persistent_cache_root(self._global_config))
         file_names: list[str] | None = None
         if not gguf.is_explicit_gguf_ref(model):
             file_names = gguf.list_cached_gguf_files(hf_home, model)
-            if not file_names and gguf.is_gguf_repo_name(model):
+            # An authoritative (possibly empty) local listing stays local; only
+            # an absent one falls back to the Hub.
+            if gguf.needs_hub_listing(file_names, model):
                 repo = gguf.repo_id_of(model)
                 try:
                     file_names = list(await asyncio.to_thread(gguf.fetch_repo_gguf_files, repo))
