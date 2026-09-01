@@ -286,10 +286,13 @@ def quant_from_filename(filename: str) -> str | None:
         stem = stem[: shard.start()]
     # Dash separation is the standard; some publishers (e.g. QuantFactory)
     # use a dot instead. Dash wins when both are present (Qwen3.5-4B-…).
+    # Quant names are case-insensitive in file names — the download patterns
+    # match Q4_K_M and q4_k_m alike — so normalize before the vocabulary
+    # match and keep the canonical uppercase form as the resolved quant.
     for sep in ("-", "."):
         if sep not in stem:
             continue
-        tail = stem.rsplit(sep, 1)[-1]
+        tail = stem.rsplit(sep, 1)[-1].upper()
         if is_valid_gguf_quant_type(tail) or is_nonstandard_gguf_quant_type(tail):
             return tail
     return None

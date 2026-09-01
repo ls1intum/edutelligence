@@ -148,6 +148,11 @@ def test_repo_id_of_all_reference_shapes() -> None:
         # pattern, and the exact name can be pinned via gguf_quant.
         ("Llama-3.1-8B-Instruct-UD-Q4_K_XL.gguf", "Q4_K_XL"),
         ("model.Q4_0-00002-of-00002.gguf", "Q4_0"),
+        # Quant names are case-insensitive in file names; the canonical
+        # uppercase form is what gets resolved (download patterns match both).
+        ("model-q4_k_m.gguf", "Q4_K_M"),
+        ("gpt2.q8_0.gguf", "Q8_0"),
+        ("Qwen3-8B-q4_k_m-00001-of-00004.gguf", "Q4_K_M"),
         # Non-GGUF files
         ("tokenizer.gguf", None),
         ("README.md", None),
@@ -347,6 +352,20 @@ def test_resolve_gguf_spec_bare_repo_auto_quant() -> None:
     spec = gguf.resolve_gguf_spec(
         "unsloth/Qwen3-8B-GGUF",
         gguf_file_names=[("Qwen3-8B-Q4_K_S.gguf", 512), ("Qwen3-8B-Q4_K_M-00001-of-00002.gguf", 1024)],
+    )
+    assert spec is not None
+    assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    assert spec.quant == "Q4_K_M"
+
+
+def test_resolve_gguf_spec_bare_repo_lowercase_filename() -> None:
+    # Regression: a bare repo whose weights are a lowercase-quant file
+    # (model-q4_k_m.gguf) must still resolve to the canonical uppercase quant.
+    # The quant tail was matched case-sensitively, so the file came back as no
+    # candidate and the lane failed at spawn time with a quant error.
+    spec = gguf.resolve_gguf_spec(
+        "unsloth/Qwen3-8B-GGUF",
+        gguf_file_names=[("model-q4_k_m.gguf", 1024)],
     )
     assert spec is not None
     assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
