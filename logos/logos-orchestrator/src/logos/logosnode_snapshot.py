@@ -562,7 +562,24 @@ def _build_live_local_provider_sample(
     elif not isinstance(heartbeat_ts, str):
         heartbeat_ts = None
     candidates = [t for t in (heartbeat_ts, runtime_ts) if isinstance(t, str) and t.strip()]
-    timestamp = max(candidates) if candidates else datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # Pick the freshest by comparing instants, not strings: runtime.timestamp
+    # arrives Pydantic-serialized with a "Z" suffix while last_heartbeat is
+    # isoformat()-ed with "+00:00", so a lexicographic max() picks the wrong
+    # one whenever one side omits fractional seconds and the suffixes diverge
+    # (a newer ...00.001+00:00 loses to an older ...00Z). Parse each candidate,
+    # keep the latest instant, and serialize it the way the fallback below does.
+    parsed = []
+    for t in candidates:
+        d = _parse_iso_datetime(t)
+        if d is None:
+            continue
+        if d.tzinfo is None:
+            # Naive input would make max() raise TypeError against an
+            # aware candidate; the whole pipeline treats timestamps as
+            # UTC, so normalize rather than crash.
+            d = d.replace(tzinfo=datetime.timezone.utc)
+        parsed.append(d)
+    timestamp = max(parsed).isoformat() if parsed else datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     return {
         "timestamp": timestamp,

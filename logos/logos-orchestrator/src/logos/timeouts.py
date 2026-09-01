@@ -15,6 +15,7 @@ runtime snapshots; the one snapshot-side constant
 (``_LOGOSNODE_STATS_STALE_AFTER_SECONDS``) stays with the helper that uses it.
 """
 
+import math
 import os
 
 _ENV = "LOGOS_TIMEOUT_S"
@@ -42,6 +43,27 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    """Parse a non-negative float env var, falling back to ``default``.
+
+    Runs at import time, so a malformed deployment value must never raise and
+    take the whole module down. Non-numeric, empty/whitespace, non-finite
+    (``inf``/``nan``) and negative values all fall back to ``default`` — a
+    negative or infinite backoff would otherwise be consumed by
+    ``asyncio.sleep`` and raise or hang there.
+    """
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(value) or value < 0:
+        return default
+    return value
+
+
 # max(1, ...): a fractional LOGOS_TIMEOUT_S (e.g. 0.5) must not floor to 0 and
 # cause immediate timeouts — clamp to at least 1 second.
 _LOGOSNODE_INFER_TIMEOUT_SECONDS = max(1, int(global_timeout_s(_env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120))))
@@ -62,4 +84,4 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
 # re-dispatch because nothing has been sent downstream yet; bounded, with a small
 # backoff so the lane finishes waking. Never retries once a token has streamed.
 _LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
-_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = float(os.getenv("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", "1.0") or 1.0)
+_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = _env_float("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", 1.0)

@@ -334,7 +334,13 @@ class _StreamingLogAccumulator:
 
         choices = blob.get("choices")
         if isinstance(choices, list) and choices:
-            delta = choices[0].get("delta", {})
+            first_choice = choices[0]
+            # Every other blob field in this parser is type-checked before use;
+            # the element was not. An upstream that sends {"choices": [null]} or
+            # {"choices": ["text"]} would otherwise call .get on a non-dict and
+            # raise AttributeError mid-stream, aborting the request being
+            # streamed. A non-dict first element simply carries no delta.
+            delta = first_choice.get("delta", {}) if isinstance(first_choice, dict) else None
             if isinstance(delta, dict):
                 content = delta.get("content", "")
                 if content:
