@@ -436,7 +436,7 @@ def _lane_models_with_live_processes(lane_manager: LaneManager) -> set[str]:
     startup would rmtree the tree out from under the process.
     """
     protected: set[str] = set()
-    for lane_id in lane_manager.lane_ids():
+    for lane_id in lane_manager.lane_ids:
         handle = lane_manager.get_handle(lane_id)
         if handle is None or handle.lane_config is None:
             continue

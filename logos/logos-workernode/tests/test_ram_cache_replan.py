@@ -19,6 +19,7 @@ follow. These tests cover the pieces the loop is built from:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -131,7 +132,11 @@ class _FakeLaneManager:
         self.sleeping = set(sleeping or set())
         self._starting = set(starting or set())
 
+    @property
     def lane_ids(self) -> list[str]:
+        # Matches the real LaneManager: a list-valued property, NOT a method.
+        # Defining it as a method here used to mask a ``lane_ids()`` call in
+        # the re-plan path (see test_replan_reaches_plan_when_lane_ids_is_property).
         return list(self._handles)
 
     def get_handle(self, lane_id: str):
@@ -297,6 +302,46 @@ def test_live_processes_include_models_in_lane_startup() -> None:
 
     lanes._starting.discard("org/b")  # noqa: SLF001
     assert worker_main._lane_models_with_live_processes(lanes) == {"org/a"}
+
+
+def test_replan_reaches_plan_when_lane_ids_is_property(monkeypatch) -> None:
+    """Regression: ``LaneManager.lane_ids`` is a ``@property`` returning a
+    list, not a callable. The re-plan reads it through
+    ``_lane_models_with_live_processes``; reading it as a call
+    (``lane_manager.lane_ids()``) raises ``TypeError: 'list' object is not
+    callable`` and aborts the tick before ``_apply_ram_cache_plan`` — so the
+    live cache is never reclaimed or re-cached. This drives the single entry
+    point (shared by the periodic tick and the post-sleep reactor) against a
+    lane manager shaped exactly like the real one and asserts the plan was
+    applied.
+
+    ``lane_ids`` is asserted to be a property up front so a future edit cannot
+    silently turn the fake back into a method and re-mask the mismatch.
+    """
+    assert isinstance(inspect.getattr_static(_FakeLaneManager, "lane_ids"), property)
+
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
+    registry = _FakeRegistry(
+        {
+            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            "org/big": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
+        }
+    )
+    sizes = {"org/small": _mb(8_000), "org/big": _mb(48_000)}
+    cache = _FakeCache(cached=["org/small", "org/big"], sizes=sizes)
+    # A live lane, so _lane_models_with_live_processes iterates lane_ids over a
+    # non-empty set — exactly the line that raised before the fix.
+    lanes = _FakeLaneManager({"big": _FakeHandle("big", "org/big", ProcessState.RUNNING)})
+    app = _app(cache, registry, lanes, ["org/small", "org/big"])
+
+    # Tight host RAM: the plan skips big, but big's live lane protects it. The
+    # decisive assertion is that the tick reached _apply_ram_cache_plan — which
+    # is what sets the host-RAM floor. A TypeError before it would leave
+    # floor_calls at 0 and the cache untouched.
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    assert cache.floor_calls == 1  # _apply_ram_cache_plan ran — no TypeError
+    assert cache.is_cached("org/big") is True  # the live-lane protection held
 
 
 # ── _replan_ram_cache_once ───────────────────────────────────────────────────
