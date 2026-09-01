@@ -428,6 +428,12 @@ def _lane_models_with_live_processes(lane_manager: LaneManager) -> set[str]:
     These are exactly the models the cache must not evict — see
     ``_apply_ram_cache_plan``. ``status()`` only checks the child process's
     return code, so this costs nothing the heartbeat does not already pay.
+
+    Also unions the startup-transition reservations: a model whose lane is
+    being spawned has no registered handle yet (the handle lands in
+    ``_handles`` only once the spawn succeeds) but its spawn is already
+    reading its — possibly tmpfs — model directory, so evicting it mid-
+    startup would rmtree the tree out from under the process.
     """
     protected: set[str] = set()
     for lane_id in lane_manager.lane_ids():
@@ -436,6 +442,7 @@ def _lane_models_with_live_processes(lane_manager: LaneManager) -> set[str]:
             continue
         if handle.status().state in {ProcessState.RUNNING, ProcessState.STARTING}:
             protected.add(handle.lane_config.model)
+    protected |= lane_manager.starting_models()
     return protected
 
 

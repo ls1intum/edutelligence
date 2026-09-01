@@ -2906,3 +2906,382 @@ async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
     await manager._add_lane_unlocked("org_left-model", lane)  # noqa: SLF001
     assert "org_left-model" in manager._handles  # noqa: SLF001
     manager.end_calibration_session()
+
+
+# ── reactive re-plan hook on every staggered sleep ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_stagger_sleeps_run_the_hook_between_sleeps(monkeypatch) -> None:
+    """apply_lanes sleeps several lanes in one staggered pass (existing lanes
+    before a spawn, fresh lanes between spawns). Each successful sleep must
+    run the on_lane_slept hook before the next lane is slept, so the RAM-cache
+    re-plan keeps up with weights landing in host RAM instead of waiting for
+    the next 60 s tick after the whole pass."""
+    hook_calls = []
+    events: list[str] = []
+
+    async def _hook() -> None:
+        hook_calls.append(1)
+        events.append("hook")
+
+    existing = LaneConfig(
+        lane_id="org_existing",
+        model="org/existing",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_a = LaneConfig(
+        lane_id="org_new-a",
+        model="org/new-a",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_b = LaneConfig(
+        lane_id="org_new-b",
+        model="org/new-b",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15400,
+        lane_port_end=15410,
+        on_lane_slept=_hook,
+    )
+
+    class ExistingHandle:
+        def __init__(self) -> None:
+            self.lane_id = "org_existing"
+            self.port = 15400
+            self.lane_config = existing
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            events.append("sleep:existing")
+            return {"ok": True}
+
+    class NewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            events.append(f"spawn:{self.lane_id}")
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            events.append(f"sleep:{self.lane_id}")
+            return {"ok": True}
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles["org_existing"] = ExistingHandle()  # noqa: SLF001
+    manager._port_alloc._used["org_existing"] = 15400  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+        return NewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    await manager.apply_lanes([existing, lane_a, lane_b])
+
+    assert hook_calls == [1, 1]
+    spawns = [e for e in events if e.startswith("spawn:")]
+    assert len(spawns) == 2
+    first_spawn, second_spawn = spawns[0], spawns[1]
+    i1 = events.index(first_spawn)
+    i2 = events.index(second_spawn)
+    # Staggered existing-lane sleep first, hook immediately after — then the
+    # spawns, each (except the last, which stays awake) followed by its own
+    # sleep and hook before the next spawn.
+    assert events[: i1 + 1] == ["sleep:existing", "hook", first_spawn]
+    assert events[i1 + 1 : i2] == [f"sleep:{first_spawn.removeprefix('spawn:')}", "hook"]
+    assert events[i2:] == [second_spawn]
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_stagger_sleep_failure_does_not_run_hook(monkeypatch) -> None:
+    """A staggered sleep that raises must not run the hook — the lane's
+    weights never landed in host RAM, so there is nothing to reclaim. The
+    apply itself continues without the stagger for that lane."""
+    hook_calls = []
+
+    async def _hook() -> None:
+        hook_calls.append(1)
+
+    existing = LaneConfig(
+        lane_id="org_existing",
+        model="org/existing",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_a = LaneConfig(
+        lane_id="org_new-a",
+        model="org/new-a",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15420,
+        lane_port_end=15430,
+        on_lane_slept=_hook,
+    )
+
+    class ExistingHandle:
+        def __init__(self) -> None:
+            self.lane_id = "org_existing"
+            self.port = 15420
+            self.lane_config = existing
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            raise RuntimeError("simulated sleep failure")
+
+    class NewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            return {"ok": True}
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles["org_existing"] = ExistingHandle()  # noqa: SLF001
+    manager._port_alloc._used["org_existing"] = 15420  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+        return NewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    result = await manager.apply_lanes([existing, lane_a])
+
+    assert result.success is True
+    assert hook_calls == []
+    assert manager.get_handle("org_new-a") is not None
+
+
+# ── startup/restart model reservation for the lock-free re-plan ─────────────
+
+
+@pytest.mark.asyncio
+async def test_add_lane_reserves_model_for_the_startup_window(monkeypatch) -> None:
+    """The model must be reserved before its HF_HOME is selected and only
+    released once the handle is registered — during the spawn the re-plan
+    (which does not take the lane-manager lock) must see it as protected even
+    though the lane is not in _handles yet."""
+    seen: dict[str, frozenset[str]] = {}
+
+    class ReservingHandle(_StubHandle):
+        def __init__(self, lane_config: LaneConfig) -> None:
+            super().__init__(lane_config)
+            self.lane_id = "org_new"
+            self.port = 15440
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            # The spawn is reading the (possibly tmpfs) model directory —
+            # the reservation must be live while the lane is unregistered.
+            seen["during_spawn"] = manager.starting_models()  # noqa: F821
+            assert "org/new" not in manager.lane_ids  # noqa: F821
+            return ProcessStatus(state=ProcessState.RUNNING)
+
+    manager = LaneManager(OllamaConfig(), lane_port_start=15440, lane_port_end=15450)
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle",
+        lambda *a, **k: ReservingHandle(a[4]),
+    )
+    lane = LaneConfig(lane_id="org_new", model="org/new", vllm=True)
+
+    await manager._add_lane_unlocked("org_new", lane)  # noqa: SLF001
+
+    assert seen["during_spawn"] == frozenset({"org/new"})
+    # Registration settled the model's fate — the reservation is gone.
+    assert manager.starting_models() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_add_lane_releases_startup_reservation_when_spawn_fails(monkeypatch) -> None:
+    seen: dict[str, frozenset[str]] = {}
+
+    class FailingReservingHandle(_StubHandle):
+        def __init__(self, lane_config: LaneConfig) -> None:
+            super().__init__(lane_config)
+            self.lane_id = "org_new"
+            self.port = 15460
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            seen["during_spawn"] = manager.starting_models()  # noqa: F821
+            raise RuntimeError("spawn boom")
+
+    manager = LaneManager(OllamaConfig(), lane_port_start=15460, lane_port_end=15470)
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle",
+        lambda *a, **k: FailingReservingHandle(a[4]),
+    )
+    lane = LaneConfig(lane_id="org_new", model="org/new", vllm=True)
+
+    with pytest.raises(RuntimeError, match="spawn boom"):
+        await manager._add_lane_unlocked("org_new", lane)  # noqa: SLF001
+
+    assert seen["during_spawn"] == frozenset({"org/new"})
+    # Failed startup cleaned up — no dangling reservation.
+    assert manager.starting_models() == frozenset()
+    assert "org_new" not in manager._handles  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_restart_lane_reserves_model_during_stop_spawn_window(monkeypatch) -> None:
+    """The old handle's process is dead (no RUNNING state left to protect the
+    model) while the new spawn runs — the reservation must cover that whole
+    window and clear once the new handle is registered."""
+    lane_id = "org_swap"
+    model = "org/swap"
+    lane_config = LaneConfig(lane_id=lane_id, model=model, vllm=True, vllm_config=VllmConfig())
+    manager = LaneManager(OllamaConfig(), lane_port_start=15480, lane_port_end=15490)
+
+    class DeadHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15480
+            self.lane_config = lane_config
+            self.destroyed = False
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=1)
+
+        async def destroy(self) -> None:
+            self.destroyed = True
+
+        async def close(self) -> None:
+            pass
+
+    seen: dict[str, frozenset[str]] = {}
+
+    class NewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            # Old process already destroyed, new handle not registered yet.
+            seen["during_spawn"] = manager.starting_models()  # noqa: F821
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    old = DeadHandle()
+    manager._handles[lane_id] = old  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15480  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+        return NewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+
+    await manager._restart_lane_unlocked(lane_id, LaneConfig(lane_id=lane_id, model=model, vllm=True))  # noqa: SLF001
+
+    assert old.destroyed is True
+    assert seen["during_spawn"] == frozenset({model})
+    assert manager.get_handle(lane_id) is not None
+    assert manager.starting_models() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_restart_lane_releases_startup_reservation_on_spawn_failure(monkeypatch) -> None:
+    lane_id = "org_swap"
+    model = "org/swap"
+    lane_config = LaneConfig(lane_id=lane_id, model=model, vllm=True, vllm_config=VllmConfig())
+    manager = LaneManager(OllamaConfig(), lane_port_start=15500, lane_port_end=15510)
+
+    class DeadHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15500
+            self.lane_config = lane_config
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=1)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    class FailingNewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            assert model in manager.starting_models()  # noqa: F821
+            raise RuntimeError("GPU out of memory")
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles[lane_id] = DeadHandle()  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15500  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> FailingNewHandle:
+        return FailingNewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+
+    with pytest.raises(RuntimeError, match="GPU out of memory"):
+        await manager._restart_lane_unlocked(
+            lane_id, LaneConfig(lane_id=lane_id, model=model, vllm=True)
+        )  # noqa: SLF001
+
+    assert lane_id not in manager._handles  # noqa: SLF001
+    assert manager.starting_models() == frozenset()
