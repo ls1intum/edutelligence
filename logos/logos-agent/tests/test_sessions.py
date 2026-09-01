@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from dataclasses import replace
 
 import pytest
@@ -501,3 +502,176 @@ class TestScreenshotOrchestration:
         skipped = [p for k, p in events if k == EventKind.SCREENSHOT and p.get("status") == "skipped"]
         assert len(skipped) == 1
         assert "did not succeed" in skipped[0]["reason"]
+
+
+class TestSettlementRaceAndDeployTag:
+    """Settlement against a lost transition, and the tag a deploy pulls.
+
+    Two races the state machine has to lose cleanly: a cancel that reaches
+    the terminal row before settlement does, and a dispatch that would pull
+    ``latest`` — which still points at main — instead of the pull request
+    build that actually contains the session's code.
+    """
+
+    SESSION_ROW = {
+        "container_id": "cid-7",
+        "deploy_to_dev": True,
+        "branch_name": "agent/feature-work/session-7",
+        "screenshot_paths": [],
+    }
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    def _patch_base(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(
+            sessions,
+            "settings",
+            replace(sessions.settings, artifact_root=str(tmp_path), deploy_enabled=True),
+        )
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        monkeypatch.setattr(sessions.db, "update_session", self._async_value(None))
+        return sessions
+
+    def _write_result(self, tmp_path, **payload):
+        directory = tmp_path / "7"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "result.json").write_text(json.dumps(payload))
+
+    async def test_settlement_losing_to_a_cancel_runs_no_side_effects(self, monkeypatch, tmp_path):
+        # An operator can cancel while restart reconciliation settles an
+        # exited container. The cancel moves the row to CANCELLED first, so
+        # the settlement's terminal transition returns False: it must still
+        # remove the container, but must not emit a status event, dispatch a
+        # deploy, or take screenshots for a session that is already final.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        self._write_result(tmp_path, pr_url="https://github.com/ls1intum/edutelligence/pull/772")
+        removed: list = []
+        events: list = []
+        dispatched: list = []
+        build_waits: list = []
+
+        async def fake_transition(_sid, _target, **_fields):
+            return False
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def fake_dispatch(**kwargs):
+            dispatched.append(kwargs)
+            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+
+        async def fake_build_wait(branch, **_kwargs):
+            build_waits.append(branch)
+            return "success", "build ended: success"
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.SESSION_ROW))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+        monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        # The container is given back, but the row belongs to the cancel:
+        # no succeeded/failed event, no deploy, no build wait — even though
+        # the result file carries a pull request.
+        assert removed == ["cid-7"]
+        assert events == []
+        assert dispatched == []
+        assert build_waits == []
+
+    async def test_deploy_waits_for_the_pr_build_and_uses_its_tag(self, monkeypatch, tmp_path):
+        # The result carries the PR URL, so the deploy must wait for the
+        # pr-<n> build to succeed and dispatch with exactly that tag — never
+        # latest, which still points at main.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        self._write_result(tmp_path, pr_url="https://github.com/ls1intum/edutelligence/pull/772")
+        order: list = []
+        dispatched: list = []
+
+        async def fake_build_wait(branch, **_kwargs):
+            order.append(("build_wait", branch))
+            return "success", "build ended: success"
+
+        async def fake_dispatch(**kwargs):
+            order.append(("dispatch", kwargs))
+            dispatched.append(kwargs)
+            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+
+        async def fake_event(_sid, kind, payload):
+            order.append((kind, payload))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.SESSION_ROW))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert dispatched == [{"ref": "agent/feature-work/session-7", "image_tag": "pr-772"}]
+        # The build wait happens before the dispatch, and the dispatched
+        # event records the tag the environment now serves.
+        build_idx = order.index(("build_wait", "agent/feature-work/session-7"))
+        dispatch_idx = next(i for i, item in enumerate(order) if item[0] == "dispatch")
+        assert build_idx < dispatch_idx
+        deploy_events = [p for k, p in order if k == EventKind.DEPLOY and p.get("status") == "dispatched"]
+        assert deploy_events == [
+            {
+                "status": "dispatched",
+                "environment": "logos-dev",
+                "url": "https://github.com/ls1intum/edutelligence/actions/runs/1",
+                "image_tag": "pr-772",
+            }
+        ]
+
+    async def test_deploy_is_aborted_when_the_pr_build_fails(self, monkeypatch, tmp_path):
+        # A build that failed (or never ran) means the session's code is not
+        # in any image; dispatching would deploy the old revision, so the
+        # deploy is recorded as failed and nothing is dispatched.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        self._write_result(tmp_path, pr_url="https://github.com/ls1intum/edutelligence/pull/772")
+        dispatched: list = []
+        events: list = []
+
+        async def fake_build_wait(_branch, **_kwargs):
+            return "failed", "build ended: failure"
+
+        async def fake_dispatch(**kwargs):
+            dispatched.append(kwargs)
+            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.SESSION_ROW))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert dispatched == []
+        failed = [p for k, p in events if k == EventKind.DEPLOY and p.get("status") == "failed"]
+        assert len(failed) == 1
+        assert "image builds did not succeed" in failed[0]["error"]

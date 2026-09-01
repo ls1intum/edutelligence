@@ -124,6 +124,11 @@ class Settings:
     # Deploys are triggered by this service, never from inside a session
     # container: the container never holds a token that can reach production.
     deploy_workflow: str = os.getenv("LOGOS_AGENT_DEPLOY_WORKFLOW", "logos_deploy-dev.yml")
+    # Builds and publishes the service images. It runs on pull requests (and
+    # main/release) but never on plain branch pushes, and PR builds publish
+    # pr-<number> tags, never latest — so a deploy of a session branch must
+    # wait for this workflow's run and use the PR tag it published.
+    build_workflow: str = os.getenv("LOGOS_AGENT_BUILD_WORKFLOW", "logos_build-and-push-docker.yml")
     deploy_enabled: bool = _bool("LOGOS_AGENT_DEPLOY_ENABLED", False)
     # The only environment a session is ever allowed to affect.
     allowed_environment: str = os.getenv("LOGOS_AGENT_ALLOWED_ENVIRONMENT", "logos-dev")

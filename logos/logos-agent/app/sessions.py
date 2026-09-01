@@ -444,11 +444,24 @@ class SessionManager:
         if result.get("pr_url"):
             fields["pr_url"] = str(result["pr_url"])
 
-        await db.transition_session(
+        moved = await db.transition_session(
             session_id,
             SessionStatus.SUCCEEDED if succeeded else SessionStatus.FAILED,
             **fields,
         )
+        if not moved:
+            # A competing actor reached the terminal row first — most often a
+            # cancel winning against a settlement that restart reconciliation
+            # kicks off for an exited container. The session already belongs
+            # to that actor: give the container back, but emit no status
+            # event, dispatch no deploy, and take no screenshots for a
+            # session whose state is already final.
+            logger.warning(
+                "settlement of session %s lost the race to another transition; only cleaning up",
+                session_id,
+            )
+            await self._cleanup_container(session_id)
+            return
         await db.add_event(
             session_id,
             EventKind.STATUS,
@@ -509,19 +522,52 @@ class SessionManager:
         try:
             # Dispatched from here, never from the container: the workflow-scoped
             # token stays in this service, and the workflow itself is pinned to
-            # the dev environment.
-            run_url = await github.dispatch_dev_deploy(ref=session.get("branch_name") or "main")
+            # the dev environment. The tag is the pull request build's, never
+            # latest: branch pushes never build, and latest still points at
+            # main, so a latest dispatch would deploy the old revision.
+            image_tag = await self._wait_for_session_image(session_id, result, session.get("branch_name") or "main")
+            if image_tag is None:
+                return "failed"
+            run_url = await github.dispatch_dev_deploy(ref=session.get("branch_name") or "main", image_tag=image_tag)
             await db.update_session(session_id, deployed_at=datetime.now(timezone.utc))
             await db.add_event(
                 session_id,
                 EventKind.DEPLOY,
-                {"status": "dispatched", "environment": settings.allowed_environment, "url": run_url},
+                {
+                    "status": "dispatched",
+                    "environment": settings.allowed_environment,
+                    "url": run_url,
+                    "image_tag": image_tag,
+                },
             )
             return "dispatched"
         except Exception as exc:
             logger.warning("dev deploy for session %s failed: %s", session_id, exc)
             await db.add_event(session_id, EventKind.DEPLOY, {"status": "failed", "error": str(exc)})
             return "failed"
+
+    async def _wait_for_session_image(self, session_id: int, result: dict[str, Any], branch: str) -> str | None:
+        """The image tag a deploy of this session must pull — or None.
+
+        The build workflow only runs when the session's pull request opens,
+        and PR builds publish ``pr-<number>`` images, never ``latest``. A
+        deploy of the session's own code therefore waits for that run and
+        uses the exact tag it published. Without a pull request no session
+        images exist at all; the previous ``latest`` behaviour is kept so a
+        session that skipped the PR degrades to the old, stale deploy.
+        """
+        pr_number = github.pr_number_from_url(result.get("pr_url") or "")
+        if pr_number is None:
+            return "latest"
+        status, detail = await github.wait_for_pr_builds(branch)
+        if status != "success":
+            await db.add_event(
+                session_id,
+                EventKind.DEPLOY,
+                {"status": "failed", "error": f"image builds did not succeed ({status}): {detail}"},
+            )
+            return None
+        return f"pr-{pr_number}"
 
     async def _capture_screenshots(self, session_id: int, deploy: str | None) -> None:
         """Capture the session's requested dev pages, after everything else.

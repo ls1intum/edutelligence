@@ -37,10 +37,12 @@ services:
       # not exist" for the orchestrator routes until the webservice came up.
       - "traefik.enable=true"
       - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
-      # The agent service is mounted at /api/agent, not /api: stripping only
-      # the shared prefix would hand FastAPI paths like /agent/workspaces
-      # while its routes are defined without any prefix.
-      - "traefik.http.middlewares.strip-api-agent.stripprefix.prefixes=/api,/agent"
+      # The agent service is mounted at /api/agent, not /api: its routes are
+      # defined without any prefix, so the whole mounted prefix has to come
+      # off. stripprefix.prefixes is a list of alternatives, not a sequence
+      # of strips — a "/api,/agent" list strips only the first match (/api)
+      # and hands FastAPI /agent/... paths, which 404.
+      - "traefik.http.middlewares.strip-api-agent.stripprefix.prefixes=/api/agent"
     networks:
       - internal
 
@@ -437,10 +439,12 @@ services:
     container_name: logos-agent-gateway
     restart: unless-stopped
     profiles: ["agent"]
-    # `service nginx status` checks the pid file the official image's startup
-    # script writes — the documented health check for this image.
+    # Validate the configuration and probe the local listener. `service
+    # nginx status` cannot work here: nginx:alpine runs without an init
+    # system, the check failed forever, the gateway stayed unhealthy, and
+    # logos-agent's service_healthy dependency never released.
     healthcheck:
-      test: ["CMD", "service", "nginx", "status"]
+      test: ["CMD-SHELL", "nginx -t && wget -q -s http://127.0.0.1/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5

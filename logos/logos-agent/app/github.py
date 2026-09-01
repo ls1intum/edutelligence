@@ -103,17 +103,65 @@ async def wait_for_dev_deploy(ref: str, *, timeout_s: float = 20 * 60, poll_s: f
         return "failed", f"could not observe the dev deploy run: {exc}"
 
 
+async def wait_for_pr_builds(branch: str, *, timeout_s: float = 20 * 60, poll_s: float = 15.0) -> tuple[str, str]:
+    """Wait for the branch's image builds to reach a conclusion.
+
+    The build workflow does not run on plain branch pushes: the session's
+    code is only built and published when its pull request triggers it,
+    under the ``pr-<number>`` tag and never ``latest``. Waiting here is what
+    keeps a dev deploy from pulling the stale ``latest`` images that still
+    point at main.
+
+    Returns ``(status, detail)``: status is ``"success"``, ``"failed"``, or
+    ``"timeout"`` — the same shape as :func:`wait_for_dev_deploy`.
+    """
+    url = f"{_API}/repos/{settings.repo_slug}/actions/runs"
+    params = {"workflow_id": settings.build_workflow, "per_page": 10}
+    deadline = asyncio.get_running_loop().time() + timeout_s
+
+    async def latest_build_for_branch() -> dict | None:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=_headers(), params=params)
+        if response.status_code != 200:
+            raise GitHubError(f"build run lookup failed ({response.status_code})")
+        for run in response.json().get("workflow_runs", []):
+            if run.get("head_branch") == branch:
+                return run
+        return None
+
+    try:
+        while True:
+            run = await latest_build_for_branch()
+            if run is not None and run.get("status") == "completed":
+                conclusion = run.get("conclusion") or "unknown"
+                status = "success" if conclusion == "success" else "failed"
+                return status, f"build {run.get('html_url')} ended: {conclusion}"
+            if asyncio.get_running_loop().time() >= deadline:
+                return "timeout", f"image builds for '{branch}' still running after {timeout_s:.0f}s"
+            await asyncio.sleep(poll_s)
+    except Exception as exc:
+        logger.warning("waiting for the image build run failed: %s", exc)
+        return "failed", f"could not observe the image build run: {exc}"
+
+
+def pr_number_from_url(pr_url: str | None) -> int | None:
+    """The pull request number encoded in a github pull URL, else None."""
+    if not pr_url or "/pull/" not in pr_url:
+        return None
+    try:
+        return int(pr_url.rsplit("/pull/", 1)[1].split("/")[0])
+    except (ValueError, IndexError):
+        return None
+
+
 async def pull_request_state(pr_url: str) -> dict[str, object] | None:
     """Fetch the current state of a pull request the session opened.
 
     Best effort: the UI shows what it gets and nothing depends on it, so a
     failure here is logged and swallowed rather than surfaced as an error.
     """
-    if not pr_url or "/pull/" not in pr_url:
-        return None
-    try:
-        number = int(pr_url.rsplit("/pull/", 1)[1].split("/")[0])
-    except (ValueError, IndexError):
+    number = pr_number_from_url(pr_url)
+    if number is None:
         return None
 
     try:
