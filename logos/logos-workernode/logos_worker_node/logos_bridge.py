@@ -1040,6 +1040,35 @@ class LogosBridgeClient:
 
         return result
 
+    @staticmethod
+    def _resolve_config_path() -> Path:
+        """The worker's config.yml — same resolution the calibration
+        session loop uses (LOGOS_WORKER_NODE_CONFIG env, then /app or CWD)."""
+        config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+        if config_path_str:
+            return Path(config_path_str)
+        for candidate in (Path("/app/config.yml"), Path("config.yml")):
+            if candidate.resolve().is_file():
+                return candidate
+        return Path("config.yml")
+
+    def _resolve_configured_gpu_devices(self, model_name: str) -> str:
+        """The model's explicit gpu_devices pin from config.yml, if any —
+        "" (auto slice) otherwise. The standalone RPC has no session plan
+        to read this from, unlike the session loop — without this it
+        always evaluated the default slice, even for a pinned model."""
+        try:
+            from logos_worker_node.calibration import plans_from_config  # noqa: PLC0415
+
+            config_path = self._resolve_config_path()
+            if not config_path.exists():
+                return ""
+            plan = next((p for p in plans_from_config(config_path) if p.get("model") == model_name), None)
+            return str((plan or {}).get("gpu_devices") or "")
+        except Exception:  # noqa: BLE001
+            logger.debug("[Precheck] gpu_devices lookup failed for %s", model_name, exc_info=True)
+            return ""
+
     async def _handle_run_compatibility_precheck(self, params: dict[str, Any]) -> dict[str, Any]:
         """RPC handler for an on-demand compatibility check, callable any
         time — including outside the nightly maintenance window — since it
@@ -1047,7 +1076,8 @@ class LogosBridgeClient:
         model_name = str(params.get("model", "")).strip()
         if not model_name:
             return {"ok": False, "error": "'model' is required"}
-        result = await self._run_hf_compatibility_precheck(model_name)
+        gpu_devices = self._resolve_configured_gpu_devices(model_name)
+        result = await self._run_hf_compatibility_precheck(model_name, gpu_devices=gpu_devices)
         return {"ok": True, **result}
 
     async def _handle_start_calibration_session(self, params: dict[str, Any]) -> dict[str, Any]:

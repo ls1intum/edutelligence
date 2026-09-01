@@ -1827,6 +1827,47 @@ async def test_run_compatibility_precheck_session_scopes_to_plans_explicit_gpu_d
     assert response["fit_tp_idle"] == 1
 
 
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_rpc_uses_configured_gpu_devices(tmp_path, monkeypatch):
+    """The standalone RPC has no session plan to read gpu_devices from —
+    it must look the model up in config.yml itself. Without that, a
+    pinned model is evaluated against the wrong (default) slice and can
+    be falsely blacklisted from a leftover GPU its pin was meant to avoid."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    config_path = tmp_path / "config.yml"
+    config_path.touch()
+    monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.plans_from_config",
+        lambda _p: [{"model": "org/model", "gpu_devices": "1,2,3"}],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=10 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 2000.0, "used_mb": 0.0, "free_mb": 2000.0},  # weak, excluded by the pin
+            1: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            2: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            3: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+        },
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["per_gpu_total_mb"] == 24000.0
+
+
 # ── Streaming: defer stream_start until first token byte (wake-readiness fix) ──
 
 

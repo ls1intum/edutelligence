@@ -279,10 +279,13 @@ def test_cache_round_trip_and_ttl(tmp_path):
     cache = HfModelInfoCache(tmp_path)
     assert cache.get("org/model") is None
 
-    cache.put("org/model", HfModelMetadata(weight_bytes=123, source="hf"))
+    cache.put("org/model", HfModelMetadata(weight_bytes=123, num_key_value_heads=8, source="hf"))
     reloaded = HfModelInfoCache(tmp_path)
     got = reloaded.get("org/model")
     assert got is not None and got.weight_bytes == 123
+    # Regression: num_key_value_heads must round-trip too, or every
+    # cached (non-cold) precheck silently loses per-TP-rank KV sharding.
+    assert got.num_key_value_heads == 8
 
     stale_success = HfModelMetadata(weight_bytes=1, source="hf", fetched_at=time.time() - 25 * 3600)
     cache.put("stale-success", stale_success)

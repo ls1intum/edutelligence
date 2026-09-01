@@ -300,6 +300,7 @@ class HfModelInfoCache:
             self._entries[model_name] = {
                 "weight_bytes": meta.weight_bytes,
                 "kv_per_token_bytes": meta.kv_per_token_bytes,
+                "num_key_value_heads": meta.num_key_value_heads,
                 "max_context_length": meta.max_context_length,
                 "quantization_method": meta.quantization_method,
                 "fetched_at": meta.fetched_at or time.time(),
