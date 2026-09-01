@@ -1862,22 +1862,32 @@ def test_build_cmd_explicit_chat_template_kwargs_win_over_inferred(monkeypatch) 
 
 
 def _populate_compile_cache(root: Path) -> dict[str, Path]:
-    """Build a realistic <cache_root>/.cache/ subtree and return key paths."""
+    """Build a realistic <cache_root>/.cache/ subtree and return key paths.
+
+    Idempotent — a previous (narrowed) purge leaves modelinfos/ and friends
+    behind, and a re-populate must not trip over them.
+    """
     cache_root = root / ".cache"
     vllm_cache = cache_root / "vllm"
     inductor_cache = cache_root / "torch_inductor"
     flashinfer_cache = cache_root / "flashinfer"
-    (vllm_cache / "torch_compile_cache" / "deadbeef" / "inductor_cache" / "ol").mkdir(parents=True)
+    modelinfos = vllm_cache / "modelinfos"
+    modelinfos.mkdir(parents=True, exist_ok=True)
+    (modelinfos / "model.json").write_text("{}")
+    (vllm_cache / "rank_0_0" / "backbone").mkdir(parents=True, exist_ok=True)
+    (vllm_cache / "rank_0_0" / "backbone" / "artifact.bin").write_text("blob")
+    (vllm_cache / "torch_compile_cache" / "deadbeef" / "inductor_cache" / "ol").mkdir(parents=True, exist_ok=True)
     (vllm_cache / "torch_compile_cache" / "deadbeef" / "inductor_cache" / "ol" / "frag.py").write_text("x = 1\n")
-    inductor_cache.mkdir(parents=True)
+    inductor_cache.mkdir(parents=True, exist_ok=True)
     (inductor_cache / "artifact.bin").write_text("blob")
-    flashinfer_cache.mkdir(parents=True)
+    flashinfer_cache.mkdir(parents=True, exist_ok=True)
     (flashinfer_cache / "keep.so").write_text("preserved")
     return {
         "cache_root": cache_root,
         "vllm": vllm_cache,
         "inductor": inductor_cache,
         "flashinfer": flashinfer_cache,
+        "modelinfos": modelinfos,
     }
 
 
@@ -1912,20 +1922,55 @@ def test_has_poisoned_compile_cache_false_when_no_logs() -> None:
     assert handle.has_poisoned_compile_cache is False
 
 
-def test_purge_compile_caches_removes_vllm_and_inductor_only(tmp_path: Path, monkeypatch) -> None:
+def test_purge_compile_caches_removes_artifacts_only(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
     paths = _populate_compile_cache(tmp_path)
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
 
     removed = handle._purge_compile_caches()
 
-    assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
-    assert not paths["vllm"].exists()
+    assert set(removed) == {
+        str(paths["vllm"] / "torch_compile_cache"),
+        str(paths["vllm"] / "rank_0_0"),
+        str(paths["inductor"]),
+    }
+    assert not (paths["vllm"] / "torch_compile_cache").exists()
+    assert not (paths["vllm"] / "rank_0_0").exists()
     assert not paths["inductor"].exists()
+    # The vllm cache dir itself survives — only the artifact subdirs are wiped.
+    assert paths["vllm"].exists()
+    # modelinfos/ is safe JSON metadata and must never be touched by
+    # auto-recovery.
+    assert (paths["modelinfos"] / "model.json").exists()
     # FlashInfer JIT cache + HF weights are not implicated in compile-cache
     # poisoning and must survive a purge.
     assert paths["flashinfer"].exists()
     assert (paths["flashinfer"] / "keep.so").exists()
+
+
+def test_purge_compile_caches_per_model_only_touches_that_lane(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    lanes_root = paths["vllm"] / "lanes"
+    for lane_name in ("alpha__model-a", "beta__model-b"):
+        (lanes_root / lane_name / "torch_compile_cache" / "deadbeef").mkdir(parents=True)
+        (lanes_root / lane_name / "rank_0_0" / "backbone").mkdir(parents=True)
+        (lanes_root / lane_name / "modelinfos").mkdir(parents=True)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    removed = handle._purge_compile_caches("alpha/model-a")
+
+    assert set(removed) == {
+        str(lanes_root / "alpha__model-a" / "torch_compile_cache"),
+        str(lanes_root / "alpha__model-a" / "rank_0_0"),
+    }
+    # A poisoned model must not force every other model on the node to
+    # recompile — the sibling lane's cache is left in place.
+    assert (lanes_root / "beta__model-b" / "torch_compile_cache").exists()
+    assert (lanes_root / "beta__model-b" / "rank_0_0").exists()
+    # And modelinfos/ is never touched, even for the purged lane.
+    assert (lanes_root / "alpha__model-a" / "modelinfos").exists()
+    assert (paths["modelinfos"] / "model.json").exists()
 
 
 def test_purge_compile_caches_is_noop_when_nothing_to_remove(tmp_path: Path, monkeypatch) -> None:
@@ -1952,8 +1997,14 @@ def test_purge_compile_caches_if_versions_changed_purges_on_mismatch(tmp_path: P
     )
 
     removed = handle._purge_compile_caches_if_versions_changed()
-    assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
-    assert not paths["vllm"].exists()
+    assert set(removed) == {
+        str(paths["vllm"] / "torch_compile_cache"),
+        str(paths["vllm"] / "rank_0_0"),
+        str(paths["inductor"]),
+    }
+    assert not (paths["vllm"] / "torch_compile_cache").exists()
+    assert not paths["inductor"].exists()
+    assert (paths["modelinfos"] / "model.json").exists()
     assert paths["flashinfer"].exists()
 
 
@@ -1990,7 +2041,12 @@ def test_purge_compile_caches_if_versions_changed_purges_when_no_stamp(tmp_path:
     )
 
     removed = handle._purge_compile_caches_if_versions_changed()
-    assert set(removed) == {str(paths["vllm"]), str(paths["inductor"])}
+    assert set(removed) == {
+        str(paths["vllm"] / "torch_compile_cache"),
+        str(paths["vllm"] / "rank_0_0"),
+        str(paths["inductor"]),
+    }
+    assert (paths["modelinfos"] / "model.json").exists()
 
 
 def test_purge_compile_caches_if_versions_changed_skips_when_no_cache(tmp_path: Path, monkeypatch) -> None:
@@ -2068,9 +2124,13 @@ async def test_spawn_retries_once_on_poisoned_compile_cache(tmp_path: Path, monk
     await handle.spawn(lane)
 
     assert attempt_calls == [1, 2]
-    # The reactive purge wiped vllm + inductor caches between attempts.
-    assert not paths["vllm"].exists()
+    # The reactive purge wiped the compile artifacts between attempts. The
+    # per-lane dir held nothing (this fixture uses the legacy shared
+    # location), so the worker-wide fallback fired.
+    assert not (paths["vllm"] / "torch_compile_cache").exists()
+    assert not (paths["vllm"] / "rank_0_0").exists()
     assert not paths["inductor"].exists()
+    assert (paths["modelinfos"] / "model.json").exists()
     assert paths["flashinfer"].exists()
 
 
@@ -2107,6 +2167,430 @@ async def test_spawn_does_not_retry_on_unrelated_startup_failure(tmp_path: Path,
     # Unrelated failure must not wipe the compile cache.
     assert paths["vllm"].exists()
     assert paths["inductor"].exists()
+
+
+@pytest.mark.asyncio
+async def test_spawn_does_not_widen_worker_wide_on_fingerprint_only(tmp_path: Path, monkeypatch) -> None:
+    """A fingerprint match whose traceback names no compile-cache file, on a
+    lane with an empty per-lane dir, must NOT widen to the worker-wide purge —
+    that would force every other model on the node to recompile on a
+    heuristic match. The failure propagates instead."""
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    import json as _json
+
+    # Stamp matches so the proactive purge stays out of the way.
+    (paths["cache_root"] / handle._COMPILE_CACHE_STAMP_FILENAME).write_text(
+        _json.dumps({"vllm": "0.22.0", "torch": "2.11.0"})
+    )
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="org/brand-new-model", vllm=True, vllm_config=VllmConfig())
+    calls: list[int] = []
+
+    async def _fake_spawn_once(_lc):  # noqa: ANN001
+        calls.append(1)
+        # copy_misaligned_inputs fingerprint, but the traceback names only
+        # torch internals — no compile-cache path, so no strong signal.
+        handle._recent_logs.extend(
+            [
+                '  File "/opt/venv/lib/python3.12/site-packages/torch/_inductor/utils.py", '
+                "line 3442, in copy_misaligned_inputs",
+                "AssertionError: Expected tensors only, but got: <class 'int'>",
+            ]
+        )
+        raise RuntimeError("Engine core init failed")
+
+    monkeypatch.setattr(handle, "_spawn_once", _fake_spawn_once)
+
+    with pytest.raises(RuntimeError, match="Engine core init failed"):
+        await handle.spawn(lane)
+    # No retry: the fingerprint-only match on an empty per-lane dir did not
+    # widen to the worker-wide cache.
+    assert len(calls) == 1
+    # The shared compile cache is untouched.
+    assert (paths["vllm"] / "torch_compile_cache").exists()
+    assert (paths["vllm"] / "rank_0_0").exists()
+    assert paths["inductor"].exists()
+
+
+# Fingerprint matching — failures that die inside torch/vllm library code,
+# where no frame of the traceback points into the cache directory.
+
+
+def test_has_poisoned_compile_cache_detects_copy_misaligned_inputs_fingerprint() -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    # The GLM-OCR incident: the cached AOT artifact asserts deep inside
+    # torch on a stale input signature — the traceback never names the
+    # cache directory, only the fingerprint does.
+    handle._recent_logs.extend(
+        [
+            "(EngineCore) ERROR core.py:1140 Traceback (most recent call last):",
+            "(EngineCore) ERROR core.py:1140   File "
+            '"/opt/venv/lib/python3.12/site-packages/transformers/models/glm4_1v/modeling_glm4_1v.py", '
+            "line 1679, in forward",
+            '(EngineCore) ERROR core.py:1140   File "/opt/venv/lib/python3.12/site-packages/'
+            'torch/_inductor/utils.py", line 3442, in copy_misaligned_inputs',
+            "(EngineCore) ERROR core.py:1140 AssertionError: Expected tensors only, but got: <class 'int'>",
+            "(EngineCore) ERROR core.py:1140 RuntimeError: Engine core initialization failed.",
+        ]
+    )
+    assert handle.has_poisoned_compile_cache is True
+    assert handle._matched_cache_poisoning_fingerprint() == "copy_misaligned_inputs"
+
+
+@pytest.mark.parametrize(
+    ("fingerprint", "log_lines"),
+    [
+        (
+            "copy_misaligned_inputs",
+            [
+                '  File ".../torch/_inductor/utils.py", line 3442, in copy_misaligned_inputs',
+                "AssertionError: Expected tensors only, but got: <class 'int'>",
+            ],
+        ),
+        (
+            "aot_artifact_assertion",
+            [
+                '  File ".../torch/_inductor/standalone_compile.py", line 122, in CacheCompiledArtifact._compiled_fn',
+                "AssertionError: shape mismatch in cached graph",
+            ],
+        ),
+        (
+            "inductor_artifact_missing",
+            [
+                '  File ".../torch/_inductor/standalone_compile.py", line 122, in _compiled_fn',
+                "FileNotFoundError: .../torch_compile_cache/torch_aot_compile/deadbeef/graph",
+            ],
+        ),
+        (
+            "compilation_cache_key_error",
+            [
+                '  File ".../vllm/compilation/caching.py", line 217, in optimized_call',
+                "KeyError: 'f5096f3c'",
+            ],
+        ),
+    ],
+)
+def test_matched_cache_poisoning_fingerprints(fingerprint: str, log_lines: list[str]) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(log_lines)
+    assert handle._matched_cache_poisoning_fingerprint() == fingerprint
+    assert handle.has_poisoned_compile_cache is True
+
+
+def test_matched_cache_poisoning_fingerprint_requires_all_fragments() -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    # A KeyError that is not from the compilation cache module, and a
+    # FileNotFoundError whose path is not under the compile cache, must not
+    # match.
+    handle._recent_logs.extend(
+        [
+            '  File ".../vllm/config.py", line 10, in load',
+            "KeyError: 'model'",
+            '  File ".../vllm/worker/worker.py", line 5, in init_device',
+            "FileNotFoundError: '/models/weights.safetensors'",
+        ]
+    )
+    assert handle._matched_cache_poisoning_fingerprint() is None
+    assert handle.has_poisoned_compile_cache is False
+
+
+def test_inductor_artifact_missing_matches_cache_path_file_not_found() -> None:
+    """A FileNotFoundError under a compile-cache path is a genuinely missing
+    cache artifact. The path uses a custom cache root so it is not one of the
+    generic path fragments — only the tightened fingerprint can match it."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(
+        [
+            '  File ".../torch/_inductor/standalone_compile.py", line 122, in _compiled_fn',
+            "FileNotFoundError: [Errno 2] No such file or directory: "
+            "'/mnt/custom-root/vllm/torch_compile_cache/deadbeef/ol/frag.py'",
+        ]
+    )
+    assert handle._matched_cache_poisoning_fingerprint() == "inductor_artifact_missing"
+    assert handle.has_poisoned_compile_cache is True
+
+
+def test_inductor_artifact_missing_ignores_unrelated_file_not_found() -> None:
+    """The false positive from review: a brand-new model that fails to load
+    (mistyped repo id, gated repo) raises FileNotFoundError, and ordinary
+    torch.compile output logs torch/_inductor frames in the same window. The
+    missing file is a HuggingFace path, not a compile-cache artifact, so the
+    fingerprint must NOT match."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(
+        [
+            '  File "/opt/venv/lib/python3.12/site-packages/torch/_inductor/runtime/' "triton_heuristics.py",
+            " line 12, in run",
+            "FileNotFoundError: [Errno 2] No such file or directory: " "'/models/org__typo-model/weights.safetensors'",
+        ]
+    )
+    assert handle._matched_cache_poisoning_fingerprint() is None
+    assert handle.has_poisoned_compile_cache is False
+
+
+# Per-lane cache_meta.json pre-flight validation
+
+
+def _populate_lane_cache(root: Path, model: str) -> Path:
+    """Build the per-lane compile cache dir for ``model`` and return it."""
+    lane_dir = root / ".cache" / "vllm" / "lanes" / model.replace("/", "__")
+    (lane_dir / "torch_compile_cache" / "deadbeef").mkdir(parents=True)
+    (lane_dir / "rank_0_0" / "backbone").mkdir(parents=True)
+    (lane_dir / "modelinfos").mkdir(parents=True)
+    (lane_dir / "modelinfos" / "model.json").write_text("{}")
+    return lane_dir
+
+
+def test_purge_lane_cache_if_meta_changed_purges_on_version_mismatch(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="zai-org/GLM-OCR", vllm=True, vllm_config=VllmConfig())
+    lane_dir = _populate_lane_cache(tmp_path, "zai-org/GLM-OCR")
+    import json
+
+    # The meta records the vLLM version that produced the cached artifacts.
+    meta = handle._current_cache_meta(lane)
+    meta["vllm"] = "0.21.0"
+    (lane_dir / handle._CACHE_META_FILENAME).write_text(json.dumps(meta, sort_keys=True))
+
+    removed = handle._purge_lane_cache_if_meta_changed(lane)
+
+    assert set(removed) == {str(lane_dir / "torch_compile_cache"), str(lane_dir / "rank_0_0")}
+    assert not (lane_dir / "torch_compile_cache").exists()
+    assert not (lane_dir / "rank_0_0").exists()
+    # modelinfos/ is never touched by auto-recovery.
+    assert (lane_dir / "modelinfos" / "model.json").exists()
+
+
+def test_purge_lane_cache_if_meta_changed_noop_on_match(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="zai-org/GLM-OCR", vllm=True, vllm_config=VllmConfig())
+    lane_dir = _populate_lane_cache(tmp_path, "zai-org/GLM-OCR")
+    import json
+
+    (lane_dir / handle._CACHE_META_FILENAME).write_text(json.dumps(handle._current_cache_meta(lane), sort_keys=True))
+
+    assert handle._purge_lane_cache_if_meta_changed(lane) == []
+    assert (lane_dir / "torch_compile_cache").exists()
+    assert (lane_dir / "rank_0_0").exists()
+
+
+def test_purge_lane_cache_if_meta_changed_purges_when_no_meta(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="zai-org/GLM-OCR", vllm=True, vllm_config=VllmConfig())
+    lane_dir = _populate_lane_cache(tmp_path, "zai-org/GLM-OCR")
+
+    # Cache exists but no meta — produced by a worker version that predates
+    # the per-lane meta check. Treated as unknown and wiped.
+    removed = handle._purge_lane_cache_if_meta_changed(lane)
+
+    assert set(removed) == {str(lane_dir / "torch_compile_cache"), str(lane_dir / "rank_0_0")}
+    assert (lane_dir / "modelinfos" / "model.json").exists()
+
+
+def test_purge_lane_cache_if_meta_changed_noop_without_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    lane = LaneConfig(model="zai-org/GLM-OCR", vllm=True, vllm_config=VllmConfig())
+    # No artifacts yet (first start of this model) — nothing to validate,
+    # and no meta is read either.
+    assert handle._purge_lane_cache_if_meta_changed(lane) == []
+
+
+def test_purge_lane_cache_if_meta_changed_skips_user_overridden_compilation_config(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+
+    # The lane manages its own --compilation-config — that cache dir is not
+    # one we resolve, so no pre-flight validation and no meta are applied.
+    lane = LaneConfig(
+        model="zai-org/GLM-OCR",
+        vllm=True,
+        vllm_config=VllmConfig(extra_args=["--compilation-config", '{"cache_dir": "/custom"}']),
+    )
+    assert handle._lane_compile_cache_dir(lane) is None
+    assert handle._purge_lane_cache_if_meta_changed(lane) == []
+    handle._write_lane_cache_meta(lane)
+    assert not (tmp_path / ".cache" / "vllm" / "lanes").exists()
+
+
+@pytest.mark.asyncio
+async def test_spawn_writes_lane_cache_meta_after_healthy_start(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOGOS_IMAGE_VERSION", "logos-workernode-vllm:2026.08.29")
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+
+    lane = LaneConfig(model="zai-org/GLM-OCR", vllm=True, vllm_config=VllmConfig())
+    calls: list[int] = []
+
+    async def _fake_spawn_once(_lc):  # noqa: ANN001
+        calls.append(1)
+        return handle.status()
+
+    monkeypatch.setattr(handle, "_spawn_once", _fake_spawn_once)
+
+    await handle.spawn(lane)
+    assert calls == [1]
+
+    import json
+
+    lane_dir = tmp_path / ".cache" / "vllm" / "lanes" / "zai-org__GLM-OCR"
+    meta_path = lane_dir / handle._CACHE_META_FILENAME
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text())
+    assert meta["vllm"] == "0.22.0"
+    assert meta["torch"] == "2.11.0"
+    assert meta["model"] == "zai-org/GLM-OCR"
+    assert meta["image"] == "logos-workernode-vllm:2026.08.29"
+    assert "compilation_config" in meta
+
+
+# Reactive recovery cooldown + structured log line
+
+
+@pytest.mark.asyncio
+async def test_spawn_reactive_recovery_is_capped_per_model_hour(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    import json as _json
+
+    (paths["cache_root"] / VllmProcessHandle._COMPILE_CACHE_STAMP_FILENAME).write_text(
+        _json.dumps({"vllm": "0.22.0", "torch": "2.11.0"})
+    )
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+    monkeypatch.setattr("logos_worker_node.vllm_process._last_reactive_cache_recovery", {})
+
+    lane = LaneConfig(model="zai-org/GLM-OCR", vllm=True, vllm_config=VllmConfig())
+    # A strong-signal poisoning: the traceback names a compile-cache file
+    # (path fragment), so the worker-wide fallback fires on this empty
+    # per-lane (legacy shared-location) fixture.
+    poisoned_logs = [
+        '  File "/tmp/x/.cache/vllm/torch_compile_cache/abc/inductor_cache/ol/frag.py", line 1, in call',
+        '  File ".../torch/_inductor/utils.py", line 3442, in copy_misaligned_inputs',
+        "AssertionError: Expected tensors only, but got: <class 'int'>",
+    ]
+
+    # First handle: one auto-recovery (purge + retry) succeeds.
+    handle1 = VllmProcessHandle("lane-1", 19000, OllamaConfig())
+    attempts1: list[int] = []
+
+    async def _spawn_once_fail_then_ok(_lc):  # noqa: ANN001
+        attempts1.append(1)
+        if len(attempts1) == 1:
+            handle1._recent_logs.extend(poisoned_logs)
+            raise RuntimeError("Engine core init failed")
+        handle1._recent_logs.clear()
+        return handle1.status()
+
+    monkeypatch.setattr(handle1, "_spawn_once", _spawn_once_fail_then_ok)
+    await handle1.spawn(lane)
+    assert attempts1 == [1, 1]
+
+    # The lane manager restarts the lane (a fresh handle). The same failure
+    # must NOT trigger a second recovery within the cooldown window.
+    _populate_compile_cache(tmp_path)
+    handle2 = VllmProcessHandle("lane-2", 19001, OllamaConfig())
+    attempts2: list[int] = []
+
+    async def _spawn_once_always_fail(_lc):  # noqa: ANN001
+        attempts2.append(1)
+        handle2._recent_logs.extend(poisoned_logs)
+        raise RuntimeError("Engine core init failed")
+
+    monkeypatch.setattr(handle2, "_spawn_once", _spawn_once_always_fail)
+    with pytest.raises(RuntimeError, match="Engine core init failed"):
+        await handle2.spawn(lane)
+    assert attempts2 == [1]  # no second retry
+    # ... and the cache was not purged again.
+    assert (tmp_path / ".cache" / "vllm" / "torch_compile_cache").exists()
+
+
+@pytest.mark.asyncio
+async def test_spawn_logs_structured_auto_recovery_line(tmp_path: Path, monkeypatch, caplog) -> None:
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+    paths = _populate_compile_cache(tmp_path)
+    import json as _json
+    import logging
+
+    (paths["cache_root"] / VllmProcessHandle._COMPILE_CACHE_STAMP_FILENAME).write_text(
+        _json.dumps({"vllm": "0.22.0", "torch": "2.11.0"})
+    )
+    monkeypatch.setattr(
+        VllmProcessHandle,
+        "_current_compile_versions",
+        staticmethod(lambda: {"vllm": "0.22.0", "torch": "2.11.0"}),
+    )
+    monkeypatch.setattr("logos_worker_node.vllm_process._last_reactive_cache_recovery", {})
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    lane = LaneConfig(model="zai-org/GLM-OCR", vllm=True, vllm_config=VllmConfig())
+    attempts: list[int] = []
+
+    async def _fake_spawn_once(_lc):  # noqa: ANN001
+        attempts.append(1)
+        if len(attempts) == 1:
+            # Strong signal (cache path in the traceback) so the worker-wide
+            # fallback fires on this empty per-lane fixture, plus the
+            # copy_misaligned_inputs fingerprint the assertion checks for.
+            handle._recent_logs.extend(
+                [
+                    '  File "/tmp/x/.cache/vllm/torch_compile_cache/abc/inductor_cache/ol/frag.py", line 1, in call',
+                    '  File ".../torch/_inductor/utils.py", line 3442, in copy_misaligned_inputs',
+                    "AssertionError: Expected tensors only, but got: <class 'int'>",
+                ]
+            )
+            raise RuntimeError("Engine core init failed")
+        handle._recent_logs.clear()
+        return handle.status()
+
+    monkeypatch.setattr(handle, "_spawn_once", _fake_spawn_once)
+
+    with caplog.at_level(logging.WARNING, logger="logos_worker_node.vllm_process"):
+        await handle.spawn(lane)
+
+    recovered = [r for r in caplog.records if "cache_auto_recovered=true" in r.getMessage()]
+    assert len(recovered) == 1
+    message = recovered[0].getMessage()
+    assert "model=zai-org/GLM-OCR" in message
+    assert "fingerprint=copy_misaligned_inputs" in message
 
 
 def test_build_cmd_emits_speculative_config(monkeypatch) -> None:

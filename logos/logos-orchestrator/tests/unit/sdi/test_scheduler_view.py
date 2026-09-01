@@ -375,6 +375,39 @@ def test_get_model_profiles_reads_from_snapshot(monkeypatch):
     assert qwen.tensor_parallel_size == 2
 
 
+def test_get_model_profiles_reads_timing_fields_from_snapshot(monkeypatch):
+    """Calibrated cold-load / wake timings flow from the snapshot into ModelProfile."""
+    profiles_data = {
+        "qwen3:8b": {
+            "base_residency_mb": 4500.0,
+            "engine": "vllm",
+            "measurement_count": 1,
+            "last_measured_epoch": 1710000100.0,
+            "cold_load_time_s": 91.5,
+            "wake_from_sleep_time_s": 12.25,
+        },
+        "legacy-model": {
+            "base_residency_mb": 3000.0,
+            "engine": "vllm",
+            "measurement_count": 1,
+            "last_measured_epoch": 1710000200.0,
+        },
+    }
+    registry = _make_registry(lanes=[], model_profiles=profiles_data)
+    facade = _build_facade(registry, 101, "qwen3:8b", monkeypatch)
+
+    profiles = facade.get_model_profiles(provider_id=12)
+    qwen = profiles["qwen3:8b"]
+    assert qwen.cold_load_time_s == 91.5
+    assert qwen.wake_from_sleep_time_s == 12.25
+    # to_dict carries the fields for API consumers.
+    assert qwen.to_dict()["cold_load_time_s"] == 91.5
+    assert qwen.to_dict()["wake_from_sleep_time_s"] == 12.25
+    # A profile from a worker that predates the fields stays None.
+    assert profiles["legacy-model"].cold_load_time_s is None
+    assert profiles["legacy-model"].wake_from_sleep_time_s is None
+
+
 def test_get_model_profiles_empty_when_no_profiles(monkeypatch):
     """No model_profiles in snapshot → returns empty dict."""
     registry = _make_registry(lanes=[])

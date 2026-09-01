@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  OnDestroy,
   OnInit,
   computed,
   inject,
@@ -13,14 +14,24 @@ import {
   ScrollingModule,
 } from '@angular/cdk/scrolling';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { Model } from '../../shared/models/model.model';
+import {
+  GuideLlmStatusDistributionSummary,
+  ModelBenchmarkPair,
+  ModelBenchmarkRun,
+  ModelProviderBenchmark,
+} from '../../shared/models/provider.model';
 
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import {
+  benchmarkConfigurationRows,
+  servingCommand,
+} from './benchmark-configuration';
 
 
 // ==========================================================================
@@ -29,7 +40,8 @@ import { ErrorMessageComponent } from '../../shared/components/error-message/err
 
 type ModelErrorTab =
   | 'error_report'
-  | 'complete_logs';
+  | 'complete_logs'
+  | 'performance';
 
 type CalibrationStatus =
   | 'success'
@@ -111,6 +123,12 @@ interface BackendCalibrationLog {
   readonly log_text: string | null;
   readonly recorded_at: string | null;
   readonly updated_at: string;
+}
+
+interface BenchmarkGroup {
+  readonly modelProviderId: number;
+  readonly benchmarks: readonly ModelProviderBenchmark[];
+  readonly selected: ModelProviderBenchmark;
 }
 
 
@@ -226,11 +244,14 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
   ],
 
   templateUrl: './model-error-report.html',
-  styleUrl: './model-error-report.scss',
+  styleUrls: [
+    './model-error-report.scss',
+    './model-performance-details.scss',
+  ],
 
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class ModelErrorReport implements OnInit {
+export class ModelErrorReport implements OnInit, OnDestroy {
 
   // ==========================================================================
   // Dependencies
@@ -290,17 +311,55 @@ export class ModelErrorReport implements OnInit {
 
   readonly processesLoading = signal(false);
 
+  readonly performance = signal<readonly ModelProviderBenchmark[]>([]);
+  readonly benchmarkPairs = signal<readonly ModelBenchmarkPair[]>([]);
+  readonly benchmarkRuns = signal<readonly ModelBenchmarkRun[]>([]);
+  readonly performanceLoading = signal(false);
+  readonly performanceError = signal(false);
+  readonly benchmarkStartingPairId = signal<number | null>(null);
+  readonly benchmarkCancellingJobId = signal<number | null>(null);
+  readonly benchmarkStartError = signal<string | null>(null);
+  readonly benchmarkSampleSize = signal(5);
+  readonly benchmarkSampleLabel = computed(
+    () => this.formatSampleCount(this.benchmarkSampleSize()),
+  );
+  readonly benchmarkSampleTicks = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] as const;
+  readonly benchmarkSampleProgress = computed(
+    () => `${((this.benchmarkSampleSize() - 1) / 99) * 100}%`,
+  );
+  private readonly selectedBenchmarkIds = signal<ReadonlyMap<number, number>>(new Map());
+  readonly benchmarkDeletingId = signal<number | null>(null);
+  readonly benchmarkDeleteError = signal<string | null>(null);
+  readonly benchmarkGroups = computed<readonly BenchmarkGroup[]>(() => {
+    const grouped = new Map<number, ModelProviderBenchmark[]>();
+    for (const benchmark of this.performance()) {
+      const benchmarks = grouped.get(benchmark.model_provider_id) ?? [];
+      benchmarks.push(benchmark);
+      grouped.set(benchmark.model_provider_id, benchmarks);
+    }
+    const selectedIds = this.selectedBenchmarkIds();
+    return [...grouped.entries()].map(([modelProviderId, benchmarks]) => ({
+      modelProviderId,
+      benchmarks,
+      selected: benchmarks.find(benchmark => benchmark.id === selectedIds.get(modelProviderId)) ?? benchmarks[0]!,
+    }));
+  });
+  private performancePollTimer: ReturnType<typeof setTimeout> | null = null;
+  private destroyed = false;
+
   // ==========================================================================
   // Tabs
   // ==========================================================================
 
   readonly tabs: readonly ModelErrorTab[] = [
     'complete_logs',
+    'performance',
   ];
 
   readonly tabLabel: Record<ModelErrorTab, string> = {
     error_report: 'Error Report',
     complete_logs: 'Complete Logs',
+    performance: 'Performance',
   };
 
   readonly hasAnyLogText = computed(() => {
@@ -445,6 +504,14 @@ export class ModelErrorReport implements OnInit {
     await this.fetchModel(id);
   }
 
+  ngOnDestroy(): void {
+    this.destroyed = true;
+    this.clearPerformancePoll();
+    if (this.logCopiedResetTimer !== null) {
+      clearTimeout(this.logCopiedResetTimer);
+    }
+  }
+
 
   // ==========================================================================
   // Initial Data Loading
@@ -469,7 +536,10 @@ export class ModelErrorReport implements OnInit {
 
       this.model.set(foundModel);
 
-      await this.loadCalibrationLogs(foundModel.name);
+      await Promise.all([
+        this.loadCalibrationLogs(foundModel.name),
+        this.loadPerformance(id),
+      ]);
 
       const logs = this.availableLogs();
 
@@ -523,6 +593,172 @@ export class ModelErrorReport implements OnInit {
     }
   }
 
+  async loadPerformance(modelId = this.modelId(), silent = false): Promise<void> {
+    if (modelId == null) {
+      return;
+    }
+
+    if (!silent) {
+      this.performanceLoading.set(true);
+    }
+    this.performanceError.set(false);
+
+    try {
+      const response = await this.modelService.getBenchmarks(modelId);
+      this.performance.set(response.benchmarks);
+      this.benchmarkPairs.set(response.pairs ?? []);
+      this.benchmarkRuns.set(response.runs ?? []);
+    } catch {
+      if (!silent) {
+        this.performance.set([]);
+        this.benchmarkPairs.set([]);
+        this.benchmarkRuns.set([]);
+        this.performanceError.set(true);
+      }
+    } finally {
+      if (!silent) {
+        this.performanceLoading.set(false);
+      }
+      this.schedulePerformancePoll();
+    }
+  }
+
+  async startBenchmark(pair: ModelBenchmarkPair): Promise<void> {
+    if (this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Start the benchmark on ${pair.provider_name} · ${pair.model_name}?\n\nConfirm that this provider is currently safe for benchmark traffic. The benchmark runs at low priority and stops automatically when production load is detected.`,
+    );
+    if (!confirmed) return;
+
+    this.benchmarkStartingPairId.set(pair.model_provider_id);
+    this.benchmarkStartError.set(null);
+    try {
+      await this.modelService.startBenchmark(pair.model_provider_id, this.benchmarkSampleSize());
+      await this.loadPerformance(this.modelId(), true);
+    } catch (error) {
+      const response = error instanceof HttpErrorResponse ? error.error : null;
+      const nestedError = response?.error;
+      const message = response?.detail
+        ?? (typeof nestedError === 'string' ? nestedError : nestedError?.message);
+      this.benchmarkStartError.set(
+        typeof message === 'string' ? message : 'Could not start the benchmark.',
+      );
+      await this.loadPerformance(this.modelId(), true);
+    } finally {
+      this.benchmarkStartingPairId.set(null);
+    }
+  }
+
+  async cancelBenchmark(run: ModelBenchmarkRun): Promise<void> {
+    this.benchmarkCancellingJobId.set(run.id);
+    this.benchmarkStartError.set(null);
+    try {
+      await this.modelService.cancelBenchmark(run.id);
+      await this.loadPerformance(this.modelId(), true);
+    } catch {
+      this.benchmarkStartError.set('Could not cancel the benchmark.');
+    } finally {
+      this.benchmarkCancellingJobId.set(null);
+    }
+  }
+
+  latestBenchmarkRun(modelProviderId: number): ModelBenchmarkRun | null {
+    return this.benchmarkRuns().find(
+      run => run.request.model_provider_id === modelProviderId,
+    ) ?? null;
+  }
+
+  providerHasActiveBenchmark(providerId: number): boolean {
+    return this.benchmarkRuns().some(
+      run => run.request.provider_id === providerId && this.isBenchmarkActive(run),
+    );
+  }
+
+  isBenchmarkActive(run: ModelBenchmarkRun): boolean {
+    return run.status === 'pending' || run.status === 'running';
+  }
+
+  benchmarkStatusLabel(run: ModelBenchmarkRun): string {
+    if (run.status === 'pending') return `Queued for ${run.request.provider_name}`;
+    if (run.status === 'running') {
+      if (run.result.stage === 'preparing_worker') return `Preparing ${run.request.provider_name}`;
+      if (run.result.stage === 'warming_up') return `Warming up ${run.request.provider_name}`;
+      if (run.result.stage === 'benchmarking') {
+        const started = run.result.started_samples ?? 0;
+        const total = run.result.total_samples ?? run.request.samples;
+        return `Running on ${run.request.provider_name} · request ${started}/${total}`;
+      }
+      return `Running on ${run.request.provider_name}`;
+    }
+    if (run.status === 'success') return `Completed ${this.formatBenchmarkTimestamp(run.updated_at)}`;
+    return `Failed ${this.formatBenchmarkTimestamp(run.updated_at)}`;
+  }
+
+  setBenchmarkSampleSize(value: string): void {
+    const parsed = Number(value);
+    this.benchmarkSampleSize.set(Number.isFinite(parsed) ? Math.min(100, Math.max(1, Math.round(parsed))) : 5);
+  }
+
+  formatSampleCount(count: number): string {
+    return `${count} ${count === 1 ? 'sample' : 'samples'}`;
+  }
+
+  selectBenchmark(modelProviderId: number, value: string): void {
+    const benchmarkId = Number(value);
+    if (!Number.isInteger(benchmarkId)) return;
+    this.selectedBenchmarkIds.update(current => {
+      const next = new Map(current);
+      next.set(modelProviderId, benchmarkId);
+      return next;
+    });
+  }
+
+  async deleteBenchmark(benchmark: ModelProviderBenchmark): Promise<void> {
+    const confirmed = window.confirm(
+      `Delete the benchmark run from ${this.formatBenchmarkTimestamp(benchmark.recorded_at)}? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    this.benchmarkDeletingId.set(benchmark.id);
+    this.benchmarkDeleteError.set(null);
+    try {
+      await this.modelService.deleteBenchmark(benchmark.id);
+      this.selectedBenchmarkIds.update(current => {
+        const next = new Map(current);
+        next.delete(benchmark.model_provider_id);
+        return next;
+      });
+      await this.loadPerformance(this.modelId(), true);
+    } catch {
+      this.benchmarkDeleteError.set('Could not delete the selected benchmark run.');
+    } finally {
+      this.benchmarkDeletingId.set(null);
+    }
+  }
+
+  private schedulePerformancePoll(): void {
+    this.clearPerformancePoll();
+    if (this.destroyed) {
+      return;
+    }
+    const hasActiveRun = this.benchmarkRuns().some(run => this.isBenchmarkActive(run));
+    if (!hasActiveRun && this.activeTab() !== 'performance') {
+      return;
+    }
+    this.performancePollTimer = setTimeout(() => {
+      void this.loadPerformance(this.modelId(), true);
+    }, hasActiveRun ? 2500 : 15000);
+  }
+
+  private clearPerformancePoll(): void {
+    if (this.performancePollTimer !== null) {
+      clearTimeout(this.performancePollTimer);
+      this.performancePollTimer = null;
+    }
+  }
+
 
   // ==========================================================================
   // Navigation
@@ -530,6 +766,87 @@ export class ModelErrorReport implements OnInit {
 
   setTab(tab: ModelErrorTab): void {
     this.activeTab.set(tab);
+    if (tab === 'performance') {
+      void this.loadPerformance(this.modelId(), true);
+    } else {
+      this.schedulePerformancePoll();
+    }
+  }
+
+  formatDuration(milliseconds: number | null): string {
+    if (milliseconds === null || !Number.isFinite(milliseconds)) return '—';
+    if (milliseconds < 1) return '<1 ms';
+    if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+    const seconds = milliseconds / 1000;
+    return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} s`;
+  }
+
+  formatBenchmarkDuration(
+    metric: GuideLlmStatusDistributionSummary | undefined,
+    percentile: 'p50' | 'p95' | 'p99' | 'p100',
+    unit: 'milliseconds' | 'seconds' = 'milliseconds',
+  ): string {
+    const value = percentile === 'p100'
+      ? metric?.successful.max ?? null
+      : metric?.successful.percentiles[percentile] ?? null;
+    return this.formatDuration(value === null || unit === 'milliseconds' ? value : value * 1000);
+  }
+
+  formatBenchmarkRate(
+    metric: GuideLlmStatusDistributionSummary | undefined,
+    statistic: 'mean' | 'p50' | 'p95',
+  ): string {
+    const value = statistic === 'mean'
+      ? metric?.successful.mean
+      : metric?.successful.percentiles[statistic];
+    return value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(1)} tok/s`;
+  }
+
+  formatBenchmarkTimestamp(timestamp: string): string {
+    return new Date(timestamp).toLocaleString(undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZoneName: 'short',
+    });
+  }
+
+  benchmarkProfile(benchmark: ModelProviderBenchmark): string {
+    const benchmarkConfig = benchmark.configuration['benchmark'];
+    if (this.isRecord(benchmarkConfig)) {
+      const profile = benchmarkConfig['profile'];
+      if (this.isRecord(profile) && typeof profile['kind'] === 'string') {
+        return profile['kind'];
+      }
+      if (typeof benchmarkConfig['kind'] === 'string') {
+        return benchmarkConfig['kind'];
+      }
+    }
+
+    const scenario = benchmark.configuration['scenario'];
+    if (this.isRecord(scenario)) {
+      const profile = scenario['profile'];
+      if (this.isRecord(profile) && typeof profile['kind'] === 'string') {
+        return profile['kind'];
+      }
+    }
+
+    return 'GuideLLM';
+  }
+
+  configurationRows(benchmark: ModelProviderBenchmark) {
+    return benchmarkConfigurationRows(benchmark);
+  }
+
+  servingCommand(benchmark: ModelProviderBenchmark): string | null {
+    return servingCommand(benchmark);
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
   }
 
   toggleProcess(id: number): void {
