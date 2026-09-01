@@ -83,13 +83,17 @@ def test_has_cold_queued_entries_clears_after_dequeue():
 
 
 class TestBackgroundAppOrdering:
-    """Within one priority level, background-app entries dispatch first.
+    """Within one priority level, background-app entries dispatch in a
+    bounded interleave with regular ones: one flagged, then two regular,
+    repeating, each class in arrival order.
 
     The flag marks the ``x-app: cli-bg`` traffic (an agent's background
     calls, e.g. its auto-permission classifier) that a full queue of
     interactive traffic would otherwise starve for the whole wait window.
-    Everything the flag does not name keeps plain arrival order, so this
-    only reorders the traffic it recognises.
+    The interleave gives it a fast lane without letting a steady flagged
+    stream starve ordinary same-priority traffic: regular entries are
+    guaranteed 2 of every 3 dispatch slots, so the worst-case wait behind
+    a continuous flagged stream is two dispatches, not the whole queue.
     """
 
     def test_background_app_dequeues_before_older_regular_entry(self):
@@ -105,7 +109,20 @@ class TestBackgroundAppOrdering:
         mgr.enqueue(DummyTask("r2"), model_id=5, priority=Priority.NORMAL)
         mgr.enqueue(DummyTask("b1"), model_id=5, priority=Priority.NORMAL, background_app=True)
         mgr.enqueue(DummyTask("b2"), model_id=5, priority=Priority.NORMAL, background_app=True)
-        assert [mgr.dequeue(5).get_id() for _ in range(4)] == ["b1", "b2", "r1", "r2"]
+        # Interleave: flagged b1 first, then two regular (r1, r2), then the
+        # next flagged (b2) — each class in arrival order.
+        assert [mgr.dequeue(5).get_id() for _ in range(4)] == ["b1", "r1", "r2", "b2"]
+
+    def test_flagged_stream_cannot_starve_regular_traffic(self):
+        mgr = PriorityQueueManager()
+        for i in range(1, 5):
+            mgr.enqueue(DummyTask(f"b{i}"), model_id=5, priority=Priority.NORMAL, background_app=True)
+        mgr.enqueue(DummyTask("r1"), model_id=5, priority=Priority.NORMAL)
+        mgr.enqueue(DummyTask("r2"), model_id=5, priority=Priority.NORMAL)
+        # The two regular entries dispatch before the second flagged one, no
+        # matter how long the flagged stream in front of them is: the
+        # interleave bounds their wait at two dispatches.
+        assert [mgr.dequeue(5).get_id() for _ in range(6)] == ["b1", "r1", "r2", "b2", "b3", "b4"]
 
     def test_priority_still_dominates_the_flag(self):
         mgr = PriorityQueueManager()

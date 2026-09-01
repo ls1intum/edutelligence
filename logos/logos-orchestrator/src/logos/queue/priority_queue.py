@@ -12,13 +12,15 @@ it. The kwarg pattern lets callers be migrated gradually. Enqueue and
 aggregate metrics ignore it; dequeue uses it only to keep provider-affine
 entries on their required worker.
 
-Within one priority level entries flagged ``background_app`` dispatch before
-all others, which keep plain arrival order (FIFO). The flag marks trusted
-background app traffic — an agent's background calls, e.g. its
+Within one priority level flagged ``background_app`` entries and regular
+entries dispatch in a bounded interleave — one flagged, then two regular,
+repeating (see ``_dispatch_position``) — each class in arrival order. The
+flag marks background app traffic — an agent's background calls, e.g. its
 auto-permission classifier — that a full queue of interactive traffic would
-otherwise starve for the whole wait window. Anything the flag does not name
-sorts exactly as it always has, so the reordering only touches the traffic it
-recognises.
+otherwise starve for the whole wait window; the interleave gives it a fast
+lane without letting a steady flagged stream starve ordinary same-priority
+traffic in return. Unflagged traffic keeps exactly its old relative order,
+so the reordering only touches the flagged entries.
 """
 
 import heapq
@@ -31,14 +33,45 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from logos.queue.models import Priority, QueueEntry, QueueStatePerPriority
 
+# Bounded dispatch interleave inside one priority level: each cycle admits
+# this many background-app entries followed by this many regular ones
+# (F R R | F R R | ...). The flag buys a fast lane, not a monopoly — a
+# steady flagged stream can never occupy more than
+# ``_BACKGROUND_APP_PER_CYCLE`` of every ``_BACKGROUND_APP_PER_CYCLE +
+# _REGULAR_PER_CYCLE`` dispatch slots, so self-identification via
+# ``x-app: cli-bg`` cannot starve a same-priority queue.
+_BACKGROUND_APP_PER_CYCLE = 1
+_REGULAR_PER_CYCLE = 2
+
 
 def _bg_sort_key(background_app: bool) -> int:
-    """Heap key for the background-app ordering inside one priority level.
-
-    0 sorts before 1: flagged entries dispatch first, everything else keeps
-    its arrival order among itself.
-    """
+    """Heap key for the background-app class ordering inside one priority
+    level. 0 sorts before 1, which keeps the heap minimum equal to the
+    dispatch head (``peek`` relies on it); the flagged/regular interleave
+    itself is applied at dequeue time (``_dispatch_position``)."""
     return 0 if background_app else 1
+
+
+def _dispatch_position(background_app: bool, rank: int) -> int:
+    """Interleaved dispatch slot of the ``rank``-th (0-based) entry of its
+    class within a priority level.
+
+    Cycles of ``_BACKGROUND_APP_PER_CYCLE`` flagged entries followed by
+    ``_REGULAR_PER_CYCLE`` regular ones (F R R F R R ...). Each class keeps
+    its own arrival order, and the cycle shape is what bounds the flag's
+    benefit: ordinary traffic is guaranteed ``_REGULAR_PER_CYCLE`` of every
+    ``_BACKGROUND_APP_PER_CYCLE + _REGULAR_PER_CYCLE`` dispatch slots even
+    against a continuous flagged stream.
+    """
+    cycle = _BACKGROUND_APP_PER_CYCLE + _REGULAR_PER_CYCLE
+    if background_app:
+        return rank * cycle
+    return (rank // _REGULAR_PER_CYCLE) * cycle + _BACKGROUND_APP_PER_CYCLE + (rank % _REGULAR_PER_CYCLE)
+
+
+def _slot_of(heap_item: Tuple[int, int, float, str, QueueEntry]) -> int:
+    """Dispatch slot of a heap item: class (``bg_key``) + its arrival rank."""
+    return _dispatch_position(heap_item[1] == 0, heap_item[4].dispatch_rank)
 
 
 class PriorityQueueManager:
@@ -59,8 +92,9 @@ class PriorityQueueManager:
       provider without splitting the model-wide queue.
     - Backward-compatible: every method that previously accepted
       ``provider_id`` still accepts it; unpinned behavior stays model-wide.
-    - Within a priority level: background-app entries first, then arrival
-      time (FIFO for the rest, see ``_bg_sort_key``).
+    - Within a priority level: bounded interleave of background-app and
+      regular entries, each class in arrival order (see
+      ``_dispatch_position``).
     """
 
     def __init__(self):
@@ -78,6 +112,15 @@ class PriorityQueueManager:
 
         self._lock = RLock()
         self._entry_counter = 0
+
+        # Next arrival rank per (model_id, priority, class) — the basis for
+        # the dispatch interleave (``_dispatch_position``). The rank is fixed
+        # at enqueue and stays with the entry, so a dispatched entry's slot
+        # stays burned: a steady flagged stream cannot take the flagged head
+        # slot over and over.
+        self._dispatch_rank_counters: Dict[int, Dict[Priority, List[int]]] = defaultdict(
+            lambda: defaultdict(lambda: [0, 0])
+        )
 
         logging.info("PriorityQueueManager initialized (model-only queue)")
 
@@ -97,14 +140,18 @@ class PriorityQueueManager:
         ``provider_affinity`` is set, any provider with capability for
         ``model_id`` can later dispatch this task.
 
-        ``background_app`` marks trusted background app traffic (see
-        ``logos.pipeline.pipeline.is_background_app``): the entry dispatches
-        before non-background entries of the same priority level, which keep
-        plain arrival order.
+        ``background_app`` marks background app traffic (see
+        ``logos.pipeline.pipeline.is_background_app``): the entry takes its
+        place in the bounded interleave ahead of a queue of regular entries,
+        without monopolising dispatch (see ``_dispatch_position``).
         """
         with self._lock:
             self._entry_counter += 1
             entry_id = f"qe-{model_id}-{self._entry_counter}-{uuid.uuid4().hex[:8]}"
+
+            bg_key = _bg_sort_key(background_app)
+            dispatch_rank = self._dispatch_rank_counters[model_id][priority][bg_key]
+            self._dispatch_rank_counters[model_id][priority][bg_key] += 1
 
             entry = QueueEntry(
                 entry_id=entry_id,
@@ -116,6 +163,7 @@ class PriorityQueueManager:
                 is_cold_at_queue=is_cold_at_queue,
                 background_app=background_app,
                 provider_affinity=provider_affinity,
+                dispatch_rank=dispatch_rank,
             )
 
             heap_entry = (
@@ -182,18 +230,17 @@ class PriorityQueueManager:
         if not queue:
             return None, None
 
-        # First eligible entry in dispatch order (priority, background first,
-        # then arrival): pinned entries only match their required provider.
-        eligible_index = next(
-            (
-                index
-                for index, (_, _bg_key, _, candidate) in sorted(enumerate(queue), key=lambda item: item[1][:3])
-                if provider_id is None or candidate.provider_affinity in (None, provider_id)
-            ),
-            None,
-        )
-        if eligible_index is None:
+        # Dispatch order within this priority level: bounded interleave of
+        # background-app and regular entries (``_dispatch_position``), each
+        # class ranked by its arrival rank, which is fixed at enqueue so the
+        # slots of dispatched entries stay burned. Pinned entries only match
+        # their required provider.
+        # The slot is unique per entry (ranked classes, disjoint slot sets),
+        # so the minimum is a well-defined dispatch head.
+        eligible = [item for item in queue if provider_id is None or item[4].provider_affinity in (None, provider_id)]
+        if not eligible:
             return None, None
+        eligible_index = queue.index(min(eligible, key=_slot_of))
 
         _neg_pri, _bg_key, _ts, entry_id, entry = queue[eligible_index]
         if eligible_index == 0:
@@ -252,6 +299,12 @@ class PriorityQueueManager:
                 return False
 
             entry_to_move.escalate(new_priority)
+            # The interleave rank is per (model, priority, class): an
+            # escalation is a fresh arrival at the new level, exactly like
+            # the re-stamped enqueue time.
+            bg_key = _bg_sort_key(entry_to_move.background_app)
+            entry_to_move.dispatch_rank = self._dispatch_rank_counters[model_id][new_priority][bg_key]
+            self._dispatch_rank_counters[model_id][new_priority][bg_key] += 1
 
             heap_entry = (
                 -int(new_priority),

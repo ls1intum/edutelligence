@@ -157,6 +157,57 @@ async def test_execute_resource_mode_queue_timeout_job_gets_retryable_body(monke
     assert out["status_code"] == 429
     assert out["data"]["error"]["type"] == "rate_limit_error"
     assert "timeout" in out["data"]["error"]["message"].lower()
+    # The header rides along in the job result so the polling endpoint can
+    # re-serve it (a fresh JSONResponse in get_job_status would drop it).
+    assert out["headers"] == {"Retry-After": str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)}
+
+
+async def test_get_job_status_forwards_stored_429_headers(monkeypatch):
+    """A job result that stored a 429 with Retry-After re-serves the header
+    when the client polls, instead of building a bare JSONResponse."""
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_user_by_api_key(self, key_value):
+            return None
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(main, "authenticate_api_key", lambda headers: MagicMock(api_key_id=1, team_id=7))
+    monkeypatch.setattr(
+        main,
+        "JobService",
+        type(
+            "J",
+            (),
+            {
+                "fetch": staticmethod(
+                    lambda job_id: {
+                        "api_key_id": 1,
+                        "team_id": 7,
+                        "status": main.JobStatus.SUCCESS.value,
+                        "result_payload": {
+                            "status_code": 429,
+                            "data": {"error": "Queue wait timeout after 280s"},
+                            "headers": {"Retry-After": str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)},
+                        },
+                        "error_message": None,
+                        "created_at": None,
+                        "updated_at": None,
+                    }
+                )
+            },
+        ),
+        raising=False,
+    )
+
+    response = await main.get_job_status(42, MagicMock(headers={}))
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)
 
 
 async def test_execute_resource_mode_forwards_api_key_priority_to_pipeline(monkeypatch):

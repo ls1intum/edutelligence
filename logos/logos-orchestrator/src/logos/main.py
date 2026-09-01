@@ -4463,6 +4463,7 @@ async def _execute_resource_mode(
     skip_laura: bool = False,
     priority: int = 1,
     required_provider_id: Optional[int] = None,
+    ingress_at: Optional[float] = None,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -4521,6 +4522,7 @@ async def _execute_resource_mode(
         # policy-level priority inside the pipeline.
         default_priority=auth.default_priority,
         api_key_id=auth.api_key_id,
+        ingress_at=ingress_at,
     )
 
     # Process through classification and scheduling
@@ -4551,7 +4553,13 @@ async def _execute_resource_mode(
             # in that second group.
             if is_async_job:
                 _, err_body = coerce_upstream_error(429, {"error": error_msg})
-                return {"status_code": 429, "data": err_body}
+                return {
+                    "status_code": 429,
+                    "data": err_body,
+                    # Carried through the job result so the polling endpoint
+                    # can re-serve the header (see get_job_status).
+                    "headers": {"Retry-After": str(_QUEUE_TIMEOUT_RETRY_AFTER_S)},
+                }
             raise HTTPException(
                 status_code=429,
                 detail=error_msg,
@@ -4589,6 +4597,7 @@ async def _execute_resource_mode(
                     return {
                         "status_code": 429,
                         "data": {"error": f"Rate limit exceeded: {reason}"},
+                        "headers": {"Retry-After": str(RateLimitConfig.window_seconds)},
                     }
                 # Retry-After: the limiter uses a sliding 60s window, so the
                 # budget is guaranteed to have room again after one window.
@@ -4721,6 +4730,7 @@ async def route_and_execute(
     request_id: Optional[str] = None,
     priority: int = 1,
     required_provider_id: Optional[int] = None,
+    ingress_at: Optional[float] = None,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -4818,6 +4828,7 @@ async def route_and_execute(
                 request_path=path,
                 priority=priority,
                 required_provider_id=required_provider_id,
+                ingress_at=ingress_at,
             )
         return response
     except HTTPException as exc:
@@ -5104,6 +5115,11 @@ async def handle_sync_request(path: str, request: Request):
     priority is derived from the authenticated API key's default_priority
     (falling back to the policy-level priority inside the pipeline).
     """
+    # The queue-wait window is a whole-request budget: stamp ingress before
+    # auth/DB/reconnect work so the scheduler only waits with the client
+    # budget that is still left (see remaining_queue_wait_s).
+    ingress_at = time.monotonic()
+
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
@@ -5167,6 +5183,7 @@ async def handle_sync_request(path: str, request: Request):
             log_id=log_id,
             request_id=request_id,
             required_provider_id=required_provider_id,
+            ingress_at=ingress_at,
         )
         response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)
         return response
@@ -6648,9 +6665,14 @@ async def get_job_status(job_id: int, request: Request):
         if isinstance(job_status_code, int) and job_status_code >= 400:
             job_data = result_payload.get("data") or {}
             corrected_sc, error_body = coerce_upstream_error(job_status_code, job_data)
+            # Re-serve the headers the job result carried (e.g. Retry-After
+            # on a 429) — a fresh JSONResponse would drop them.
+            stored_headers = result_payload.get("headers")
+            headers = stored_headers if isinstance(stored_headers, dict) else None
             return JSONResponse(
                 content={**return_payload, "result": None, "error": error_body},
                 status_code=corrected_sc,
+                headers=headers,
             )
 
     if job["status"] == JobStatus.FAILED.value and job.get("error_message"):

@@ -80,9 +80,16 @@ class SchedulingRequest:
     # prefix-cache-aware placement; empty/None means "route as before".
     affinity_keys: Optional[List[str]] = None
     # True when the request carried the ``x-app: cli-bg`` header: background
-    # app traffic (e.g. an agent's auto-permission classifier call) that the
-    # queue dispatches ahead of other traffic at the same priority level.
+    # app traffic (e.g. an agent's auto-permission classifier call) that gets
+    # bounded precedence at the same priority level — the dispatch interleave
+    # keeps a fast lane for it without letting a steady flagged stream starve
+    # ordinary same-priority traffic.
     background_app: bool = False
+    # Remaining queue-wait budget for this request: the whole-request client
+    # window minus the time already spent before enqueue (None = no ingress
+    # stamp, plain window). The scheduler caps its wait at this value so the
+    # queue-timeout 429 still beats the client's watchdog.
+    queue_wait_budget_s: Optional[float] = None
 
 
 class SchedulerInterface(ABC):

@@ -803,6 +803,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             timeout = (
                 request.timeout_s if request.timeout_s else global_timeout_s(DEFAULT_QUEUE_WAIT_TIMEOUT_S)
             )  # bounded queue wait (or LOGOS_TIMEOUT_S)
+            if request.queue_wait_budget_s is not None:
+                # Absolute client budget: pre-queue work (auth, worker
+                # reconnect wait, classification) already spent part of the
+                # window, so only the remainder may be spent waiting here.
+                timeout = min(timeout, request.queue_wait_budget_s)
             result = await asyncio.wait_for(future, timeout=timeout)
 
             # Attach ETTFT info to the dequeued result (decision-time values:

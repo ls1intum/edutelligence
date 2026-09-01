@@ -2,10 +2,11 @@
 
 Claude Code's background agents mark their traffic with the ``x-app: cli-bg``
 header. The pipeline derives ``SchedulingRequest.background_app`` from it and
-the queue dispatches flagged entries ahead of other traffic at the same
-priority level — latency-sensitive calls (an agent's auto-permission
-classifier) must not wait out a full queue of interactive traffic — while
-unrecognised traffic keeps plain arrival order.
+the queue gives flagged entries bounded precedence at the same priority
+level — a 1-flagged : 2-regular dispatch interleave, so a latency-sensitive
+call (an agent's auto-permission classifier) does not wait out a full queue
+of interactive traffic, but a steady flagged stream cannot starve it either
+— while unrecognised traffic keeps plain arrival order.
 """
 
 import asyncio

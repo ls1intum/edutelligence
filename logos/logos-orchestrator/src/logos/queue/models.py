@@ -106,13 +106,22 @@ class QueueEntry:
     """True when the request arrived with the ``x-app: cli-bg`` header:
     background app traffic (e.g. an agent's auto-permission classifier call)
     that is latency-sensitive and must not wait out a full queue of
-    interactive traffic. Within one priority level such entries dispatch
-    before the rest, which keep plain arrival order (see
-    PriorityQueueManager)."""
+    interactive traffic. Within one priority level such entries dispatch in
+    a bounded interleave with the rest — one flagged entry per two regular
+    (see PriorityQueueManager) — so the flag buys a fast lane, not a
+    monopoly."""
 
     provider_affinity: int | None = None
     """When set, only this provider may dispatch the entry. Normal requests
     leave this unset and retain the model-wide, cross-provider queue behavior."""
+
+    dispatch_rank: int = 0
+    """Arrival rank within (model, priority, background-app class), assigned
+    at enqueue and fixed for the entry's lifetime. The basis for the bounded
+    dispatch interleave (see PriorityQueueManager): the rank is not
+    recomputed among the surviving entries, so the slots of dispatched
+    entries stay burned and a steady flagged stream cannot hold the flagged
+    head slot."""
 
     @property
     def wait_time_seconds(self) -> float:

@@ -16,7 +16,7 @@ from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority
-from logos.timeouts import global_timeout_s
+from logos.timeouts import global_timeout_s, remaining_queue_wait_s
 
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
@@ -62,8 +62,10 @@ def is_background_app(headers: Dict[str, str]) -> bool:
     ``x-app: cli-bg`` for its background agents; only the latter is
     flagged. Those background calls (e.g. the auto-permission classifier)
     are latency-sensitive — they block the agent's next step — so the queue
-    dispatches them ahead of other traffic at the same priority level
-    (``SchedulingRequest.background_app``). The comparison is
+    gives them bounded precedence at the same priority level
+    (``SchedulingRequest.background_app``): the dispatch interleave keeps a
+    fast lane for them without letting a steady flagged stream starve
+    ordinary same-priority traffic. The comparison is
     case-insensitive in both name and value, as HTTP headers are.
     """
     for name, value in headers.items():
@@ -100,6 +102,10 @@ class PipelineRequest:
     # Calling API key. Seeds the prefix-affinity hash so two keys never share
     # a stream identity, and so one key's parallel agent loops stay separate.
     api_key_id: Optional[int] = None
+    # time.monotonic() stamp of request ingress (sync path only). The queue
+    # wait is capped at the client window minus the time already spent before
+    # enqueue, so the queue-timeout 429 still beats the client's watchdog.
+    ingress_at: Optional[float] = None
 
 
 @dataclass
@@ -232,6 +238,7 @@ class RequestPipeline:
             required_provider_id=request.required_provider_id,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
             background_app=is_background_app(request.headers),
+            queue_wait_budget_s=remaining_queue_wait_s(request.ingress_at),
         )
 
         # Record enqueue
