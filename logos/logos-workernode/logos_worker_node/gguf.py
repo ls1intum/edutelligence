@@ -157,6 +157,13 @@ _PREFERRED_QUANTS: tuple[str, ...] = (
 # org/name (dots allowed) plus a colon and a quant token.
 _REMOTE_GGUF_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*:[A-Za-z0-9_+-]+$")
 
+# repo/file.gguf — the same two org/name segments as above plus a file name
+# without path separators. Local paths (/abs, ./, ../) are filesystem checks,
+# not Hub references, and deeper repo paths cannot be inverted to a repo id —
+# classifying either as remote would chase a Hub snapshot the file will never
+# come from.
+_REMOTE_GGUF_FILE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*/[^/]+\.gguf$")
+
 # Multi-file shard suffix: …-Q4_K_M-00001-of-00004.gguf
 _SHARD_SUFFIX_RE = re.compile(r"-\d+-of-\d+$")
 
@@ -164,6 +171,12 @@ _SHARD_SUFFIX_RE = re.compile(r"-\d+-of-\d+$")
 # matches the trailing …-00001-of-00004, so this also covers the
 # …-00001-of-00002-Q4_K_M.gguf layout where the quant comes last).
 _SHARD_INDEX_RE = re.compile(r"-\d+-of-\d+")
+
+
+def _shard_marker_parts(marker: str) -> tuple[int, int]:
+    """(index, total) of a ``-<index>-of-<total>`` shard marker."""
+    index, total = marker.split("-of-", 1)
+    return int(index.lstrip("-")), int(total)
 
 
 def is_valid_gguf_quant_type(quant_type: str) -> bool:
@@ -217,10 +230,14 @@ def is_gguf_file_ref(model: str) -> bool:
 
 
 def is_remote_gguf_file_ref(model: str) -> bool:
-    """Whether *model* is a ``repo/file.gguf`` reference (not a local
-    ``/path/to/file.gguf``, whose presence is a plain filesystem check)."""
+    """Whether *model* is a ``namespace/repository/file.gguf`` reference.
+
+    Only the strict two-segment repository shape counts: local paths
+    (``/abs/…``, ``./…``, ``../…``) and deeper repo paths are not Hub
+    references, so they must not enter snapshot validation or Hub downloads.
+    """
     model = (model or "").strip()
-    return is_gguf_file_ref(model) and not model.startswith("/") and "/" in repo_id_of(model)
+    return bool(_REMOTE_GGUF_FILE_RE.fullmatch(model))
 
 
 def is_gguf_repo_name(model: str) -> bool:
@@ -449,11 +466,13 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
     repository directory:
 
     - ``repo:quant`` — the cached files carry the quant, complete: a
-      single-file quant needs its file, a sharded quant needs every shard of
-      its ``-N-of-M`` family (a partial download still counts as missing so
-      the idempotent prefetch completes it).
+      single-file quant needs its file, a sharded quant needs every index of
+      its ``-N-of-M`` family in one directory (a partial or path-scattered
+      download still counts as missing so the idempotent prefetch completes
+      it).
     - ``repo/file.gguf`` — the named file is cached; for a sharded name the
-      whole family, which the plugin's loader expands the first shard to.
+      whole family in one directory, which the plugin's loader expands the
+      first shard to.
 
     Returns True when the snapshot proves the reference loadable, False when
     the active snapshot is present but lacks the quant or file (a partial
@@ -470,8 +489,11 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
         return None
     if is_remote_gguf_ref(model):
         quant = model.rsplit(":", 1)[1].upper()
-        shard_total: int | None = None
-        shard_count = 0
+        # The loader reads a sharded quant from one directory, so every
+        # index 1..total must sit in a single path — shards scattered across
+        # directories (or duplicate indices filling a count) do not load.
+        indices_by_dir: dict[str, set[int]] = {}
+        shard_total = 0
         for name, _ in listing:
             base = name.rsplit("/", 1)[-1]
             if "mmproj" in base.lower() or quant_from_filename(base) != quant:
@@ -480,18 +502,82 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
             if shard is None:
                 # A non-sharded file of the quant is a complete model.
                 return True
-            shard_count += 1
-            shard_total = int(shard.group(0).rsplit("-of-", 1)[1])
-        return shard_total is not None and shard_count == shard_total
+            index, shard_total = _shard_marker_parts(shard.group(0))
+            directory = name.rsplit("/", 1)[0] if "/" in name else ""
+            indices_by_dir.setdefault(directory, set()).add(index)
+        return any(all(index in indices for index in range(1, shard_total + 1)) for indices in indices_by_dir.values())
     requested = model.rsplit("/", 1)[1].lower()
-    names = [name.rsplit("/", 1)[-1].lower() for name, _ in listing]
     shard = _SHARD_INDEX_RE.search(requested)
     if shard is None:
-        return requested in names
-    total = int(shard.group(0).rsplit("-of-", 1)[1])
+        # Membership check: the named file anywhere in the snapshot.
+        return requested in {name.rsplit("/", 1)[-1].lower() for name, _ in listing}
     key = _SHARD_INDEX_RE.sub("-of-", requested)
-    siblings = [name for name in names if _SHARD_INDEX_RE.sub("-of-", name) == key]
-    return len(siblings) >= total
+    _, total = _shard_marker_parts(shard.group(0))
+    # The loader reads the family from the directory it finds the requested
+    # file in, so every index 1..total must sit in ONE directory — shards
+    # across paths or duplicate indices inflating a basename count do not
+    # make the model loadable.
+    indices_by_dir: dict[str, set[int]] = {}
+    for name, _ in listing:
+        lowered = name.lower()
+        base = lowered.rsplit("/", 1)[-1]
+        if _SHARD_INDEX_RE.sub("-of-", base) != key:
+            continue
+        index, _ = _shard_marker_parts(_SHARD_INDEX_RE.search(base).group(0))
+        directory = lowered.rsplit("/", 1)[0] if "/" in lowered else ""
+        indices_by_dir.setdefault(directory, set()).add(index)
+    return any(all(index in indices for index in range(1, total + 1)) for indices in indices_by_dir.values())
+
+
+def gguf_capability_target(
+    hf_home: str | None,
+    model: str,
+    pinned_quant: str = "",
+) -> str | None:
+    """The concrete reference a GGUF capability's cache check must prove.
+
+    Feeds :func:`is_gguf_ref_cached`, which the caller applies to the result:
+
+    - explicit references (``repo:quant`` / ``repo/file.gguf``) → themselves;
+    - a bare ``…-GGUF`` repository → ``<repo>:<quant>`` with the operator
+      pin when it is a valid quant, else the quant the spec resolver
+      auto-selects from the active cached listing — the one the lane will
+      actually serve;
+    - the bare repository itself when the listing cannot prove a target
+      (unresolvable, or holding only auxiliary files):
+      :func:`is_gguf_ref_cached` reports that as not cached, so the
+      capability stays missing and the prefetch can (re)build it;
+    - ``None`` when the model is not a GGUF concern (plain model, local
+      path, or a repository whose authoritative listing holds no GGUF files
+      at all — the resolver serves that as a plain model) — the caller
+      applies its regular directory check.
+    """
+    model = (model or "").strip()
+    if is_remote_gguf_ref(model) or is_remote_gguf_file_ref(model):
+        return model
+    if not is_gguf_repo_name(model):
+        return None
+    pinned = (pinned_quant or "").strip()
+    if pinned:
+        # A pin the plugin would reject cannot load either way, so it
+        # changes nothing the cache check can prove — the directory check
+        # stands and the lane fails at spawn with the plugin's own error.
+        if not is_remote_gguf_ref(f"{model}:{pinned}"):
+            return None
+        return f"{model}:{pinned}"
+    listing = list_cached_gguf_files(hf_home, model)
+    if not listing:
+        # An authoritative EMPTY listing makes the resolver serve the repo
+        # as a plain model (the directory check is the right proof); an
+        # absent listing (None) proves nothing (the bare repo stays missing).
+        return None if listing is not None else model
+    quant = select_quant(candidate_quants(listing))
+    if quant:
+        return f"{model}:{quant}"
+    # Cached but holding no backbone quant: the resolver fails the lane on
+    # this listing, so the capability must stay missing — not be excused by
+    # the repository directory alone.
+    return model
 
 
 def effective_hf_home(explicit: str | None, default: str = "") -> str:

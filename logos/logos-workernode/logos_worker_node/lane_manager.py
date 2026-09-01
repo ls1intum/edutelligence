@@ -365,10 +365,11 @@ class LaneManager:
         For each model, checks if it exists in the HF cache or models path.
         A GGUF model whose serve target is concrete — an explicit
         ``repo:quant`` / ``repo/file.gguf`` reference, or a bare GGUF
-        repository with an operator-pinned ``gguf_quant`` from *gguf_quants*
-        (the same model_overrides the lane's spec resolution applies) — is
-        checked for that quant or file in the active snapshot, because a
-        partial snapshot of the same repository does not prove it loadable.
+        repository (whose served quant is its operator pin from *gguf_quants*,
+        else the one auto-selected from the cached listing, exactly as the
+        lane's spec resolution decides) — is checked for that quant or file,
+        complete, in the active snapshot, because a partial snapshot of the
+        same repository does not prove it loadable.
         Returns a list of models that could NOT be found (warnings only,
         doesn't block startup).
         """
@@ -379,8 +380,9 @@ class LaneManager:
         missing = []
         # Same HF cache root the startup prefetch populates (.hf_cache), so a
         # freshly prefetched model is found; a different default here would
-        # flag prefetched models as missing.
-        hf_home = os.environ.get("HF_HOME", os.path.join(self._global_config.models_path, ".hf_cache"))
+        # flag prefetched models as missing. A blank/whitespace HF_HOME falls
+        # back too — a relative "hub" path would ignore every cached weight.
+        hf_home = gguf.effective_hf_home(None, os.path.join(self._global_config.models_path, ".hf_cache"))
         models_path = self._global_config.models_path
         for model_name in capabilities_models:
             # Check HF cache (transformers style: models--org--name). Keyed on
@@ -389,28 +391,20 @@ class LaneManager:
             hf_cache_dir = os.path.join(hf_home, "hub", gguf.hf_cache_dir_name(model_name))
             # Check direct model path
             direct_path = os.path.join(models_path, model_name)
-            # The concrete reference the lane serves with, when one is pinned
-            # down: an explicit reference names it itself, a bare GGUF
-            # repository takes its operator gguf_quant (the spec resolver
-            # serves exactly that quant). Without a pin, the quant is chosen
-            # from the cached listing at spawn, so the directory check stands.
-            served_ref = ""
-            if gguf.is_remote_gguf_ref(model_name) or gguf.is_remote_gguf_file_ref(model_name):
-                served_ref = model_name
-            elif gguf.is_gguf_repo_name(model_name):
-                pinned = (gguf_quants or {}).get(model_name, "").strip()
-                # A quant the plugin would reject cannot load either way, so
-                # it changes nothing the cache check can prove.
-                if pinned and gguf.is_remote_gguf_ref(f"{model_name}:{pinned}"):
-                    served_ref = f"{model_name}:{pinned}"
-            if served_ref:
+            # What the cache must prove for this capability: the concrete
+            # reference the lane serves with (explicit references name it, a
+            # bare GGUF repository its pinned — else auto-selected — quant),
+            # or None when a plain directory check decides.
+            served_ref = gguf.gguf_capability_target(hf_home, model_name, (gguf_quants or {}).get(model_name, ""))
+            if served_ref is not None:
                 # A repository directory is not proof the model can load: Hugging
                 # Face snapshots can be partial (the prefetch stores only the
                 # quants its models selected), so the reference must resolve to
-                # its concrete quant or file and find THAT in the active
-                # snapshot. A cache holding only a different quant of the same
-                # repo must stay missing, or the prefetch never downloads the
-                # quant the lane serves and the lane fails offline.
+                # its concrete quant or file — complete, in one path — and find
+                # THAT in the active snapshot. A cache holding only a different
+                # quant, or an unfinished shard family, of the same repo must
+                # stay missing, or the prefetch never downloads what the lane
+                # serves and the lane fails offline.
                 if gguf.is_gguf_ref_cached(hf_home, served_ref) is not True:
                     missing.append(model_name)
                     logger.warning(

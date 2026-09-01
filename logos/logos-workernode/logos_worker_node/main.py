@@ -377,6 +377,17 @@ def _log_storage_layout(cfg) -> None:
     )
 
 
+def _startup_hf_home(cfg) -> str:
+    """HF cache root for startup cache work (RAM cache source, prefetch).
+
+    A blank/whitespace ``HF_HOME`` falls back to ``<models_path>/.hf_cache``
+    — the directory the startup prefetch populates and capability validation
+    checks — instead of a relative ``hub`` path under the working directory
+    that would ignore every cached weight.
+    """
+    return os.environ.get("HF_HOME", "").strip() or os.path.join(cfg.engines.ollama.models_path, ".hf_cache")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
@@ -426,7 +437,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # ── tmpfs RAM cache (created before calibration so models can be loaded
     # from RAM during VRAM measurement, then evicted to free space) ──────────
-    hf_home = os.environ.get("HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache"))
+    hf_home = _startup_hf_home(cfg)
     model_cache = create_model_cache(
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,

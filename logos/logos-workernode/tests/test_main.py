@@ -93,3 +93,23 @@ def test_download_one_model_explicit_quant_beats_operator_pin(tmp_path, monkeypa
     # The embedded quant (Q8_0), not the operator pin (Q4_K_M), is downloaded.
     assert all("q8_0" in pattern.lower() for pattern in kwargs["allow_patterns"])
     assert all("q4_k_m" not in pattern.lower() for pattern in kwargs["allow_patterns"])
+
+
+def test_startup_hf_home_blank_env_falls_back_to_models_path(tmp_path, monkeypatch) -> None:
+    # Regression: a blank/whitespace HF_HOME must fall back to
+    # <models_path>/.hf_cache — the directory the startup prefetch populates
+    # and capability validation checks — instead of resolving to a relative
+    # "hub" path under the working directory that ignores cached weights.
+    cfg = AppConfig()
+    cfg.engines.ollama.models_path = str(tmp_path / "models")
+    fallback = str(tmp_path / "models" / ".hf_cache")
+
+    monkeypatch.setenv("HF_HOME", "")
+    assert worker_main._startup_hf_home(cfg) == fallback
+    monkeypatch.setenv("HF_HOME", "   ")
+    assert worker_main._startup_hf_home(cfg) == fallback
+    monkeypatch.delenv("HF_HOME")
+    assert worker_main._startup_hf_home(cfg) == fallback
+    # A real value still wins.
+    monkeypatch.setenv("HF_HOME", "/explicit/hf")
+    assert worker_main._startup_hf_home(cfg) == "/explicit/hf"

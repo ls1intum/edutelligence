@@ -96,6 +96,13 @@ def test_is_remote_gguf_file_ref() -> None:
     assert gguf.is_remote_gguf_file_ref("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf") is True
     # A local path is a plain filesystem check, not a Hub reference.
     assert gguf.is_remote_gguf_file_ref("/models/Qwen3-8B-Q4_K_M.gguf") is False
+    # Relative local paths are not Hub references either — repo_id_of() would
+    # return "./models" and the worker would chase a Hub snapshot the file
+    # will never come from.
+    assert gguf.is_remote_gguf_file_ref("./models/model.gguf") is False
+    assert gguf.is_remote_gguf_file_ref("../models/model.gguf") is False
+    # A deeper path is not invertible to a repo id either.
+    assert gguf.is_remote_gguf_file_ref("unsloth/Qwen3-8B-GGUF/quants/model.gguf") is False
     # No repository component (or not a file at all) → not remote.
     assert gguf.is_remote_gguf_file_ref("Qwen3-8B.gguf") is False
     assert gguf.is_remote_gguf_file_ref("unsloth/Qwen3-8B-GGUF") is False
@@ -417,6 +424,79 @@ def test_is_gguf_ref_cached_sharded_quant_needs_all_shards(tmp_path: Path) -> No
         ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "Qwen3-8B-Q4_K_M-00002-of-00002.gguf"],
     )
     assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
+
+
+def test_is_gguf_ref_cached_sharded_file_ref_family_must_be_in_one_path(tmp_path: Path) -> None:
+    # Shards of the same family split across directories — or duplicate
+    # indices inflating a basename count — do not make the model loadable:
+    # the loader reads the family from the one path it finds it in.
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "quants/Qwen3-8B-Q4_K_M-00001-of-00002.gguf"],
+    )
+    ref = "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M-00001-of-00002.gguf"
+    assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is False
+    # A complete family in ONE directory satisfies the reference, even with
+    # the stray shard of another directory left behind.
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "Qwen3-8B-Q4_K_M-00002-of-00002.gguf"],
+    )
+    assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is True
+
+
+def test_is_gguf_ref_cached_sharded_quant_family_must_be_in_one_path(tmp_path: Path) -> None:
+    # Same completeness rule for a sharded QUANT: the indices must sit in a
+    # single directory, not scattered across paths.
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "quants/Qwen3-8B-Q4_K_M-00002-of-00002.gguf"],
+    )
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is False
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "Qwen3-8B-Q4_K_M-00002-of-00002.gguf"],
+    )
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
+
+
+# ---------------------------------------------------------------------------
+# gguf_capability_target — the concrete reference a capability cache check proves
+# ---------------------------------------------------------------------------
+
+
+def test_gguf_capability_target_shapes(tmp_path: Path) -> None:
+    _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M.gguf"])
+    # Explicit references validate themselves …
+    assert gguf.gguf_capability_target(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q8_0") == "unsloth/Qwen3-8B-GGUF:Q8_0"
+    assert (
+        gguf.gguf_capability_target(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf")
+        == "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf"
+    )
+    # … a bare repository its operator pin …
+    assert gguf.gguf_capability_target(str(tmp_path), "unsloth/Qwen3-8B-GGUF", pinned_quant="Q8_0") == (
+        "unsloth/Qwen3-8B-GGUF:Q8_0"
+    )
+    # … an invalid pin changes nothing the check can prove (directory check) …
+    assert gguf.gguf_capability_target(str(tmp_path), "unsloth/Qwen3-8B-GGUF", pinned_quant="Q9_X") is None
+    # … else the quant the spec resolver auto-selects from the cached listing.
+    assert gguf.gguf_capability_target(str(tmp_path), "unsloth/Qwen3-8B-GGUF") == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    # Plain models and local paths are not a GGUF concern (directory check).
+    assert gguf.gguf_capability_target(str(tmp_path), "Qwen/Qwen3-8B") is None
+    assert gguf.gguf_capability_target(str(tmp_path), "/data/models/model.gguf") is None
+    # An unresolvable listing proves nothing — the bare repo must stay missing.
+    assert gguf.gguf_capability_target(str(tmp_path), "org/never-cached-GGUF") == "org/never-cached-GGUF"
+    # A cached repo without GGUF files serves as a plain model (directory
+    # check) … a cached repo holding only auxiliary files cannot resolve a
+    # quant (stays missing).
+    _write_gguf(tmp_path, "org/plain-GGUF", ["config.json"])
+    assert gguf.gguf_capability_target(str(tmp_path), "org/plain-GGUF") is None
+    _write_gguf(tmp_path, "org/aux-only-GGUF", ["tokenizer.gguf"])
+    assert gguf.gguf_capability_target(str(tmp_path), "org/aux-only-GGUF") == "org/aux-only-GGUF"
 
 
 # ---------------------------------------------------------------------------

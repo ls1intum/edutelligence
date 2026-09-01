@@ -169,6 +169,78 @@ def test_validate_capabilities_bare_repo_pinned_quant(tmp_path: Path, monkeypatc
     assert other.validate_capabilities(["org/model-GGUF"], gguf_quants={"org/model-GGUF": "Q8_0"}) == []
 
 
+def test_validate_capabilities_bare_repo_incomplete_shards_report_missing(tmp_path: Path, monkeypatch) -> None:
+    # The no-pin partial-cache regression: an UNPINNED bare repository
+    # auto-selects its quant from the active listing, so that concrete
+    # quant must be validated — complete — in the snapshot. A cache holding
+    # only shard 1 of Q4_K_M must land in `missing` so the startup prefetch
+    # downloads the rest, not be accepted on the repository directory alone.
+    monkeypatch.delenv("HF_HOME", raising=False)
+    cache_root = tmp_path / "root"
+    (cache_root / "models").mkdir(parents=True)
+    manager = LaneManager(
+        OllamaConfig(models_path=str(cache_root / "models")),
+        lane_port_start=16081,
+        lane_port_end=16090,
+    )
+    _write_cached(cache_root / "models" / ".hf_cache", "org/model-GGUF", ["model-GGUF-Q4_K_M-00001-of-00002.gguf"])
+    # Auto-selected Q4_K_M is incomplete (1 of 2 shards) → missing …
+    assert manager.validate_capabilities(["org/model-GGUF"]) == ["org/model-GGUF"]
+    # … the complete family in one path stays available.
+    _write_cached(
+        cache_root / "models" / ".hf_cache",
+        "org/model-GGUF",
+        ["model-GGUF-Q4_K_M-00001-of-00002.gguf", "model-GGUF-Q4_K_M-00002-of-00002.gguf"],
+    )
+    assert manager.validate_capabilities(["org/model-GGUF"]) == []
+    # The auto-selected quant is the resolver's choice — Q4_K_M over a
+    # co-cached Q4_K_S — and a complete Q4_K_M stays available with the
+    # other quant alongside.
+    _write_cached(
+        cache_root / "models" / ".hf_cache",
+        "org/model-GGUF",
+        [
+            "model-GGUF-Q4_K_M-00001-of-00002.gguf",
+            "model-GGUF-Q4_K_M-00002-of-00002.gguf",
+            "model-GGUF-Q4_K_S.gguf",
+        ],
+    )
+    assert manager.validate_capabilities(["org/model-GGUF"]) == []
+    # … while a PARTIAL auto-selected Q4_K_M stays missing even though the
+    # co-cached Q4_K_S is complete — the lane serves the resolved quant.
+    shard_root = tmp_path / "root2"
+    (shard_root / "models").mkdir(parents=True)
+    shard_manager = LaneManager(
+        OllamaConfig(models_path=str(shard_root / "models")),
+        lane_port_start=16091,
+        lane_port_end=16100,
+    )
+    _write_cached(
+        shard_root / "models" / ".hf_cache",
+        "org/model-GGUF",
+        ["model-GGUF-Q4_K_M-00001-of-00002.gguf", "model-GGUF-Q4_K_S.gguf"],
+    )
+    assert shard_manager.validate_capabilities(["org/model-GGUF"]) == ["org/model-GGUF"]
+
+
+def test_validate_capabilities_blank_hf_home_falls_back(tmp_path: Path, monkeypatch) -> None:
+    # A blank/whitespace HF_HOME must fall back to <models_path>/.hf_cache —
+    # the directory the startup prefetch populates — instead of checking
+    # relative "hub/..." paths that ignore every cached weight.
+    monkeypatch.setenv("HF_HOME", "")
+    cache_root = tmp_path / "root"
+    (cache_root / "models").mkdir(parents=True)
+    manager = LaneManager(
+        OllamaConfig(models_path=str(cache_root / "models")),
+        lane_port_start=16101,
+        lane_port_end=16110,
+    )
+    _write_cached(cache_root / "models" / ".hf_cache", "org/some-model")
+    assert manager.validate_capabilities(["org/some-model"]) == []
+    monkeypatch.setenv("HF_HOME", "   ")
+    assert manager.validate_capabilities(["org/some-model"]) == []
+
+
 # ---------------------------------------------------------------------------
 # calibration resolver — inherited HF_HOME + authoritative empty listing
 # ---------------------------------------------------------------------------
