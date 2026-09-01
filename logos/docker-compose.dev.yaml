@@ -85,7 +85,7 @@ services:
       LOGOSNODE_INFER_TIMEOUT_SECONDS: "1200"
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "1200"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
-      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-logos-local-internal-secret}"
     expose:
       - "8080"
     ports:
@@ -175,7 +175,7 @@ services:
       DB_USER: postgres
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
-      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-logos-local-internal-secret}"
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
       KEYCLOAK_ISSUER_URI: "${KEYCLOAK_ISSUER_URI:-http://localhost:8085/realms/tum}"
       KEYCLOAK_JWKS_URI: "${KEYCLOAK_JWKS_URI:-http://keycloak:8080/realms/tum/protocol/openid-connect/certs}"

@@ -36,15 +36,20 @@ from logos_worker_node.calibration import (
     _load_unsupported_models,
     _max_tp_for_plan,
     _parse_kv_to_mb,
+    _plan_needs_gpu_pin,
     _record_unsupported_model,
     _remove_unsupported_model,
     auto_calibrate_models,
     calibrate_model,
+    calibration_gpu_slice,
     is_model_unsupported,
     load_existing_profiles,
+    merge_profile,
     parse_gpu_indices,
+    pin_plan_gpu_devices,
     plans_from_config,
     result_to_profile_dict,
+    sample_vram_mb,
     save_profiles,
 )
 from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
@@ -661,6 +666,54 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
     assert not results["big-model"].success
 
 
+def test_escalation_pins_plan_to_gpu_slice_on_heterogeneous_node(tmp_path):
+    """On a 3-GPU host the probe is pinned to the power-of-two slice "0,1", so
+    GPU 2 stays free for production and the baseline never sums it (#592). The
+    TP escalation itself is unchanged: max-first from tp=2, then down to tp=1.
+    """
+    config_path = _write_config(tmp_path, ["big-model"])
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        if tp == 1:
+            return _fail_result("big-model", error="OOM on tp=1")
+        return _success_result("big-model", tensor_parallel_size=tp)
+
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(3)),
+    ):
+        mock_cm.side_effect = side_effect
+        results = auto_calibrate_models(["big-model"], config_path, state_dir)
+
+    assert results["big-model"].success
+    assert results["big-model"].tensor_parallel_size == 2
+    # Every probe attempt is pinned to the slice, not "all" / every GPU.
+    for call in mock_cm.call_args_list:
+        passed_plan = call[0][0]
+        assert passed_plan["gpu_devices"] == "0,1"
+
+
+def test_escalation_respects_an_explicit_plan_pin(tmp_path):
+    """An operator-pinned gpu_devices is passed through to the probe untouched."""
+    cfg = {"logos": {"capabilities_models": [{"model": "big-model", "gpu_devices": "1,2"}]}}
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(yaml.safe_dump(cfg))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(3)),
+    ):
+        mock_cm.return_value = _success_result("big-model", tensor_parallel_size=2)
+        auto_calibrate_models(["big-model"], config_path, state_dir)
+
+    assert mock_cm.call_args[0][0]["gpu_devices"] == "1,2"
+
+
 def test_max_tp_for_plan():
     # Power-of-2 rounding: 4 GPUs → tp=4, 3 GPUs → tp=2, 5 → 4, 7 → 4
     assert _max_tp_for_plan({"model": "x"}, available_gpus=4) == 4
@@ -675,6 +728,78 @@ def test_max_tp_for_plan():
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=4) == 4
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=3) == 2
     assert _max_tp_for_plan({"model": "x", "gpu_devices": ""}, available_gpus=4) == 4
+
+
+def test_calibration_gpu_slice_power_of_two_prefix():
+    assert calibration_gpu_slice(3) == [0, 1]
+    assert calibration_gpu_slice(5) == [0, 1, 2, 3]
+    assert calibration_gpu_slice(6) == [0, 1, 2, 3]
+    assert calibration_gpu_slice(7) == [0, 1, 2, 3]
+    assert calibration_gpu_slice(8) == [0, 1, 2, 3, 4, 5, 6, 7]
+    assert calibration_gpu_slice(1) == [0]
+
+
+def test_calibration_gpu_slice_no_gpus_is_empty():
+    assert calibration_gpu_slice(0) == []
+    assert calibration_gpu_slice(None) == []
+    assert calibration_gpu_slice(-2) == []
+
+
+def test_pin_plan_uses_slice_only_when_gpu_devices_blank_or_all():
+    assert pin_plan_gpu_devices({"model": "x"}, 3)["gpu_devices"] == "0,1"
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "all"}, 3)["gpu_devices"] == "0,1"
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": ""}, 3)["gpu_devices"] == "0,1"
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "none"}, 3) == {"model": "x", "gpu_devices": "none"}
+
+
+def test_pin_plan_keeps_operator_specific_gpu_set():
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "1,2"}, 3) == {
+        "model": "x",
+        "gpu_devices": "1,2",
+    }
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "  2  "}, 3) == {
+        "model": "x",
+        "gpu_devices": "  2  ",
+    }
+
+
+def test_pin_plan_no_gpus_leaves_blank_plan_alone():
+    assert pin_plan_gpu_devices({"model": "x"}, 0) == {"model": "x"}
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "all"}, None) == {
+        "model": "x",
+        "gpu_devices": "all",
+    }
+
+
+def test_pin_needs_gpu_pin_only_for_blank_and_all():
+    assert _plan_needs_gpu_pin("")
+    assert _plan_needs_gpu_pin("all")
+    assert _plan_needs_gpu_pin("  ALL  ")
+    assert _plan_needs_gpu_pin(None)
+    assert not _plan_needs_gpu_pin("1,2")
+    assert not _plan_needs_gpu_pin("none")
+
+
+def test_calibration_baseline_ignores_leftover_gpu_lane(monkeypatch):
+    """Pinned slice [0,1] on a 3-GPU host: a leftover lane on GPU 2 must not
+    inflate the calibration baseline — only the slice's own GPUs are summed."""
+    snap = {
+        0: {"total_mb": 24000.0, "used_mb": 100.0, "free_mb": 23900.0},
+        1: {"total_mb": 24000.0, "used_mb": 200.0, "free_mb": 23800.0},
+        2: {"total_mb": 24000.0, "used_mb": 9999.0, "free_mb": 14001.0},
+    }
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda gpu_indices=None: {k: v for k, v in snap.items() if gpu_indices is None or k in gpu_indices},
+    )
+    monkeypatch.setattr("logos_worker_node.calibration._VRAM_SAMPLE_COUNT", 1)
+    monkeypatch.setattr("logos_worker_node.calibration.time.sleep", lambda _s: None)
+
+    plan = pin_plan_gpu_devices({"model": "x"}, 3)
+    gpu_indices = parse_gpu_indices(plan["gpu_devices"])
+    assert gpu_indices == [0, 1]
+    assert sample_vram_mb(gpu_indices) == 300.0  # 100 + 200, never the 9999 on GPU 2
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2526,3 +2651,149 @@ def test_result_to_profile_dict_maps_sleep_mode_disabled() -> None:
     assert result_to_profile_dict(_success_result("m"))["sleep_mode_disabled"] is None
     assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=True))["sleep_mode_disabled"] is True
     assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=False))["sleep_mode_disabled"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Cold-load & wake-from-sleep timing (issue #627)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_cold_load_time_measured_from_spawn_to_first_served_request():
+    """The warmup IS the first request served, so spawn → warmup completion is recorded."""
+    patches = _patch_calibration_infra()  # _post answers 200 → warmup request "serves"
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.cold_load_time_s is not None
+    assert result.cold_load_time_s >= 0.0
+    # Everything external is mocked — the interval is only the (tiny)
+    # in-process walk through calibrate_model, so it must stay small.
+    assert result.cold_load_time_s < 10.0
+
+
+def test_cold_load_anchor_excludes_failed_retry_attempts():
+    """The anchor is the successful attempt's spawn, not the moment before
+    the first attempt: _try_start's internal retries (max_model_len /
+    max_num_seqs) typically fail only AFTER loading the weights, and those
+    near-full loads must not be billed to cold_load_time_s."""
+    patches = _patch_calibration_infra()
+
+    def wait_ready_side_effect(*args, **kwargs):
+        if not wait_ready_side_effect.attempts:
+            wait_ready_side_effect.attempts.append(time.perf_counter())
+            # The rejected attempt loads the weights and is only refused at
+            # the very end — simulate that cost before raising.
+            deadline = time.perf_counter() + 0.2
+            while time.perf_counter() < deadline:
+                pass
+            raise RuntimeError("vLLM exited (code=1)")
+        return None
+
+    wait_ready_side_effect.attempts = []
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    # The one failure's log parses to a --max-model-len suggestion, which
+    # drives the retry recursion; nothing else in this run parses to one.
+    suggested = {"done": False}
+
+    def suggest_side_effect(log_tail):
+        if suggested["done"]:
+            return None
+        suggested["done"] = True
+        return 65536
+
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion",
+        side_effect=suggest_side_effect,
+    )
+
+    result, mocks = _run_calibrate(patches)
+
+    assert result.success, result.error
+    # One rejected attempt, one successful retry.
+    assert mocks["spawn"].call_count == 2
+    assert result.cold_load_time_s is not None
+    # The rejected attempt's ~0.2s weight load is NOT in the measured
+    # interval — only the successful attempt (startup → warmup) is.
+    assert result.cold_load_time_s < 0.1
+
+
+def test_cold_load_time_none_when_first_request_does_not_serve():
+    """A value that never actually served a request must not pose as one."""
+    post, _ = _capturing_post(**{"/v1/completions": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.cold_load_time_s is None
+
+
+def test_wake_from_sleep_time_measured_from_wake_to_first_served_request():
+    """/wake_up trigger → post-wake test request served is recorded as the wake time."""
+    post, urls = _capturing_post()
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert any(u.endswith("/wake_up") for u in urls)
+    assert result.wake_from_sleep_time_s is not None
+    assert result.wake_from_sleep_time_s >= 0.0
+    assert result.wake_from_sleep_time_s < 10.0
+
+
+def test_wake_from_sleep_time_none_when_sleep_phases_skipped():
+    """No sleep in the run → no wake to measure."""
+    result, _ = _run_calibrate(_patch_calibration_infra(), sleep_level=0)
+
+    assert result.success, result.error
+    assert result.wake_from_sleep_time_s is None
+
+
+def test_wake_from_sleep_time_none_when_wake_fails():
+    """A wake that cannot be verified safe carries no timing (same rule as the residual)."""
+    post, _ = _capturing_post(**{"/wake_up": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    assert result.wake_from_sleep_time_s is None
+
+
+def test_result_to_profile_dict_maps_timing_fields():
+    """Measured timings map 1:1 into the profile dict; unmeasured ones stay None."""
+    assert result_to_profile_dict(_success_result("m"))["cold_load_time_s"] is None
+    assert result_to_profile_dict(_success_result("m"))["wake_from_sleep_time_s"] is None
+
+    d = result_to_profile_dict(_success_result("m", cold_load_time_s=123.45, wake_from_sleep_time_s=12.34))
+    assert d["cold_load_time_s"] == 123.5  # rounded to 0.1s like the MB fields
+    assert d["wake_from_sleep_time_s"] == 12.3
+
+
+def test_merge_profile_keeps_prior_timing_when_new_run_unmeasured():
+    """A None timing in a fresh result must not erase an earlier measurement."""
+    prior = {"base_residency_mb": 5000.0, "cold_load_time_s": 90.0, "wake_from_sleep_time_s": 12.0}
+    merged = merge_profile(prior, result_to_profile_dict(_success_result("m")))
+    assert merged["cold_load_time_s"] == 90.0
+    assert merged["wake_from_sleep_time_s"] == 12.0
+
+    # A fresh measurement replaces the stored value.
+    merged2 = merge_profile(merged, result_to_profile_dict(_success_result("m", cold_load_time_s=42.0)))
+    assert merged2["cold_load_time_s"] == 42.0
+    assert merged2["wake_from_sleep_time_s"] == 12.0
+
+
+def test_timing_fields_survive_profile_store_roundtrip(tmp_path):
+    result = _success_result("org/m", cold_load_time_s=123.4, wake_from_sleep_time_s=12.3)
+    profiles_path = tmp_path / "model_profiles.yml"
+    save_profiles(profiles_path, {"org/m": merge_profile(None, result_to_profile_dict(result))})
+
+    loaded = load_existing_profiles(profiles_path)
+    assert loaded["org/m"]["cold_load_time_s"] == 123.4
+    assert loaded["org/m"]["wake_from_sleep_time_s"] == 12.3
