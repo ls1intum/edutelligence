@@ -15,10 +15,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,9 +42,11 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelMetricsService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 @SpringBootTest
@@ -65,6 +69,8 @@ class ModelMetricsControllerTest {
     MockMvc mvc;
     @Autowired
     ModelMetricsService modelMetricsService;
+    @Autowired
+    ProviderService providerService;
     @Autowired
     JdbcTemplate jdbc;
     // Spied (not replaced) so one test can make a single guarded weight
@@ -341,5 +347,143 @@ class ModelMetricsControllerTest {
                 .contentType("application/json")
                 .content("{\"model_id\":5101}"))
            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void providerTypeChangeLocalToCloud_invalidatesCostAndRederivesInNewUnit() throws Exception {
+        // Baseline: under the current type the local pairs hold the
+        // VRAM x latency proxy, in USD per request.
+        modelMetricsService.deriveAllMetrics();
+        assertThat(costOf(5101, 6102)).isEqualByComparingTo(new BigDecimal("0.008889"));
+
+        // Park both async re-derivations at the price update - their first
+        // step, before any pair is re-derived - so the invalidated state is
+        // observable in between. The first parked task installs the
+        // catalogue prices and only then lets the second proceed, so both
+        // re-derivations read the same prices.
+        CountDownLatch parked = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch pricesInstalled = new CountDownLatch(1);
+        AtomicInteger priceInstalls = new AtomicInteger();
+        doAnswer(inv -> {
+            parked.countDown();
+            release.await(10, TimeUnit.SECONDS);
+            if (priceInstalls.compareAndSet(0, 1)) {
+                jdbc.update("INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_token) "
+                    + "VALUES (92210, 9101, 5101, 6102, NOW() - INTERVAL '1 year', 1000), "
+                    + "       (92211, 9102, 5101, 6102, NOW() - INTERVAL '1 year', 2000), "
+                    + "       (92212, 9101, 5102, 6102, NOW() - INTERVAL '1 year', 4000), "
+                    + "       (92213, 9102, 5102, 6102, NOW() - INTERVAL '1 year', 8000)");
+                pricesInstalled.countDown();
+            }
+            pricesInstalled.await(10, TimeUnit.SECONDS);
+            return null;
+        }).when(priceUpdaterService).updatePricesForModel(anyInt(), anyString());
+
+        providerService.updateProvider(
+            new UpdateProviderRequestDTO(6102, null, null, null, null, null, null, "openai", null));
+
+        // The committed update invalidated the old-unit cost of every
+        // affected pair - and only those: the untouched provider 6101 keeps
+        // its cloud cost. A ranking running in this window reads NULL, so a
+        // USD-per-request figure can never be read as USD per million tokens.
+        assertThat(costOf(5101, 6102)).isNull();
+        assertThat(costOf(5102, 6102)).isNull();
+        assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.015"));
+
+        // Release the parked re-derivations: catalogue refresh first, then
+        // the re-derivation, then the re-rank.
+        assertThat(parked.await(10, TimeUnit.SECONDS)).isTrue();
+        release.countDown();
+        awaitUntil(() -> costOf(5101, 6102) != null && costOf(5102, 6102) != null);
+        // The new-unit values are the catalogue blend (1000/2000 and
+        // 4000/8000 per 1K tokens), not the old local proxy.
+        assertThat(costOf(5101, 6102)).isEqualByComparingTo(new BigDecimal("0.015"));
+        assertThat(costOf(5102, 6102)).isEqualByComparingTo(new BigDecimal("0.06"));
+    }
+
+    @Test
+    void providerTypeChangeCloudToLocal_invalidatesCostAndRederivesInNewUnit() throws Exception {
+        modelMetricsService.deriveAllMetrics();
+        assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.015"));
+
+        // Give the provider local hardware, so the new-unit (VRAM x latency)
+        // cost is derivable after the switch.
+        jdbc.update("UPDATE providers SET total_vram_mb = 8000 WHERE id = 6101");
+
+        CountDownLatch parked = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        doAnswer(inv -> {
+            parked.countDown();
+            release.await(10, TimeUnit.SECONDS);
+            return null;
+        }).when(priceUpdaterService).updatePricesForModel(anyInt(), anyString());
+
+        providerService.updateProvider(
+            new UpdateProviderRequestDTO(6101, null, null, null, null, null, null, "none", null));
+
+        // The cloud-unit costs are gone before the re-derivation runs; the
+        // pairs of the untouched provider keep their values.
+        assertThat(costOf(5101, 6101)).isNull();
+        assertThat(costOf(5102, 6101)).isNull();
+        assertThat(costOf(5101, 6102)).isEqualByComparingTo(new BigDecimal("0.008889"));
+
+        assertThat(parked.await(10, TimeUnit.SECONDS)).isTrue();
+        release.countDown();
+        awaitUntil(() -> costOf(5101, 6101) != null && costOf(5102, 6101) != null);
+        // The new-unit values are the VRAM x latency proxy (USD per request):
+        // 8000 MB at 0.0001 USD/MB-hour over 500 ms and 3000 ms.
+        assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.000111"));
+        assertThat(costOf(5102, 6101)).isEqualByComparingTo(new BigDecimal("0.000667"));
+        // With no cloud pair left, the cost dimension is held fleet-wide:
+        // the local figures are display-only and never feed the cost ranking,
+        // so the weights keep their last cloud-derived values.
+        assertThat(weightCost(5101)).isEqualTo(4);
+        assertThat(weightCost(5102)).isEqualTo(-4);
+    }
+
+    @Test
+    void providerDeletion_rederivesAndReranksAffectedModelsImmediately() throws Exception {
+        modelMetricsService.deriveAllMetrics();
+        // Baseline: 5101 is fastest via its 500 ms cloud pair, 5102 slowest.
+        assertThat(weightLatency(5101)).isEqualTo(4);
+        assertThat(weightLatency(5102)).isEqualTo(-4);
+
+        providerService.deleteProvider(6101);
+
+        // The pair rows are gone with the provider...
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM model_provider WHERE provider_id = 6101", Integer.class))
+            .isZero();
+        // ...and the survivors are re-derived and the models re-ranked right
+        // away - not at the next daily job. On the local pairs 5102 (900 ms)
+        // now beats 5101 (40000 ms), so the latency ranking flips.
+        awaitUntil(() -> weightLatency(5101) == -4 && weightLatency(5102) == 4);
+        assertThat(weightLatency(5101)).isEqualTo(-4);
+        assertThat(weightLatency(5102)).isEqualTo(4);
+    }
+
+    private BigDecimal costOf(int modelId, int providerId) {
+        return jdbc.queryForObject(
+            "SELECT derived_cost_usd FROM model_provider WHERE model_id = ? AND provider_id = ?",
+            BigDecimal.class, modelId, providerId);
+    }
+
+    private Integer weightLatency(int modelId) {
+        return jdbc.queryForObject("SELECT weight_latency FROM models WHERE id = ?", Integer.class, modelId);
+    }
+
+    private Integer weightCost(int modelId) {
+        return jdbc.queryForObject("SELECT weight_cost FROM models WHERE id = ?", Integer.class, modelId);
+    }
+
+    /** Poll a condition for up to 10 s: the re-derivation under test runs on the async executor. */
+    private static void awaitUntil(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (!condition.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) {
+                throw new AssertionError("condition not met within 10 s");
+            }
+            Thread.sleep(50);
+        }
     }
 }

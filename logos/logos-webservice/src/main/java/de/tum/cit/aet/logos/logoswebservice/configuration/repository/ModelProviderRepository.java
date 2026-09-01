@@ -214,6 +214,21 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
                              @Param("samples") int samples,
                              @Param("updatedAt") Instant updatedAt);
 
+    /**
+     * Clear the derived cost of every pair of the given provider, leaving the
+     * unit-independent latency figures in place. The cost unit depends on the
+     * provider's cloud_provider_type (USD per million tokens for cloud pairs,
+     * USD per request for local pairs), so a type change invalidates every
+     * persisted cost value: until the pairs are re-derived, a ranking that
+     * reads the row must see NULL, or an old-unit value would be
+     * reinterpreted in the new unit.
+     */
+    @Transactional
+    @Modifying
+    @Query(value = "UPDATE model_provider SET derived_cost_usd = NULL WHERE provider_id = :providerId",
+           nativeQuery = true)
+    int invalidateDerivedCostByProviderId(@Param("providerId") int providerId);
+
     @Query(value = """
         SELECT mp.model_id AS model_id, m.name AS model_name,
                mp.provider_id AS provider_id, p.name AS provider_name,

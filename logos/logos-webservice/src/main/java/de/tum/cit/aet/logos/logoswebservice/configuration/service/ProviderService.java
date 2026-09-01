@@ -7,6 +7,8 @@ import java.util.Set;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
@@ -36,13 +38,16 @@ public class ProviderService {
     private final ProviderRepository providerRepository;
     private final ModelProviderRepository modelProviderRepository;
     private final OrchestratorNotificationService orchestratorNotificationService;
+    private final ModelMetricsService modelMetricsService;
 
     public ProviderService(ProviderRepository providerRepository,
                            ModelProviderRepository modelProviderRepository,
-                           OrchestratorNotificationService orchestratorNotificationService) {
+                           OrchestratorNotificationService orchestratorNotificationService,
+                           ModelMetricsService modelMetricsService) {
         this.providerRepository = providerRepository;
         this.modelProviderRepository = modelProviderRepository;
         this.orchestratorNotificationService = orchestratorNotificationService;
+        this.modelMetricsService = modelMetricsService;
     }
 
     public List<Map<String, Object>> getProviders(AuthContext auth) {
@@ -82,6 +87,7 @@ public class ProviderService {
         if (req.authName() != null) p.setAuthName(req.authName());
         if (req.authFormat() != null) p.setAuthFormat(req.authFormat());
         if (req.providerType() != null) p.setProviderType(parseProviderType(req.providerType()));
+        CloudProviderType oldType = p.getCloudProviderType();
         if (req.cloudProviderType() != null) p.setCloudProviderType(parseCloudProviderType(req.cloudProviderType()));
         if (req.privacyLevel() != null) {
             if (!VALID_PRIVACY_LEVELS.contains(req.privacyLevel())) {
@@ -90,6 +96,19 @@ public class ProviderService {
             p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
         }
         providerRepository.save(p);
+        if (p.getCloudProviderType() != oldType) {
+            // The type change redefines the unit of the pairs' persisted
+            // derived cost (USD per million tokens <-> USD per request), so
+            // every affected cost value is invalidated in this same
+            // transaction: a ranking that runs before the re-derivation sees
+            // NULL and can never read an old-unit value as the new one. The
+            // pairs are then re-derived (catalogue price refresh first) and
+            // the fleet re-ranked, after the commit.
+            List<Integer> modelIds = modelProviderRepository.findByProviderId(p.getId()).stream()
+                .map(ModelProvider::getModelId).distinct().toList();
+            modelProviderRepository.invalidateDerivedCostByProviderId(p.getId());
+            rederiveAfterCommit(modelIds, true);
+        }
         orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Updated Provider.");
     }
@@ -99,9 +118,41 @@ public class ProviderService {
         if (!providerRepository.existsById(providerId)) {
             throw new IllegalArgumentException("Provider not found: " + providerId);
         }
+        // The pair rows cascade-delete with the provider, which changes the
+        // best available latency/cost of every connected model. Collect the
+        // affected models before the cascade, and re-derive and re-rank them
+        // right away instead of leaving weights based on a pair that no
+        // longer exists until the daily job.
+        List<Integer> modelIds = modelProviderRepository.findByProviderId(providerId).stream()
+            .map(ModelProvider::getModelId).distinct().toList();
         providerRepository.deleteById(providerId);
+        rederiveAfterCommit(modelIds, false);
         orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Deleted Provider.");
+    }
+
+    /**
+     * Fire the async re-derivation only after the surrounding transaction
+     * committed: a worker that started earlier would race the commit, read
+     * the pre-update state, and re-derive the old values - so the type
+     * change would never land. Mirrors the connect/disconnect triggers,
+     * which likewise run only after the service (and its transaction) has
+     * returned.
+     */
+    private void rederiveAfterCommit(List<Integer> modelIds, boolean withPriceRefresh) {
+        if (modelIds.isEmpty()) return;
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                for (int modelId : modelIds) {
+                    if (withPriceRefresh) {
+                        modelMetricsService.deriveAfterPriceRefreshAsync(modelId);
+                    } else {
+                        modelMetricsService.deriveForModelAsync(modelId);
+                    }
+                }
+            }
+        });
     }
 
     @Transactional
