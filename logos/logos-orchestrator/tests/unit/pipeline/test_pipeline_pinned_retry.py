@@ -1,6 +1,9 @@
 """Internal retry / stream resume (#815): pinned PipelineRequests keep the
 model, may change the node, and honour priority overrides."""
 
+import asyncio
+import time
+
 import pytest
 
 from logos import PipelineRequest, RequestPipeline, SchedulingResult
@@ -228,3 +231,37 @@ async def test_non_pinned_request_stays_model_wide():
     await pipeline.process(_pinned_request(pinned_model_id=None))
 
     assert scheduler.requests[0].eligible_provider_ids is None
+
+
+@pytest.mark.asyncio
+async def test_context_resolve_call_is_cut_off_at_the_remaining_retry_budget():
+    """A retry rebuilt with seconds left on the overall deadline must not sit
+    inside a single resolve_context() call well past it: the resolver can
+    sleep through dozens of lane-selection rounds (~120 s) before returning,
+    so the call itself is bounded by the budget's remaining time, and an
+    expired bound fails through the context-failure path — reservation
+    release included."""
+    releases = []
+    pipeline, _classifier, scheduler = _build_pipeline()
+    scheduler.release = lambda *args, **kwargs: releases.append((args, kwargs))  # noqa: ARG005
+
+    class _SlowContextResolver:
+        async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+            # Stands in for the ~120 s of lane-selection sleeps the real
+            # resolver can perform before returning.
+            await asyncio.sleep(60)
+            return _StubExecutionContext(model_id, provider_id)
+
+    pipeline._context_resolver = _SlowContextResolver()
+
+    started = time.monotonic()
+    result = await pipeline.process(_pinned_request(context_resolve_timeout_s=0.5))
+    elapsed = time.monotonic() - started
+
+    assert result.success is False
+    assert result.error.startswith("Failed to resolve execution context")
+    # The call was cut off at the 0.5 s budget, not after its 60 s sleep.
+    assert elapsed < 10
+    # The context-failure path released the scheduler reservation.
+    assert len(releases) == 1
+    assert releases[0][0] == (27, 1, "logosnode", "req-pinned")

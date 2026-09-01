@@ -425,8 +425,12 @@ class RequestPipeline:
         """Resolve execution context, retrying for logosnode providers whose lane may still be starting.
 
         ``context_resolve_timeout_s`` tightens the default bound for requests
-        whose overall retry deadline is running out (#815): a retry must not
-        spend the whole lane-readiness window when the budget is nearly gone.
+        whose overall retry deadline is running out: a retry must not spend
+        the whole lane-readiness window when the budget is nearly gone. The
+        bound covers each individual ``resolve_context`` call as well as the
+        wait loop around it — the call itself can sleep through many
+        lane-selection rounds before returning — and an expired bound fails
+        through the same context-failure path (reservation release included).
         """
         timeout_s = self._CONTEXT_RESOLVE_TIMEOUT_S
         if context_resolve_timeout_s is not None and context_resolve_timeout_s > 0:
@@ -435,11 +439,43 @@ class RequestPipeline:
         first_attempt = True
 
         while True:
+            # Bound the single call itself, not just the loop around it:
+            # resolve_context() can perform dozens of lane-selection sleeps
+            # (~120 s) before returning, so a retry rebuilt with a few
+            # seconds left must not sit inside that one call well past the
+            # overall deadline.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                return self._context_failure(
+                    scheduling_result,
+                    classification_result,
+                    request_id,
+                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
+                )
             try:
-                exec_context = await self._context_resolver.resolve_context(
-                    model_id=scheduling_result.model_id,
-                    provider_id=scheduling_result.provider_id,
-                    request_path=request_path,
+                exec_context = await asyncio.wait_for(
+                    self._context_resolver.resolve_context(
+                        model_id=scheduling_result.model_id,
+                        provider_id=scheduling_result.provider_id,
+                        request_path=request_path,
+                    ),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                logger.warning(
+                    "Execution context resolution timed out for request %s (model_id=%s, provider_id=%s): "
+                    "the resolve call outlived the remaining retry budget",
+                    request_id,
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
+                )
+                return self._context_failure(
+                    scheduling_result,
+                    classification_result,
+                    request_id,
+                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")
