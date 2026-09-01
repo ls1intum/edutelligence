@@ -208,6 +208,11 @@ class LogEntry(Base):
     queue_depth_at_arrival = Column(Integer)
     utilization_at_arrival = Column(Numeric)
     queue_wait_ms = Column(Numeric)
+    # Whether the key's rate limiter admitted the request (issue #672). NULL
+    # when no limit is configured (the request was never checked) or for
+    # pre-migration rows; FALSE for a request the limiter rejected after
+    # scheduling. The usage window counts everything except explicit FALSE.
+    rate_limit_admitted = Column(Boolean, nullable=True)
     was_cold_start = Column(Boolean, default=False)
     load_duration_ms = Column(Numeric)
     available_vram_mb = Column(Integer)

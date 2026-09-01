@@ -153,14 +153,25 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
      * {@code timestamp_request}: the limiter charges a request when it is
      * admitted (i.e. scheduled, see {@code check_and_record} in the
      * orchestrator's main.py), and {@code timestamp_forwarding} is written
-     * at exactly that moment. {@code timestamp_request} is when the request
+     * at scheduling. {@code timestamp_request} is when the request
      * *arrived*, which under queue wait can be long before admission —
      * cutting on it would drop exactly the requests that waited in the queue
      * from the figure, so the display would under-report precisely when
      * developers look at it to understand a 429. Requests that never reached
-     * admission (still queued, or rejected before scheduling) have no
-     * {@code timestamp_forwarding} and are left out of the window, matching
-     * the limiter, which does not count them either.
+     * scheduling (still queued) have no {@code timestamp_forwarding} and are
+     * left out of the window, matching the limiter, which does not count
+     * them either.
+     *
+     * Rate-limiter rejects are excluded by the persisted admission verdict,
+     * not by the timestamp: the orchestrator writes
+     * {@code timestamp_forwarding} during {@code record_scheduled()} —
+     * *before* {@code check_and_record()} runs — so a request the limiter
+     * rejects afterwards (429) already satisfies the window predicate. The
+     * orchestrator persists {@code rate_limit_admitted} at the decision
+     * point (TRUE admitted, FALSE rejected, NULL when no limit is
+     * configured or for pre-migration rows), and the
+     * {@code IS DISTINCT FROM FALSE} filter counts everything except the
+     * explicit rejects — unlimited keys keep showing their usage.
      *
      * Token sums read the same {@code total_tokens} rows the
      * limiter records on completion; request counts use DISTINCT ids because
@@ -180,6 +191,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         WHERE ak.user_id = :userId
           AND ak.is_active = true
           AND le.timestamp_forwarding >= :since
+          AND le.rate_limit_admitted IS DISTINCT FROM FALSE
         GROUP BY le.api_key_id
         """, nativeQuery = true)
     List<RateLimitUsageProjection> findRateLimitUsageForUser(
