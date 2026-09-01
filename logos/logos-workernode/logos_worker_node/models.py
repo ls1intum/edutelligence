@@ -429,13 +429,21 @@ class WorkerConfig(BaseModel):
         exists in the container. Translated for backwards compatibility.
         """
         if value == LEGACY_OLLAMA_MODELS_PATH:
-            logger.warning("worker.models_path: translating legacy Ollama container path %s -> %s. "
-                           "Update your config file to the new path.", value, NEW_MODELS_PATH)
+            logger.warning(
+                "worker.models_path: translating legacy Ollama container path %s -> %s. "
+                "Update your config file to the new path.",
+                value,
+                NEW_MODELS_PATH,
+            )
             return NEW_MODELS_PATH
         if value.startswith(LEGACY_OLLAMA_MODELS_PATH + "/"):
-            translated = NEW_MODELS_PATH + value[len(LEGACY_OLLAMA_MODELS_PATH):]
-            logger.warning("worker.models_path: translating legacy Ollama container subpath %s -> %s. "
-                           "Update your config file to the new path.", value, translated)
+            translated = NEW_MODELS_PATH + value[len(LEGACY_OLLAMA_MODELS_PATH) :]
+            logger.warning(
+                "worker.models_path: translating legacy Ollama container subpath %s -> %s. "
+                "Update your config file to the new path.",
+                value,
+                translated,
+            )
             return translated
         return value
 
