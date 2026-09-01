@@ -65,14 +65,14 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void migration018_providerSnapshotsTableRenamed() {
+    void migration020_providerSnapshotsTableRenamed() {
         assertThat(tableExists("provider_snapshots")).isTrue();
         assertThat(tableExists("ollama_provider_snapshots")).isFalse();
     }
 
     @Test
-    void migration019_allowsStartWithoutOllamaTypedProviders() {
-        // The 019 gate must be a no-op on a clean schema (the provider_type
+    void migration021_allowsStartWithoutOllamaTypedProviders() {
+        // The 021 gate must be a no-op on a clean schema (the provider_type
         // enum makes 'ollama' rows impossible) — reaching this test already
         // proves the changelog ran to the end.
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM providers", Integer.class)).isZero();
