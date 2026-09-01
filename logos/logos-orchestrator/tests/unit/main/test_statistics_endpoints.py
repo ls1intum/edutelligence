@@ -5,6 +5,7 @@ import pytest
 
 import logos as main
 from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
+from logos.routers import admin as admin_mod
 
 
 def _make_request(body: dict | None = None, headers: dict | None = None):
@@ -73,7 +74,7 @@ def mock_auth(monkeypatch):
     def fake_authenticate(headers):
         return mock_auth_ctx
 
-    monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate)
+    monkeypatch.setattr(admin_mod, "authenticate_api_key", fake_authenticate)
 
 
 @pytest.mark.asyncio
@@ -173,7 +174,7 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -272,7 +273,7 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -366,7 +367,7 @@ async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -470,7 +471,7 @@ async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)

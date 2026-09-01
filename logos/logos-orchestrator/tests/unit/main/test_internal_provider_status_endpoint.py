@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
-import logos as main_mod
+from logos.logosnode_snapshot import _LOGOSNODE_STATS_STALE_AFTER_SECONDS
+from logos.routers import internal as main_mod
 
 
 def _make_request(authorization: str = "") -> MagicMock:
@@ -83,7 +84,7 @@ async def test_stale_heartbeat_counts_as_offline(monkeypatch):
 
     stale = (
         datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(seconds=main_mod._LOGOSNODE_STATS_STALE_AFTER_SECONDS + 60)
+        - datetime.timedelta(seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS + 60)
     ).isoformat()
     registry = MagicMock()
     registry.peek_runtime_snapshot = lambda pid: {"last_heartbeat": stale}

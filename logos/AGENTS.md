@@ -39,7 +39,13 @@ logos/
 │       ├── run_all_migrations.sh
 │       └── README.md
 ├── src/logos/
-│   ├── main.py                        # FastAPI app + ALL route definitions
+│   ├── main.py                        # FastAPI app, middleware, shared runtime helpers
+│   ├── routers/                       # All route handlers, grouped by domain (included in main.py)
+│   │   ├── monitoring.py              # /health, /metrics
+│   │   ├── internal.py                # secret-gated /internal/* (Spring webservice)
+│   │   ├── logosnode.py               # worker provider endpoints /logosdb/providers/logosnode/*
+│   │   ├── admin.py                   # admin endpoints /logosdb/*, /forward_host
+│   │   └── user_facing.py             # public API: models, audio, /v1/{path:path} catch-all, jobs
 │   ├── auth.py                        # Authentication & authorization
 │   ├── responses.py                   # Helper utilities (URL merging, token extraction)
 │   ├── model_string_parser.py         # logos-v* model string parser
@@ -70,7 +76,7 @@ logos/
 └── tests/
     ├── conftest.py                    # Global test config (stubs heavy deps)
     ├── unit/
-    │   ├── main/                      # Tests for main.py functions
+    │   ├── main/                      # Tests for main.py functions and the routers/ endpoints
     │   ├── sdi/                       # Tests for SDI facades
     │   ├── queue/                     # Tests for priority queue
     │   └── responses/                 # Tests for proxy behavior
@@ -81,16 +87,26 @@ logos/
 ## Architecture & Key Patterns
 
 ### main.py and where new code goes
-`src/logos/main.py` currently still defines all FastAPI routes; there are no separate router files yet. That is the state the project is actively breaking up, so new code must move toward the target state, not extend the monolith:
+`src/logos/main.py` owns the FastAPI `app`, the exception handlers, the middleware, and the shared runtime helpers (pipeline startup, request execution, VRAM payloads, benchmark bookkeeping). All route handlers live in `src/logos/routers/`, grouped by domain, and are included on the app at the bottom of `main.py`:
 
-- **New endpoints** go in a router module under `src/logos/routers/` (create the package when adding the first new router) and are included on the app — never into `main.py`.
-- **New helpers** go in a domain module (`live_stream.py`, `logosnode_snapshot.py`, `middleware.py`, ...) — never into `main.py`.
+- `monitoring.py` — `/health`, `/metrics`
+- `internal.py` — secret-gated `/internal/*` endpoints (Spring webservice)
+- `logosnode.py` — worker provider endpoints under `/logosdb/providers/logosnode/*`
+- `admin.py` — admin endpoints under `/logosdb/*` and `/forward_host`
+- `user_facing.py` — public OpenAI-compatible API: model listing, audio, the `/v1/{path:path}` catch-all, jobs
+
+So new code must move toward that structure, not back into the monolith:
+
+- **New endpoints** go in the matching router module under `src/logos/routers/` — never into `main.py`.
+- **New helpers** go in a domain module (`live_stream.py`, `logosnode_snapshot.py`, `middleware.py`, ...) — never into `main.py`, unless several routers genuinely share them (then they belong in `main.py`'s shared-helper section, imported by the routers).
 - A module approaching ~1000 lines is a signal to split it — a soft guideline, not a gate.
 - The guideline applies to the whole orchestrator, not just `main.py`: `capacity/capacity_planner.py` is currently 7716 lines, larger than `main.py` itself.
 
 Endpoint request models live in `dbutils/dbrequest.py`.
 
-**Important**: The `/v1/{path:path}` catch-all route captures all `/v1/*` requests. Any new `/v1/...` routes (e.g., `/v1/models`) MUST be defined BEFORE the catch-all in the file, otherwise FastAPI will never match them.
+**Important**: The `/v1/{path:path}` catch-all route captures all `/v1/*` requests. Any new `/v1/...` routes (e.g., `/v1/models`) MUST be registered before the catch-all, otherwise FastAPI will never match them: within `user_facing.py` they must be defined above it, and any new router must be `include_router`-ed in `main.py` before the `user_facing` router (which is included last).
+
+**Important**: Routers import shared state from `logos.main` — this works only because `main.py` imports the routers at its very bottom, after all module-level definitions. Globals that `start_pipeline`/`refresh_pipeline_runtime_state` rebind (`_pipeline`, `_queue_mgr`, `_logosnode_facade`, `_azure_facade`, `_context_resolver`, `_demand_tracker`, `_capacity_planner`, `_calibration_orchestrator`) must be read in router code through `import logos.main as _main` + `_main.<name>`; a plain `from logos.main import <name>` would freeze the pre-startup `None`.
 
 ### Database Pattern
 - `DBManager` is a context manager: `with DBManager() as db: ...`
@@ -374,7 +390,7 @@ ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name
 
 ## Important Notes for AI Agents
 
-1. **main.py is large** (~5000+ lines) — the symptom of the monolith that is being broken down (see "main.py and where new code goes": new code goes into router/domain modules and existing clusters are extracted, so the file should shrink over time). Until it is small enough to hold in one read, read specific sections rather than the whole file and use grep to find relevant routes/functions.
+1. **main.py is still large** (~3800 lines after the route handlers moved to `routers/`) — it holds the shared runtime helpers (see "main.py and where new code goes": new code goes into router/domain modules, and existing clusters are still being extracted, so the file should keep shrinking). Until it is small enough to hold in one read, read specific sections rather than the whole file and use grep to find relevant functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
 3. **No Alembic** — migrations are plain SQL files. Apply via `run_all_migrations.sh` (uses `docker exec`) or run manually.
 4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances)
