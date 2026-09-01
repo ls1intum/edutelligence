@@ -60,6 +60,10 @@ worker:
   # Persistent model store directory (the deployment's model volume). Holds
   # the HuggingFace model store that vLLM lanes load from. Also the default
   # root for the worker's caches when cache_path below is empty.
+  # Backward compatibility: an Ollama-era config left on the old container
+  # path (/usr/share/ollama/.ollama/models) is auto-translated to this path
+  # at load time (with a warning) — no manual edit required, but prefer
+  # updating the config file itself.
   models_path: /usr/share/logos/models
 
   # Worker-wide default GPU placement: "all" | "none" | "0,1" (comma-separated

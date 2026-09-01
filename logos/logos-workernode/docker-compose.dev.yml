@@ -57,7 +57,10 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ./data:/app/data
-      - ${LOGOS_MODELS_MOUNT:-logos-models}:/usr/share/logos/models
+      # Same backward-compatible model-volume resolution as production — see
+      # docker-compose.yml (LOGOS_MODELS_MOUNT → OLLAMA_MODELS_MOUNT →
+      # the pre-existing `ollama-models` volume, for one release).
+      - ${LOGOS_MODELS_MOUNT:-${OLLAMA_MODELS_MOUNT:-ollama-models}}:/usr/share/logos/models
       - ./certs:/app/certs:ro
       - ./logos_worker_node:/app/logos_worker_node:ro
       # Same custom chat-template directory as production — see docker-compose.yml.
@@ -77,3 +80,4 @@ services:
 
 volumes:
   logos-models:
+  ollama-models:
