@@ -1044,7 +1044,7 @@ class LogosBridgeClient:
                 model_name,
                 disk_size_bytes=hf_meta.weight_bytes,
                 base_residency_mb=hf_meta.weight_bytes / (1024 * 1024),
-                kv_per_token_bytes=hf_meta.kv_per_token_bytes,
+                kv_per_token_bytes=kv_per_token_bytes,  # effective (dtype-adjusted), not hf_meta's raw value
                 max_context_length=hf_meta.max_context_length,
             )
             if unsupported_reason is not None:

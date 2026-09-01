@@ -66,6 +66,9 @@ def test_kv_bytes_for_dtype():
     # demand instead of the value cached under the config's own dtype.
     assert kv_bytes_for_dtype(32, 8, 128, "bfloat16") == 2 * 32 * 8 * 128 * 2
     assert kv_bytes_for_dtype(32, 8, 128, "fp8") == 2 * 32 * 8 * 128 * 1
+    # vLLM's --kv-cache-dtype spelling, not just the bare "fp8" alias.
+    assert kv_bytes_for_dtype(32, 8, 128, "fp8_e4m3") == 2 * 32 * 8 * 128 * 1
+    assert kv_bytes_for_dtype(32, 8, 128, "fp8_e5m2") == 2 * 32 * 8 * 128 * 1
     assert kv_bytes_for_dtype(32, 8, 128, "unknown-future-dtype") == 2 * 32 * 8 * 128 * 2
     assert kv_bytes_for_dtype(32, 8, 128, None) == 2 * 32 * 8 * 128 * 2
 

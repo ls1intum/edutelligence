@@ -1927,6 +1927,13 @@ async def test_run_compatibility_precheck_applies_kv_cache_dtype_override(tmp_pa
     assert response["unsupported_reason"] is None
     assert response["fit_tp_idle"] == 1
 
+    # The persisted profile must also carry the effective (fp8) value —
+    # not hf_meta's raw bf16 one, which calibration.py's own KV-ceiling
+    # narrowing would otherwise use to (again) double the real budget.
+    await client._run_hf_compatibility_precheck("org/model", kv_cache_dtype="fp8")  # noqa: SLF001
+    profile = app.state.model_profiles.get_profile("org/model")
+    assert profile.kv_per_token_bytes == 2 * 32 * 8 * 128 * 1
+
 
 # ── Streaming: defer stream_start until first token byte (wake-readiness fix) ──
 

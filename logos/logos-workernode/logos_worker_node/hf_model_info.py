@@ -50,8 +50,10 @@ _DTYPE_BYTES = {
     "fp16": 2,
     "bfloat16": 2,
     "bf16": 2,
-    "float8_e4m3fn": 1,
-    "float8_e5m2": 1,
+    "float8_e4m3fn": 1,  # torch_dtype spelling (config.json)
+    "float8_e5m2": 1,  # torch_dtype spelling (config.json)
+    "fp8_e4m3": 1,  # vLLM --kv-cache-dtype spelling
+    "fp8_e5m2": 1,  # vLLM --kv-cache-dtype spelling
     "fp8": 1,
     "int8": 1,
     "float8": 1,
