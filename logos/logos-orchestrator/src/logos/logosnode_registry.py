@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import secrets
 import time
@@ -15,6 +16,7 @@ from typing import Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
+from logos.errors import UpstreamStreamError
 from logos.monitoring import prometheus_metrics as prom
 from logos.terminal_logging import (
     BOLD,
@@ -1151,6 +1153,15 @@ class LogosNodeRuntimeRegistry:
         # unwinding early — the consumer went away — and the worker is still
         # generating unless we say otherwise.
         stream_finished = False
+        # A lane can answer with an error status (429/5xx) instead of tokens:
+        # the worker sends the status in stream_start, the error body as the
+        # following chunk, then a failing stream_end. That status must reach
+        # the caller before any body bytes are committed, or FastAPI commits a
+        # 200 StreamingResponse for the error body and the transient status is
+        # never retried. So a non-2xx start is buffered and surfaced as an
+        # UpstreamStreamError at stream_end, never yielded.
+        error_status = None
+        error_body: list[bytes] = []
         try:
             while True:
                 try:
@@ -1159,9 +1170,18 @@ class LogosNodeRuntimeRegistry:
                     raise LogosNodeOfflineError("Stream timeout waiting for worker response") from exc
                 event_type = event.get("type")
                 if event_type == "stream_start":
+                    status_code = event.get("status_code")
+                    if isinstance(status_code, int) and status_code >= 400:
+                        error_status = status_code
                     continue
                 if event_type == "stream_chunk":
                     chunk = event.get("chunk")
+                    if error_status is not None:
+                        if isinstance(chunk, bytes):
+                            error_body.append(chunk)
+                        elif isinstance(chunk, str):
+                            error_body.append(chunk.encode("utf-8"))
+                        continue
                     if isinstance(chunk, bytes):
                         yield chunk
                     elif isinstance(chunk, str):
@@ -1169,6 +1189,13 @@ class LogosNodeRuntimeRegistry:
                     continue
                 if event_type == "stream_end":
                     stream_finished = True
+                    if error_status is not None:
+                        raw = b"".join(error_body)
+                        try:
+                            error_payload = json.loads(raw)
+                        except (json.JSONDecodeError, ValueError):
+                            error_payload = raw
+                        raise UpstreamStreamError(error_status, error_payload)
                     if not bool(event.get("success", False)):
                         raise LogosNodeCommandError(str(event.get("error", "unknown worker stream error")))
                     break

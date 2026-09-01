@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from logos.errors import UpstreamStreamError
 from logos.logosnode_registry import CANCEL_COMMAND_ACTION, LogosNodeRuntimeRegistry, ProviderSession
 
 PROVIDER_ID = 7
@@ -190,6 +191,131 @@ async def test_cancellation_clears_the_pending_stream_entry():
     await stream.aclose()
     await _drain_pending_tasks()
     assert cmd_id not in registry._sessions[PROVIDER_ID].pending_streams
+
+
+# ---------------------------------------------------------------------------
+# A lane can answer with an error status instead of tokens
+#
+# The worker sends the status in stream_start, the error body as the following
+# chunk, then a failing stream_end. That status used to be discarded, so the
+# error body was yielded as a normal 200 stream and the transient status was
+# never retried. A non-2xx start must now surface as an UpstreamStreamError
+# before any body bytes are committed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_200_stream_start_passes_through_to_the_body():
+    """A 200 stream_start is not an error: the body is yielded as-is."""
+    registry, websocket = _registry_with_session()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
+    assert await consumer == b"tok"
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_429_stream_start_surfaces_as_upstream_error_not_a_200():
+    """A 429 answer raises before any body bytes are yielded, and keeps its
+    status and error body so the caller surfaces 429 (not a 200, not 502)."""
+    registry, websocket = _registry_with_session()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 429})
+    await _feed(
+        registry,
+        cmd_id,
+        {"type": "stream_chunk", "chunk": b'{"error": {"message": "rate limited", "type": "rate_limit_error"}}'},
+    )
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "HTTP 429"})
+    with pytest.raises(UpstreamStreamError) as excinfo:
+        await consumer
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.body == {"error": {"message": "rate limited", "type": "rate_limit_error"}}
+    await _drain_pending_tasks()
+
+
+@pytest.mark.asyncio
+async def test_a_5xx_stream_start_surfaces_as_upstream_error_not_a_200():
+    """A 5xx answer is an upstream failure, surfaced with its status; a
+    non-JSON error body is passed through as-is for the caller to coerce."""
+    registry, websocket = _registry_with_session()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 503})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"upstream unavailable"})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "HTTP 503"})
+    with pytest.raises(UpstreamStreamError) as excinfo:
+        await consumer
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.body == b"upstream unavailable"
+    await _drain_pending_tasks()
+
+
+@pytest.mark.asyncio
+async def test_a_429_lane_answer_is_a_pre_stream_error_not_a_committed_200(monkeypatch):
+    """End to end: a lane that answers 429 before any token must come back as
+    a 429 JSON error — not a committed 200 StreamingResponse — so the internal
+    retry sees the transient status and re-dispatches instead of the client
+    eating an error body as a success."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-429",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 429})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b'{"error": {"message": "rate limited"}}'})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "HTTP 429"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    await _drain_pending_tasks()
+
+    assert not isinstance(response, StreamingResponse), "the 429 was committed as a 200 stream"
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 429
 
 
 # ---------------------------------------------------------------------------

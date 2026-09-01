@@ -3899,7 +3899,11 @@ async def _streaming_response(
                 except Exception as e:
                     with suppress(Exception):
                         await chunk_iter.aclose()
-                    if attempt < attempts - 1:
+                    # An upstream error status (429/5xx) is not the just-woken
+                    # race this same-lane retry exists for: the lane answered,
+                    # so re-pulling it cannot help. Surface it so the internal
+                    # retry can re-dispatch to another lane instead.
+                    if attempt < attempts - 1 and not isinstance(e, UpstreamStreamError):
                         logger.warning(
                             "logosnode pre-token stream failure (attempt %d/%d), retrying: %s",
                             attempt + 1,
@@ -3919,6 +3923,12 @@ async def _streaming_response(
                 provider_id,
                 open_error,
             )
+            if isinstance(open_error, UpstreamStreamError):
+                # Preserve the lane's status and body — a 429 keeps its
+                # Retry-After handling and a 5xx reads as an upstream failure —
+                # instead of flattening it to 502, so the internal retry can
+                # decide from the real status whether to re-dispatch.
+                return _pre_stream_error_response(open_error.status_code, open_error.body, str(open_error))
             return _pre_stream_error_response(502, {"error": str(open_error)}, str(open_error))
 
         async def logosnode_streamer():
