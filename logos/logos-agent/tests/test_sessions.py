@@ -938,6 +938,9 @@ class TestRestartReconciliation:
         "Labels": {"logos.agent.session": "7", "logos.agent.managed": "true"},
         "State": "running",
     }
+    # What re-adoption must persist, and only as part of a successful
+    # transition.
+    META = {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")}
 
     @staticmethod
     def _async_value(value):
@@ -973,8 +976,8 @@ class TestRestartReconciliation:
         async def fake_update(sid, **fields):
             updated.append((sid, fields))
 
-        async def fake_transition(sid, target, **_fields):
-            transitions.append(target)
+        async def fake_transition(sid, target, **fields):
+            transitions.append((target, fields))
             return True
 
         def fake_supervise(_self, sid, cid):
@@ -992,8 +995,11 @@ class TestRestartReconciliation:
 
         await sessions.manager._reconcile()
 
-        assert updated == [(7, {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")})]
-        assert transitions == [SessionStatus.RUNNING]
+        # The id and branch ride on the transition that claims running — not
+        # on a separate write — so the row can never carry them without also
+        # being the owner of the container, and never on a terminal row.
+        assert transitions == [(SessionStatus.RUNNING, self.META)]
+        assert updated == []
         assert supervised == [(7, "cid-x")]
         # The matched container is not an orphan: it is supervised, not removed.
         assert removed == []
@@ -1014,8 +1020,8 @@ class TestRestartReconciliation:
         async def fake_update(sid, **fields):
             updated.append((sid, fields))
 
-        async def fake_transition(sid, target, **_fields):
-            transitions.append(target)
+        async def fake_transition(sid, target, **fields):
+            transitions.append((target, fields))
             return True
 
         async def fake_state(_cid):
@@ -1046,10 +1052,12 @@ class TestRestartReconciliation:
 
         await sessions.manager._reconcile()
 
-        assert updated == [(7, {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")})]
-        # starting has no edge to succeeded: the row is normalized through
-        # running first, and settlement's terminal transition is the second.
-        assert transitions == [SessionStatus.RUNNING, SessionStatus.SUCCEEDED]
+        assert updated == []
+        # The id and branch ride on the normalizing transition; starting has
+        # no edge to succeeded, so settlement's terminal transition is the
+        # second.
+        assert transitions[0] == (SessionStatus.RUNNING, self.META)
+        assert [target for target, _ in transitions] == [SessionStatus.RUNNING, SessionStatus.SUCCEEDED]
         assert removed == ["cid-x"]
         assert events == [(EventKind.STATUS, {"status": "succeeded", "exit_code": 0, "error": None})]
 
@@ -1067,8 +1075,8 @@ class TestRestartReconciliation:
         async def fake_update(sid, **fields):
             updated.append((sid, fields))
 
-        async def fake_transition(sid, target, **_fields):
-            transitions.append(target)
+        async def fake_transition(sid, target, **fields):
+            transitions.append((target, fields))
             return True
 
         def fake_supervise(_self, sid, cid):
@@ -1086,8 +1094,10 @@ class TestRestartReconciliation:
 
         await sessions.manager._reconcile()
 
-        assert updated == [(7, {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")})]
-        assert transitions == [SessionStatus.RUNNING, SessionStatus.PAUSED]
+        # The metadata rides on the normalizing transition; the second hop
+        # to paused carries none.
+        assert transitions == [(SessionStatus.RUNNING, self.META), (SessionStatus.PAUSED, {})]
+        assert updated == []
         assert supervised == [(7, "cid-x")]
 
     async def test_created_container_from_a_starting_row_is_started_not_settled(self, monkeypatch, tmp_path):
@@ -1107,8 +1117,8 @@ class TestRestartReconciliation:
         async def fake_update(sid, **fields):
             updated.append((sid, fields))
 
-        async def fake_transition(sid, target, **_fields):
-            transitions.append(target)
+        async def fake_transition(sid, target, **fields):
+            transitions.append((target, fields))
             return True
 
         async def fake_start(cid):
@@ -1135,12 +1145,13 @@ class TestRestartReconciliation:
         await sessions.manager._reconcile()
 
         # No settle: a created container has no exit, however green, and no
-        # orphan removal: the container is put to work.
+        # orphan removal: the container is put to work. The id and branch
+        # ride on the transition that claims running.
         assert settled == []
         assert started == ["cid-x"]
-        assert transitions == [SessionStatus.RUNNING]
+        assert transitions == [(SessionStatus.RUNNING, self.META)]
         assert supervised == [(7, "cid-x")]
-        assert updated == [(7, {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")})]
+        assert updated == []
 
     async def test_created_container_with_an_occupying_row_is_failed_and_removed(self, monkeypatch, tmp_path):
         # The container id is only stored once the start succeeded, so a
@@ -1197,3 +1208,100 @@ class TestRestartReconciliation:
         failed = [p for k, p in events if k == EventKind.STATUS]
         assert len(failed) == 1
         assert "never started" in failed[0]["error"]
+
+    async def test_cancel_winning_re_adoption_stops_and_removes_the_container(self, monkeypatch, tmp_path):
+        # A cancel that lands in the restart window moves the 'starting'
+        # row to 'cancelled' before re-adoption's transition can claim it —
+        # and, seeing no container id in the row yet, it stops nothing. The
+        # transition must lose, and reconciliation must give the container
+        # back by the id Docker told it about: no supervision, and no id
+        # written into the now-terminal row.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        updated: list = []
+        transitions: list = []
+        supervised: list = []
+        stopped: list = []
+        removed: list = []
+
+        async def fake_update(sid, **fields):
+            updated.append((sid, fields))
+
+        async def fake_transition(sid, target, **_fields):
+            transitions.append(target)
+            # The cancel claimed the row first: every reconciliation
+            # transition loses.
+            return False
+
+        def fake_supervise(_self, sid, cid):
+            supervised.append((sid, cid))
+
+        async def fake_stop(cid, **_kwargs):
+            stopped.append(cid)
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", self._async_value([self.CONTAINER]))
+        self._patch_rows(monkeypatch, sessions, {SessionStatus.STARTING: [self.STARTING_ROW]})
+        monkeypatch.setattr(sessions.db, "update_session", fake_update)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", fake_supervise)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+
+        await sessions.manager._reconcile()
+
+        # One transition attempt, lost to the cancel — and the
+        # credential-bearing container is given back: stopped and removed,
+        # never supervised, and the row is left untouched.
+        assert transitions == [SessionStatus.RUNNING]
+        assert stopped == ["cid-x"]
+        assert removed == ["cid-x"]
+        assert supervised == []
+        assert updated == []
+
+    async def test_cancel_winning_re_adoption_of_a_started_created_container_stops_it(self, monkeypatch, tmp_path):
+        # The same race on the created path: the container is started, then
+        # the transition to running loses to a cancel that landed in the
+        # restart window. The just-started, credential-bearing agent must be
+        # stopped and removed, not supervised.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        container = {**self.CONTAINER, "State": "created"}
+        transitions: list = []
+        started: list = []
+        supervised: list = []
+        stopped: list = []
+        removed: list = []
+
+        async def fake_transition(sid, target, **_fields):
+            transitions.append(target)
+            return False
+
+        async def fake_start(cid):
+            started.append(cid)
+
+        def fake_supervise(_self, sid, cid):
+            supervised.append((sid, cid))
+
+        async def fake_stop(cid, **_kwargs):
+            stopped.append(cid)
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", self._async_value([container]))
+        self._patch_rows(monkeypatch, sessions, {SessionStatus.STARTING: [self.STARTING_ROW]})
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", fake_supervise)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+
+        await sessions.manager._reconcile()
+
+        # Lost the race after the start: the agent is stopped and removed.
+        assert started == ["cid-x"]
+        assert transitions == [SessionStatus.RUNNING]
+        assert stopped == ["cid-x"]
+        assert removed == ["cid-x"]
+        assert supervised == []

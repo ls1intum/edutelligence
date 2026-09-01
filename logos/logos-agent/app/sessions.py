@@ -141,20 +141,21 @@ class SessionManager:
                     await self._settle(sid, exit_code=None, error="container vanished during restart")
                     continue
                 container_id = container.get("Id", "")
-                # Re-adopt the container's identity into the row. The runner
-                # can restart after the container is created and started but
-                # before the RUNNING transition stored the id: a row without
-                # it cannot be stopped or removed by a later cancel or
-                # cleanup, and the credential-bearing agent would keep
-                # running unmanaged. The branch is derived exactly the way
-                # the launch derived it.
+                # Re-adopt the container's identity into the row, but by the
+                # same atomic move that claims the state: the id and the
+                # derived branch are stored as fields of the transition, so
+                # a cancel that lands in the restart window either wins
+                # before the id is stored (the transition then loses, and
+                # the container is given back below by the id Docker told us
+                # about) or reads the stored id and stops it itself. Neither
+                # an id written into a terminal row nor a supervisor on a
+                # row that is no longer ours is acceptable for a
+                # credential-bearing agent.
                 fields: dict[str, Any] = {}
                 if session.get("container_id") != container_id:
                     fields["container_id"] = container_id
                 if not session.get("branch_name"):
                     fields["branch_name"] = branch_for(sid, session["workspace_name"])
-                if fields:
-                    await db.update_session(sid, **fields)
                 state = (container.get("State") or "").lower()
                 if state == "created":
                     # The runner restarted between creating and starting the
@@ -169,9 +170,19 @@ class SessionManager:
                             await docker_engine.start_container(container_id)
                         except Exception as exc:
                             await self._settle(sid, exit_code=None, error=f"could not start recovered container: {exc}")
+                            # The start failed before the transition below,
+                            # so the id is not in the row and settlement's
+                            # cleanup cannot reach the container; remove it
+                            # by the id Docker told us about.
+                            await self._relinquish_container(container_id)
                         else:
-                            await db.transition_session(sid, SessionStatus.RUNNING)
-                            self._supervise(sid, container_id)
+                            if not await db.transition_session(sid, SessionStatus.RUNNING, **fields):
+                                # A cancel that landed in the restart window
+                                # owns the row; the agent must not keep
+                                # running.
+                                await self._relinquish_container(container_id)
+                            else:
+                                self._supervise(sid, container_id)
                     else:
                         await self._settle(sid, exit_code=None, error="container was created but never started")
                     continue
@@ -181,12 +192,20 @@ class SessionManager:
                         # starting -> paused is not an edge: a container the
                         # platform paused inside the start window normalizes
                         # through running first.
-                        await db.transition_session(sid, SessionStatus.RUNNING)
-                    if status != target:
+                        if not await db.transition_session(sid, SessionStatus.RUNNING, **fields):
+                            await self._relinquish_container(container_id)
+                            continue
+                        fields = {}
+                        if not await db.transition_session(sid, SessionStatus.PAUSED):
+                            await self._relinquish_container(container_id)
+                            continue
+                    elif status != target:
                         # A validated transition, not a raw update: a cancel
                         # that landed inside the restart window must not be
                         # overwritten with running/paused.
-                        await db.transition_session(sid, target)
+                        if not await db.transition_session(sid, target, **fields):
+                            await self._relinquish_container(container_id)
+                            continue
                     self._supervise(sid, container_id)
                 else:
                     if status is SessionStatus.STARTING:
@@ -194,7 +213,14 @@ class SessionManager:
                         # 'starting' has no direct edge to a terminal state;
                         # normalize through running so settlement's
                         # transition is valid and can record the outcome.
-                        await db.transition_session(sid, SessionStatus.RUNNING)
+                        if not await db.transition_session(sid, SessionStatus.RUNNING, **fields):
+                            # A cancel that landed in the restart window owns
+                            # the row and saw no container id yet; the
+                            # exited container is removed here, by the id
+                            # Docker told us about.
+                            await self._relinquish_container(container_id)
+                            continue
+                        fields = {}
                     _, exit_code = await docker_engine.container_state(container_id)
                     await self._settle(sid, exit_code=exit_code, error=None)
 
@@ -756,7 +782,33 @@ class SessionManager:
         session = await db.get_session(session_id)
         container_id = (session or {}).get("container_id")
         if container_id:
+            try:
+                await docker_engine.remove_container(container_id)
+            except Exception:
+                # Another actor (usually the cancel this cleanup races) may
+                # already have removed it.
+                logger.debug("could not remove the container of session %s", session_id)
+
+    async def _relinquish_container(self, container_id: str) -> None:
+        """Give a container back that a lost transition no longer owns.
+
+        Called when restart reconciliation loses a recovered session's
+        state transition — most often to a cancel that landed in the
+        restart window and, seeing no container id in the row yet, could
+        not stop it itself. The id Docker told us about is all we have, so
+        the stop-and-remove happens here: a credential-bearing agent must
+        not outlive the row that manages it.
+        """
+        try:
+            await docker_engine.stop_container(container_id)
+        except Exception:
+            # Already exited or removed: only the removal below can still
+            # matter.
+            pass
+        try:
             await docker_engine.remove_container(container_id)
+        except Exception:
+            logger.warning("could not remove the relinquished container %s", container_id)
 
     # --- operator actions -------------------------------------------------
 

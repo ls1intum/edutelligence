@@ -61,8 +61,17 @@ export class AgentService {
     );
   }
 
-  screenshotUrl(sessionId: number, name: string): string {
-    return `${AgentService.BASE}/sessions/${sessionId}/screenshots/${encodeURIComponent(name)}`;
+  /**
+   * The endpoint is bearer-only, so the shot must travel through HttpClient
+   * to pick up the auth header; a raw URL in a native element would 401.
+   */
+  getScreenshotBlob(sessionId: number, name: string): Promise<Blob> {
+    return firstValueFrom(
+      this.http.get(
+        `${AgentService.BASE}/sessions/${sessionId}/screenshots/${encodeURIComponent(name)}`,
+        { responseType: 'blob' },
+      ),
+    );
   }
 
   // ── capacity ─────────────────────────────────────────────────────────────

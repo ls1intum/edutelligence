@@ -91,7 +91,10 @@ export class Agents implements OnInit {
   async ngOnInit(): Promise<void> {
     await this.refresh();
     const timer = setInterval(() => void this.tick(), POLL_MS);
-    this.destroyRef.onDestroy(() => clearInterval(timer));
+    this.destroyRef.onDestroy(() => {
+      clearInterval(timer);
+      this.resetScreenshots();
+    });
   }
 
   private async tick(): Promise<void> {
@@ -139,11 +142,13 @@ export class Agents implements OnInit {
     if (this.selectedId() === session.id) {
       this.selectedId.set(null);
       this.events.set([]);
+      this.resetScreenshots();
       return;
     }
     this.selectedId.set(session.id);
     this.events.set([]);
     this.lastEventId = 0;
+    this.resetScreenshots();
     await this.loadEvents();
   }
 
@@ -155,6 +160,9 @@ export class Agents implements OnInit {
       if (fresh.length > 0) {
         this.lastEventId = fresh[fresh.length - 1].id;
         this.events.update((existing) => [...existing, ...fresh]);
+        // Screenshot events arrive with the transcript; fetch the blobs
+        // without delaying the transcript update itself.
+        void this.loadScreenshots();
       }
     } catch {
       /* transient; the next poll retries */
@@ -189,17 +197,61 @@ export class Agents implements OnInit {
    */
   transcriptText = computed(() => this.logLines().join('\n'));
 
-  screenshots = computed(() => {
-    const id = this.selectedId();
-    if (id === null) return [];
-    return this.events()
+  /** The shots captured so far, with the object URLs their blobs are shown as. */
+  screenshots = signal<Array<{ name: string; url: string }>>([]);
+  /** Object URL per screenshot name; revoked when the shot leaves the view. */
+  private screenshotUrls = new Map<string, string>();
+  /** Names whose blob fetch is in flight, so a poll does not double-fetch. */
+  private screenshotInFlight = new Set<string>();
+
+  private screenshotNames = computed(() =>
+    this.events()
       .filter((e) => e.kind === 'screenshot')
-      .map((e) => {
-        const name = String((e.payload as { name?: string }).name ?? '');
-        return { name, url: this.agentService.screenshotUrl(id, name) };
-      })
-      .filter((s) => s.name.length > 0);
-  });
+      .map((e) => String((e.payload as { name?: string }).name ?? ''))
+      .filter((n) => n.length > 0),
+  );
+
+  /**
+   * The screenshot endpoint requires a bearer token, and a native
+   * `<img>`/`<a>` request would bypass the auth interceptor and receive a
+   * 401. Each shot is therefore fetched through HttpClient as a blob and
+   * shown via an object URL, revoked when the shot leaves the view or the
+   * component is destroyed.
+   */
+  private async loadScreenshots(): Promise<void> {
+    const id = this.selectedId();
+    if (id === null) return;
+    for (const name of this.screenshotNames()) {
+      if (this.screenshotUrls.has(name) || this.screenshotInFlight.has(name)) continue;
+      this.screenshotInFlight.add(name);
+      try {
+        const blob = await this.agentService.getScreenshotBlob(id, name);
+        // A selection change while the fetch was in flight already reset
+        // the URL state; do not adopt the blob (no object URL created).
+        if (this.selectedId() !== id) return;
+        this.screenshotUrls.set(name, URL.createObjectURL(blob));
+        this.publishScreenshots();
+      } catch {
+        /* transient; the next poll retries */
+      } finally {
+        this.screenshotInFlight.delete(name);
+      }
+    }
+  }
+
+  private publishScreenshots(): void {
+    this.screenshots.set(
+      this.screenshotNames()
+        .filter((name) => this.screenshotUrls.has(name))
+        .map((name) => ({ name, url: this.screenshotUrls.get(name) as string })),
+    );
+  }
+
+  private resetScreenshots(): void {
+    for (const url of this.screenshotUrls.values()) URL.revokeObjectURL(url);
+    this.screenshotUrls.clear();
+    this.screenshots.set([]);
+  }
 
   // ── actions ──────────────────────────────────────────────────────────────
   openForm(): void {
