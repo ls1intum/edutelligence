@@ -332,6 +332,143 @@ class TestLaunchAndSupervision:
         assert events == []
         assert not sessions.manager._supervisors
 
+    async def test_a_settle_racing_the_cancel_loses_to_it(self, monkeypatch, tmp_path):
+        # While the cancel's stop is in flight the supervisor can observe
+        # the exit and settle it. The cancel must own the row before any
+        # container I/O, so the settle's terminal transition loses and the
+        # session ends CANCELLED — no succeeded event, no deploy, no
+        # screenshots for a session the operator just cancelled.
+        from app import sessions
+
+        monkeypatch.setattr(
+            sessions,
+            "settings",
+            replace(sessions.settings, artifact_root=str(tmp_path), deploy_enabled=True),
+        )
+        row = {
+            "status": "running",
+            "container_id": "cid-7",
+            "deploy_to_dev": True,
+            "branch_name": "agent/feature-work/session-7",
+            "screenshot_paths": ["/dashboard"],
+        }
+        order: list = []
+        removed: list = []
+        dispatched: list = []
+        events: list = []
+        claimed: dict = {}
+
+        async def fake_transition(sid, target, **_fields):
+            order.append(("transition", target))
+            # The atomic gate: the row moves once, to whatever claims it
+            # first; every later transition loses.
+            if sid in claimed:
+                return False
+            claimed[sid] = target
+            return True
+
+        async def fake_stop(_cid, **_kwargs):
+            order.append("stop")
+            # The supervisor settles the exit it observes while the stop is
+            # in flight.
+            await sessions.manager._settle(7, exit_code=0, error=None)
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        async def fake_dispatch(**kwargs):
+            dispatched.append(kwargs)
+            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(row))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+
+        moved = await sessions.manager.cancel(7)
+
+        assert moved is True
+        # The claim comes first: CANCELLED before the stop, and the
+        # settle's SUCCEEDED attempt loses the race to it.
+        assert order == [("transition", SessionStatus.CANCELLED), "stop", ("transition", SessionStatus.SUCCEEDED)]
+        assert dispatched == []
+        assert events == [(EventKind.STATUS, {"status": "cancelled"})]
+        assert removed.count("cid-7") >= 1
+
+
+class TestOverlappingAdmission:
+    """Admission under overlapping scheduler passes.
+
+    Every session creation schedules a pass, so passes overlap. The room
+    must be computed from counts read inside the admission lock, after any
+    earlier pass has launched its batch — otherwise each pass admits a full
+    batch from the same stale snapshot and the parallel ceiling is exceeded.
+    """
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_overlapping_passes_cannot_exceed_the_parallel_ceiling(self, monkeypatch, tmp_path):
+        from app import capacity, sessions
+
+        monkeypatch.setattr(
+            sessions,
+            "settings",
+            replace(sessions.settings, artifact_root=str(tmp_path), max_parallel_sessions=2),
+        )
+        reading = capacity.Reading(load=0.0, busy_slots=0, total_slots=1, queue_total=0, ok=True)
+        states = {sid: "queued" for sid in (1, 2, 3, 4)}
+        queue = [{"id": sid, "workspace_id": sid} for sid in states]
+        launched: list = []
+
+        async def fake_in_status(status):
+            # Always a fresh read, like the database: whatever is true now.
+            return [{"id": sid, "workspace_id": sid} for sid, state in states.items() if state == status.value]
+
+        async def fake_claim(limit):
+            claimed = []
+            while limit > 0 and queue:
+                session = queue.pop(0)
+                states[session["id"]] = "starting"
+                claimed.append(session)
+                limit -= 1
+            return claimed
+
+        async def fake_launch(_self, session):
+            # Like the real launch, the row becomes running while the
+            # admission lock is still held.
+            await asyncio.sleep(0)
+            states[session["id"]] = "running"
+            launched.append(session["id"])
+
+        async def fake_event(_sid, _kind, _payload):
+            return None
+
+        monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
+        monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
+
+        await asyncio.gather(sessions.manager.scheduler_pass(), sessions.manager.scheduler_pass())
+
+        # The ceiling is two: the second pass must see the first one's
+        # launches and find no room, not admit another full batch.
+        assert sorted(launched) == [1, 2]
+
 
 class TestScreenshotOrchestration:
     """Where and when the requested dev pages get photographed.
@@ -520,6 +657,49 @@ class TestScreenshotOrchestration:
         skipped = [p for k, p in events if k == EventKind.SCREENSHOT and p.get("status") == "skipped"]
         assert len(skipped) == 1
         assert "did not succeed" in skipped[0]["reason"]
+
+    async def test_screenshots_are_skipped_when_the_requested_deploy_did_not_land(self, monkeypatch, tmp_path):
+        # The session asked for a deploy and it did not land (here: refused,
+        # because no pull request was opened and no image of the branch
+        # exists). The environment still serves the previous revision, so a
+        # photo attributed to this session would document the old code.
+        sessions = self._patch_base(monkeypatch, tmp_path, deploy_enabled=True)
+        row = {**self.SESSION_ROW, "deploy_to_dev": True}
+        events: list = []
+        created: list = []
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-shot"
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def fake_dispatch(**kwargs):
+            raise AssertionError("no image exists to dispatch a deploy of")
+
+        async def fake_build_wait(_branch, **_kwargs):
+            raise AssertionError("no image exists to wait for")
+
+        async def noop(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(row))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "create_screenshot_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+        monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+
+        # No result file, hence no pull request: the deploy is refused and
+        # the photos are skipped with it.
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert created == []
+        skipped = [p for k, p in events if k == EventKind.SCREENSHOT and p.get("status") == "skipped"]
+        assert len(skipped) == 1
+        assert "did not land" in skipped[0]["reason"]
 
 
 class TestSettlementRaceAndDeployTag:
@@ -909,3 +1089,111 @@ class TestRestartReconciliation:
         assert updated == [(7, {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")})]
         assert transitions == [SessionStatus.RUNNING, SessionStatus.PAUSED]
         assert supervised == [(7, "cid-x")]
+
+    async def test_created_container_from_a_starting_row_is_started_not_settled(self, monkeypatch, tmp_path):
+        # The runner restarted between creating and starting the container.
+        # Docker reports it 'created' with exit code 0 — settling that would
+        # record a success for an agent that never ran. A 'starting' row
+        # continues what the launch began: start the container and supervise
+        # it.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        container = {**self.CONTAINER, "State": "created"}
+        updated: list = []
+        transitions: list = []
+        started: list = []
+        supervised: list = []
+        settled: list = []
+
+        async def fake_update(sid, **fields):
+            updated.append((sid, fields))
+
+        async def fake_transition(sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def fake_start(cid):
+            started.append(cid)
+
+        def fake_supervise(_self, sid, cid):
+            supervised.append((sid, cid))
+
+        async def fake_settle(_self, sid, **kwargs):
+            settled.append((sid, kwargs))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", self._async_value([container]))
+        self._patch_rows(monkeypatch, sessions, {SessionStatus.STARTING: [self.STARTING_ROW]})
+        monkeypatch.setattr(sessions.db, "update_session", fake_update)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", fake_supervise)
+        monkeypatch.setattr(sessions.SessionManager, "_settle", fake_settle)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+
+        await sessions.manager._reconcile()
+
+        # No settle: a created container has no exit, however green, and no
+        # orphan removal: the container is put to work.
+        assert settled == []
+        assert started == ["cid-x"]
+        assert transitions == [SessionStatus.RUNNING]
+        assert supervised == [(7, "cid-x")]
+        assert updated == [(7, {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")})]
+
+    async def test_created_container_with_an_occupying_row_is_failed_and_removed(self, monkeypatch, tmp_path):
+        # The container id is only stored once the start succeeded, so a
+        # running row with a created container is inconsistent: it is failed
+        # with a visible reason and removed, never trusted to run the
+        # session.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        container = {**self.CONTAINER, "State": "created"}
+        running_row = {
+            **self.STARTING_ROW,
+            "container_id": "cid-x",
+            "branch_name": "agent/feature-work/session-7",
+        }
+        transitions: list = []
+        started: list = []
+        removed: list = []
+        events: list = []
+
+        async def fake_transition(sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def fake_start(cid):
+            started.append(cid)
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", self._async_value([container]))
+        self._patch_rows(monkeypatch, sessions, {SessionStatus.RUNNING: [running_row]})
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(
+            sessions.db,
+            "get_session",
+            self._async_value({**running_row, "deploy_to_dev": False, "screenshot_paths": []}),
+        )
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+
+        await sessions.manager._reconcile()
+
+        assert started == []
+        # Settled with an error: straight to FAILED from running, no
+        # normalization through states the session never had.
+        assert transitions == [SessionStatus.FAILED]
+        assert removed == ["cid-x"]
+        failed = [p for k, p in events if k == EventKind.STATUS]
+        assert len(failed) == 1
+        assert "never started" in failed[0]["error"]

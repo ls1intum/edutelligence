@@ -90,8 +90,36 @@ async def test_wait_for_pr_builds_selects_the_branch_run(monkeypatch):
 
     assert status == "success"
     assert "actions/runs/1" in detail
-    params = calls[0]["params"]
-    assert params["workflow_id"] == "logos_build-and-push-docker.yml"
+    # The polling must be scoped to the build workflow's own runs endpoint:
+    # the repository-wide /actions/runs listing has no workflow filter, so a
+    # completed run of another workflow on the same branch could otherwise
+    # be mistaken for the build.
+    assert calls[0]["url"] == (
+        "https://api.github.com/repos/ls1intum/edutelligence/actions/workflows/logos_build-and-push-docker.yml/runs"
+    )
+    assert "workflow_id" not in calls[0]["params"]
+
+
+async def test_wait_for_dev_deploy_polls_only_the_deploy_workflow(monkeypatch):
+    # Same scoping for the deploy wait: the dispatched run of the dev deploy
+    # workflow, not any completed run of any workflow on the branch.
+    calls: list = []
+    run = {
+        "head_branch": "agent/feature-work/session-7",
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/ls1intum/edutelligence/actions/runs/9",
+    }
+    fake_client(monkeypatch, calls, runs=[{"head_branch": "other-branch", "status": "completed"}, run])
+
+    status, detail = await github.wait_for_dev_deploy("agent/feature-work/session-7")
+
+    assert status == "success"
+    assert "actions/runs/9" in detail
+    assert calls[0]["url"] == (
+        "https://api.github.com/repos/ls1intum/edutelligence/actions/workflows/logos_deploy-dev.yml/runs"
+    )
+    assert "workflow_id" not in calls[0]["params"]
 
 
 async def test_wait_for_pr_builds_times_out_when_no_build_ran(monkeypatch):

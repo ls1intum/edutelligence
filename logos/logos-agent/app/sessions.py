@@ -156,6 +156,25 @@ class SessionManager:
                 if fields:
                     await db.update_session(sid, **fields)
                 state = (container.get("State") or "").lower()
+                if state == "created":
+                    # The runner restarted between creating and starting the
+                    # container: the agent never ran, so there is no exit to
+                    # settle — settling it would record a success for work
+                    # that never happened. A 'starting' row continues what
+                    # the launch began; any other row is inconsistent (the id
+                    # is only stored once the start succeeded) and is failed
+                    # instead of trusted.
+                    if status is SessionStatus.STARTING:
+                        try:
+                            await docker_engine.start_container(container_id)
+                        except Exception as exc:
+                            await self._settle(sid, exit_code=None, error=f"could not start recovered container: {exc}")
+                        else:
+                            await db.transition_session(sid, SessionStatus.RUNNING)
+                            self._supervise(sid, container_id)
+                    else:
+                        await self._settle(sid, exit_code=None, error="container was created but never started")
+                    continue
                 if state in ("running", "paused"):
                     target = SessionStatus.PAUSED if state == "paused" else SessionStatus.RUNNING
                     if status is SessionStatus.STARTING and target is SessionStatus.PAUSED:
@@ -233,6 +252,12 @@ class SessionManager:
 
         # 3. Admit queued work into whatever room is left.
         async with self._admission_lock:
+            # Re-read inside the lock: every session creation schedules a
+            # pass, so overlapping passes must not admit against a snapshot
+            # the other pass has already made stale — two passes on the same
+            # counts would each claim a full batch and push past the ceiling.
+            running = await db.sessions_in_status(SessionStatus.RUNNING)
+            paused = await db.sessions_in_status(SessionStatus.PAUSED)
             may_start, why = capacity.start_decision(reading, running=len(running), paused=len(paused))
             if not may_start:
                 return
@@ -620,7 +645,9 @@ class SessionManager:
         finished and the environment serves again — is what makes the photos
         show the revision the session just deployed. A session container would
         see the previous revision: it exits long before the deploy dispatch
-        is even made.
+        is even made. A requested deploy that failed or was skipped skips the
+        photos too, for the same reason: the environment would still be
+        serving the previous revision.
         """
         session = await db.get_session(session_id)
         paths = (session or {}).get("screenshot_paths") or []
@@ -643,6 +670,16 @@ class SessionManager:
                     {"status": "skipped", "reason": "dev environment was not serving after the deploy"},
                 )
                 return
+        elif deploy in ("failed", "skipped"):
+            # The session asked for a deploy that did not land (the dispatch
+            # failed, the build did not succeed, or deploys are disabled):
+            # the pages would show the old revision under this session's name.
+            await db.add_event(
+                session_id,
+                EventKind.SCREENSHOT,
+                {"status": "skipped", "reason": f"requested dev deploy did not land ({deploy})"},
+            )
+            return
 
         for name in await self._take_screenshots(session_id, paths):
             await db.add_event(session_id, EventKind.SCREENSHOT, {"name": name})
@@ -732,21 +769,34 @@ class SessionManager:
             return False
 
         container_id = session.get("container_id")
-        if container_id:
-            # Unpause first: a paused container cannot process the stop signal,
-            # and Docker would otherwise wait out the full grace period.
-            await docker_engine.unpause_container(container_id)
-            await docker_engine.stop_container(container_id, timeout_s=5)
-
+        # Claim the terminal state before any container I/O: stopping the
+        # container is what produces the exit the supervisor settles, and
+        # that settle must lose this race — otherwise the cancellation lands
+        # as FAILED or SUCCEEDED, complete with the deploy and screenshot
+        # side effects of a finished session.
         moved = await db.transition_session(session_id, SessionStatus.CANCELLED, finished_at=datetime.now(timezone.utc))
-        if moved:
-            await db.add_event(session_id, EventKind.STATUS, {"status": "cancelled"})
-            task = self._supervisors.pop(session_id, None)
-            if task:
-                task.cancel()
-            if container_id:
+        if not moved:
+            return False
+
+        await db.add_event(session_id, EventKind.STATUS, {"status": "cancelled"})
+        task = self._supervisors.pop(session_id, None)
+        if task:
+            task.cancel()
+        if container_id:
+            try:
+                # Unpause first: a paused container cannot process the stop
+                # signal, and Docker would otherwise wait out the full grace
+                # period.
+                await docker_engine.unpause_container(container_id)
+                await docker_engine.stop_container(container_id, timeout_s=5)
+            except Exception:
+                logger.warning("could not stop the container of cancelled session %s", session_id)
+            try:
+                # A supervisor settling the same exit may remove it first.
                 await docker_engine.remove_container(container_id)
-        return moved
+            except Exception:
+                logger.warning("could not remove the container of cancelled session %s", session_id)
+        return True
 
 
 manager = SessionManager()

@@ -73,9 +73,14 @@ async def wait_for_dev_deploy(ref: str, *, timeout_s: float = 20 * 60, poll_s: f
     ``"timeout"``. The workflow itself ends as soon as ``docker compose up``
     returns, so success means the new revision is started, not that it is
     healthy — callers that need the environment ready still probe it.
+
+    The runs endpoint is the workflow-scoped one: the repository-wide
+    ``/actions/runs`` listing does not accept a ``workflow_id`` filter, so an
+    unrelated completed run on the same branch could be mistaken for the
+    deploy.
     """
-    url = f"{_API}/repos/{settings.repo_slug}/actions/runs"
-    params = {"workflow_id": settings.deploy_workflow, "per_page": 10}
+    url = f"{_API}/repos/{settings.repo_slug}/actions/workflows/{settings.deploy_workflow}/runs"
+    params = {"per_page": 10}
     deadline = asyncio.get_running_loop().time() + timeout_s
 
     async def latest_run_for_ref() -> dict | None:
@@ -113,10 +118,12 @@ async def wait_for_pr_builds(branch: str, *, timeout_s: float = 20 * 60, poll_s:
     point at main.
 
     Returns ``(status, detail)``: status is ``"success"``, ``"failed"``, or
-    ``"timeout"`` — the same shape as :func:`wait_for_dev_deploy`.
+    ``"timeout"`` — the same shape as :func:`wait_for_dev_deploy`. As there,
+    the polling is scoped to the build workflow's own runs endpoint, so a
+    completed run of another workflow on the same branch cannot end the wait.
     """
-    url = f"{_API}/repos/{settings.repo_slug}/actions/runs"
-    params = {"workflow_id": settings.build_workflow, "per_page": 10}
+    url = f"{_API}/repos/{settings.repo_slug}/actions/workflows/{settings.build_workflow}/runs"
+    params = {"per_page": 10}
     deadline = asyncio.get_running_loop().time() + timeout_s
 
     async def latest_build_for_branch() -> dict | None:
