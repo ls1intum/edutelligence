@@ -455,6 +455,7 @@ async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
         skip_laura=False,
         priority=1,
         required_provider_id=None,
+        ingress_at=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -510,6 +511,7 @@ async def test_execute_proxy_mode_resolves_model_name_case_insensitively(monkeyp
         skip_laura=False,
         priority=1,
         required_provider_id=None,
+        ingress_at=None,
     ):
         called["body"] = body
         return {"status": "resource"}
