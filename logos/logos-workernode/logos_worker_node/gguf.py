@@ -198,11 +198,16 @@ def is_nonstandard_gguf_quant_type(quant_type: str) -> bool:
 
 
 def is_remote_gguf_ref(model: str) -> bool:
-    """Whether *model* is a ``<repo_id>:<quant_type>`` GGUF reference."""
+    """Whether *model* is a ``<repo_id>:<quant_type>`` GGUF reference.
+
+    The quant token is matched case-insensitively (the canonical form is
+    uppercase), so ``org/model-GGUF:q4_k_m`` is recognized the same as
+    ``org/model-GGUF:Q4_K_M``.
+    """
     model = (model or "").strip()
     if not _REMOTE_GGUF_RE.fullmatch(model):
         return False
-    quant_type = model.rsplit(":", 1)[1]
+    quant_type = model.rsplit(":", 1)[1].upper()
     return is_valid_gguf_quant_type(quant_type) or is_nonstandard_gguf_quant_type(quant_type)
 
 
@@ -353,44 +358,74 @@ def select_quant(candidates: list[tuple[str, int]], preferred: str = "") -> str 
     return quant
 
 
+def _active_revision(refs_dir: Path) -> str | None:
+    """The revision a repo's ``refs`` currently point at, or None if unclear.
+
+    ``refs/main`` is preferred; a single other ref (a default branch not named
+    ``main``) is the fallback. Ambiguous or absent refs yield None, so the
+    caller treats the local listing as unavailable rather than guessing which
+    of several cached revisions is the current one.
+    """
+    main_ref = refs_dir / "main"
+    if main_ref.is_file():
+        try:
+            return main_ref.read_text().strip() or None
+        except OSError:
+            return None
+    try:
+        refs = [p for p in refs_dir.iterdir() if p.is_file()]
+    except OSError:
+        return None
+    if len(refs) != 1:
+        return None
+    try:
+        return refs[0].read_text().strip() or None
+    except OSError:
+        return None
+
+
 def list_cached_gguf_files(hf_home: str | None, model: str) -> list[tuple[str, int]] | None:
     """(name, size) pairs of *model*'s GGUF files in the local HF cache.
 
     Returns the (possibly empty) list of ``(name, size)`` pairs when the model
     directory exists under ``<hf_home>/hub/models--<org>--<name>``, and None
-    when it does not (model not downloaded yet — the caller may then fall
-    back to a remote listing). An empty list is authoritative: the repo is
-    cached and contains no GGUF weights. Each snapshot revision is walked
-    recursively — GGUF repositories often keep their weights in
-    subdirectories (``quants/``) — but never past it, so discovery stays
-    bounded to this model and does not scan the whole cache. Names are
-    snapshot-relative, so a nested file surfaces as
-    ``quants/Qwen3-8B-Q4_K_M.gguf`` (the quant helpers basename their input,
-    so the prefix is harmless). Sizes let :func:`select_quant` order the
-    fallback by file size instead of relying on listing order.
+    when it does not (model not downloaded yet) or its active revision cannot
+    be resolved — the caller may then fall back to a remote listing. An empty
+    list is authoritative: the repo is cached and contains no GGUF weights.
+
+    Only the snapshot the repo's ``refs`` currently point at is walked
+    recursively. Walking every cached revision instead would merge files from
+    obsolete revisions, so a quant removed from the active branch could still
+    be offered from a stale snapshot and selected for a ``repo:quant`` target
+    the repository no longer serves. GGUF repositories often keep their weights
+    in subdirectories (``quants/``), which this bounded walk still reaches.
+    Names are snapshot-relative (``quants/Qwen3-8B-Q4_K_M.gguf``); the quant
+    helpers basename their input, so the prefix is harmless. Sizes let
+    :func:`select_quant` order the fallback by file size instead of relying on
+    listing order.
     """
     if not hf_home:
         return None
     repo = repo_id_of(model)
     if "/" not in repo:
         return None
-    snapshots = Path(hf_home) / "hub" / hf_cache_dir_name(model) / "snapshots"
-    if not snapshots.is_dir():
+    repo_dir = Path(hf_home) / "hub" / hf_cache_dir_name(model)
+    revision = _active_revision(repo_dir / "refs")
+    if not revision:
+        return None
+    snapshot = repo_dir / "snapshots" / revision
+    if not snapshot.is_dir():
         return None
     sizes: dict[str, int] = {}
     try:
-        for rev_dir in snapshots.iterdir():
-            if not rev_dir.is_dir():
+        for entry in snapshot.rglob("*.gguf"):
+            try:
+                # stat() follows the snapshot symlink into blobs/
+                size = entry.stat().st_size
+                if size > 0:
+                    sizes[str(entry.relative_to(snapshot))] = size
+            except OSError:
                 continue
-            # Bounded to this revision, never the whole cache.
-            for entry in rev_dir.rglob("*.gguf"):
-                try:
-                    # stat() follows the snapshot symlink into blobs/
-                    size = entry.stat().st_size
-                    if size > 0:
-                        sizes[str(entry.relative_to(rev_dir))] = size
-                except OSError:
-                    continue
     except OSError:
         return None
     return sorted(sizes.items())
@@ -527,8 +562,19 @@ def resolve_gguf_spec(
     quant_override = (gguf_quant or "").strip()
 
     if is_explicit_gguf_ref(model):
-        quant = model.rsplit(":", 1)[1] if is_remote_gguf_ref(model) else None
-        return GgufServeSpec(model=model, serve_ref=model, quant=quant, tokenizer=tokenizer)
+        if is_remote_gguf_ref(model):
+            # Canonicalize the quant to its uppercase form so vllm/the plugin
+            # receive the same reference whether the operator typed it upper-
+            # or lowercase; the download patterns already match both cases.
+            repo, quant = model.rsplit(":", 1)
+            quant = quant.upper()
+            return GgufServeSpec(
+                model=model,
+                serve_ref=f"{repo}:{quant}",
+                quant=quant,
+                tokenizer=tokenizer,
+            )
+        return GgufServeSpec(model=model, serve_ref=model, quant=None, tokenizer=tokenizer)
 
     looks_like_gguf_repo = is_gguf_repo_name(model)
     # An authoritative listing (a list — from the local cache or the Hub) that
