@@ -31,13 +31,25 @@ class _FakeWebSocket:
         self.sent: list[dict] = []
         self.auto_ack = True
         self._registry: LogosNodeRuntimeRegistry | None = None
+        # Set from send_json the moment the command frame is on the wire.
+        # Waiting on these instead of a bare asyncio.sleep(0) keeps the tests
+        # deterministic: a sleep(0) yields only once, and the dispatch task
+        # may not have reached send_json yet (it awaits the session lookup
+        # and the send lock first).
+        self.stream_command_sent = asyncio.Event()
+        self.infer_command_sent = asyncio.Event()
 
     def bind(self, registry: LogosNodeRuntimeRegistry) -> None:
         self._registry = registry
 
     async def send_json(self, message: dict) -> None:
         self.sent.append(message)
-        if self.auto_ack and self._registry is not None and message.get("action") == CANCEL_COMMAND_ACTION:
+        action = message.get("action")
+        if action == "infer_stream":
+            self.stream_command_sent.set()
+        elif action == "infer":
+            self.infer_command_sent.set()
+        if self.auto_ack and self._registry is not None and action == CANCEL_COMMAND_ACTION:
             # Answer the cancel RPC the way a worker would, so the
             # fire-and-forget task completes instead of timing out.
             await self._registry.on_command_result(
@@ -96,7 +108,7 @@ async def test_abandoned_stream_is_cancelled_on_the_worker():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     assert await consumer == b"tok"
@@ -116,7 +128,7 @@ async def test_a_stream_that_finished_normally_is_not_cancelled():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
@@ -135,7 +147,7 @@ async def test_a_worker_reported_stream_failure_is_not_cancelled():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
     with pytest.raises(Exception, match="lane died"):
@@ -153,7 +165,7 @@ async def test_a_worker_without_the_capability_is_left_alone():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
@@ -170,7 +182,7 @@ async def test_cancellation_clears_the_pending_stream_entry():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
@@ -190,7 +202,7 @@ async def test_abandoned_sync_infer_is_cancelled_on_the_worker():
     registry, websocket = _registry_with_session()
 
     call = asyncio.ensure_future(registry.send_command(PROVIDER_ID, "infer", {"lane_id": "lane-a"}))
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.infer_command_sent.wait(), timeout=1)
     cmd_id = next(m["cmd_id"] for m in websocket.sent if m.get("action") == "infer")
 
     call.cancel()
@@ -364,7 +376,7 @@ async def test_an_abandoned_response_reaches_the_worker_as_a_cancellation(monkey
             },
         )
     )
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"data: {}\n\n"})
     response = await response_task
@@ -409,7 +421,7 @@ async def test_an_aborted_generation_is_counted():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
@@ -428,7 +440,7 @@ async def test_a_worker_that_cannot_cancel_is_counted_separately():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
