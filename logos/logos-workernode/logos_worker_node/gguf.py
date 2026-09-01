@@ -391,6 +391,32 @@ def list_cached_gguf_files(hf_home: str | None, model: str) -> list[tuple[str, i
     return sorted(sizes.items())
 
 
+def effective_hf_home(explicit: str | None, default: str = "") -> str:
+    """HF cache root to consult for a local GGUF listing.
+
+    Precedence: an explicit root (the RAM cache / operator override) > the
+    inherited ``HF_HOME`` environment variable > *default* (the resolved
+    persistent cache). Returns an empty string when nothing is set, so the
+    caller can fall back to a HuggingFace Hub listing. Respecting the
+    inherited ``HF_HOME`` keeps the listing lookup in the same directory the
+    lane and the startup prefetch actually use. Each candidate is stripped
+    before the truthiness check so a blank value falls through to the next.
+    """
+    return (explicit or "").strip() or os.environ.get("HF_HOME", "").strip() or (default or "").strip()
+
+
+def needs_hub_listing(local_listing: list[tuple[str, int]] | None, model: str) -> bool:
+    """Whether to fetch *model*'s GGUF file listing from the HuggingFace Hub.
+
+    A listing the local cache produced — non-empty OR empty — is authoritative
+    (an empty one proves the repo holds no GGUF weights), so only an absent
+    listing (``None``) for a repo whose name follows the ``…-GGUF`` convention
+    triggers a Hub fetch. This keeps locally cached models resolvable offline
+    and stops redundant boot-time downloads.
+    """
+    return local_listing is None and is_gguf_repo_name(model)
+
+
 @lru_cache(maxsize=64)
 def fetch_repo_gguf_files(repo_id: str) -> tuple[tuple[str, int], ...]:
     """List ``(path, size)`` pairs of *repo_id*'s ``.gguf`` files on the Hub.
