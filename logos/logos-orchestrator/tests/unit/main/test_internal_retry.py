@@ -60,6 +60,7 @@ class _FakePipeline:
     def __init__(self, results):
         self.results = list(results)
         self.requests = []
+        self.discard_calls = []
         self.scheduler = MagicMock()
 
     async def process(self, request):
@@ -67,6 +68,9 @@ class _FakePipeline:
         if not self.results:
             raise AssertionError("pipeline.process called more times than scripted")
         return self.results.pop(0)
+
+    def discard_request(self, request_id, result_status):
+        self.discard_calls.append((request_id, result_status))
 
     def record_completion(self, **kwargs):  # noqa: ARG002
         return None
@@ -780,6 +784,144 @@ async def test_schedule_stream_resume_rejects_non_vllm_lane_takeover(retry_env):
 
     assert out is None
     pipeline.scheduler.release.assert_called_once_with(27, 9, "logosnode", "req-1")
+
+
+# ---------------------------------------------------------------------------
+# Resume re-enqueueing keeps one terminal outcome per enqueue
+# ---------------------------------------------------------------------------
+
+
+def _requests_total_counts() -> dict[str, float]:
+    from logos.monitoring import prometheus_metrics as prom
+
+    counts: dict[str, float] = {}
+    for metric in prom.registry.collect():
+        if metric.name != "logos_requests":
+            continue
+        for sample in metric.samples:
+            if sample.name.endswith("_total"):
+                counts[sample.labels["status"]] = sample.value
+    return counts
+
+
+def _requests_in_flight() -> float:
+    from logos.monitoring import prometheus_metrics as prom
+
+    for metric in prom.registry.collect():
+        if metric.name == "logos_requests_in_flight":
+            for sample in metric.samples:
+                return sample.value
+    return 0.0
+
+
+class _EnqueueTrackingPipeline:
+    """Pipeline stub that honours the real monitoring contract: every
+    process() enqueues the request (as ``RequestPipeline.process`` does)
+    and discard_request settles it, both on a real recorder — so the
+    counter arithmetic under test is the production arithmetic."""
+
+    def __init__(self, recorder, results):
+        self._recorder = recorder
+        self.results = list(results)
+        self.requests = []
+        self.scheduler = MagicMock()
+
+    async def process(self, request):
+        self.requests.append(request)
+        self._recorder.record_enqueue(
+            request_id=request.request_id,
+            model_id=27,
+            provider_id=1,
+            initial_priority="normal",
+            queue_depth=0,
+        )
+        if not self.results:
+            raise AssertionError("pipeline.process called more times than scripted")
+        return self.results.pop(0)
+
+    def discard_request(self, request_id, result_status):
+        self._recorder.discard(request_id, result_status)
+
+    def record_completion(self, **kwargs):  # noqa: ARG002
+        return None
+
+
+def _resume_call_kwargs():
+    return dict(
+        model_id=27,
+        failed_provider_id=1,
+        deployments=DEPLOYMENTS,
+        resume_payload={"messages": []},
+        request_path=None,
+        policy=None,
+        default_priority=0,
+        api_key_id=None,
+        budget=main.RetryBudget(max_attempts=3, deadline_s=100.0, now=lambda: 1000.0),
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_stream_resume_settles_the_failed_attempt_before_reenqueueing(retry_env):
+    """The resume re-queues the same request id, replacing the tracked
+    state: without a terminal for the failed first attempt, the streamer's
+    single final record_completion leaves two enqueues with one outcome.
+    The invariant — one terminal state per enqueue — is asserted on the
+    real counters."""
+    from logos.monitoring.recorder import MonitoringRecorder
+
+    ctx = SimpleNamespace(model_id=27, provider_id=2, provider_type="logosnode", lane_id="lane-2", engine="vllm")
+    recorder = MonitoringRecorder(db_factory=_FakeDB)
+    pipeline = _EnqueueTrackingPipeline(recorder, [_result_with_context(ctx)])
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    request_id = "req-resume-settle"
+    before = _requests_total_counts()
+    in_flight_before = _requests_in_flight()
+    # The main handler enqueued the initial attempt before the stream ran.
+    recorder.record_enqueue(request_id, 27, 1, "normal", 0)
+
+    out = await main._schedule_stream_resume(request_id=request_id, **_resume_call_kwargs())
+    assert out is ctx
+    # The streamer's single final settlement closes the resumed attempt.
+    recorder.record_complete(request_id, "success")
+
+    after = _requests_total_counts()
+    delta = {status: after.get(status, 0.0) - before.get(status, 0.0) for status in ("enqueued", "error", "success")}
+    assert delta["enqueued"] == 2  # the initial attempt and the resume
+    assert delta["error"] == 1  # the failed attempt, settled before the re-enqueue
+    assert delta["success"] == 1  # the final settlement of the resume
+    assert delta["error"] + delta["success"] == delta["enqueued"], "one terminal per enqueue must hold"
+    assert _requests_in_flight() == in_flight_before, "the gauge must return to where it started"
+
+
+@pytest.mark.asyncio
+async def test_schedule_stream_resume_settles_the_attempt_even_when_the_resume_is_not_scheduled(retry_env):
+    """The re-queue counts even when the re-schedule itself fails, so the
+    failed first attempt needs its terminal in that case too: the streamer
+    ends in the error frame and its settlement covers the re-queue, not the
+    attempt that produced the partial answer."""
+    from logos.monitoring.recorder import MonitoringRecorder
+
+    recorder = MonitoringRecorder(db_factory=_FakeDB)
+    pipeline = _EnqueueTrackingPipeline(recorder, [_fail_result("no capacity left")])
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    request_id = "req-resume-settle-failed"
+    before = _requests_total_counts()
+    in_flight_before = _requests_in_flight()
+    recorder.record_enqueue(request_id, 27, 1, "normal", 0)
+
+    out = await main._schedule_stream_resume(request_id=request_id, **_resume_call_kwargs())
+    assert out is None
+    # The streamer ends in the error frame and settles once.
+    recorder.record_complete(request_id, "error")
+
+    after = _requests_total_counts()
+    delta = {status: after.get(status, 0.0) - before.get(status, 0.0) for status in ("enqueued", "error", "success")}
+    assert delta["enqueued"] == 2  # the initial attempt and the (failed) re-queue
+    assert delta["error"] == 2  # one terminal per enqueue, both failed
+    assert delta["success"] == 0
+    assert _requests_in_flight() == in_flight_before, "the gauge must return to where it started"
 
 
 # ---------------------------------------------------------------------------

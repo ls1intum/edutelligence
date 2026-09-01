@@ -561,6 +561,77 @@ async def test_a_split_first_frame_is_held_until_it_completes_then_replayed(monk
     assert body == role_only_head + role_only_tail + content_frame + done_frame
 
 
+@pytest.mark.asyncio
+async def test_a_legacy_completion_text_chunk_starts_the_stream(monkeypatch):
+    """End to end: /v1/completions streams carry the generated output in
+    ``choices[].text``, not in a delta. Such a chunk is output — it must
+    commit the 200 the moment it arrives, not be buffered until [DONE]
+    (which would retain the whole answer in memory and destroy TTFT)."""
+    from fastapi.responses import StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"prompt": "Say hello"},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-legacy-completions",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+
+    first = (
+        b'data: {"id": "cmpl-1", "object": "text_completion", '
+        b'"choices": [{"text": "Hel", "index": 0, "logprobs": null, "finish_reason": null}]}\n\n'
+    )
+    second = (
+        b'data: {"id": "cmpl-1", "object": "text_completion", '
+        b'"choices": [{"text": "lo", "index": 0, "logprobs": null, "finish_reason": null}]}\n\n'
+    )
+    done_frame = b"data: [DONE]\n\n"
+
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": first})
+    # The response must be back before any further chunk arrives: the first
+    # text chunk already committed the stream.
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": second})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": done_frame})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": True})
+
+    body = b"".join([part async for part in response.body_iterator])
+    await _drain_pending_tasks()
+
+    assert body == first + second + done_frame
+
+
 # ---------------------------------------------------------------------------
 # Non-streaming path — same exposure, same fix
 # ---------------------------------------------------------------------------

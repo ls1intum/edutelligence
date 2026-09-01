@@ -3682,6 +3682,15 @@ async def _schedule_stream_resume(
         context_resolve_timeout_s=budget.remaining_s(),
         context_resolve_deadline=budget.deadline_at,
     )
+    # The failed attempt is still the request's open enqueue. The process()
+    # below enqueues the same id again and replaces the tracked state, so
+    # without a terminal for the failed attempt here, the streamer's single
+    # final record_completion would settle two enqueues with one outcome.
+    # Settle it now — metrics only, via discard: the request itself is not
+    # done, so the log row keeps its place for the final settlement of the
+    # (resumed or failed) stream.
+    if request_id is not None:
+        _pipeline.discard_request(request_id, "error")
     try:
         result = await _pipeline.process(resume_request)
     except Exception as exc:  # noqa: BLE001
@@ -3729,12 +3738,15 @@ class _SsePreCommitGate:
     therefore keeps the trailing line until its newline arrives and
     classifies only complete lines:
 
-    - a data line that parses to a chat-completion frame whose deltas carry
-      no content and no structured key (tool calls, function calls, audio)
-      is protocol metadata — hold it;
-    - anything else — real content, a structured delta, data that does not
-      parse, a non-data line, a terminal event — is output: the stream
-      starts, when in doubt.
+    - a data line that parses to a completion frame carrying no generated
+      text — a chat frame whose deltas have neither content nor a
+      structured key (tool calls, function calls, audio), a legacy
+      ``/v1/completions`` frame whose ``choices[].text`` is empty — is
+      protocol metadata: hold it;
+    - anything else — real content, a structured delta, a legacy
+      ``choices[].text`` that carries text, data that does not parse, a
+      non-data line, a terminal event — is output: the stream starts,
+      when in doubt.
 
     Binary (audio-upload) streams are never gated: their payload is not SSE
     and every byte is output.
@@ -3774,7 +3786,13 @@ class _SsePreCommitGate:
         if not isinstance(blob, dict) or not isinstance(blob.get("choices"), list):
             return True  # non-chat protocol event or degenerate frame — output
         for choice in blob["choices"]:
-            delta = choice.get("delta", {}) if isinstance(choice, dict) else None
+            if not isinstance(choice, dict):
+                return True
+            if choice.get("text"):
+                # Legacy /v1/completions carries the generated output in
+                # choices[].text instead of a delta — output.
+                return True
+            delta = choice.get("delta", {})
             if not isinstance(delta, dict):
                 return True
             if delta.get("content") or any(key in delta for key in _STRUCTURED_DELTA_KEYS):
