@@ -607,13 +607,17 @@ class SessionManager:
         try:
             # Dispatched from here, never from the container: the workflow-scoped
             # token stays in this service, and the workflow itself is pinned to
-            # the dev environment. The tag is the pull request build's, never
-            # latest: branch pushes never build, and latest still points at
-            # main, so a latest dispatch would deploy the old revision.
+            # the dev environment. The dispatch carries the prebuilt image tag
+            # and nothing else branch-derived: the workflow checks out the
+            # repository to copy the compose file to the dev host, so it runs
+            # on a fixed trusted ref, never the session's agent-editable
+            # branch. The tag is the pull request build's, never latest:
+            # branch pushes never build, and latest still points at main, so
+            # a latest dispatch would deploy the old revision.
             image_tag = await self._wait_for_session_image(session_id, result, session.get("branch_name") or "main")
             if image_tag is None:
                 return "failed"
-            run_url = await github.dispatch_dev_deploy(ref=session.get("branch_name") or "main", image_tag=image_tag)
+            run_url = await github.dispatch_dev_deploy(image_tag=image_tag)
             await db.update_session(session_id, deployed_at=datetime.now(timezone.utc))
             await db.add_event(
                 session_id,
@@ -681,7 +685,7 @@ class SessionManager:
             return
 
         if deploy == "dispatched":
-            status, detail = await github.wait_for_dev_deploy((session or {}).get("branch_name") or "main")
+            status, detail = await github.wait_for_dev_deploy()
             if status != "success":
                 await db.add_event(
                     session_id,

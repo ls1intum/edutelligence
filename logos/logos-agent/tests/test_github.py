@@ -57,20 +57,23 @@ def test_pr_number_from_url():
     assert github.pr_number_from_url("https://github.com/ls1intum/edutelligence/pull/not-a-number") is None
 
 
-async def test_dispatch_posts_the_pr_image_tag(monkeypatch):
+async def test_dispatch_posts_the_pr_image_tag_on_the_trusted_ref(monkeypatch):
     # The dispatch is what the deploy workflow pulls: the tag must be the one
     # the caller resolved (the PR build's), forwarded as the image-tag input.
+    # The ref is the fixed trusted one, never a session branch — the workflow
+    # checks out the repository to copy the compose file to the dev host, so
+    # a branch ref would let the agent's own compose edits run there.
     calls: list = []
     fake_client(monkeypatch, calls)
 
-    url = await github.dispatch_dev_deploy(ref="agent/feature-work/session-7", image_tag="pr-772")
+    url = await github.dispatch_dev_deploy(image_tag="pr-772")
 
     post = calls[0]
     assert post["method"] == "POST"
     assert post["url"] == (
         "https://api.github.com/repos/ls1intum/edutelligence/actions/workflows/logos_deploy-dev.yml/dispatches"
     )
-    assert post["json"] == {"ref": "agent/feature-work/session-7", "inputs": {"image-tag": "pr-772"}}
+    assert post["json"] == {"ref": "main", "inputs": {"image-tag": "pr-772"}}
     assert url.startswith("https://github.com/ls1intum/edutelligence/actions/workflows/logos_deploy-dev.yml")
 
 
@@ -100,26 +103,55 @@ async def test_wait_for_pr_builds_selects_the_branch_run(monkeypatch):
     assert "workflow_id" not in calls[0]["params"]
 
 
-async def test_wait_for_dev_deploy_polls_only_the_deploy_workflow(monkeypatch):
-    # Same scoping for the deploy wait: the dispatched run of the dev deploy
-    # workflow, not any completed run of any workflow on the branch.
+async def test_wait_for_dev_deploy_ignores_runs_on_session_branches(monkeypatch):
+    # Deploys are dispatched on the trusted ref only, so the wait observes
+    # runs there: a completed run on a session branch (manual or leftover)
+    # must not end the wait, but the completed run on the trusted ref does.
     calls: list = []
     run = {
-        "head_branch": "agent/feature-work/session-7",
+        "head_branch": "main",
         "status": "completed",
         "conclusion": "success",
         "html_url": "https://github.com/ls1intum/edutelligence/actions/runs/9",
     }
-    fake_client(monkeypatch, calls, runs=[{"head_branch": "other-branch", "status": "completed"}, run])
+    fake_client(
+        monkeypatch,
+        calls,
+        runs=[
+            {"head_branch": "agent/feature-work/session-7", "status": "completed", "conclusion": "success"},
+            run,
+        ],
+    )
 
-    status, detail = await github.wait_for_dev_deploy("agent/feature-work/session-7")
+    status, detail = await github.wait_for_dev_deploy()
 
     assert status == "success"
     assert "actions/runs/9" in detail
+    # Same scoping as the build wait: the workflow-scoped runs endpoint, so a
+    # completed run of another workflow on the same ref is not the deploy.
     assert calls[0]["url"] == (
         "https://api.github.com/repos/ls1intum/edutelligence/actions/workflows/logos_deploy-dev.yml/runs"
     )
     assert "workflow_id" not in calls[0]["params"]
+
+
+async def test_wait_for_dev_deploy_times_out_without_a_trusted_ref_run(monkeypatch):
+    # Without a run on the trusted ref there is no deploy to observe: the
+    # wait must time out, not hang, even when session-branch runs completed.
+    calls: list = []
+    fake_client(
+        monkeypatch,
+        calls,
+        runs=[
+            {"head_branch": "agent/feature-work/session-7", "status": "completed", "conclusion": "success"},
+            {"head_branch": "other-branch", "status": "in_progress"},
+        ],
+    )
+
+    status, detail = await github.wait_for_dev_deploy(timeout_s=0.05, poll_s=0.01)
+
+    assert status == "timeout"
+    assert "still running" in detail
 
 
 async def test_wait_for_pr_builds_times_out_when_no_build_ran(monkeypatch):

@@ -573,7 +573,7 @@ class TestScreenshotOrchestration:
             order.append("dispatch")
             return "https://github.com/ls1intum/edutelligence/actions/runs/1"
 
-        async def fake_wait(ref, **_kwargs):
+        async def fake_wait(**_kwargs):
             order.append("wait")
             return "success", "run ended: success"
 
@@ -627,7 +627,7 @@ class TestScreenshotOrchestration:
         async def fake_dispatch(**_kwargs):
             return "https://github.com/ls1intum/edutelligence/actions/runs/1"
 
-        async def fake_wait(_ref, **_kwargs):
+        async def fake_wait(**_kwargs):
             return "timeout", "still running after 1200s"
 
         async def fake_create(**kwargs):
@@ -822,7 +822,10 @@ class TestSettlementRaceAndDeployTag:
 
         await sessions.manager._settle(7, exit_code=0, error=None)
 
-        assert dispatched == [{"ref": "agent/feature-work/session-7", "image_tag": "pr-772"}]
+        # The dispatch receives the prebuilt image tag and nothing branch-derived:
+        # the workflow runs on a fixed trusted ref, so the session's agent-editable
+        # branch never reaches the dev host.
+        assert dispatched == [{"image_tag": "pr-772"}]
         # The build wait happens before the dispatch, and the dispatched
         # event records the tag the environment now serves.
         build_idx = order.index(("build_wait", "agent/feature-work/session-7"))

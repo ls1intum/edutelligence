@@ -25,6 +25,13 @@ _API = "https://api.github.com"
 # the agent runner into a production deploy button.
 _ALLOWED_WORKFLOWS = frozenset({"logos_deploy-dev.yml"})
 
+# The ref the deploy workflow always runs on. It checks out the repository to
+# copy docker-compose.yaml to the dev host, so that checkout must never come
+# from a session branch — branch files are agent-editable, and a compose
+# change there would execute on the dev host, outside the container sandbox.
+# The session's code still reaches dev, but only as the prebuilt image tag.
+_DEPLOY_REF = "main"
+
 
 class GitHubError(RuntimeError):
     pass
@@ -40,12 +47,15 @@ def _headers() -> dict[str, str]:
     }
 
 
-async def dispatch_dev_deploy(*, ref: str, image_tag: str = "latest") -> str:
+async def dispatch_dev_deploy(*, image_tag: str) -> str:
     """Trigger the dev deployment workflow and return a link to the run.
 
     Refuses any workflow other than the dev one. The dev deploy workflow is
-    itself pinned to the dev environment, so this is two independent locks on
-    the same door.
+    itself pinned to the dev environment and dispatched on the fixed trusted
+    ref :data:`_DEPLOY_REF` — never on a session branch, since the workflow
+    checks out the repository to copy ``docker-compose.yaml`` to the dev
+    host, and a branch ref would let session edits run there. The only
+    branch-derived value the workflow receives is the prebuilt image tag.
     """
     workflow = settings.deploy_workflow
     if workflow not in _ALLOWED_WORKFLOWS:
@@ -58,7 +68,7 @@ async def dispatch_dev_deploy(*, ref: str, image_tag: str = "latest") -> str:
         response = await client.post(
             url,
             headers=_headers(),
-            json={"ref": ref, "inputs": {"image-tag": image_tag}},
+            json={"ref": _DEPLOY_REF, "inputs": {"image-tag": image_tag}},
         )
     if response.status_code not in (201, 204):
         raise GitHubError(f"workflow dispatch failed ({response.status_code}): {response.text}")
@@ -66,7 +76,7 @@ async def dispatch_dev_deploy(*, ref: str, image_tag: str = "latest") -> str:
     return f"https://github.com/{settings.repo_slug}/actions/workflows/{workflow}"
 
 
-async def wait_for_dev_deploy(ref: str, *, timeout_s: float = 20 * 60, poll_s: float = 15.0) -> tuple[str, str]:
+async def wait_for_dev_deploy(*, timeout_s: float = 20 * 60, poll_s: float = 15.0) -> tuple[str, str]:
     """Wait for the dev deploy run we just dispatched to reach a conclusion.
 
     Returns ``(status, detail)``: status is ``"success"``, ``"failed"``, or
@@ -74,34 +84,38 @@ async def wait_for_dev_deploy(ref: str, *, timeout_s: float = 20 * 60, poll_s: f
     returns, so success means the new revision is started, not that it is
     healthy — callers that need the environment ready still probe it.
 
-    The runs endpoint is the workflow-scoped one: the repository-wide
-    ``/actions/runs`` listing does not accept a ``workflow_id`` filter, so an
-    unrelated completed run on the same branch could be mistaken for the
-    deploy.
+    Runs are observed on the trusted ref :data:`_DEPLOY_REF`, the same ref
+    every dispatch targets: the newest run of the workflow on that ref is
+    the one the environment is converging to (the workflow's concurrency
+    group cancels a superseded run), and completed runs on session branches
+    are ignored rather than mistaken for our deploy. The runs endpoint is
+    the workflow-scoped one: the repository-wide ``/actions/runs`` listing
+    does not accept a ``workflow_id`` filter, so an unrelated completed run
+    of another workflow could be mistaken for the deploy.
     """
     url = f"{_API}/repos/{settings.repo_slug}/actions/workflows/{settings.deploy_workflow}/runs"
     params = {"per_page": 10}
     deadline = asyncio.get_running_loop().time() + timeout_s
 
-    async def latest_run_for_ref() -> dict | None:
+    async def latest_run_on_trusted_ref() -> dict | None:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=_headers(), params=params)
         if response.status_code != 200:
             raise GitHubError(f"workflow run lookup failed ({response.status_code})")
         for run in response.json().get("workflow_runs", []):
-            if run.get("head_branch") == ref:
+            if run.get("head_branch") == _DEPLOY_REF:
                 return run
         return None
 
     try:
         while True:
-            run = await latest_run_for_ref()
+            run = await latest_run_on_trusted_ref()
             if run is not None and run.get("status") == "completed":
                 conclusion = run.get("conclusion") or "unknown"
                 status = "success" if conclusion == "success" else "failed"
                 return status, f"run {run.get('html_url')} ended: {conclusion}"
             if asyncio.get_running_loop().time() >= deadline:
-                return "timeout", f"dev deploy for '{ref}' still running after {timeout_s:.0f}s"
+                return "timeout", f"dev deploy still running after {timeout_s:.0f}s"
             await asyncio.sleep(poll_s)
     except Exception as exc:
         logger.warning("waiting for the dev deploy run failed: %s", exc)

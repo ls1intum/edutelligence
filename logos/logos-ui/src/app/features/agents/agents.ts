@@ -160,10 +160,13 @@ export class Agents implements OnInit {
       if (fresh.length > 0) {
         this.lastEventId = fresh[fresh.length - 1].id;
         this.events.update((existing) => [...existing, ...fresh]);
-        // Screenshot events arrive with the transcript; fetch the blobs
-        // without delaying the transcript update itself.
-        void this.loadScreenshots();
       }
+      // Outside the fresh-events branch on purpose: screenshot events are
+      // normally the final ones, so once polling has consumed them a failed
+      // blob fetch would never see fresh events again — only this per-poll
+      // call retries it. Unresolved names are skipped, so steady state costs
+      // nothing but the check.
+      void this.loadScreenshots();
     } catch {
       /* transient; the next poll retries */
     }
