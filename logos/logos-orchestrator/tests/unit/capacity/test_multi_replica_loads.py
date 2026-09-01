@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from dataclasses import dataclass, field
 from types import ModuleType, SimpleNamespace
 from typing import Any, Dict, List
@@ -512,3 +513,158 @@ class TestDemandPathAdditionalLane:
         actions = planner._compute_demand_actions(1, provider.lanes)
 
         assert [(a.action, a.lane_id) for a in actions] == [("wake", "planner-X")]
+
+
+# ---------------------------------------------------------------------------
+# Backoff when a replica lands in error
+# ---------------------------------------------------------------------------
+
+
+class TestErroredLaneBackoff:
+    """A replica load the worker accepted can still fail afterwards: the lane
+    lands in ``error`` and keeps holding its lane id. Without a backoff the
+    allocator skips that id, the per-lane cooldown never covers the fresh
+    suffix, and the copy cap does not count the errored lane — sustained
+    demand then leaves a fresh errored lane behind every cycle."""
+
+    def test_errored_replica_blocks_the_next_suffix(self):
+        """Replica 1 runs, replica 2 errored, demand is hot and the scale-out
+        flag is on. The next cycle must not allocate planner-X-3 — it backs
+        off until the errored lane goes away."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running"), _lane("planner-X-2", "X", "error")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+
+        assert planner._compute_demand_actions(1, provider.lanes) == []
+
+    def test_errored_first_lane_blocks_a_reload_on_a_fresh_id(self):
+        """The model's only lane errored and nothing serves it: a first load
+        would take the next free id (the broken lane still holds replica
+        1's). That must back off too, or the same failure replays under a
+        fresh suffix."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "error")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=1.2, replicate=False)
+
+        assert planner._compute_demand_actions(1, provider.lanes) == []
+
+    def test_cooldown_on_any_lane_of_the_model_blocks(self):
+        """Confirmation-timeout window: the load was marked failed but the
+        lane has not landed in error yet (still starting). Any lane of the
+        model in load-failure cooldown blocks the next suffix."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running"), _lane("planner-X-2", "X", "starting")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        planner._lane_load_failure_until[planner._lane_key(1, "planner-X-2")] = time.time() + 60
+
+        assert planner._compute_demand_actions(1, provider.lanes) == []
+
+    def test_other_models_errored_lanes_do_not_block(self):
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running"), _lane("planner-Y", "Y", "error")],
+            capabilities=["X", "Y"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile(), "Y": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+        kinds = [(a.action, a.lane_id) for a in actions]
+
+        assert ("load", "planner-X-2") in kinds
+
+    def test_ranker_excludes_a_worker_with_an_errored_lane(self):
+        planner = _planner(
+            _MockProvider(provider_id=1, name="A", lanes=[], capabilities=["X"], available_vram_mb=50_000),
+            score=2.5,
+        )
+        capacity = SimpleNamespace(available_vram_mb=50_000, total_vram_mb=96_000, loaded_models=[])
+        profiles = {"X": _profile()}
+
+        # No lane: a plain cold load — the ranker scores it.
+        assert planner._estimate_demand_action_cost(1, "X", [], profiles, capacity) is not None
+        # An errored replica makes the worker infeasible for the model.
+        assert (
+            planner._estimate_demand_action_cost(1, "X", [_lane("planner-X", "X", "error")], profiles, capacity) is None
+        )
+        # ... but a sleeping lane is a wake, which keeps its own cooldown —
+        # the error backoff does not eat the wake path.
+        assert (
+            planner._estimate_demand_action_cost(
+                1, "X", [_lane("planner-X", "X", "loaded", sleep_state="sleeping")], profiles, capacity
+            )
+            is not None
+        )
+
+    def test_errored_lane_is_marked_in_cooldown_without_remarking(self):
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running"), _lane("planner-X-2", "X", "error")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+
+        planner._mark_errored_lanes(1, provider.lanes)
+        assert planner._lane_is_in_load_failure_cooldown(1, "planner-X-2") is True
+        assert planner._lane_is_in_load_failure_cooldown(1, "planner-X") is False
+
+        # A persistently errored lane is not re-marked while already cooling
+        # down — one log line per cooldown window, not one per cycle.
+        key = planner._lane_key(1, "planner-X-2")
+        until_before = planner._lane_load_failure_until[key]
+        planner._mark_errored_lanes(1, provider.lanes)
+        assert planner._lane_load_failure_until[key] == until_before
+
+    def test_replication_skips_a_worker_whose_copy_errored(self):
+        """The cross-provider pass loads replica 1's id on a worker that does
+        not host the model; an errored lane still holds that id, so the
+        worker is skipped rather than getting a rejected add_lane."""
+        healthy = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        broken = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[_lane("planner-X", "X", "error")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(healthy, score=2.5, replicate=True)
+        planner._facade = _MockFacade([healthy, broken])
+
+        actions = planner._compute_replication_actions([1, 2], [("X", 2.5)], {"X": 1}, set())
+        assert actions == []
+
+        # Same worker with the broken lane gone is a valid replica target.
+        broken.lanes = []
+        actions = planner._compute_replication_actions([1, 2], [("X", 2.5)], {"X": 1}, set())
+        assert [(a.provider_id, a.lane_id) for a in actions] == [(2, "planner-X")]

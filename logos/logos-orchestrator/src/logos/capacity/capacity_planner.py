@@ -754,6 +754,7 @@ class CapacityPlanner:
             except Exception:
                 continue
 
+            self._mark_errored_lanes(provider_id, lanes)
             self._update_idle_tracking(provider_id, lanes)
             self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
@@ -1518,6 +1519,25 @@ class CapacityPlanner:
             self._lane_load_failure_until.pop(key, None)
             return False
         return True
+
+    def _mark_errored_lanes(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
+        """Feed the load-failure cooldown from lanes that landed in error.
+
+        The synchronous ``add_lane`` rejection is the only load failure the
+        execution path sees; a load the worker accepted can still fail on the
+        worker afterwards (the lane lands in ``error``) and raises nothing.
+        Re-marking the per-lane cooldown here keeps every cooldown reader in
+        sync — the cold-load gate, the ranker, the ``_validate_vram_budget``
+        pre-pass — and gives the failure a log line. A lane that is already
+        cooling down is left alone, so a persistently errored lane logs once
+        per cooldown window rather than once per planner cycle.
+        """
+        for lane in lanes:
+            if lane.runtime_state != "error":
+                continue
+            if self._lane_is_in_load_failure_cooldown(provider_id, lane.lane_id):
+                continue
+            self._mark_load_failure(provider_id, lane.lane_id, details="lane in error state")
 
     def _record_confirmed_action_state(self, action: CapacityPlanAction, confirmed_at: float) -> None:
         key = self._lane_key(action.provider_id, action.lane_id)
@@ -2866,11 +2886,16 @@ class CapacityPlanner:
         # the model sat idle.
         #
         # Only the cold-load path is gated: a sleeping lane is a wake, which
-        # has its own cooldown and is already filtered above.
-        if not sleeping_lanes and self._lane_is_in_load_failure_cooldown(
-            provider_id, self._planner_lane_id(model_name)
-        ):
-            return None
+        # has its own cooldown and is already filtered above. The gate covers
+        # more than the replica-1 cooldown: an errored replica of the model
+        # holds its lane id, and loading another copy under a fresh suffix
+        # would just produce another errored lane — so the worker is
+        # infeasible while any of the model's lanes is errored or cooling
+        # down.
+        if not sleeping_lanes:
+            blocked_reason = self._model_cold_load_blocked_reason(provider_id, model_name, model_lanes)
+            if blocked_reason is not None:
+                return None
 
         profile = profiles.get(model_name)
 
@@ -3563,6 +3588,21 @@ class CapacityPlanner:
             # enforced once the placement is known (an extra copy must never
             # push out another model's lane). A first lane keeps the full load
             # semantics below.
+            # A copy of this model on this worker that errored — or just
+            # failed to confirm — still holds its lane id, and the allocator
+            # would answer with the next free suffix: under sustained demand
+            # that leaves a fresh errored lane behind every cycle. Back off
+            # instead, until the broken lane goes away or the cooldown runs
+            # out.
+            blocked_reason = self._model_cold_load_blocked_reason(provider_id, model_name, model_lanes)
+            if blocked_reason is not None:
+                logger.info(
+                    "Skipping cold load of %s on worker=%s: %s",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    blocked_reason,
+                )
+                continue
             is_additional_lane = bool(active_lanes)
             if is_additional_lane and (
                 not self._replicate_on_free_vram
@@ -3890,11 +3930,13 @@ class CapacityPlanner:
                 except Exception:
                     continue
                 # Skip workers that already host the model in any non-terminal
-                # state — including sleeping (would wake instead of replicate)
-                # and starting (an in-flight load is in progress).
+                # state — including sleeping (would wake instead of replicate),
+                # starting (an in-flight load is in progress), and error (the
+                # broken lane still holds replica 1's id, and a worker whose
+                # copy failed is not a target for a fresh replica).
                 if any(
                     lane.model_name == model_name
-                    and lane.runtime_state in ("loaded", "running", "sleeping", "starting")
+                    and lane.runtime_state in ("loaded", "running", "sleeping", "starting", "error")
                     for lane in lanes
                 ):
                     continue
@@ -5700,6 +5742,37 @@ class CapacityPlanner:
         if replica_index <= 1:
             return base
         return f"{base}-{replica_index}"
+
+    def _model_cold_load_blocked_reason(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: List[LaneSchedulerSignals],
+    ) -> Optional[str]:
+        """Why a new cold load of ``model_name`` must back off on this worker.
+
+        Returns a reason string, or ``None`` when a cold load may proceed.
+
+        A replica load the worker accepted can still fail afterwards: the
+        lane lands in ``error`` — or the confirmation times out with the lane
+        stuck — and it keeps holding its lane id for as long as it exists.
+        Left unchecked, ``_next_lane_id_for_model`` skips that id and answers
+        with the next free suffix, the per-lane load-failure cooldown never
+        covers the new id, and the cluster-copy cap does not count the
+        errored lane — so sustained demand would allocate a fresh errored
+        lane every cycle. Back off while any lane of the model is in error
+        state or load-failure cooldown, or the replica-1 id is cooling down
+        after its lane already left the worker.
+        """
+        if self._lane_is_in_load_failure_cooldown(provider_id, self._planner_lane_id(model_name)):
+            return "replica lane in load-failure cooldown"
+        for lane in lanes:
+            if lane.model_name == model_name and lane.runtime_state == "error":
+                return f"lane {lane.lane_id} is in error state"
+        for lane in lanes:
+            if lane.model_name == model_name and self._lane_is_in_load_failure_cooldown(provider_id, lane.lane_id):
+                return f"lane {lane.lane_id} is in load-failure cooldown"
+        return None
 
     def _next_lane_id_for_model(
         self,
@@ -7595,6 +7668,17 @@ class CapacityPlanner:
         if not confirmed:
             if action.action == "wake":
                 self._mark_wake_failure(
+                    action.provider_id,
+                    action.lane_id,
+                    details="confirmation timeout",
+                )
+            elif action.action == "load":
+                # Symmetric with the wake case: the worker accepted the load
+                # but the lane never reached the loaded state. Without this
+                # mark the per-lane cooldown stays empty and the next cycle
+                # allocates a fresh suffix for a model this worker cannot
+                # load.
+                self._mark_load_failure(
                     action.provider_id,
                     action.lane_id,
                     details="confirmation timeout",
