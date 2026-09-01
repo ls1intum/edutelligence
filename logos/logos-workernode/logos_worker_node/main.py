@@ -402,6 +402,18 @@ def _log_storage_layout(cfg) -> None:
     )
 
 
+def _startup_hf_home(cache_root: str) -> str:
+    """HF cache root for startup cache work (RAM cache source, prefetch).
+
+    A blank/whitespace ``HF_HOME`` falls back to ``<cache_root>/.hf_cache``
+    — the directory the startup prefetch populates and capability validation
+    checks — instead of a relative ``hub`` path under the working directory
+    that would ignore every cached weight. *cache_root* is the resolved
+    worker cache root the lane processes download into.
+    """
+    return os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
@@ -471,7 +483,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # prefetch must use the HF_HOME the lane processes download into — on a
     # Mac without LOGOS_WORKER_CACHE_ROOT that is not the ollama models path.
     cache_root = _resolve_worker_cache_root(cfg)
-    hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
+    hf_home = _startup_hf_home(cache_root)
     model_cache = create_model_cache(
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,
