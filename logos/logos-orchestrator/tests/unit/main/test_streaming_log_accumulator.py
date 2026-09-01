@@ -341,3 +341,22 @@ def test_chat_completions_stream_ignores_non_dict_choice_elements():
     )
 
     assert acc.full_text == "Hello"
+
+
+def test_response_payload_survives_a_malformed_first_chunk():
+    """The first chunk is what response_payload() rebuilds from.
+
+    A malformed choices element in the FIRST chunk survives the feed guard
+    (which only reads deltas) inside first_chunk; the reconstruction must
+    apply the same shape check before writing the rebuilt delta, or the
+    completion logging that runs in the stream's finally path raises.
+    """
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"id": "c1", "choices": [None]},
+        {"id": "c1", "choices": [{"delta": {"content": "Hi"}}]},
+    )
+
+    # The unassignable first entry is kept as received and carries no delta.
+    assert acc.response_payload() == {"id": "c1", "choices": [None]}

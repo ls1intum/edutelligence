@@ -289,8 +289,13 @@ class _StreamingLogAccumulator:
 
         if base_payload:
             response_payload = base_payload
-            if "choices" in response_payload and response_payload["choices"]:
-                response_payload["choices"][0]["delta"] = {"content": self.full_text}
+            # The rebuild prefers the first chunk, so a malformed choices
+            # element the feed guard skipped is still sitting in it. Validate
+            # the complete shape before assigning, as _consume_line does:
+            # a non-dict entry carries no delta.
+            choices = response_payload.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                choices[0]["delta"] = {"content": self.full_text}
         if usage:
             response_payload["usage"] = usage
         return response_payload
