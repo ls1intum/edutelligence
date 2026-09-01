@@ -840,3 +840,97 @@ async def test_logosnode_pre_token_failure_comes_back_as_json_error(retry_env):
     assert isinstance(response, JSONResponse)
     assert response.status_code == 502
     assert status_is_retryable(response.status_code)
+
+
+def _fake_deadline_env(retry_env, deadline_s=10.0, backoff_s=4.0):
+    """A RetryBudget on a fake clock plus a fake asyncio.sleep that advances
+    it, so a retry loop can be driven with real backoff in zero wall time."""
+    from logos.pipeline.retry import RetryBudget
+
+    clock = {"t": 0.0}
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+        clock["t"] += seconds
+
+    retry_env.setattr("asyncio.sleep", fake_sleep)
+    retry_env.setattr(
+        main,
+        "_new_retry_budget",
+        lambda: RetryBudget(
+            max_attempts=3,
+            deadline_s=deadline_s,
+            backoff_base_s=backoff_s,
+            backoff_cap_s=15.0,
+            now=lambda: clock["t"],
+        ),
+    )
+    return slept
+
+
+@pytest.mark.asyncio
+async def test_retry_request_bounds_clamp_to_the_post_backoff_deadline(retry_env):
+    """The next retry's queue-wait and context bounds must be computed AFTER
+    the backoff sleep: a bound frozen from the pre-sleep budget lets the next
+    wait run past the overall retry deadline."""
+    slept = _fake_deadline_env(retry_env)  # 10s deadline, 4s backoff
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[
+            _fail_result("All candidate models unavailable (rate-limited or no capacity)", provider_id=1),
+            _ok_result(provider_id=2),
+        ],
+        sync_responses=[JSONResponse(content={"ok": True}, status_code=200)],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={"messages": [{"role": "user", "content": "hi"}]},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # The backoff consumed 4s of the 10s deadline before the retry was built
+    # — its bounds must reflect the remaining 6s, not the old 10.
+    assert slept == [4.0]
+    retry_req = pipeline.requests[1]
+    assert retry_req.payload["timeout_s"] == 6.0
+    assert retry_req.context_resolve_timeout_s == 6.0
+
+
+@pytest.mark.asyncio
+async def test_terminal_status_retry_bounds_clamp_to_the_post_backoff_deadline(retry_env):
+    """Same ordering guarantee on the terminal-status retry branch: the
+    rebuilt request sees the deadline after the backoff, not before."""
+    slept = _fake_deadline_env(retry_env)  # 10s deadline, 4s backoff
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1), _ok_result(provider_id=2)],
+        sync_responses=[
+            JSONResponse(content={"error": "worker gone"}, status_code=503),
+            JSONResponse(content={"ok": True}, status_code=200),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    assert slept == [4.0]
+    retry_req = pipeline.requests[1]
+    assert retry_req.payload["timeout_s"] == 6.0
+    assert retry_req.context_resolve_timeout_s == 6.0

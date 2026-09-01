@@ -113,18 +113,21 @@ class FcfScheduler(BaseScheduler):
             result = await asyncio.wait_for(future, timeout=timeout)
 
             if provider_type == "logosnode":
+                # The model-wide queue may dispatch to an eligible peer
+                # rather than the deployment enqueued against — account the
+                # request on the worker that actually runs it.
                 try:
                     if result.was_queued:
                         self._logosnode.on_request_start(
                             request.request_id,
                             model_id=result.model_id,
-                            provider_id=provider_id,
+                            provider_id=result.provider_id,
                             priority=priority.name.lower(),
                         )
                     self._logosnode.on_request_begin_processing(
                         request.request_id,
                         increment_active=False,
-                        provider_id=provider_id,
+                        provider_id=result.provider_id,
                     )
                 except KeyError:
                     pass

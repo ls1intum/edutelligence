@@ -5035,8 +5035,11 @@ async def _execute_resource_mode(
             error_msg = result.error or "Pipeline processing failed"
             if retry_budget is not None and retry_budget.can_retry() and pipeline_error_is_retryable(error_msg):
                 _arm_internal_retry(retry_budget, result, request_id, error_msg)
-                pipeline_req = _next_retry_request(pipeline_req, result, retry_budget)
+                # Back off first: the next request's queue-wait and context
+                # bounds must clamp to what is left in the deadline AFTER
+                # the sleep, or the wait could run past the deadline.
                 await asyncio.sleep(retry_budget.backoff_s())
+                pipeline_req = _next_retry_request(pipeline_req, result, retry_budget)
                 continue
             _record_log_failure(
                 log_id,
@@ -5229,8 +5232,10 @@ async def _execute_resource_mode(
             and retry_budget.can_retry()
         ):
             _arm_internal_retry(retry_budget, result, request_id, f"HTTP {status_code}")
-            pipeline_req = _next_retry_request(pipeline_req, result, retry_budget)
+            # Back off first, as in the pipeline-error branch above: the
+            # rebuilt request's bounds must see the post-sleep deadline.
             await asyncio.sleep(retry_budget.backoff_s())
+            pipeline_req = _next_retry_request(pipeline_req, result, retry_budget)
             continue
         return response
 
