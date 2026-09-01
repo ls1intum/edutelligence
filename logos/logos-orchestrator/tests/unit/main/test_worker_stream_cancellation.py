@@ -413,6 +413,154 @@ async def test_a_role_only_first_frame_is_not_a_committed_200_when_the_lane_then
     assert response.status_code == 502
 
 
+@pytest.mark.asyncio
+async def test_a_split_first_frame_is_not_a_committed_200_when_the_lane_then_fails(monkeypatch):
+    """End to end: the worker forwards each ``aiter_bytes()`` transport
+    chunk unchanged, so a role-only event can arrive split mid-JSON. The
+    first fragment is not a complete frame — it proves nothing and must be
+    buffered, not treated as output: if the lane then fails before its first
+    content token, the answer must still come back as a pre-stream JSON
+    error the internal retry can re-dispatch."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    # One pre-token attempt: the test pins the buffering, not the same-lane
+    # retry that exists for the just-woken race.
+    monkeypatch.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 0, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-splitfragment",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # First transport chunk: the role-only frame split mid-JSON — an
+    # incomplete line that is not yet a frame at all.
+    await _feed(
+        registry,
+        cmd_id,
+        {
+            "type": "stream_chunk",
+            "chunk": (
+                b'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", '
+                b'"choices": [{"index": 0, "delta": {"ro'
+            ),
+        },
+    )
+    # Worker failure before the first content token.
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    await _drain_pending_tasks()
+
+    assert not isinstance(
+        response, StreamingResponse
+    ), "the failure after an incomplete first fragment was committed as a 200 stream"
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_a_split_first_frame_is_held_until_it_completes_then_replayed(monkeypatch):
+    """End to end: a role-only frame split across two transport chunks is
+    held back as a fragment until the second chunk completes it; when the
+    content delta then arrives, the 200 is committed with the held frames
+    replayed ahead of it — in order, with nothing lost."""
+    from fastapi.responses import StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-splitcomplete",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+
+    role_only_head = (
+        b'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", ' b'"choices": [{"index": 0, "delta": {"ro'
+    )
+    role_only_tail = b'le": "assistant", "content": ""}}]}\n\n'
+    content_frame = (
+        b'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", '
+        b'"choices": [{"index": 0, "delta": {"content": "Hello"}}]}\n\n'
+    )
+    done_frame = b"data: [DONE]\n\n"
+
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # The role-only frame arrives split mid-JSON across two chunks.
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": role_only_head})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": role_only_tail})
+    # The first generated content, then a clean end.
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": content_frame})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": done_frame})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": True})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+    body = b"".join([part async for part in response.body_iterator])
+    await _drain_pending_tasks()
+
+    # The fragment's bytes come back first, in order: the held role-only
+    # frame is replayed ahead of the content that committed the 200.
+    assert body == role_only_head + role_only_tail + content_frame + done_frame
+
+
 # ---------------------------------------------------------------------------
 # Non-streaming path — same exposure, same fix
 # ---------------------------------------------------------------------------

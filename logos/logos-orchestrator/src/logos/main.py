@@ -3711,52 +3711,75 @@ async def _schedule_stream_resume(
     return context
 
 
-def _chunk_is_sse_metadata_only(chunk) -> bool:
-    """Whether a text-stream frame may be held back behind the pre-commit
-    window.
+class _SsePreCommitGate:
+    """Decides, across transport chunks, when a text stream's generated
+    output starts.
 
     A chat stream can open with protocol metadata — a role-only delta with
     empty content, an empty delta — that the client expects but that commits
     no answer: yielding such a frame would pin the response to HTTP 200 while
-    nothing has been generated yet. Only chat-completion frames are held,
-    and only when every choice's delta carries no text and no structured
-    key (tool calls, function calls). Anything else — real content, a
-    non-chat protocol event, a degenerate frame, a line split across chunk
-    boundaries, an unparseable payload, a non-SSE body — counts as output
-    and commits the response immediately: when in doubt, the stream starts,
-    and only chat metadata is ever withheld. (Non-SSE payloads on the
-    audio-upload path never reach this check; there, buffering is disabled.)
+    nothing has been generated yet, and a worker failure right after it
+    could no longer be re-dispatched (a resume needs a text prefix). So
+    initial text frames are held back behind the pre-commit window until
+    output is known.
+
+    The worker forwards each ``aiter_bytes()`` chunk unchanged, and those
+    transport chunks can split a frame mid-line or mid-JSON — an incomplete
+    fragment proves nothing about what the frame will say. The gate
+    therefore keeps the trailing line until its newline arrives and
+    classifies only complete lines:
+
+    - a data line that parses to a chat-completion frame whose deltas carry
+      no content and no structured key (tool calls, function calls, audio)
+      is protocol metadata — hold it;
+    - anything else — real content, a structured delta, data that does not
+      parse, a non-data line, a terminal event — is output: the stream
+      starts, when in doubt.
+
+    Binary (audio-upload) streams are never gated: their payload is not SSE
+    and every byte is output.
     """
-    if not chunk:
-        return True
-    if isinstance(chunk, bytes):
-        text = chunk.decode("utf-8", errors="replace")
-    else:
-        text = str(chunk)
-    saw_chat_frame = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("data: "):
-            continue
-        if stripped == "data: [DONE]":
-            continue
+
+    def __init__(self, text_stream: bool):
+        self._text_stream = text_stream
+        self._line = b""  # trailing line awaiting its newline
+
+    def has_output(self, chunk) -> bool:
+        """Feed a transport chunk; True once a complete line proves that
+        generated output has started, False while only metadata (or an
+        unfinished fragment) is known."""
+        if not self._text_stream:
+            return bool(chunk)
+        if chunk:
+            self._line += chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
+        while b"\n" in self._line:
+            line, self._line = self._line.split(b"\n", 1)
+            if self._line_is_output(line):
+                return True
+        return False
+
+    @staticmethod
+    def _line_is_output(line: bytes) -> bool:
+        text = line.decode("utf-8", errors="replace").strip()
+        if not text:
+            return False  # event separator — no decision
+        if not text.startswith("data: "):
+            return True  # non-data SSE field or a non-SSE body — output
+        if text == "data: [DONE]":
+            return True
         try:
-            blob = json.loads(stripped[6:])
+            blob = json.loads(text[6:])
         except json.JSONDecodeError:
-            # Not a complete protocol frame (or split across chunks) — output.
-            return False
+            return True  # complete data line that does not parse — output
         if not isinstance(blob, dict) or not isinstance(blob.get("choices"), list):
-            # Non-chat protocol event or degenerate frame — output.
-            return False
-        saw_chat_frame = True
+            return True  # non-chat protocol event or degenerate frame — output
         for choice in blob["choices"]:
             delta = choice.get("delta", {}) if isinstance(choice, dict) else None
             if not isinstance(delta, dict):
-                return False
+                return True
             if delta.get("content") or any(key in delta for key in _STRUCTURED_DELTA_KEYS):
-                # Real content or a structured delta — output.
-                return False
-    return saw_chat_frame
+                return True  # real content or a structured delta — output
+        return False
 
 
 async def _streaming_response(
@@ -3946,8 +3969,11 @@ async def _streaming_response(
             So on text streams, initial metadata frames are buffered and
             replayed ahead of the first real chunk (or of a clean stream
             end); a failure while only metadata is held is still a pre-token
-            failure. Binary (audio-upload) streams are never buffered — their
-            payload is not SSE and every byte is output.
+            failure. Transport chunks can split a frame mid-JSON, so the
+            gate decides only on complete lines and holds unfinished
+            fragments (see ``_SsePreCommitGate``). Binary (audio-upload)
+            streams are never buffered — their payload is not SSE and every
+            byte is output.
 
             Returns ``(first_chunks, chunk_iter, error)`` — on success
             ``first_chunks`` holds the frames to yield before continuing the
@@ -3959,17 +3985,18 @@ async def _streaming_response(
             attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
             for attempt in range(attempts):
                 chunk_iter = _new_logosnode_chunk_iter(exec_ctx, exec_payload)
+                gate = _SsePreCommitGate(buffering)
                 held: list = []
                 try:
                     while True:
                         chunk = await chunk_iter.__anext__()
-                        if chunk and (not buffering or not _chunk_is_sse_metadata_only(chunk)):
-                            return held + [chunk], chunk_iter, None
-                        # Empty frame, or a metadata-only frame on a text
-                        # stream: hold it back until real output arrives or
-                        # the stream fails (error below) / ends (replayed
-                        # via the StopAsyncIteration return).
                         held.append(chunk)
+                        if gate.has_output(chunk):
+                            return held, chunk_iter, None
+                        # Empty frame, metadata, or an unfinished frame
+                        # fragment: hold it back until real output arrives
+                        # or the stream fails (error below) / ends (replayed
+                        # via the StopAsyncIteration return).
                 except StopAsyncIteration:
                     return held, chunk_iter, None
                 except Exception as e:
