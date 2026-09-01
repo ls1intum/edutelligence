@@ -65,16 +65,6 @@ class ReadinessTier(Enum):
     UNAVAILABLE = "unavailable"  # no lanes / error
 
 
-class InitialReadinessTierWeights(Enum):
-    INIT_WARM: float = 0.0
-    INIT_SLEEPING: float = 2.5
-    INIT_BUSY: float = 0
-    INIT_COLD: float = 0
-    INIT_COLD_RECLAIM: float = 3.0
-    INIT_SLEEPING_RECLAIM: float = 5.5
-    INIT_UNAVAILABLE: float = float("inf")
-
-
 @dataclass(frozen=True)
 class EttftEstimate:
     """ETTFT estimation result with infrastructure-aware wait decomposition."""
@@ -281,6 +271,7 @@ def estimate_ettft_local(
     scheduler_queue_depth: int = 0,
     observed_e2e_p50_s: float = 0.0,
     all_provider_lanes: Optional[List[LaneSchedulerSignals]] = None,
+    overhead_overrides: Optional[dict] = None,
 ) -> EttftEstimate:
     """Estimate ETTFT for a local (logosnode) model from its scheduler view.
 
@@ -292,6 +283,12 @@ def estimate_ettft_local(
     whether eviction targets are idle (fast, ~3s) or busy (slow, ~30s).
     Queue wait uses the observed e2e latency p50 as service time when available,
     falling back to a configured constant.
+
+    ``overhead_overrides`` is an optional dict mapping ReadinessTier → float
+    (seconds) produced by a LatencyStore.  When provided, learned values
+    replace the static OVERHEAD_* constants for the matched tier.  For
+    *_RECLAIM tiers the override covers the full (load + reclaim) cost, so
+    the separate ``_estimate_reclaim_overhead_s`` call is skipped.
 
     Decision tree:
     1. No lanes or all stopped/error → UNAVAILABLE
@@ -342,26 +339,37 @@ def estimate_ettft_local(
         else ""
     )
 
+    _overrides: dict = overhead_overrides or {}
+
     # ── Cold: no loaded/running lanes ──────────────────────────────────
     if best_state in ("cold", "starting"):
         needs_reclaim = model_vram_mb > 0 and model_vram_mb > available_vram_mb
         if needs_reclaim:
-            reclaim_s = _estimate_reclaim_overhead_s(
-                all_provider_lanes or [],
-                view.model_name,
-            )
-            overhead = OVERHEAD_COLD_S
             tier = ReadinessTier.COLD_RECLAIM
-            reason = (
-                f"Cold + reclaim: model needs {model_vram_mb:.0f}MB, "
-                f"available {available_vram_mb:.0f}MB, "
-                f"reclaim ~{reclaim_s:.0f}s"
-            )
+            if tier in _overrides:
+                # Learned value covers full (load + reclaim) cost.
+                overhead = _overrides[tier]
+                reclaim_s = 0.0
+                reason = (
+                    f"Cold + reclaim (learned): {overhead:.1f}s "
+                    f"(model {model_vram_mb:.0f}MB, available {available_vram_mb:.0f}MB)"
+                )
+            else:
+                reclaim_s = _estimate_reclaim_overhead_s(
+                    all_provider_lanes or [],
+                    view.model_name,
+                )
+                overhead = _overrides.get(ReadinessTier.COLD, OVERHEAD_COLD_S)
+                reason = (
+                    f"Cold + reclaim: model needs {model_vram_mb:.0f}MB, "
+                    f"available {available_vram_mb:.0f}MB, "
+                    f"reclaim ~{reclaim_s:.0f}s"
+                )
         else:
-            overhead = OVERHEAD_COLD_S
-            reclaim_s = 0.0
             tier = ReadinessTier.COLD
-            reason = f"Best lane state is '{best_state}', cold-start ~{OVERHEAD_COLD_S:.0f}s"
+            overhead = _overrides.get(tier, OVERHEAD_COLD_S)
+            reclaim_s = 0.0
+            reason = f"Best lane state is '{best_state}', cold-start ~{overhead:.0f}s"
 
         expected = overhead + reclaim_s + queue_wait_s
         reason += queue_suffix
@@ -381,22 +389,30 @@ def estimate_ettft_local(
     if best_state == "sleeping":
         needs_reclaim = kv_budget_mb > 0 and kv_budget_mb > available_vram_mb
         if needs_reclaim:
-            reclaim_s = _estimate_reclaim_overhead_s(
-                all_provider_lanes or [],
-                view.model_name,
-            )
-            overhead = OVERHEAD_SLEEPING_S
             tier = ReadinessTier.SLEEPING_RECLAIM
-            reason = (
-                f"Sleeping + reclaim: KV cache needs {kv_budget_mb:.0f}MB, "
-                f"available {available_vram_mb:.0f}MB, "
-                f"reclaim ~{reclaim_s:.0f}s"
-            )
+            if tier in _overrides:
+                overhead = _overrides[tier]
+                reclaim_s = 0.0
+                reason = (
+                    f"Sleeping + reclaim (learned): {overhead:.1f}s "
+                    f"(KV {kv_budget_mb:.0f}MB, available {available_vram_mb:.0f}MB)"
+                )
+            else:
+                reclaim_s = _estimate_reclaim_overhead_s(
+                    all_provider_lanes or [],
+                    view.model_name,
+                )
+                overhead = _overrides.get(ReadinessTier.SLEEPING, OVERHEAD_SLEEPING_S)
+                reason = (
+                    f"Sleeping + reclaim: KV cache needs {kv_budget_mb:.0f}MB, "
+                    f"available {available_vram_mb:.0f}MB, "
+                    f"reclaim ~{reclaim_s:.0f}s"
+                )
         else:
-            overhead = OVERHEAD_SLEEPING_S
-            reclaim_s = 0.0
             tier = ReadinessTier.SLEEPING
-            reason = f"Best lane is sleeping, wake ~{OVERHEAD_SLEEPING_S:.1f}s"
+            overhead = _overrides.get(tier, OVERHEAD_SLEEPING_S)
+            reclaim_s = 0.0
+            reason = f"Best lane is sleeping, wake ~{overhead:.1f}s"
 
         expected = overhead + reclaim_s + queue_wait_s
         reason += queue_suffix

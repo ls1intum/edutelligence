@@ -35,6 +35,7 @@ from .ettft_estimator import (
     estimate_ettft_cloud,
     estimate_ettft_local,
 )
+from .latency_store import LatencyStore
 from .prefix_affinity import PrefixAffinityRouter
 from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
 
@@ -68,6 +69,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         ettft_enabled: bool = True,
         on_capacity_needed=None,
         prefix_router: Optional[PrefixAffinityRouter] = None,
+        latency_store: Optional[LatencyStore] = None,
     ):
         super().__init__(
             queue_manager,
@@ -78,6 +80,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         )
         self._ettft_enabled = ettft_enabled
         self._prefix_router = prefix_router if prefix_router is not None else PrefixAffinityRouter()
+        self._latency_store = latency_store
 
         # Decision logging (JSON-lines): set ECCS_DECISION_LOG=/path/to/log.jsonl
         self._decision_log_path = os.environ.get("ECCS_DECISION_LOG")
@@ -510,6 +513,40 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             except (KeyError, Exception):
                 pass
 
+            # Build per-tier overhead overrides from the latency store when
+            # available. The store returns a prior (size-derived or static)
+            # for tiers with no learned data yet, so the dict is always
+            # populated and estimate_ettft_local always uses a meaningful value.
+            overhead_overrides: dict[ReadinessTier, float] | None = None
+            if self._latency_store is not None:
+                model_name_for_store = view.model_name or ""
+                tp_size = 1
+                try:
+                    _, tp_size = self._logosnode.get_parallel_capacity(model_id, provider_id)
+                except Exception:
+                    pass
+                overhead_overrides = {
+                    tier: self._latency_store.get_overhead_s(
+                        model_name_for_store,
+                        provider_id,
+                        tier,
+                        model_vram_mb=model_vram_mb,
+                        tp_size=tp_size,
+                    )
+                    for tier in (
+                        ReadinessTier.COLD,
+                        ReadinessTier.COLD_RECLAIM,
+                        ReadinessTier.SLEEPING,
+                        ReadinessTier.SLEEPING_RECLAIM,
+                    )
+                }
+                # Replace the live e2e p50 with the learned value when the
+                # store has sufficient history (learned value is more stable
+                # across the session than a single-lane histogram p50).
+                learned_e2e = self._latency_store.get_e2e_latency_s(model_name_for_store)
+                if learned_e2e is not None:
+                    observed_e2e_p50_s = learned_e2e
+
             return estimate_ettft_local(
                 view,
                 effective_parallel=effective_parallel,
@@ -520,6 +557,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 scheduler_queue_depth=scheduler_queue_depth,
                 observed_e2e_p50_s=observed_e2e_p50_s,
                 all_provider_lanes=all_provider_lanes,
+                overhead_overrides=overhead_overrides,
             )
 
         if provider_type == "azure":

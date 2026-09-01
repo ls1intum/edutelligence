@@ -16,6 +16,8 @@ from typing import Any, AsyncIterator, Callable
 from fastapi import WebSocket
 
 from logos.monitoring import prometheus_metrics as prom
+from logos.pipeline.latency_store import LatencyStore
+from logos.pipeline.ettft_estimator import ReadinessTier
 from logos.terminal_logging import (
     BOLD,
     CYAN,
@@ -350,6 +352,7 @@ class LogosNodeRuntimeRegistry:
     def __init__(
         self,
         on_capabilities_changed: Callable[[int, list[str]], None] | None = None,
+        latency_store: LatencyStore | None = None,
     ) -> None:
         self._tickets: dict[str, AuthTicket] = {}
         self._sessions: dict[int, ProviderSession] = {}
@@ -381,6 +384,35 @@ class LogosNodeRuntimeRegistry:
         # In-flight stream cancellations. Held only so the loop keeps a strong
         # reference to fire-and-forget tasks until they complete.
         self._cancellation_tasks: set[asyncio.Task] = set()
+        self._latency_store = latency_store
+
+    def _absorb_latency_observations(self, provider_id: int, runtime: dict[str, Any]) -> None:
+        """Extract timing observations from a worker status update and feed them
+        to the LatencyStore so the scheduler can use learned values."""
+        assert self._latency_store is not None
+        for lane in runtime.get("lanes") or []:
+            if not isinstance(lane, dict):
+                continue
+            model_name: str = lane.get("model") or ""
+            if not model_name:
+                continue
+
+            # Cold load timing reported directly by the worker process.
+            cold_s = lane.get("last_cold_load_s")
+            if isinstance(cold_s, (int, float)) and cold_s > 0:
+                self._latency_store.record_overhead(
+                    model_name, provider_id, ReadinessTier.COLD, float(cold_s)
+                )
+
+            # TTFT and e2e latency from vLLM Prometheus histograms.
+            bm = lane.get("backend_metrics")
+            if isinstance(bm, dict):
+                ttft_p50 = _histogram_quantile(bm.get("ttft_histogram"), 0.50)
+                if ttft_p50 > 0.0:
+                    self._latency_store.record_ttft(model_name, ttft_p50)
+                e2e_p50 = _lane_e2e_latency_p50_seconds(bm)
+                if e2e_p50 > 0.0:
+                    self._latency_store.record_e2e_latency(model_name, e2e_p50)
 
     def set_on_runtime_updated(self, callback: Callable[[int], None] | None) -> None:
         """Register the post-status hook. See ``_on_runtime_updated``."""
@@ -792,6 +824,10 @@ class LogosNodeRuntimeRegistry:
                     accent=CYAN,
                 )
             )
+
+        # Feed per-lane timing data into the LatencyStore.
+        if self._latency_store is not None and isinstance(runtime, dict):
+            self._absorb_latency_observations(provider_id, runtime)
 
         # Fresh measurements are in: whatever the scheduler was holding back
         # against the previous ones can be reconsidered now.

@@ -3003,6 +3003,7 @@ class LaneManager:
             effective_vram_mb=effective_vram_mb,
             host_ram_mb=host_ram_mb,
             host_ram_source=host_ram_source,
+            last_cold_load_s=getattr(handle, "last_cold_load_s", None),
         )
 
     async def _query_process_vram_map(self, pids: list[int]) -> dict[int, float]:

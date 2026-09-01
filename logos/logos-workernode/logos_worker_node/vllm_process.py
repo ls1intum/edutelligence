@@ -411,6 +411,10 @@ class VllmProcessHandle:
         self._process_group_id: int | None = None
         self._max_concurrency: int | None = None
         self.hf_home_override: str | None = None
+        # Duration of the most recent successful cold start (spawn → ready).
+        # None until at least one spawn has completed. Included in the lane
+        # status dict so the orchestrator can feed it into its LatencyStore.
+        self._last_cold_load_s: float | None = None
         # Set by _maybe_prepare_sharded_checkpoint when a pre-sharded checkpoint
         # is used for a TP>1 lane; _build_cmd then serves this directory with
         # --load-format sharded_state instead of the full checkpoint.
@@ -569,6 +573,7 @@ class VllmProcessHandle:
         )
 
         process_env = self._build_process_env(lane_config, env, cmd)
+        _spawn_t0 = asyncio.get_event_loop().time()
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
             env=process_env,
@@ -593,6 +598,13 @@ class VllmProcessHandle:
             self._persist_failure_logs("startup_failed")
             await self._kill_process()
             raise RuntimeError(failure)
+
+        self._last_cold_load_s = asyncio.get_event_loop().time() - _spawn_t0
+        logger.info(
+            "[%s] Cold load completed in %.1f s",
+            self.lane_id,
+            self._last_cold_load_s,
+        )
 
         # Discover TP worker child PIDs so _verify_vram_released can track them
         self._known_child_pids = await self._discover_child_pids(self._process.pid)
@@ -623,6 +635,16 @@ class VllmProcessHandle:
         else:
             self._stuck_vram = False
         return self.status()
+
+    @property
+    def last_cold_load_s(self) -> float | None:
+        """Wall-clock seconds from process spawn to first successful health check.
+
+        None until the first successful cold start has been observed.
+        Included in the runtime status dict so the orchestrator can feed it
+        into its LatencyStore.
+        """
+        return self._last_cold_load_s
 
     @property
     def has_stuck_vram(self) -> bool:

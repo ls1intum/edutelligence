@@ -70,6 +70,7 @@ from logos.logosnode_registry import (
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.latency_store import LatencyStore
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
@@ -201,8 +202,10 @@ def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str])
     task.add_done_callback(_background_tasks.discard)
 
 
+_latency_store = LatencyStore()
 _logosnode_registry = LogosNodeRuntimeRegistry(
     on_capabilities_changed=_sync_logosnode_capabilities_to_db,
+    latency_store=_latency_store,
 )
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
@@ -3120,6 +3123,7 @@ async def start_pipeline():
         azure_facade=_azure_facade,
         model_registry=model_registry,
         ettft_enabled=ettft_enabled,
+        latency_store=_latency_store,
     )
     logger.info("Scheduler: ClassificationCorrectingScheduler (ettft_enabled=%s)", ettft_enabled)
 

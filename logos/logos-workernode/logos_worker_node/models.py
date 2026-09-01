@@ -667,6 +667,10 @@ class LaneStatus(BaseModel):
     # subprocesses whose RSS each carries a full copy of the weights.
     host_ram_mb: float = 0.0
     host_ram_source: Literal["pss", "rss", "unknown"] = "unknown"
+    # Wall-clock seconds from process spawn to first healthy response.
+    # None until the first successful cold load has been observed.
+    # Consumed by the orchestrator LatencyStore to learn per-model load times.
+    last_cold_load_s: float | None = None
 
 
 class WorkerRuntimeStatus(BaseModel):
