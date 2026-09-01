@@ -60,7 +60,6 @@ from logos_worker_node.gguf import (
     GgufServeSpec,
     fetch_repo_gguf_files,
     is_explicit_gguf_ref,
-    is_gguf_model,
     is_gguf_repo_name,
     list_cached_gguf_files,
     repo_id_of,
@@ -836,9 +835,14 @@ def _build_vllm_cmd(
     # GGUF models are served through the out-of-tree GGUF plugin under a
     # resolved reference (repo:quant or file) — mirror the serving lane's
     # _build_cmd so the probe measures exactly what production runs.
-    gguf_spec = None
-    if is_gguf_model(model):
-        gguf_spec = _resolve_gguf_calibration_spec(plan, hf_home)
+    #
+    # The resolver runs for EVERY model, not just names that look like GGUF:
+    # it re-checks the cached file listing before concluding, and returns None
+    # for ordinary models. Guarding on the name first (the old behaviour)
+    # skipped that second-stage detection, so a cached GGUF-only repository
+    # whose name doesn't follow the -GGUF/_GGUF convention calibrated against
+    # the bare repo and failed, while the same model served fine in a lane.
+    gguf_spec = _resolve_gguf_calibration_spec(plan, hf_home)
     if gguf_spec is not None:
         model = gguf_spec.serve_ref
     tp = int(plan.get("tensor_parallel_size", 1))
@@ -1734,15 +1738,23 @@ def calibrate_model(
         # before the model was cached it would resolve from the Hub instead — a
         # network call inside the KV sweep, and a hard failure when the Hub is
         # unreachable for a repo that is already downloaded. Caching first also
-        # sets hf_home to the tmpfs root the spawn will load from, so the
-        # fingerprint and the spawn resolve to the same reference.
+        # sets hf_home to the root the spawn will load from (tmpfs when the
+        # copy succeeded, the persistent cache otherwise), so the fingerprint
+        # and the spawn resolve to the same reference.
         if not _ram_cached and model_cache is not None:
             logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
             _hf = model_cache.ensure_cached_sync(model) or None
             if _hf:
                 is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
+                # Both branches point hf_home at the cache the weights
+                # actually live in: the tmpfs root when the copy succeeded,
+                # the persistent HF cache root when it did not (full,
+                # unavailable, or declined). Skipping the assignment on the
+                # disk branch left hf_home=None, so a bare GGUF repo
+                # resolved from the Hub instead of its local cache — a hard
+                # failure when the Hub is unreachable.
+                hf_home = _hf
                 if is_tmpfs:
-                    hf_home = _hf
                     logger.info("  [RAM cache] %s → loading from tmpfs", model)
                 else:
                     logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
