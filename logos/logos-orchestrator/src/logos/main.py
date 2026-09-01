@@ -4377,12 +4377,15 @@ async def _execute_proxy_mode(
     request_path: Optional[str] = None,
     priority: int = 1,
     required_provider_id: Optional[int] = None,
+    ingress_at: Optional[float] = None,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
 
     Resolves the requested model from the DB (access-controlled by logos_key), then reuses the
-    resource-mode pipeline with allowed_models restricted to that model.
+    resource-mode pipeline with allowed_models restricted to that model. The request still goes
+    through the same queue, so ``ingress_at`` is forwarded exactly like in resource mode: the
+    queue-wait budget starts at ingress, not at the (skipped) classification.
     """
     requested_model_name = str(body.get("model") or "").strip()
     if not requested_model_name:
@@ -4447,6 +4450,7 @@ async def _execute_proxy_mode(
         skip_laura=True,
         priority=priority,
         required_provider_id=required_provider_id,
+        ingress_at=ingress_at,
     )
 
 
@@ -4800,7 +4804,9 @@ async def route_and_execute(
 
     response = None
     try:
-        # PROXY mode (body["model"] specified → direct forwarding)
+        # PROXY mode (body["model"] specified → direct forwarding). The
+        # ingress stamp goes with it: model-specified requests queue the
+        # same way, so the client budget is spent identically.
         if body.get("model"):
             response = await _execute_proxy_mode(
                 body=body,
@@ -4813,6 +4819,7 @@ async def route_and_execute(
                 request_path=path,
                 priority=priority,
                 required_provider_id=required_provider_id,
+                ingress_at=ingress_at,
             )
 
         else:

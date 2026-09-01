@@ -115,14 +115,6 @@ class QueueEntry:
     """When set, only this provider may dispatch the entry. Normal requests
     leave this unset and retain the model-wide, cross-provider queue behavior."""
 
-    dispatch_rank: int = 0
-    """Arrival rank within (model, priority, background-app class), assigned
-    at enqueue and fixed for the entry's lifetime. The basis for the bounded
-    dispatch interleave (see PriorityQueueManager): the rank is not
-    recomputed among the surviving entries, so the slots of dispatched
-    entries stay burned and a steady flagged stream cannot hold the flagged
-    head slot."""
-
     @property
     def wait_time_seconds(self) -> float:
         """Calculate how long this entry has been waiting in queue."""

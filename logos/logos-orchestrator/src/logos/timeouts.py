@@ -50,8 +50,8 @@ def remaining_queue_wait_s(ingress_at: float | None) -> float | None:
     ``DEFAULT_QUEUE_WAIT_TIMEOUT_S`` is a whole-request budget: auth, the
     worker reconnect wait and classification all happen before enqueue and
     count against it, so the scheduler may only wait with what is left.
-    Without an ingress stamp (async jobs, tests, proxy mode) there is no
-    client watchdog to beat, so ``None`` is returned and the scheduler keeps
+    Without an ingress stamp (async jobs, tests) there is no client
+    watchdog to beat, so ``None`` is returned and the scheduler keeps
     the plain window.
     """
     if ingress_at is None:

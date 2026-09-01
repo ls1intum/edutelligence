@@ -333,11 +333,13 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         skip_laura=False,
         priority=1,
         required_provider_id=None,
+        ingress_at=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
         called["allowed_models_override"] = allowed_models_override
         called["request_id"] = request_id
+        called["ingress_at"] = ingress_at
         return {"status": "resource"}
 
     monkeypatch.setattr(main, "DBManager", DummyDB)
@@ -353,6 +355,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         ],
         log_id=None,
         is_async_job=False,
+        ingress_at=987.6,
     )
 
     assert result == {"status": "resource"}
@@ -360,6 +363,10 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
     assert called["body"]["model"] == "gemma2:2b"
     assert called["allowed_models_override"] == [27]
     assert called["request_id"] is None
+    # The ingress stamp must reach the resource-mode pipeline: proxy-mode
+    # requests queue the same way, so the queue-wait budget has to start at
+    # ingress like in resource mode.
+    assert called["ingress_at"] == 987.6
 
 
 async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
@@ -391,6 +398,7 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
         skip_laura=False,
         priority=1,
         required_provider_id=None,
+        ingress_at=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
