@@ -87,7 +87,7 @@ class FcfScheduler(BaseScheduler):
         provider_type = logosnode_dep["type"]
         provider_id = logosnode_dep["provider_id"]
 
-        priority = Priority.from_int(priority_int)
+        priority = Priority.from_resolved(priority_int)
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 

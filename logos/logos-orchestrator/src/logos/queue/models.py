@@ -28,14 +28,34 @@ class Priority(IntEnum):
     @classmethod
     def from_int(cls, value: int) -> "Priority":
         """
-        Convert integer priority to Priority enum.
+        Convert a caller-supplied integer priority to Priority enum.
 
-        Maps:
+        Maps the caller scale:
         - 1 → LOW
         - 5 → NORMAL
         - 10 → HIGH
-        - 20 → RESUME (mid-flight stream resume)
-        - Other values → NORMAL (default)
+        - Other values (including 0 and 20) → NORMAL (default)
+
+        ``RESUME`` is deliberately not reachable here: it exists only for
+        the internal stream-resume path (``PipelineRequest.priority_override``)
+        and must never be expressible from caller input — an API key with a
+        crafted ``default_priority`` has to stay out of the resume level.
+        Internally resolved values convert via ``from_resolved``.
+        """
+        if value in (cls.LOW.value, cls.NORMAL.value, cls.HIGH.value):
+            return cls(value)
+        # Default to NORMAL for unrecognized values
+        return cls.NORMAL
+
+    @classmethod
+    def from_resolved(cls, value: int) -> "Priority":
+        """
+        Convert an internally resolved priority to Priority enum.
+
+        The full scale is in play — including ``RESUME`` (20), which is
+        legitimate here: the value already came out of the pipeline's
+        priority resolution (caller value normalised through ``from_int``,
+        or the internal ``priority_override``).
         """
         try:
             return cls(value)

@@ -754,7 +754,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
     async def _queue_and_wait(self, best_scored: tuple, request: SchedulingRequest) -> Optional[SchedulingResult]:
         """Queue on the best-scored candidate and wait for release."""
         model_id, provider_id, provider_type, score, priority_int, ettft = best_scored
-        priority = Priority.from_int(priority_int)
+        priority = Priority.from_resolved(priority_int)
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()

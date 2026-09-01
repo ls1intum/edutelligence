@@ -38,7 +38,11 @@ def resolve_queue_priority(default_priority: Optional[int], policy_priority: Opt
     to the policy's priority, preserving the historical policy-only behaviour.
 
     Both values use the same 1/5/10 scale consumed by ``Priority.from_int``
-    (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL).
+    (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL). The
+    normalisation happens here, at the boundary where caller values enter the
+    queue: ``RESUME`` (20) is an internal level reached only through
+    ``PipelineRequest.priority_override``, never through a key or policy
+    priority.
 
     Args:
         default_priority: The requesting API key's default_priority, or 0/None
@@ -49,9 +53,9 @@ def resolve_queue_priority(default_priority: Optional[int], policy_priority: Opt
         The effective integer priority for the request's queue entry.
     """
     if default_priority:
-        return int(default_priority)
+        return Priority.from_int(int(default_priority)).value
     if policy_priority:
-        return int(policy_priority)
+        return Priority.from_int(int(policy_priority)).value
     return 0
 
 
@@ -255,7 +259,7 @@ class RequestPipeline:
             request_id=request_id,
             model_id=target_deployment["model_id"] if target_deployment else None,
             provider_id=target_deployment["provider_id"] if target_deployment else None,
-            initial_priority=Priority.from_int(priority_int).name.lower(),
+            initial_priority=Priority.from_resolved(priority_int).name.lower(),
             queue_depth=self._scheduler.get_total_queue_depth(),
             timeout_s=request.payload.get("timeout_s"),
         )

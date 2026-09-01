@@ -97,7 +97,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         provider_type = deployment["type"]
         provider_id = deployment["provider_id"]
 
-        priority = Priority.from_int(priority_int)
+        priority = Priority.from_resolved(priority_int)
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()

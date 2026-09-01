@@ -11,7 +11,20 @@ def _task(name: str) -> dict:
 
 def test_resume_is_above_high():
     assert int(Priority.RESUME) > int(Priority.HIGH)
-    assert Priority.from_int(int(Priority.RESUME)) is Priority.RESUME
+    assert Priority.from_resolved(int(Priority.RESUME)) is Priority.RESUME
+
+
+def test_resume_is_not_reachable_from_caller_input():
+    # The caller-facing conversion normalises anything outside the 1/5/10
+    # scale to NORMAL — a crafted default_priority of 20 must not reach the
+    # resume level. RESUME enters the queue only via the internal
+    # priority_override path (Priority.from_resolved).
+    assert Priority.from_int(int(Priority.RESUME)) is Priority.NORMAL
+    assert Priority.from_int(0) is Priority.NORMAL
+    assert Priority.from_int(7) is Priority.NORMAL
+    assert Priority.from_int(1) is Priority.LOW
+    assert Priority.from_int(5) is Priority.NORMAL
+    assert Priority.from_int(10) is Priority.HIGH
 
 
 def test_resume_jumps_every_other_priority():

@@ -34,7 +34,7 @@ class _RecordingScheduler:
             queue_entry_id=None,
             was_queued=False,
             queue_depth_at_schedule=0,
-            priority_when_scheduled=Priority.from_int(request.classified_models[0][2]).name.lower(),
+            priority_when_scheduled=Priority.from_resolved(request.classified_models[0][2]).name.lower(),
         )
 
     def release(self, *args, **kwargs):  # noqa: ARG002
