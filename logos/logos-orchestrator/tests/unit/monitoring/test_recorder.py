@@ -339,3 +339,17 @@ def test_malformed_usage_tokens_are_skipped_not_fatal(monkeypatch):
     assert fake.GENERATION_TOKENS_TOTAL.label_calls == []
     assert fake.CACHED_PROMPT_TOKENS_TOTAL.label_calls == []
     assert fake.REQUEST_CONTEXT_TOKENS.observations == []
+
+
+def test_record_rate_limit_admission_persists_the_flag_both_ways(monkeypatch):
+    """Issue #672: the /me/keys usage window must be able to tell an admitted
+    request from one the limiter rejected after scheduling. Both verdicts are
+    persisted verbatim — the DB layer drops None fields, so False must reach
+    it as False, not be swallowed like an unset value."""
+    recorder, calls = _make_recorder(monkeypatch, {}, {})
+
+    recorder.record_rate_limit_admission("req-rl-admitted", admitted=True)
+    recorder.record_rate_limit_admission("req-rl-rejected", admitted=False)
+
+    assert {"request_id": "req-rl-admitted", "rate_limit_admitted": True} in calls
+    assert {"request_id": "req-rl-rejected", "rate_limit_admitted": False} in calls
