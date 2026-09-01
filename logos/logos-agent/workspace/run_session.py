@@ -147,12 +147,34 @@ def _reset_agent_home() -> None:
     repository metadata is rebuilt, not reused.
     """
     home = Path(os.environ.get("HOME") or "/workspace/.home")
-    if home.is_symlink() or not home.is_dir():
-        if home.exists():
-            home.unlink()
-    else:
+    if home.is_symlink():
+        # Unlinked even when the target does not exist: `exists()` follows
+        # the link, so a dangling one is invisible to it — but `mkdir`
+        # would fail on the surviving path and break every later session.
+        home.unlink()
+    elif home.is_dir():
         shutil.rmtree(home)
+    elif home.exists():
+        home.unlink()
     home.mkdir(parents=True, exist_ok=True)
+
+
+def _clear_checkout() -> None:
+    """Remove whatever a previous session left at the checkout path.
+
+    Same symlink rule as the home: a dangling ``/workspace/repo`` link is
+    invisible to ``exists()``, yet ``git clone`` fails on the surviving
+    path — left alone, one session could make every later session in the
+    workspace fail before the agent even starts.
+    """
+    if CHECKOUT.is_symlink():
+        CHECKOUT.unlink()
+    elif CHECKOUT.is_dir():
+        # A previous session left a tree without a usable .git (or one it
+        # replaced): nothing in it is trusted, so start from nothing.
+        shutil.rmtree(CHECKOUT)
+    elif CHECKOUT.exists():
+        CHECKOUT.unlink()
 
 
 def _rebuild_git_metadata(repo_url: str) -> None:
@@ -196,13 +218,7 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
     if not (CHECKOUT / ".git").is_dir():
         log(f"cloning {repo_url} at {base_branch}")
         CHECKOUT.parent.mkdir(parents=True, exist_ok=True)
-        if CHECKOUT.exists():
-            # A previous session left a tree without a usable .git (or one
-            # it replaced): nothing in it is trusted, so start from nothing.
-            if CHECKOUT.is_dir() and not CHECKOUT.is_symlink():
-                shutil.rmtree(CHECKOUT)
-            else:
-                CHECKOUT.unlink()
+        _clear_checkout()
         run(["git", "clone", "--depth", "50", "--branch", base_branch, repo_url, str(CHECKOUT)])
     else:
         log("reusing existing checkout; rebuilding trusted git metadata")

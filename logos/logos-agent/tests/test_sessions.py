@@ -522,6 +522,85 @@ class TestOverlappingAdmission:
         assert launched == [1]
         assert [sid for sid, state in states.items() if state == "queued"] == [2, 3, 4]
 
+    async def test_overlapping_passes_cannot_share_one_pre_launch_reading(self, monkeypatch, tmp_path):
+        # Creation-triggered passes overlap: a pass that sampled the load
+        # before an earlier pass's launch must not admit against that stale
+        # sample — a burst of such passes could each claim one session from
+        # the same pre-launch load and fill the ceiling without a single
+        # observation made after any of the launches. The reading that
+        # gates a claim must be taken after the admission lock is held.
+        from app import capacity, sessions
+
+        monkeypatch.setattr(
+            sessions,
+            "settings",
+            replace(sessions.settings, artifact_root=str(tmp_path), max_parallel_sessions=4),
+        )
+        idle = capacity.Reading(load=0.0, busy_slots=0, total_slots=10, queue_total=0, ok=True)
+        # At or above the start threshold, below the pause threshold: the
+        # platform has work, but nothing to interrupt.
+        busy = capacity.Reading(load=0.7, busy_slots=7, total_slots=10, queue_total=0, ok=True)
+        # The fleet is idle until the first launch has taken its effect,
+        # after which no further admission is justified.
+        readings = [idle, idle, busy, busy, busy]
+        decided_loads: list = []
+        real_start_decision = capacity.start_decision
+
+        async def fake_read_load():
+            return readings.pop(0) if len(readings) > 1 else readings[0]
+
+        def spy_start_decision(reading, **kwargs):
+            decided_loads.append(reading.load)
+            return real_start_decision(reading, **kwargs)
+
+        states = {sid: "queued" for sid in (1, 2, 3, 4)}
+        queue = [{"id": sid, "workspace_id": sid} for sid in states]
+        launched: list = []
+
+        async def fake_in_status(status):
+            return [{"id": sid, "workspace_id": sid} for sid, state in states.items() if state == status.value]
+
+        async def fake_claim(limit):
+            claimed = []
+            while limit > 0 and queue:
+                session = queue.pop(0)
+                states[session["id"]] = "starting"
+                claimed.append(session)
+                limit -= 1
+            return claimed
+
+        async def fake_launch(_self, session):
+            # The launch takes time on the real engine; the row becomes
+            # running while the admission lock is still held.
+            await asyncio.sleep(0)
+            states[session["id"]] = "running"
+            launched.append(session["id"])
+
+        async def fake_event(_sid, _kind, _payload):
+            return None
+
+        monkeypatch.setattr(sessions.capacity, "read_load", fake_read_load)
+        monkeypatch.setattr(sessions.capacity, "start_decision", spy_start_decision)
+        monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
+        # A fresh manager: the shared singleton's admission lock is bound to
+        # whichever test's event loop first contended on it, and the passes
+        # here do contend — on this test's new loop that would raise.
+        monkeypatch.setattr(sessions, "manager", sessions.SessionManager())
+
+        await asyncio.gather(sessions.manager.scheduler_pass(), sessions.manager.scheduler_pass())
+
+        # The second pass's own reading already sees the load the first
+        # pass's launch caused, so it admits nothing: one pre-launch sample
+        # bought exactly one session, not one per overlapping pass.
+        assert launched == [1]
+        assert [sid for sid, state in states.items() if state == "queued"] == [2, 3, 4]
+        # And the second decision was made on a post-launch observation,
+        # not on the shared pre-launch one.
+        assert decided_loads == [0.0, 0.7]
+
 
 class TestScreenshotOrchestration:
     """Where and when the requested dev pages get photographed.

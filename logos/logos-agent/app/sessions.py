@@ -295,18 +295,18 @@ class SessionManager:
             return  # resume before admitting anything new
 
         # 3. Admit queued work — at most one session per fresh capacity
-        #    reading. A single below-threshold sample must not claim every
-        #    open slot: admitted as a batch, four agents would move a small
-        #    fleet from zero load to occupying (or queueing for) every
-        #    loaded slot before the next observation can notice. The next
-        #    pass re-reads the platform before admitting the next session,
-        #    and a session creation schedules a pass of its own, so a
-        #    backlog drains at one fresh observation per admission.
+        #    reading, taken *inside* the admission lock. A session creation
+        #    schedules a pass of its own, so passes overlap: one that
+        #    sampled the load before an earlier pass's launch would admit
+        #    against a reading the launch predates, and a burst of
+        #    creation-triggered passes could each claim one session from
+        #    the same pre-launch sample until the ceiling is full without a
+        #    single observation made after any of the launches. Re-reading
+        #    under the lock makes every claim pay for its own observation;
+        #    the backlog drains at one fresh reading per admission.
         async with self._admission_lock:
-            # Re-read inside the lock: every session creation schedules a
-            # pass, so overlapping passes must not admit against a snapshot
-            # the other pass has already made stale — two passes on the same
-            # counts would each claim a full batch and push past the ceiling.
+            reading = await capacity.read_load()
+            self._last_reading = reading
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
             may_start, why = capacity.start_decision(reading, running=len(running), paused=len(paused))

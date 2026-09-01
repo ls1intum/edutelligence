@@ -20,7 +20,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "workspace"))
 
-from run_session import _rebuild_git_metadata, _reset_agent_home  # noqa: E402
+from run_session import _clear_checkout, _rebuild_git_metadata, _reset_agent_home  # noqa: E402
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 
@@ -152,3 +152,39 @@ def test_a_home_left_as_a_symlink_is_replaced_too(tmp_path, monkeypatch):
     assert list(home.iterdir()) == []
     # Whatever the symlink pointed at is untouched: we never followed it.
     assert (outside / ".gitconfig").exists()
+
+
+def test_a_dangling_home_symlink_is_removed_not_kept(tmp_path, monkeypatch):
+    # `exists()` follows the link, so a dangling one is invisible to it —
+    # but `mkdir` would fail on the surviving path and the next session
+    # would break the same way. The link must go whether or not its target
+    # exists.
+    workspace = tmp_path / "ws"
+    (workspace / "repo").mkdir(parents=True)
+    home = workspace / ".home"
+    home.symlink_to(tmp_path / "a-target-that-was-never-created")
+    assert home.is_symlink()
+    assert not home.exists()
+    _patch_workspace(monkeypatch, workspace)
+
+    _reset_agent_home()
+
+    assert home.is_dir() and not home.is_symlink()
+    assert list(home.iterdir()) == []
+
+
+def test_a_dangling_checkout_symlink_is_removed_before_the_clone(tmp_path, monkeypatch):
+    # One session turning /workspace/repo into a dangling link must not make
+    # every later session in the workspace fail at the clone: the link is
+    # gone before git runs, whether or not its target exists.
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    checkout = workspace / "repo"
+    checkout.symlink_to(tmp_path / "a-target-that-was-never-created")
+    assert checkout.is_symlink()
+    assert not checkout.exists()
+    _patch_workspace(monkeypatch, workspace)
+
+    _clear_checkout()
+
+    assert not checkout.exists() and not checkout.is_symlink()
