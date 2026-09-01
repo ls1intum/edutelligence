@@ -76,8 +76,43 @@ async def dispatch_dev_deploy(*, image_tag: str) -> str:
     return f"https://github.com/{settings.repo_slug}/actions/workflows/{workflow}"
 
 
-async def wait_for_dev_deploy(*, timeout_s: float = 20 * 60, poll_s: float = 15.0) -> tuple[str, str]:
-    """Wait for the dev deploy run we just dispatched to reach a conclusion.
+async def latest_dev_deploy_run_id() -> int | None:
+    """The id of the newest run of the deploy workflow on the trusted ref.
+
+    Callers record this immediately before a dispatch — the pre-dispatch
+    marker. GitHub run ids only increase, so the run the dispatch creates
+    is the one that turns out newer than the marker, while a deploy that
+    completed before it (or one another session dispatched) stays older and
+    can no longer be mistaken for the dispatch's own run. Returns ``None``
+    when the workflow has no run on the trusted ref yet.
+    """
+    url = f"{_API}/repos/{settings.repo_slug}/actions/workflows/{settings.deploy_workflow}/runs"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url, headers=_headers(), params={"per_page": 10})
+    if response.status_code != 200:
+        raise GitHubError(f"workflow run lookup failed ({response.status_code})")
+    for run in response.json().get("workflow_runs", []):
+        if run.get("head_branch") != _DEPLOY_REF:
+            continue
+        run_id = run.get("id")
+        return run_id if isinstance(run_id, int) else None
+    return None
+
+
+async def wait_for_dev_deploy(
+    *,
+    after_run_id: int | None = None,
+    timeout_s: float = 20 * 60,
+    poll_s: float = 15.0,
+) -> tuple[str, str]:
+    """Wait for the dev deploy run of a dispatch to reach a conclusion.
+
+    ``after_run_id`` is the pre-dispatch marker recorded with
+    :func:`latest_dev_deploy_run_id`: only a run on the trusted ref whose id
+    is newer than the marker is accepted. Without it, the newest completed
+    run on that ref could still be a deploy that predates the dispatch — or
+    a run of a session that dispatched earlier — and the wait would settle
+    against a revision this dispatch never put in the environment.
 
     Returns ``(status, detail)``: status is ``"success"``, ``"failed"``, or
     ``"timeout"``. The workflow itself ends as soon as ``docker compose up``
@@ -97,19 +132,23 @@ async def wait_for_dev_deploy(*, timeout_s: float = 20 * 60, poll_s: float = 15.
     params = {"per_page": 10}
     deadline = asyncio.get_running_loop().time() + timeout_s
 
-    async def latest_run_on_trusted_ref() -> dict | None:
+    async def our_run() -> dict | None:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=_headers(), params=params)
         if response.status_code != 200:
             raise GitHubError(f"workflow run lookup failed ({response.status_code})")
         for run in response.json().get("workflow_runs", []):
-            if run.get("head_branch") == _DEPLOY_REF:
-                return run
+            if run.get("head_branch") != _DEPLOY_REF:
+                continue
+            run_id = run.get("id")
+            if after_run_id is not None and (not isinstance(run_id, int) or run_id <= after_run_id):
+                continue
+            return run
         return None
 
     try:
         while True:
-            run = await latest_run_on_trusted_ref()
+            run = await our_run()
             if run is not None and run.get("status") == "completed":
                 conclusion = run.get("conclusion") or "unknown"
                 status = "success" if conclusion == "success" else "failed"

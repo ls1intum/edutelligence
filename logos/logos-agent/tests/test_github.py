@@ -154,6 +154,80 @@ async def test_wait_for_dev_deploy_times_out_without_a_trusted_ref_run(monkeypat
     assert "still running" in detail
 
 
+async def test_latest_dev_deploy_run_id_reads_the_newest_trusted_ref_run(monkeypatch):
+    # The marker counts runs on the trusted ref only: a run on a session
+    # branch, however new, is not a deploy the environment can be serving.
+    calls: list = []
+    fake_client(
+        monkeypatch,
+        calls,
+        runs=[
+            {"id": 42, "head_branch": "agent/feature-work/session-7", "status": "in_progress"},
+            {"id": 41, "head_branch": "main", "status": "completed", "conclusion": "success"},
+        ],
+    )
+
+    assert await github.latest_dev_deploy_run_id() == 41
+
+
+async def test_wait_for_dev_deploy_rejects_a_completed_run_from_before_the_dispatch(monkeypatch):
+    # The newest completed run on the trusted ref can be a deploy that
+    # predates the dispatch: with the pre-dispatch marker the wait must skip
+    # it — settling on it would pass the old revision off as the one the
+    # session just deployed.
+    calls: list = []
+    fake_client(
+        monkeypatch,
+        calls,
+        runs=[
+            {
+                "id": 41,
+                "head_branch": "main",
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/ls1intum/edutelligence/actions/runs/41",
+            },
+        ],
+    )
+
+    status, detail = await github.wait_for_dev_deploy(after_run_id=41, timeout_s=0.05, poll_s=0.01)
+
+    assert status == "timeout"
+    assert "still running" in detail
+
+
+async def test_wait_for_dev_deploy_accepts_only_a_run_newer_than_the_marker(monkeypatch):
+    # The run the dispatch created is the one newer than the marker: a
+    # completed run of an earlier session (older) is skipped even though it
+    # is the newest completed one, and the wait ends with the newer run.
+    calls: list = []
+    fake_client(
+        monkeypatch,
+        calls,
+        runs=[
+            {
+                "id": 42,
+                "head_branch": "main",
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/ls1intum/edutelligence/actions/runs/42",
+            },
+            {
+                "id": 41,
+                "head_branch": "main",
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/ls1intum/edutelligence/actions/runs/41",
+            },
+        ],
+    )
+
+    status, detail = await github.wait_for_dev_deploy(after_run_id=41)
+
+    assert status == "success"
+    assert "actions/runs/42" in detail
+
+
 async def test_wait_for_pr_builds_times_out_when_no_build_ran(monkeypatch):
     # Without a pull request (or without logos/** changes) no build run
     # exists for the branch: the wait must time out, not hang, so the caller

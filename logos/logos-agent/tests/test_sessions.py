@@ -565,16 +565,22 @@ class TestScreenshotOrchestration:
         )
         order: list = []
         created: list = []
+        wait_calls: list = []
 
         async def fake_build_wait(_branch, **_kwargs):
             return "success", "build ended: success"
 
+        async def fake_marker():
+            order.append("marker")
+            return 40
+
         async def fake_dispatch(**_kwargs):
             order.append("dispatch")
-            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+            return "https://github.com/ls1intum/edutelligence/actions/runs/41"
 
-        async def fake_wait(**_kwargs):
+        async def fake_wait(**kwargs):
             order.append("wait")
+            wait_calls.append(kwargs)
             return "success", "run ended: success"
 
         async def fake_ready(_self):
@@ -590,6 +596,7 @@ class TestScreenshotOrchestration:
             return None
 
         monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+        monkeypatch.setattr(sessions.github, "latest_dev_deploy_run_id", fake_marker)
         monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
         monkeypatch.setattr(sessions.github, "wait_for_dev_deploy", fake_wait)
         monkeypatch.setattr(sessions.SessionManager, "_wait_dev_ready", fake_ready)
@@ -605,7 +612,13 @@ class TestScreenshotOrchestration:
 
         # The strict point of this fix: the photo comes only after the deploy
         # has been dispatched, waited out, and the environment serves again.
-        assert order == ["dispatch", "wait", "ready", "screenshot"]
+        # The marker is recorded before the dispatch — the run the dispatch
+        # creates is the one that turns out newer than it.
+        assert order == ["marker", "dispatch", "wait", "ready", "screenshot"]
+        # The wait is handed the marker: it may settle only a run of the
+        # deploy workflow newer than what existed before the dispatch, never
+        # a deploy that predates it.
+        assert wait_calls == [{"after_run_id": 40}]
         assert created[0]["url"].endswith("/dashboard")
 
     async def test_screenshots_are_skipped_when_the_deploy_does_not_succeed(self, monkeypatch, tmp_path):
@@ -624,8 +637,11 @@ class TestScreenshotOrchestration:
         async def fake_build_wait(_branch, **_kwargs):
             return "success", "build ended: success"
 
+        async def fake_marker():
+            return 40
+
         async def fake_dispatch(**_kwargs):
-            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+            return "https://github.com/ls1intum/edutelligence/actions/runs/41"
 
         async def fake_wait(**_kwargs):
             return "timeout", "still running after 1200s"
@@ -641,6 +657,7 @@ class TestScreenshotOrchestration:
             return None
 
         monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+        monkeypatch.setattr(sessions.github, "latest_dev_deploy_run_id", fake_marker)
         monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
         monkeypatch.setattr(sessions.github, "wait_for_dev_deploy", fake_wait)
         monkeypatch.setattr(sessions.docker_engine, "create_screenshot_container", fake_create)
@@ -657,6 +674,88 @@ class TestScreenshotOrchestration:
         skipped = [p for k, p in events if k == EventKind.SCREENSHOT and p.get("status") == "skipped"]
         assert len(skipped) == 1
         assert "did not succeed" in skipped[0]["reason"]
+
+    async def test_concurrent_deploys_do_not_interleave_the_environment_sequence(self, monkeypatch, tmp_path):
+        # The dev environment is shared by every session on the runner, so
+        # the sequences that change it and then observe it — dispatch, wait
+        # for the run that dispatch created, wait for the environment to
+        # serve, take the photos — must not interleave across sessions: an
+        # interleaved pair would each settle against the other's run and
+        # photograph the other's revision.
+        from app import sessions
+
+        self._patch_base(monkeypatch, tmp_path, deploy_enabled=True)
+        for sid in (7, 8):
+            directory = tmp_path / str(sid)
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "result.json").write_text(
+                json.dumps({"pr_url": f"https://github.com/ls1intum/edutelligence/pull/{sid}"})
+            )
+        order: list = []
+
+        async def fake_get_session(_sid):
+            return {
+                "container_id": "cid-x",
+                "deploy_to_dev": True,
+                "branch_name": "agent/feature-work/session",
+                "screenshot_paths": ["/dashboard"],
+            }
+
+        async def fake_build_wait(_branch, **_kwargs):
+            return "success", "build ended: success"
+
+        async def fake_marker():
+            return 40
+
+        async def fake_dispatch(**_kwargs):
+            order.append("dispatch")
+            # Yield so the other settling session can run while this one is
+            # inside the environment sequence — only the lock keeps it out.
+            await asyncio.sleep(0)
+            return "https://github.com/ls1intum/edutelligence/actions/runs/41"
+
+        async def fake_wait(**_kwargs):
+            order.append("wait")
+            await asyncio.sleep(0)
+            return "success", "run ended: success"
+
+        async def fake_ready(_self):
+            order.append("ready")
+            await asyncio.sleep(0)
+            return True
+
+        async def fake_create(**_kwargs):
+            order.append("screenshot")
+            await asyncio.sleep(0)
+            return "cid-shot"
+
+        async def fake_transition(_sid, _target, **_fields):
+            return True
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_session", fake_get_session)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+        monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+        monkeypatch.setattr(sessions.github, "latest_dev_deploy_run_id", fake_marker)
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+        monkeypatch.setattr(sessions.github, "wait_for_dev_deploy", fake_wait)
+        monkeypatch.setattr(sessions.SessionManager, "_wait_dev_ready", fake_ready)
+        monkeypatch.setattr(sessions.docker_engine, "create_screenshot_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", self._async_value(0))
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+
+        await asyncio.gather(
+            sessions.manager._settle(7, exit_code=0, error=None),
+            sessions.manager._settle(8, exit_code=0, error=None),
+        )
+
+        # One dispatch-to-screenshot block per session, and the blocks do not
+        # interleave: each sequence ran to completion before the next began.
+        assert order == ["dispatch", "wait", "ready", "screenshot"] * 2
 
     async def test_screenshots_are_skipped_when_the_requested_deploy_did_not_land(self, monkeypatch, tmp_path):
         # The session asked for a deploy and it did not land (here: refused,
@@ -797,15 +896,22 @@ class TestSettlementRaceAndDeployTag:
         self._write_result(tmp_path, pr_url="https://github.com/ls1intum/edutelligence/pull/772")
         order: list = []
         dispatched: list = []
+        marker_at: list = []
 
         async def fake_build_wait(branch, **_kwargs):
             order.append(("build_wait", branch))
             return "success", "build ended: success"
 
+        async def fake_marker():
+            # Position in `order` when the marker is recorded: after the
+            # build wait, before the dispatch entry exists.
+            marker_at.append(len(order))
+            return 40
+
         async def fake_dispatch(**kwargs):
             order.append(("dispatch", kwargs))
             dispatched.append(kwargs)
-            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+            return "https://github.com/ls1intum/edutelligence/actions/runs/41"
 
         async def fake_event(_sid, kind, payload):
             order.append((kind, payload))
@@ -818,6 +924,7 @@ class TestSettlementRaceAndDeployTag:
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
         monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+        monkeypatch.setattr(sessions.github, "latest_dev_deploy_run_id", fake_marker)
         monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
 
         await sessions.manager._settle(7, exit_code=0, error=None)
@@ -826,17 +933,19 @@ class TestSettlementRaceAndDeployTag:
         # the workflow runs on a fixed trusted ref, so the session's agent-editable
         # branch never reaches the dev host.
         assert dispatched == [{"image_tag": "pr-772"}]
-        # The build wait happens before the dispatch, and the dispatched
-        # event records the tag the environment now serves.
+        # The build wait happens first, then the pre-dispatch marker — the
+        # marker must see the runs as they stood before this dispatch's own
+        # run exists — and only then the dispatch; the dispatched event
+        # records the tag the environment now serves.
         build_idx = order.index(("build_wait", "agent/feature-work/session-7"))
         dispatch_idx = next(i for i, item in enumerate(order) if item[0] == "dispatch")
-        assert build_idx < dispatch_idx
+        assert build_idx < marker_at[0] <= dispatch_idx
         deploy_events = [p for k, p in order if k == EventKind.DEPLOY and p.get("status") == "dispatched"]
         assert deploy_events == [
             {
                 "status": "dispatched",
                 "environment": "logos-dev",
-                "url": "https://github.com/ls1intum/edutelligence/actions/runs/1",
+                "url": "https://github.com/ls1intum/edutelligence/actions/runs/41",
                 "image_tag": "pr-772",
             }
         ]
@@ -1006,6 +1115,60 @@ class TestRestartReconciliation:
         assert supervised == [(7, "cid-x")]
         # The matched container is not an orphan: it is supervised, not removed.
         assert removed == []
+
+    async def test_a_recovered_row_is_not_requeried_after_its_own_transition(self, monkeypatch, tmp_path):
+        # The status queries see the committed state, like the real database:
+        # a STARTING row this reconciliation moves to RUNNING is in the
+        # RUNNING result set by the time that status is queried. The
+        # occupying rows must be snapshotted before any of the transitions
+        # are committed — otherwise the recovered session's container is
+        # already out of the live list when the second query returns the row,
+        # and the active, supervised session is settled as vanished.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        states = {7: "starting"}
+        transitions: list = []
+        supervised: list = []
+        settled: list = []
+
+        async def fake_in_status(status):
+            # A fresh read on every call, like the database: whatever has
+            # been committed by now.
+            return [self.STARTING_ROW] if states[7] == status.value else []
+
+        async def fake_transition(sid, target, **fields):
+            transitions.append((target, fields))
+            # A validated transition, like the database: only legal edges,
+            # and the row really moves, so a later query sees it there.
+            if not can_transition(SessionStatus(states[sid]), target):
+                return False
+            states[sid] = target.value
+            return True
+
+        def fake_supervise(_self, sid, cid):
+            supervised.append((sid, cid))
+
+        async def fake_settle(_self, sid, **kwargs):
+            settled.append((sid, kwargs))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", self._async_value([self.CONTAINER]))
+        monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", fake_supervise)
+        monkeypatch.setattr(sessions.SessionManager, "_settle", fake_settle)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+
+        await sessions.manager._reconcile()
+
+        # The recovered session is re-adopted and supervised — and not
+        # settled again from the RUNNING query that, against the committed
+        # state, also returns it with its container already popped.
+        assert transitions == [(SessionStatus.RUNNING, self.META)]
+        assert supervised == [(7, "cid-x")]
+        assert settled == []
+        assert states[7] == "running"
 
     async def test_exited_container_from_a_starting_row_settles_through_running(self, monkeypatch, tmp_path):
         # The container exited while the runner was down, but the row never

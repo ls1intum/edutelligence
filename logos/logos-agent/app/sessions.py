@@ -89,6 +89,13 @@ class SessionManager:
         # Serialises admission so two scheduler passes cannot both decide there
         # is room for the last slot.
         self._admission_lock = asyncio.Lock()
+        # The dev environment is shared by every session on this runner, so
+        # the sequence that changes it and then observes it — dispatch a
+        # deploy, wait for the run the dispatch created, wait for the
+        # environment to serve, take the screenshots — must not interleave
+        # across sessions: an interleaved pair would each settle against the
+        # other's run and photograph the other's revision.
+        self._deploy_screenshot_lock = asyncio.Lock()
         self._last_reading: capacity.Reading = capacity.UNKNOWN
 
     # --- lifecycle --------------------------------------------------------
@@ -133,96 +140,107 @@ class SessionManager:
             logger.warning("could not list managed containers during reconcile: %s", exc)
             return
 
+        # Snapshot the occupying rows before committing any of the
+        # transitions: the status queries must see the state as it was at
+        # startup, not the state this reconciliation writes. A STARTING row
+        # that is normalized to RUNNING here would otherwise be returned by
+        # the RUNNING query again — its container is already out of ``live``
+        # by then, and the recovered session would be settled as vanished
+        # while its supervisor keeps running it.
+        occupying: list[tuple[SessionStatus, dict[str, Any]]] = []
         for status in (SessionStatus.STARTING, SessionStatus.RUNNING, SessionStatus.PAUSED):
             for session in await db.sessions_in_status(status):
-                sid = session["id"]
-                container = live.pop(sid, None)
-                if container is None:
-                    await self._settle(sid, exit_code=None, error="container vanished during restart")
-                    continue
-                container_id = container.get("Id", "")
-                # Re-adopt the container's identity into the row, but by the
-                # same atomic move that claims the state: the id and the
-                # derived branch are stored as fields of the transition, so
-                # a cancel that lands in the restart window either wins
-                # before the id is stored (the transition then loses, and
-                # the container is given back below by the id Docker told us
-                # about) or reads the stored id and stops it itself. Neither
-                # an id written into a terminal row nor a supervisor on a
-                # row that is no longer ours is acceptable for a
-                # credential-bearing agent.
-                fields: dict[str, Any] = {}
-                if session.get("container_id") != container_id:
-                    fields["container_id"] = container_id
-                if not session.get("branch_name"):
-                    fields["branch_name"] = branch_for(sid, session["workspace_name"])
-                state = (container.get("State") or "").lower()
-                if state == "created":
-                    # The runner restarted between creating and starting the
-                    # container: the agent never ran, so there is no exit to
-                    # settle — settling it would record a success for work
-                    # that never happened. A 'starting' row continues what
-                    # the launch began; any other row is inconsistent (the id
-                    # is only stored once the start succeeded) and is failed
-                    # instead of trusted.
-                    if status is SessionStatus.STARTING:
-                        try:
-                            await docker_engine.start_container(container_id)
-                        except Exception as exc:
-                            await self._settle(sid, exit_code=None, error=f"could not start recovered container: {exc}")
-                            # The start failed before the transition below,
-                            # so the id is not in the row and settlement's
-                            # cleanup cannot reach the container; remove it
-                            # by the id Docker told us about.
+                occupying.append((status, session))
+
+        for status, session in occupying:
+            sid = session["id"]
+            container = live.pop(sid, None)
+            if container is None:
+                await self._settle(sid, exit_code=None, error="container vanished during restart")
+                continue
+            container_id = container.get("Id", "")
+            # Re-adopt the container's identity into the row, but by the
+            # same atomic move that claims the state: the id and the
+            # derived branch are stored as fields of the transition, so
+            # a cancel that lands in the restart window either wins
+            # before the id is stored (the transition then loses, and
+            # the container is given back below by the id Docker told us
+            # about) or reads the stored id and stops it itself. Neither
+            # an id written into a terminal row nor a supervisor on a
+            # row that is no longer ours is acceptable for a
+            # credential-bearing agent.
+            fields: dict[str, Any] = {}
+            if session.get("container_id") != container_id:
+                fields["container_id"] = container_id
+            if not session.get("branch_name"):
+                fields["branch_name"] = branch_for(sid, session["workspace_name"])
+            state = (container.get("State") or "").lower()
+            if state == "created":
+                # The runner restarted between creating and starting the
+                # container: the agent never ran, so there is no exit to
+                # settle — settling it would record a success for work
+                # that never happened. A 'starting' row continues what
+                # the launch began; any other row is inconsistent (the id
+                # is only stored once the start succeeded) and is failed
+                # instead of trusted.
+                if status is SessionStatus.STARTING:
+                    try:
+                        await docker_engine.start_container(container_id)
+                    except Exception as exc:
+                        await self._settle(sid, exit_code=None, error=f"could not start recovered container: {exc}")
+                        # The start failed before the transition below,
+                        # so the id is not in the row and settlement's
+                        # cleanup cannot reach the container; remove it
+                        # by the id Docker told us about.
+                        await self._relinquish_container(container_id)
+                    else:
+                        if not await db.transition_session(sid, SessionStatus.RUNNING, **fields):
+                            # A cancel that landed in the restart window
+                            # owns the row; the agent must not keep
+                            # running.
                             await self._relinquish_container(container_id)
                         else:
-                            if not await db.transition_session(sid, SessionStatus.RUNNING, **fields):
-                                # A cancel that landed in the restart window
-                                # owns the row; the agent must not keep
-                                # running.
-                                await self._relinquish_container(container_id)
-                            else:
-                                self._supervise(sid, container_id)
-                    else:
-                        await self._settle(sid, exit_code=None, error="container was created but never started")
-                    continue
-                if state in ("running", "paused"):
-                    target = SessionStatus.PAUSED if state == "paused" else SessionStatus.RUNNING
-                    if status is SessionStatus.STARTING and target is SessionStatus.PAUSED:
-                        # starting -> paused is not an edge: a container the
-                        # platform paused inside the start window normalizes
-                        # through running first.
-                        if not await db.transition_session(sid, SessionStatus.RUNNING, **fields):
-                            await self._relinquish_container(container_id)
-                            continue
-                        fields = {}
-                        if not await db.transition_session(sid, SessionStatus.PAUSED):
-                            await self._relinquish_container(container_id)
-                            continue
-                    elif status != target:
-                        # A validated transition, not a raw update: a cancel
-                        # that landed inside the restart window must not be
-                        # overwritten with running/paused.
-                        if not await db.transition_session(sid, target, **fields):
-                            await self._relinquish_container(container_id)
-                            continue
-                    self._supervise(sid, container_id)
+                            self._supervise(sid, container_id)
                 else:
-                    if status is SessionStatus.STARTING:
-                        # An exited container found while the row is still
-                        # 'starting' has no direct edge to a terminal state;
-                        # normalize through running so settlement's
-                        # transition is valid and can record the outcome.
-                        if not await db.transition_session(sid, SessionStatus.RUNNING, **fields):
-                            # A cancel that landed in the restart window owns
-                            # the row and saw no container id yet; the
-                            # exited container is removed here, by the id
-                            # Docker told us about.
-                            await self._relinquish_container(container_id)
-                            continue
-                        fields = {}
-                    _, exit_code = await docker_engine.container_state(container_id)
-                    await self._settle(sid, exit_code=exit_code, error=None)
+                    await self._settle(sid, exit_code=None, error="container was created but never started")
+                continue
+            if state in ("running", "paused"):
+                target = SessionStatus.PAUSED if state == "paused" else SessionStatus.RUNNING
+                if status is SessionStatus.STARTING and target is SessionStatus.PAUSED:
+                    # starting -> paused is not an edge: a container the
+                    # platform paused inside the start window normalizes
+                    # through running first.
+                    if not await db.transition_session(sid, SessionStatus.RUNNING, **fields):
+                        await self._relinquish_container(container_id)
+                        continue
+                    fields = {}
+                    if not await db.transition_session(sid, SessionStatus.PAUSED):
+                        await self._relinquish_container(container_id)
+                        continue
+                elif status != target:
+                    # A validated transition, not a raw update: a cancel
+                    # that landed inside the restart window must not be
+                    # overwritten with running/paused.
+                    if not await db.transition_session(sid, target, **fields):
+                        await self._relinquish_container(container_id)
+                        continue
+                self._supervise(sid, container_id)
+            else:
+                if status is SessionStatus.STARTING:
+                    # An exited container found while the row is still
+                    # 'starting' has no direct edge to a terminal state;
+                    # normalize through running so settlement's
+                    # transition is valid and can record the outcome.
+                    if not await db.transition_session(sid, SessionStatus.RUNNING, **fields):
+                        # A cancel that landed in the restart window owns
+                        # the row and saw no container id yet; the
+                        # exited container is removed here, by the id
+                        # Docker told us about.
+                        await self._relinquish_container(container_id)
+                        continue
+                    fields = {}
+                _, exit_code = await docker_engine.container_state(container_id)
+                await self._settle(sid, exit_code=exit_code, error=None)
 
         # Containers with no live session row: leftovers, remove them.
         for sid, container in live.items():
@@ -561,16 +579,23 @@ class SessionManager:
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
 
         deploy: str | None = None
+        after_run_id: int | None = None
         if succeeded:
-            deploy = await self._maybe_deploy(session_id, result)
+            # Hold the shared-environment lock across the whole
+            # dispatch-to-screenshot sequence, so a second settling session
+            # cannot dispatch in the middle of this one's wait or photograph
+            # this one's deploy (see the lock in __init__).
+            async with self._deploy_screenshot_lock:
+                deploy, after_run_id = await self._maybe_deploy(session_id, result)
 
-        # Give the container back before the post-deploy wait: a deploy can
-        # take minutes, and the capacity a session holds is worth reclaiming
-        # without waiting for its screenshots.
-        await self._cleanup_container(session_id)
+                # Give the container back before the post-deploy wait: a
+                # deploy can take minutes, and the capacity a session holds
+                # is worth reclaiming without waiting for its screenshots.
+                await self._cleanup_container(session_id)
 
-        if succeeded:
-            await self._capture_screenshots(session_id, deploy)
+                await self._capture_screenshots(session_id, deploy, after_run_id)
+        else:
+            await self._cleanup_container(session_id)
 
     def _read_result(self, session_id: int) -> dict[str, Any]:
         """Read the result file the container writes before it exits.
@@ -587,23 +612,29 @@ class SessionManager:
             logger.warning("unreadable result file for session %s: %s", session_id, exc)
         return {}
 
-    async def _maybe_deploy(self, session_id: int, result: dict[str, Any]) -> str | None:
+    async def _maybe_deploy(self, session_id: int, result: dict[str, Any]) -> tuple[str | None, int | None]:
         """Dispatch the dev deploy if the session asked for one.
 
-        Returns what happened — ``"dispatched"``, ``"skipped"``, ``"failed"`` —
-        or ``None`` when the session did not request a deploy. Callers that
-        have to happen *after* the deploy (the screenshots) key off this.
+        Returns ``(outcome, pre_dispatch_run_id)``. The outcome is
+        ``"dispatched"``, ``"skipped"``, ``"failed"``, or ``None`` when the
+        session did not request a deploy — callers that have to happen
+        *after* the deploy (the screenshots) key off it. The
+        ``pre_dispatch_run_id`` is the newest run of the deploy workflow
+        that existed *before* the dispatch; the screenshots wait for a run
+        newer than it, so a deploy that predates this dispatch — or one of
+        a session that dispatched earlier — cannot be settled as this
+        session's.
         """
         session = await db.get_session(session_id)
         if not session or not session.get("deploy_to_dev"):
-            return None
+            return None, None
         if not settings.deploy_enabled:
             await db.add_event(
                 session_id,
                 EventKind.DEPLOY,
                 {"status": "skipped", "reason": "deploys are disabled on this runner"},
             )
-            return "skipped"
+            return "skipped", None
         try:
             # Dispatched from here, never from the container: the workflow-scoped
             # token stays in this service, and the workflow itself is pinned to
@@ -616,7 +647,10 @@ class SessionManager:
             # a latest dispatch would deploy the old revision.
             image_tag = await self._wait_for_session_image(session_id, result, session.get("branch_name") or "main")
             if image_tag is None:
-                return "failed"
+                return "failed", None
+            # The pre-dispatch marker: whatever run exists on the trusted
+            # ref right now is older than the one this dispatch creates.
+            after_run_id = await github.latest_dev_deploy_run_id()
             run_url = await github.dispatch_dev_deploy(image_tag=image_tag)
             await db.update_session(session_id, deployed_at=datetime.now(timezone.utc))
             await db.add_event(
@@ -629,11 +663,11 @@ class SessionManager:
                     "image_tag": image_tag,
                 },
             )
-            return "dispatched"
+            return "dispatched", after_run_id
         except Exception as exc:
             logger.warning("dev deploy for session %s failed: %s", session_id, exc)
             await db.add_event(session_id, EventKind.DEPLOY, {"status": "failed", "error": str(exc)})
-            return "failed"
+            return "failed", None
 
     async def _wait_for_session_image(self, session_id: int, result: dict[str, Any], branch: str) -> str | None:
         """The image tag a deploy of this session must pull — or None.
@@ -668,7 +702,7 @@ class SessionManager:
             return None
         return f"pr-{pr_number}"
 
-    async def _capture_screenshots(self, session_id: int, deploy: str | None) -> None:
+    async def _capture_screenshots(self, session_id: int, deploy: str | None, after_run_id: int | None = None) -> None:
         """Capture the session's requested dev pages, after everything else.
 
         Running this in settlement — and only after a requested dev deploy has
@@ -678,6 +712,12 @@ class SessionManager:
         is even made. A requested deploy that failed or was skipped skips the
         photos too, for the same reason: the environment would still be
         serving the previous revision.
+
+        ``after_run_id`` is the pre-dispatch run marker the dispatch
+        recorded: the wait accepts only a run of the deploy workflow newer
+        than it, so a completed deploy from before this dispatch cannot end
+        the wait and make the photos pass for the revision this session put
+        in the environment.
         """
         session = await db.get_session(session_id)
         paths = (session or {}).get("screenshot_paths") or []
@@ -685,7 +725,7 @@ class SessionManager:
             return
 
         if deploy == "dispatched":
-            status, detail = await github.wait_for_dev_deploy()
+            status, detail = await github.wait_for_dev_deploy(after_run_id=after_run_id)
             if status != "success":
                 await db.add_event(
                     session_id,
