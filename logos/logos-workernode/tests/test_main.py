@@ -69,3 +69,27 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
 
         with pytest.raises(RuntimeError, match="nvidia-smi"):
             await context.__aenter__()
+
+
+def test_download_one_model_explicit_quant_beats_operator_pin(tmp_path, monkeypatch) -> None:
+    # Regression: an explicit repo:quant reference must prefetch the quant it
+    # names. resolve_gguf_spec serves the embedded quant and ignores any
+    # operator pin, so the prefetch has to download the same one — otherwise
+    # the lane boots against a quant that was never fetched.
+    calls: list[dict] = []
+
+    def fake(**kwargs) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    worker_main._download_one_model("unsloth/Qwen3-8B-GGUF:Q8_0", str(tmp_path), "Q4_K_M")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["repo_id"] == "unsloth/Qwen3-8B-GGUF"
+    assert kwargs["allow_patterns"] is not None
+    # The embedded quant (Q8_0), not the operator pin (Q4_K_M), is downloaded.
+    assert all("q8_0" in pattern.lower() for pattern in kwargs["allow_patterns"])
+    assert all("q4_k_m" not in pattern.lower() for pattern in kwargs["allow_patterns"])

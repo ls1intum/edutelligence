@@ -352,8 +352,14 @@ def list_cached_gguf_files(hf_home: str | None, model: str) -> list[tuple[str, i
     directory exists under ``<hf_home>/hub/models--<org>--<name>``, and None
     when it does not (model not downloaded yet — the caller may then fall
     back to a remote listing). An empty list is authoritative: the repo is
-    cached and contains no GGUF weights. Sizes let :func:`select_quant` order
-    the fallback by file size instead of relying on listing order.
+    cached and contains no GGUF weights. Each snapshot revision is walked
+    recursively — GGUF repositories often keep their weights in
+    subdirectories (``quants/``) — but never past it, so discovery stays
+    bounded to this model and does not scan the whole cache. Names are
+    snapshot-relative, so a nested file surfaces as
+    ``quants/Qwen3-8B-Q4_K_M.gguf`` (the quant helpers basename their input,
+    so the prefix is harmless). Sizes let :func:`select_quant` order the
+    fallback by file size instead of relying on listing order.
     """
     if not hf_home:
         return None
@@ -368,14 +374,13 @@ def list_cached_gguf_files(hf_home: str | None, model: str) -> list[tuple[str, i
         for rev_dir in snapshots.iterdir():
             if not rev_dir.is_dir():
                 continue
-            for entry in rev_dir.iterdir():
-                if not entry.name.lower().endswith(".gguf"):
-                    continue
+            # Bounded to this revision, never the whole cache.
+            for entry in rev_dir.rglob("*.gguf"):
                 try:
                     # stat() follows the snapshot symlink into blobs/
                     size = entry.stat().st_size
                     if size > 0:
-                        sizes[entry.name] = size
+                        sizes[str(entry.relative_to(rev_dir))] = size
                 except OSError:
                     continue
     except OSError:

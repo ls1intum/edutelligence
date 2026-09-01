@@ -65,11 +65,13 @@ def _download_one_model(model_name: str, hf_home: str, gguf_quant: str = "") -> 
         snapshot_download(repo_id=model_name, cache_dir=cache_dir, token=token)
         return
 
-    # Resolve the quant to filter on: an operator pin wins, a repo:quant
-    # reference carries its own, and a bare GGUF repository is picked from
-    # its file listing.
+    # Resolve the quant to filter on. An explicit repo:quant reference is
+    # authoritative: resolve_gguf_spec serves the embedded quant and ignores
+    # any operator pin, so the prefetch must download the same one or the lane
+    # would boot against a quant that was never fetched. A bare GGUF repository
+    # takes an operator pin, else the quant picked from its file listing.
     if gguf.is_remote_gguf_ref(model_name):
-        quant = gguf_quant or model_name.rsplit(":", 1)[1]
+        quant = model_name.rsplit(":", 1)[1]
     elif gguf.is_gguf_file_ref(model_name):
         quant = ""
     else:
