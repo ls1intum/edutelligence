@@ -341,12 +341,21 @@ def _resolve_requested_model_name(
 
         replica_prefix = f"planner-{sanitized}-"
         suffix = requested[len(replica_prefix) :] if requested.startswith(replica_prefix) else None
-        if suffix is not None and suffix.isdigit() and int(suffix) >= 2:
-            # Skip when <alias>-<n> is another deployed model's own alias:
-            # that request addresses that model, not this one's replica.
-            if f"{sanitized}-{suffix}" in sanitized_aliases:
+        if suffix is not None and suffix.isascii() and suffix.isdigit():
+            # The planner derives suffixes from int, so a replica id is ASCII
+            # decimal only: a non-ASCII "digit" never names a lane, and a run
+            # longer than int() can parse (Python caps the length) must be
+            # refused rather than raised out of the resolver.
+            try:
+                index = int(suffix)
+            except ValueError:
                 continue
-            replica_matches.add(canonical)
+            if index >= 2:
+                # Skip when <alias>-<n> is another deployed model's own alias:
+                # that request addresses that model, not this one's replica.
+                if f"{sanitized}-{suffix}" in sanitized_aliases:
+                    continue
+                replica_matches.add(canonical)
 
     if alias_matches:
         # Two distinct models sharing one planner-safe alias is a genuine

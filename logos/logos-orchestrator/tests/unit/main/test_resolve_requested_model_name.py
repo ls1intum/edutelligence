@@ -51,6 +51,17 @@ def test_replica_suffix_must_be_digit_at_least_two():
     assert main._resolve_requested_model_name("planner-llama-x", ["llama"]) is None
 
 
+def test_replica_suffix_must_be_ascii_decimal():
+    # The planner derives suffixes from int, so a replica id is ASCII decimal
+    # only: a non-ASCII "digit" never names a lane, and a run longer than
+    # int() can parse is refused instead of raising out of the resolver.
+    assert (
+        main._resolve_requested_model_name("planner-llama-" + "\u0662", ["llama"]) is None
+    )  # non-ASCII digit (Arabic-Indic 2)
+    assert main._resolve_requested_model_name("planner-llama-" + "9" * 5000, ["llama"]) is None
+    assert main._resolve_requested_model_name("planner-llama-2", ["llama"]) == "llama"
+
+
 def test_shared_planner_alias_is_ambiguous():
     # Two distinct models whose names only differ in / vs : share one
     # planner-safe alias — a genuine ambiguity, refused.
