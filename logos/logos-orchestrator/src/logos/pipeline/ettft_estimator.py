@@ -65,6 +65,16 @@ class ReadinessTier(Enum):
     UNAVAILABLE = "unavailable"  # no lanes / error
 
 
+class InitialReadinessTierWeights(Enum):
+    INIT_WARM: float = 0.0
+    INIT_SLEEPING: float = 2.5
+    INIT_BUSY: float = 0
+    INIT_COLD: float = 0
+    INIT_COLD_RECLAIM: float = 3.0
+    INIT_SLEEPING_RECLAIM: float = 5.5
+    INIT_UNAVAILABLE: float = float("inf")
+
+
 @dataclass(frozen=True)
 class EttftEstimate:
     """ETTFT estimation result with infrastructure-aware wait decomposition."""
