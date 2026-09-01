@@ -14,6 +14,7 @@ from logos_worker_node.hf_model_info import (
     HfModelMetadata,
     _derive_kv_per_token_bytes,
     _effective_max_context_length,
+    _resolve_checkpoint_weight_bytes,
     fetch_hf_model_metadata,
     min_feasible_tp,
 )
@@ -99,15 +100,63 @@ def _fake_sibling(rfilename: str, size: int | None):
     return sib
 
 
-def test_fetch_hf_model_metadata_success():
-    fake_info = MagicMock()
-    fake_info.siblings = [
+def test_resolve_checkpoint_weight_bytes_single_unsharded_file():
+    siblings = [_fake_sibling("model.safetensors", 1_000_000_000)]
+    assert _resolve_checkpoint_weight_bytes(siblings, index_json=None) == 1_000_000_000
+
+
+def test_resolve_checkpoint_weight_bytes_uses_index_total_size():
+    siblings = [
         _fake_sibling("model-00001-of-00002.safetensors", 3_000_000_000),
         _fake_sibling("model-00002-of-00002.safetensors", 2_000_000_000),
-        _fake_sibling("README.md", 512),
     ]
-    fake_api = MagicMock()
-    fake_api.model_info.return_value = fake_info
+    index_json = {"metadata": {"total_size": 5_000_000_000}, "weight_map": {}}
+    assert _resolve_checkpoint_weight_bytes(siblings, index_json) == 5_000_000_000
+
+
+def test_resolve_checkpoint_weight_bytes_sums_only_indexed_shards():
+    """The bug this fixes: an alternate-precision checkpoint sitting next
+    to the indexed one must not inflate the sum — only the files the
+    index's weight_map actually names count toward weight_bytes."""
+    siblings = [
+        _fake_sibling("model-00001-of-00002.safetensors", 3_000_000_000),
+        _fake_sibling("model-00002-of-00002.safetensors", 2_000_000_000),
+        _fake_sibling("fp8/model.safetensors", 2_500_000_000),  # alternate variant
+    ]
+    index_json = {
+        "weight_map": {
+            "layer.0.weight": "model-00001-of-00002.safetensors",
+            "layer.1.weight": "model-00002-of-00002.safetensors",
+        }
+    }
+    assert _resolve_checkpoint_weight_bytes(siblings, index_json) == 5_000_000_000
+
+
+def test_resolve_checkpoint_weight_bytes_ambiguous_without_index():
+    # Two variants, no index to say which one is the active checkpoint.
+    siblings = [
+        _fake_sibling("model.safetensors", 1_000_000_000),
+        _fake_sibling("fp8/model.safetensors", 500_000_000),
+    ]
+    assert _resolve_checkpoint_weight_bytes(siblings, index_json=None) is None
+
+
+def test_resolve_checkpoint_weight_bytes_inconsistent_index_fails_open():
+    siblings = [_fake_sibling("model-00001-of-00002.safetensors", 3_000_000_000)]
+    index_json = {
+        "weight_map": {"layer.0.weight": "model-00001-of-00002.safetensors", "layer.1.weight": "missing.safetensors"}
+    }
+    assert _resolve_checkpoint_weight_bytes(siblings, index_json) is None
+
+
+def test_resolve_checkpoint_weight_bytes_no_safetensors_at_all():
+    assert _resolve_checkpoint_weight_bytes([_fake_sibling("README.md", 512)], index_json=None) is None
+
+
+def test_fetch_hf_model_metadata_success(tmp_path):
+    index_path = tmp_path / "model.safetensors.index.json"
+    index_path.write_text(json.dumps({"metadata": {"total_size": 5_000_000_000}, "weight_map": {}}))
+    config_path = tmp_path / "config.json"
     fake_config = {
         "num_hidden_layers": 32,
         "hidden_size": 4096,
@@ -117,17 +166,31 @@ def test_fetch_hf_model_metadata_success():
         "torch_dtype": "bfloat16",
         "quantization_config": {"quant_method": "awq", "bits": 4},
     }
+    config_path.write_text(json.dumps(fake_config))
+
+    fake_info = MagicMock()
+    fake_info.siblings = [
+        _fake_sibling("model-00001-of-00002.safetensors", 3_000_000_000),
+        _fake_sibling("model-00002-of-00002.safetensors", 2_000_000_000),
+        _fake_sibling("model.safetensors.index.json", 200),
+        _fake_sibling("README.md", 512),
+    ]
+    fake_api = MagicMock()
+    fake_api.model_info.return_value = fake_info
+
+    def _fake_download(_model_name, filename, **_kw):
+        return str(index_path) if filename.endswith("index.json") else str(config_path)
 
     with (
         patch("huggingface_hub.HfApi", return_value=fake_api),
-        patch("huggingface_hub.hf_hub_download", return_value="/fake/config.json"),
-        patch("builtins.open", mock_open(read_data=json.dumps(fake_config))),
+        patch("huggingface_hub.hf_hub_download", side_effect=_fake_download),
     ):
         meta = fetch_hf_model_metadata("org/model", token=None)
 
     assert meta.source == "hf"
     assert meta.weight_bytes == 5_000_000_000
     assert meta.kv_per_token_bytes == 2 * 32 * 8 * 128 * 2
+    assert meta.num_key_value_heads == 8
     assert meta.max_context_length == 8192
     assert meta.quantization_method == "awq"
 
@@ -318,3 +381,30 @@ def test_min_feasible_tp():
     # doesn't fit a 5 GB budget, but tp=4 (3.75 GB/GPU) does; tp=3 is
     # never considered.
     assert min_feasible_tp(15 * gb, per_gpu_free_mb=5000.0, hardware_max_tp=8) == 4
+
+
+def test_min_feasible_tp_shards_kv_cache_across_tp_ranks():
+    """Regression: min_kv_mb is the whole-model KV footprint (every KV
+    head). Charging it unchanged at every tp falsely reports a model as
+    infeasible everywhere; vLLM shards KV heads across ranks the same
+    way it shards attention heads — num_key_value_heads fixes that."""
+    # 8000 MB whole-model KV footprint, 8 KV heads: tp=4 still charges
+    # 2000 MB/rank (2 heads) and misses a 1440 MB budget; tp=8 shrinks to
+    # 1000 MB/rank (1 head) and fits. Without num_key_value_heads, the
+    # full 8000 MB is charged at every tp and it never fits, anywhere.
+    assert (
+        min_feasible_tp(8_000_000, per_gpu_free_mb=1600.0, hardware_max_tp=8, min_kv_mb=8000.0, num_key_value_heads=8)
+        == 8
+    )
+    assert min_feasible_tp(8_000_000, per_gpu_free_mb=1600.0, hardware_max_tp=8, min_kv_mb=8000.0) is None
+
+
+def test_min_feasible_tp_kv_replication_does_not_over_shrink_past_head_count():
+    """A tp wider than num_key_value_heads must replicate, not keep
+    splitting — pins vLLM's max(1, heads // tp) floor: widening from
+    tp=4 to tp=8 must not halve the KV share again once every rank
+    already holds one full (replicated) head."""
+    assert (
+        min_feasible_tp(1_000_000, per_gpu_free_mb=1000.0, hardware_max_tp=8, min_kv_mb=4000.0, num_key_value_heads=4)
+        is None
+    )

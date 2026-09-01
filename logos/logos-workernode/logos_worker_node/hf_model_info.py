@@ -61,7 +61,8 @@ _DTYPE_BYTES = {
 @dataclass(frozen=True)
 class HfModelMetadata:
     weight_bytes: int | None = None  # sum of *.safetensors sibling sizes
-    kv_per_token_bytes: int | None = None
+    kv_per_token_bytes: int | None = None  # whole model, every KV head — see min_feasible_tp
+    num_key_value_heads: int | None = None  # for per-TP-rank KV sharding/replication
     max_context_length: int | None = None
     # config.json's quantization_config.quant_method (e.g. "awq", "gptq").
     # This module just extracts the raw string; logos_bridge.py checks it
@@ -124,6 +125,29 @@ def _derive_kv_per_token_bytes(config: dict[str, Any], kv_cache_dtype_override: 
     return int(2 * num_hidden_layers * num_key_value_heads * head_dim * dtype_bytes)
 
 
+def _resolve_checkpoint_weight_bytes(siblings: list[Any], index_json: dict[str, Any] | None) -> int | None:
+    """Byte size of the checkpoint vLLM will actually load — not every
+    .safetensors file in the repo, which alternate-precision or quantized
+    variants and adapters can inflate. None when it can't be resolved
+    unambiguously; an unknown weight must never look "too big to fit"."""
+    sizes_by_name = {s.rfilename: s.size for s in siblings if getattr(s, "size", None)}
+    safetensor_names = [n for n in sizes_by_name if n.endswith(".safetensors")]
+
+    if index_json is not None:
+        total_size = (index_json.get("metadata") or {}).get("total_size")
+        if isinstance(total_size, int) and total_size > 0:
+            return total_size
+        shard_names = set((index_json.get("weight_map") or {}).values())
+        if shard_names and shard_names <= sizes_by_name.keys():
+            return sum(sizes_by_name[n] for n in shard_names)
+        return None  # index present but unusable — don't guess
+
+    if len(safetensor_names) == 1:
+        return sizes_by_name[safetensor_names[0]]
+
+    return None  # zero, or 2+ files with no index to disambiguate them
+
+
 def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> HfModelMetadata:
     try:
         from huggingface_hub import HfApi, hf_hub_download
@@ -138,8 +162,19 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
     weight_bytes: int | None = None
     try:
         info = HfApi().model_info(model_name, token=token, files_metadata=True, timeout=timeout_s)
-        sizes = [s.size for s in (info.siblings or []) if s.rfilename.endswith(".safetensors") and s.size]
-        weight_bytes = sum(sizes) if sizes else None
+        siblings = info.siblings or []
+        index_names = [s.rfilename for s in siblings if s.rfilename.endswith(".safetensors.index.json")]
+        index_json: dict[str, Any] | None = None
+        if len(index_names) == 1:
+            try:
+                index_path = hf_hub_download(model_name, filename=index_names[0], token=token, etag_timeout=timeout_s)
+                with open(index_path, encoding="utf-8") as f:
+                    index_json = json.load(f)
+            except Exception:  # noqa: BLE001
+                # Best-effort: an unreadable index just means the resolver
+                # below falls through to its own ambiguous-case handling.
+                index_json = None
+        weight_bytes = _resolve_checkpoint_weight_bytes(siblings, index_json)
     except GatedRepoError as exc:
         gated = True
         logger.debug("[HF precheck] model_info gated for %s: %s", model_name, exc)
@@ -152,6 +187,7 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
         logger.debug("[HF precheck] model_info failed for %s: %s", model_name, exc)
 
     kv_per_token_bytes: int | None = None
+    num_key_value_heads: int | None = None
     max_context_length: int | None = None
     quantization_method: str | None = None
     try:
@@ -161,6 +197,9 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
         with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
         kv_per_token_bytes = _derive_kv_per_token_bytes(config, None)
+        num_key_value_heads = _get_config_field(config, "num_key_value_heads") or _get_config_field(
+            config, "num_attention_heads"
+        )
         max_context_length = _effective_max_context_length(config, _get_config_field(config, "max_position_embeddings"))
         quant_cfg = _get_config_field(config, "quantization_config")
         if isinstance(quant_cfg, dict):
@@ -188,6 +227,7 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
     return HfModelMetadata(
         weight_bytes=weight_bytes,
         kv_per_token_bytes=kv_per_token_bytes,
+        num_key_value_heads=num_key_value_heads,
         max_context_length=max_context_length,
         quantization_method=quantization_method,
         fetched_at=time.time(),
@@ -307,18 +347,20 @@ def min_feasible_tp(
     *,
     safety_ratio: float = 0.9,
     min_kv_mb: float = 0.0,
+    num_key_value_heads: int | None = None,
 ) -> int | None:
-    """Smallest power-of-2 TP in [1, hardware_max_tp] where the weights (plus
-    ``min_kv_mb`` of KV cache) fit within ``per_gpu_free_mb * safety_ratio``.
-
-    Returns None if infeasible even at hardware_max_tp. safety_ratio=0.9 is
-    deliberately generous — this is a skip gate, and a false skip (wrongly
-    declaring a model incompatible) is much costlier than a false proceed.
-    """
+    """Smallest power-of-2 TP where weight+KV fit per GPU. min_kv_mb is the
+    whole-model KV footprint; num_key_value_heads lets it scale per rank via
+    vLLM's own head-sharding (max(1, heads // tp)) instead of being charged
+    unchanged to every TP. None if infeasible even at hardware_max_tp."""
     tp = 1
     while tp <= hardware_max_tp:
         per_gpu_weight_mb = (weight_bytes / (1024 * 1024)) / tp
-        if per_gpu_weight_mb + min_kv_mb <= per_gpu_free_mb * safety_ratio:
+        per_gpu_kv_mb = min_kv_mb
+        if num_key_value_heads and num_key_value_heads > 0:
+            heads_per_rank = max(1, num_key_value_heads // tp)
+            per_gpu_kv_mb = min_kv_mb * heads_per_rank / num_key_value_heads
+        if per_gpu_weight_mb + per_gpu_kv_mb <= per_gpu_free_mb * safety_ratio:
             return tp
         tp *= 2
     return None

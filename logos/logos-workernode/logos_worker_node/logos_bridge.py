@@ -831,7 +831,9 @@ class LogosBridgeClient:
             model_name, self._app.state.model_profiles.mark_calibration_unsupported, model_name, True, reason_code
         )
 
-    async def _run_hf_compatibility_precheck(self, model_name: str, *, persist: bool = True) -> dict[str, Any]:
+    async def _run_hf_compatibility_precheck(
+        self, model_name: str, *, persist: bool = True, gpu_devices: str = ""
+    ) -> dict[str, Any]:
         """Best-effort HF compatibility check for one model on this node.
 
         Shared by the calibration session's per-model loop and the standalone
@@ -847,9 +849,19 @@ class LogosBridgeClient:
           - ``fit_tp_current`` (against free VRAM): fits right now without
             evicting anything — informational only.
 
+        ``gpu_devices`` is the calibration plan's own selection (blank/"all"
+        for the auto-pinned slice, matching pin_plan_gpu_devices). On a
+        heterogeneous node, an irrelevant GPU outside that selection must
+        never sink the estimate — see calibration_gpu_slice.
+
         ``persist=False`` skips the model_profiles write. Never raises.
         """
-        from logos_worker_node.calibration import _max_tp_for_plan, query_gpu_vram  # noqa: PLC0415
+        from logos_worker_node.calibration import (  # noqa: PLC0415
+            _max_tp_for_plan,
+            calibration_gpu_slice,
+            parse_gpu_indices,
+            query_gpu_vram,
+        )
         from logos_worker_node.hf_model_info import (  # noqa: PLC0415
             MIN_VIABLE_CONTEXT_TOKENS,
             REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
@@ -955,9 +967,22 @@ class LogosBridgeClient:
         if not gpu_snap:
             return result
 
-        per_gpu_total_mb = min(v["total_mb"] for v in gpu_snap.values())
-        per_gpu_free_mb = min(v["free_mb"] for v in gpu_snap.values())
-        hardware_max_tp = _max_tp_for_plan({"model": model_name}, len(gpu_snap))
+        # Scope to the GPUs the plan will use: an explicit pin, or (for
+        # "all"/blank — the standalone no-plan caller too) the same
+        # index-ordered auto slice pin_plan_gpu_devices commits to. A GPU
+        # outside that never sinks an estimate it was never part of.
+        explicit_indices = parse_gpu_indices(gpu_devices)
+        if explicit_indices is not None:
+            relevant_indices = explicit_indices
+        else:
+            relevant_indices = calibration_gpu_slice(len(gpu_snap))
+        relevant_snap = {i: gpu_snap[i] for i in relevant_indices if i in gpu_snap}
+        if not relevant_snap:
+            return result
+
+        per_gpu_total_mb = min(v["total_mb"] for v in relevant_snap.values())
+        per_gpu_free_mb = min(v["free_mb"] for v in relevant_snap.values())
+        hardware_max_tp = _max_tp_for_plan({"model": model_name, "gpu_devices": gpu_devices}, len(gpu_snap))
 
         min_kv_mb = 0.0
         if hf_meta.kv_per_token_bytes:
@@ -969,11 +994,23 @@ class LogosBridgeClient:
         if weights_only_tp_idle is None:
             unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
         else:
-            fit_tp_idle = min_feasible_tp(hf_meta.weight_bytes, per_gpu_total_mb, hardware_max_tp, min_kv_mb=min_kv_mb)
+            fit_tp_idle = min_feasible_tp(
+                hf_meta.weight_bytes,
+                per_gpu_total_mb,
+                hardware_max_tp,
+                min_kv_mb=min_kv_mb,
+                num_key_value_heads=hf_meta.num_key_value_heads,
+            )
             if fit_tp_idle is None:
                 unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
 
-        fit_tp_current = min_feasible_tp(hf_meta.weight_bytes, per_gpu_free_mb, hardware_max_tp, min_kv_mb=min_kv_mb)
+        fit_tp_current = min_feasible_tp(
+            hf_meta.weight_bytes,
+            per_gpu_free_mb,
+            hardware_max_tp,
+            min_kv_mb=min_kv_mb,
+            num_key_value_heads=hf_meta.num_key_value_heads,
+        )
 
         result.update(
             per_gpu_total_mb=per_gpu_total_mb,
@@ -1437,7 +1474,9 @@ class LogosBridgeClient:
 
                 # Pre-flight: HF compatibility precheck (see
                 # _run_hf_compatibility_precheck's docstring for the rules).
-                precheck = await self._run_hf_compatibility_precheck(model_name)
+                precheck = await self._run_hf_compatibility_precheck(
+                    model_name, gpu_devices=str(plan.get("gpu_devices") or "")
+                )
                 if precheck["unsupported_reason"] is not None:
                     logger.warning(
                         "[Calibration] Skipping %s — %s",

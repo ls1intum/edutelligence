@@ -889,6 +889,55 @@ def test_calibrate_with_tp_escalation_widens_to_hardware_max_on_ceiling_failure(
     assert result.tensor_parallel_size == 8
 
 
+def test_calibrate_with_tp_escalation_retries_remote_code_after_widening(tmp_path):
+    """The trust_remote_code requirement can be invisible at a low tp (OOM
+    hits before vLLM ever reaches the custom-code check) and only surface
+    once a wider tp gets far enough — must be re-checked after the
+    hardware-max widen attempt too, not just the very first probe."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        has_flag = "--trust-remote-code" in (plan.get("extra_args") or [])
+        seen.append((tp, has_flag))
+        if tp < 8:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="CUDA out of memory",
+            )
+        if not has_flag:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="The repository for big-model contains custom code which must be executed.",
+            )
+        return _success_result("big-model", tensor_parallel_size=tp)
+
+    seen: list[tuple[int, bool]] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "_hf_max_tp_ceiling": 2},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=8,
+        )
+
+    # 2 (ceiling, OOM) -> 8 (widened, needs remote-code) -> 8 (retried,
+    # succeeds) -> 4 (binary-search probe, still OOM below 8 either way).
+    assert seen == [(2, False), (8, False), (8, True), (4, True)]
+    assert result.success
+    assert result.tensor_parallel_size == 8
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Group 6 — _format_kv_mb helper
 # ═══════════════════════════════════════════════════════════════════════

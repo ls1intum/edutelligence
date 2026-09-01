@@ -3233,26 +3233,28 @@ def calibrate_with_tp_escalation(
         cancel_event=cancel_event,
     )
 
-    tp = max_tp
-    current_plan = {**plan, "tensor_parallel_size": tp}
-    result = _try_calibrate(current_plan, **cal_kwargs)
-
-    # Auto-retry with --trust-remote-code when vLLM demands it.
-    # vLLM phrasings seen in the wild:
-    #   "Please pass the argument `trust_remote_code=True`..."
-    #   "The repository ... contains custom code which must be executed..."
-    _err = result.error or ""
-    if not result.success and ("trust_remote_code=True" in _err or "contains custom code" in _err):
-        logger.info(
-            "  %s requires trust_remote_code — adding flag and retrying",
-            model_name,
-        )
+    def _retry_with_trust_remote_code_if_needed(
+        plan: dict[str, Any], tp: int, result: CalibrationResult
+    ) -> tuple[dict[str, Any], CalibrationResult]:
+        """Auto-retry *this* tp with --trust-remote-code when vLLM demands
+        it. Must run after every probe, not just the first — a low tp can
+        OOM before vLLM ever reaches the custom-code check, so the
+        requirement only surfaces once a wider tp gets far enough."""
+        _err = result.error or ""
+        if result.success or ("trust_remote_code=True" not in _err and "contains custom code" not in _err):
+            return plan, result
+        logger.info("  %s requires trust_remote_code — adding flag and retrying", model_name)
         extra = list(plan.get("extra_args") or [])
         if "--trust-remote-code" not in extra:
             extra.append("--trust-remote-code")
         plan = {**plan, "extra_args": extra}
-        current_plan = {**plan, "tensor_parallel_size": tp}
-        result = _try_calibrate(current_plan, **cal_kwargs)
+        retried_plan = {**plan, "tensor_parallel_size": tp}
+        return plan, _try_calibrate(retried_plan, **cal_kwargs)
+
+    tp = max_tp
+    current_plan = {**plan, "tensor_parallel_size": tp}
+    result = _try_calibrate(current_plan, **cal_kwargs)
+    plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
 
     _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
         result.error or ""
@@ -3272,6 +3274,7 @@ def calibrate_with_tp_escalation(
         tp = hardware_max_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
+        plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
 
     # If max tp fails, try the configured (original) tp before giving up.
     # Models may have attention-head counts that aren't divisible by max_tp
@@ -3286,6 +3289,7 @@ def calibrate_with_tp_escalation(
         tp = original_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
+        plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
 
     if not result.success or _fatal:
         return result
