@@ -11,6 +11,7 @@ import datetime
 import json
 
 import logos as main
+from logos.context_budget import CHARS_PER_TOKEN
 from logos.main import _StreamingLogAccumulator, _usage_tokens_from_payload
 
 
@@ -35,6 +36,47 @@ def test_chat_completions_stream_accumulates_text_and_usage():
     payload = acc.response_payload()
     assert payload["choices"][0]["delta"] == {"content": "Hello"}
     assert payload["usage"]["total_tokens"] == 5
+
+
+def test_emitted_completion_tokens_counts_the_emitted_text_not_the_delta_count():
+    """A speculative vLLM lane packs several accepted tokens into one delta, so
+    the delta count undercounts what actually went out. The resume shrinks the
+    continuation's completion budget by the emitted figure — so that figure must
+    track the text, not the frame count, or a resumed request could generate
+    past the caller's explicit completion cap.
+    """
+    acc = _StreamingLogAccumulator()
+    # A few deltas, each carrying several words; no usage event arrives on a
+    # failed stream, so usage() is empty.
+    acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":"The quick brown "}}]}\n\n')
+    acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":"fox jumps over the "}}]}\n\n')
+    acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":"lazy dog."}}]}\n\n')
+    acc.finish()
+
+    assert acc.full_text == "The quick brown fox jumps over the lazy dog."
+    assert acc.delta_count == 3
+    assert acc.usage() == {}
+
+    # The estimate is the emitted text at the context-budget character ratio,
+    # rounded up — well above the delta count, so the budget reduction is not
+    # starved.
+    assert acc.emitted_completion_tokens() == int(len(acc.full_text) / CHARS_PER_TOKEN) + 1
+    assert acc.emitted_completion_tokens() > acc.delta_count
+
+
+def test_emitted_completion_tokens_prefers_settled_usage():
+    """When the terminal usage has arrived it is the exact count — the text
+    estimate is only the fallback for the failed stream that never got one."""
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"id": "c1", "choices": [{"delta": {"content": "Hello, world, how can I help you today?"}}]},
+        {"id": "c1", "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 8, "total_tokens": 11}},
+    )
+
+    # The estimate would come to a different number; the settled usage wins.
+    assert acc.emitted_completion_tokens() == 8
+    assert int(len(acc.full_text) / CHARS_PER_TOKEN) + 1 != 8
 
 
 def test_stream_decodes_utf8_code_points_split_across_byte_chunks():

@@ -49,7 +49,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.context_budget import estimate_prompt_tokens, required_context_tokens
+from logos.context_budget import CHARS_PER_TOKEN, estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
@@ -1422,6 +1422,32 @@ class _StreamingLogAccumulator:
             if isinstance(usage, dict):
                 return usage
         return {}
+
+    def emitted_completion_tokens(self) -> int:
+        """Tokens this stream has actually emitted, as precisely as is knowable.
+
+        ``streamed_tokens`` substitutes the delta count because it feeds a live
+        view and must never wait on the terminal usage event. The resume path
+        has no such constraint — it is sizing the continuation's budget — and it
+        must subtract what the prefix really cost, not the number of SSE frames
+        it arrived in. A speculative lane packs several accepted tokens into one
+        delta, so the delta count undercounts and the takeover would come away
+        with a completion budget that lets the combined answer overshoot the
+        caller's cap.
+
+        The settled usage is authoritative the moment it has arrived; otherwise
+        the accumulated text is estimated with the same character ratio the
+        prompt budget uses. Everything emitted — every delta and any final
+        answer pieces — lives in ``full_text``, and the estimate rounds up, so
+        the figure stands in for the true count in the safe direction.
+        """
+        usage = self.usage()
+        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        if isinstance(completion, int) and completion > 0:
+            return completion
+        if not self.full_text:
+            return 0
+        return int(len(self.full_text) / CHARS_PER_TOKEN) + 1
 
     def response_payload(self) -> Dict[str, Any]:
         # Responses-API stream: the terminal event already carries the complete
@@ -3976,14 +4002,16 @@ async def _streaming_response(
                         if not resumed and _RESUME_ENABLED and retry_budget is not None and deployments:
                             prefix = stream_log.full_text
                             if prefix and not stream_log.saw_structured_delta:
-                                # Delta count stands in for the streamed
-                                # completion figure: the exact count only
-                                # settles with the terminal usage event, which
-                                # never arrives on a failed stream.
+                                # The continuation's budget must shrink by the
+                                # tokens the prefix already consumed. The
+                                # terminal usage event never arrives on a failed
+                                # stream, so that figure is derived from the
+                                # emitted text rather than the undercounting
+                                # delta count — see emitted_completion_tokens.
                                 resume_payload = _build_resume_payload(
                                     prepared_payload,
                                     prefix,
-                                    streamed_completion_tokens=stream_log.streamed_tokens().get("completion_tokens", 0),
+                                    streamed_completion_tokens=stream_log.emitted_completion_tokens(),
                                 )
                                 if resume_payload is not None:
                                     if not is_audio_upload_path(request_path or ""):
