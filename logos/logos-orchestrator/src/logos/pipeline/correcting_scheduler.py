@@ -773,6 +773,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             priority,
             is_cold_at_queue=is_cold_at_queue,
             provider_affinity=request.required_provider_id,
+            eligible_provider_ids=request.eligible_provider_ids,
         )
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(

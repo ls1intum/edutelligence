@@ -81,6 +81,12 @@ class SchedulingRequest:
     required_provider_id: Optional[int] = None
     """Trusted internal affinity. When set, scheduling and queue dispatch
     must never fall back to another provider."""
+    eligible_provider_ids: Optional[frozenset[int]] = None
+    """When set, only these providers may dequeue the request once it is
+    queued. The pipeline derives it from a pinned request's filtered
+    deployment list (internal retry / stream resume) so the model-wide queue
+    honours the same cross-node failover eligibility the scheduling pass
+    just established. Normal requests leave it unset and stay model-wide."""
     # Chained prefix-block hashes identifying the request's "stream"
     # (api key + actual prompt prefix), deepest block first. Used for
     # prefix-cache-aware placement; empty/None means "route as before".

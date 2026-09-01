@@ -179,3 +179,52 @@ async def test_pinned_payload_timeout_reaches_scheduling_request():
     await pipeline.process(_pinned_request(payload={"messages": [], "timeout_s": 42.0}))
 
     assert scheduler.requests[0].timeout_s == 42.0
+
+
+@pytest.mark.asyncio
+async def test_pinned_retry_carries_eligible_provider_set_to_queue():
+    """The queue is model-wide, so the failed-node exclusion must travel with
+    the scheduling request — otherwise the failed node dequeues and executes
+    its own retry."""
+    pipeline, _classifier, scheduler = _build_pipeline(pick_provider_id=2)
+
+    await pipeline.process(_pinned_request(exclude_provider_ids=frozenset({1})))
+
+    assert scheduler.requests[0].eligible_provider_ids == frozenset({2})
+
+
+@pytest.mark.asyncio
+async def test_pinned_resume_carries_eligible_provider_set_to_queue():
+    """Stream resumes queue at RESUME priority and carry the same set, so the
+    resume stays on an eligible provider."""
+    pipeline, _classifier, scheduler = _build_pipeline(pick_provider_id=2)
+
+    await pipeline.process(
+        _pinned_request(exclude_provider_ids=frozenset({1}), priority_override=Priority.RESUME.value)
+    )
+
+    assert scheduler.requests[0].eligible_provider_ids == frozenset({2})
+
+
+@pytest.mark.asyncio
+async def test_pinned_redeploy_lifted_exclusion_carries_single_node_set():
+    """Single-node model: the lifted exclusion leaves the failed node as the
+    only deployment — the set must keep the entry on that node, not open it
+    up model-wide."""
+    pipeline, _classifier, scheduler = _build_pipeline()
+
+    single_node = [d for d in _DEPLOYMENTS if d["provider_id"] == 1]
+    await pipeline.process(_pinned_request(deployments=single_node, exclude_provider_ids=frozenset({1})))
+
+    assert scheduler.requests[0].eligible_provider_ids == frozenset({1})
+
+
+@pytest.mark.asyncio
+async def test_non_pinned_request_stays_model_wide():
+    """Normal requests carry no eligibility set — model-wide queueing is
+    unchanged for them."""
+    pipeline, _classifier, scheduler = _build_pipeline()
+
+    await pipeline.process(_pinned_request(pinned_model_id=None))
+
+    assert scheduler.requests[0].eligible_provider_ids is None

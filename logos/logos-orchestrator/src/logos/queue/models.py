@@ -132,6 +132,14 @@ class QueueEntry:
     """When set, only this provider may dispatch the entry. Normal requests
     leave this unset and retain the model-wide, cross-provider queue behavior."""
 
+    eligible_provider_ids: frozenset[int] | None = None
+    """When set, only these providers may dispatch the entry. Pinned internal
+    retries and stream resumes carry the pipeline's filtered deployment set
+    here, because ``provider_affinity`` is a single-provider hint that stays
+    unset for them — without this set the model-wide queue would lose the
+    failed-node exclusion the scheduling pass just made. Normal requests
+    leave it unset and stay model-wide."""
+
     @property
     def wait_time_seconds(self) -> float:
         """Calculate how long this entry has been waiting in queue."""

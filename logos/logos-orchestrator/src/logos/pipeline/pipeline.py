@@ -220,12 +220,21 @@ class RequestPipeline:
         # lifted and the same node is retried: that is the redeploy case,
         # where the answer comes back from the very node that dropped.
         deployments = request.deployments
+        eligible_provider_ids: frozenset[int] | None = None
         if request.pinned_model_id is not None:
             deployments = [d for d in deployments if d["model_id"] == request.pinned_model_id]
             if request.exclude_provider_ids:
                 without_failed = [d for d in deployments if d["provider_id"] not in request.exclude_provider_ids]
                 if without_failed:
                     deployments = without_failed
+            # The queue is model-wide, so the exclusion above would be lost
+            # the moment the request queues: with only the affinity hint (a
+            # single trusted provider, unset here) the failed node could
+            # dequeue and execute its own retry or resume. Carry the
+            # surviving deployments' providers so dequeue honours the same
+            # set — lifted exclusions included, which keeps the single-node
+            # redeploy case on its only node.
+            eligible_provider_ids = frozenset(d["provider_id"] for d in deployments)
 
         target_deployment = next(
             (d for d in deployments if d["model_id"] == target_model_id),
@@ -251,6 +260,7 @@ class RequestPipeline:
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
             required_provider_id=request.required_provider_id,
+            eligible_provider_ids=eligible_provider_ids,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
         )
 

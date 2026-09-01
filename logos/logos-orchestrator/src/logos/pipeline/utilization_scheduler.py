@@ -108,6 +108,7 @@ class UtilizationAwareScheduler(BaseScheduler):
             provider_id,
             priority,
             provider_affinity=request.required_provider_id,
+            eligible_provider_ids=request.eligible_provider_ids,
         )
         logger.info(
             "Request %s queued for model %s provider %s (depth=%s)",
