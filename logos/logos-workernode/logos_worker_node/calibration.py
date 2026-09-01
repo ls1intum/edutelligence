@@ -3213,6 +3213,7 @@ def calibrate_with_tp_escalation(
     plan = pin_plan_gpu_devices(plan, available_gpus)
 
     original_tp = int(plan.get("tensor_parallel_size", 1))
+    hardware_max_tp = _max_tp_for_plan(plan, available_gpus)
     max_tp = _max_tp_for_plan(plan, available_gpus, weight_derived_max_tp=plan.get("_hf_max_tp_ceiling"))
     max_tp = max(max_tp, original_tp)  # never search below what the operator pinned
 
@@ -3253,12 +3254,28 @@ def calibrate_with_tp_escalation(
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
 
-    # If max tp fails, try the configured (original) tp before giving up.
-    # Models may have attention-head counts that aren't divisible by max_tp
-    # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
     _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
         result.error or ""
     )
+
+    # _hf_max_tp_ceiling is only the smallest TP the HF byte-count estimate
+    # expects to fit — an optimization to skip needlessly high probes, not
+    # a guarantee. On failure, widen to the true hardware max before
+    # falling back to the pinned tp, same as an unconstrained failure did.
+    if not result.success and not _fatal and tp < hardware_max_tp:
+        logger.info(
+            "  %s failed at HF-derived ceiling tp=%d — retrying at hardware max tp=%d",
+            model_name,
+            tp,
+            hardware_max_tp,
+        )
+        tp = hardware_max_tp
+        current_plan = {**plan, "tensor_parallel_size": tp}
+        result = _try_calibrate(current_plan, **cal_kwargs)
+
+    # If max tp fails, try the configured (original) tp before giving up.
+    # Models may have attention-head counts that aren't divisible by max_tp
+    # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
     if not result.success and not _fatal and tp > original_tp:
         logger.info(
             "  %s failed at max tp=%d — falling back to configured tp=%d",

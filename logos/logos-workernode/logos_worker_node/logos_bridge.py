@@ -855,7 +855,7 @@ class LogosBridgeClient:
             REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
             REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
             REASON_MODEL_GATED,
-            REASON_MODEL_NOT_FOUND,
+            REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
             fetch_hf_model_metadata,
             min_feasible_tp,
         )
@@ -880,7 +880,11 @@ class LogosBridgeClient:
         # event. Anything else (network trouble, bad HF_TOKEN, missing
         # huggingface_hub) has no such signal and stays silent at debug
         # level forever — warn here so a persistent failure is visible.
-        if hf_meta is None or hf_meta.source not in ("hf", "error:model-not-found", "error:model-gated"):
+        if hf_meta is None or hf_meta.source not in (
+            "hf",
+            "error:model-not-found-or-unauthorized",
+            "error:model-gated",
+        ):
             logger.warning(
                 "[Precheck] HF metadata unavailable for %s (source=%s) — precheck skipped this run",
                 model_name,
@@ -902,14 +906,12 @@ class LogosBridgeClient:
             "unsupported_reason": None,
         }
 
-        # A repo that doesn't exist can never work here, on any node — skip
-        # before even querying VRAM.
-        if hf_meta is not None and hf_meta.source == "error:model-not-found":
-            result["unsupported_reason"] = REASON_MODEL_NOT_FOUND
-            if persist:
-                await self._persist_permanent_unsupported(
-                    model_name, REASON_MODEL_NOT_FOUND, "HF compatibility precheck: repo not found on the Hub."
-                )
+        # A repo that doesn't exist and a private one this token can't see
+        # produce the identical Hub response (see fetch_hf_model_metadata)
+        # — never a confirmed permanent verdict. Treated like gating: skip
+        # this attempt only, stays a candidate, rechecked every session.
+        if hf_meta is not None and hf_meta.source == "error:model-not-found-or-unauthorized":
+            result["unsupported_reason"] = REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
             return result
 
         # Gating is temporary (a token can be added later), so this is

@@ -169,13 +169,15 @@ def test_fetch_hf_model_metadata_never_raises_on_failure(hf_api_patch):
 def test_fetch_hf_model_metadata_distinguishes_not_found_from_gated():
     from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
 
-    # A genuinely nonexistent repo is a definitive verdict.
+    # The Hub returns this same exception for a genuinely nonexistent repo
+    # AND for a private one this token can't see — never a confirmed
+    # permanent verdict (see the caller, which must never persist this).
     with patch(
         "huggingface_hub.HfApi",
         side_effect=_hf_http_error(RepositoryNotFoundError, "not found"),
     ):
         meta = fetch_hf_model_metadata("org/does-not-exist", token=None)
-    assert meta.source == "error:model-not-found"
+    assert meta.source == "error:model-not-found-or-unauthorized"
 
     # GatedRepoError is a RepositoryNotFoundError subclass (a real repo
     # the caller lacks access to) — must classify as gated, not not-found.

@@ -851,6 +851,44 @@ def test_calibrate_with_tp_escalation_honors_hf_max_tp_ceiling(tmp_path):
     assert seen_tps[0] == 4  # ceiling below the pinned tp is ignored
 
 
+def test_calibrate_with_tp_escalation_widens_to_hardware_max_on_ceiling_failure(tmp_path):
+    """A weight-derived ceiling is an optimization, not a guarantee — if
+    the real load fails at that tp, escalation must still try the true
+    hardware max before giving up, instead of treating the ceiling as a
+    hard cap that forecloses every wider tp that could have worked."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp < 8:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="CUDA out of memory",
+            )
+        return _success_result("big-model", tensor_parallel_size=tp)
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "_hf_max_tp_ceiling": 2},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=8,
+        )
+
+    assert seen_tps[0] == 2  # started at the HF ceiling, not hardware max
+    assert 8 in seen_tps  # widened to hardware max once the ceiling failed
+    assert result.success
+    assert result.tensor_parallel_size == 8
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Group 6 — _format_kv_mb helper
 # ═══════════════════════════════════════════════════════════════════════

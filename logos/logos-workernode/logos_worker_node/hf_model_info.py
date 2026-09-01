@@ -40,7 +40,7 @@ MIN_VIABLE_CONTEXT_TOKENS = 2048
 # after an actual load attempt". These fire before any process is spawned.
 REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS = "insufficient-vram-for-weights"
 REASON_INSUFFICIENT_VRAM_FOR_MIN_KV = "insufficient-vram-for-min-kv-cache"
-REASON_MODEL_NOT_FOUND = "model-not-found"
+REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED = "model-not-found-or-unauthorized"
 REASON_MODEL_GATED = "model-gated"
 
 _DTYPE_BYTES = {
@@ -144,7 +144,10 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
         gated = True
         logger.debug("[HF precheck] model_info gated for %s: %s", model_name, exc)
     except RepositoryNotFoundError as exc:
-        return HfModelMetadata(source="error:model-not-found", error=str(exc))
+        # The Hub returns this exact exception (401) for a genuinely
+        # nonexistent repo AND for a private one this token can't see —
+        # undistinguishable, so never a confirmed permanent verdict.
+        return HfModelMetadata(source="error:model-not-found-or-unauthorized", error=str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.debug("[HF precheck] model_info failed for %s: %s", model_name, exc)
 
@@ -167,7 +170,8 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
         gated = True
         logger.debug("[HF precheck] config.json gated for %s: %s", model_name, exc)
     except RepositoryNotFoundError as exc:
-        return HfModelMetadata(source="error:model-not-found", error=str(exc))
+        # Same ambiguity as above — see the comment on the first occurrence.
+        return HfModelMetadata(source="error:model-not-found-or-unauthorized", error=str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.debug("[HF precheck] config.json fetch failed for %s: %s", model_name, exc)
 

@@ -1303,7 +1303,7 @@ async def test_hf_precheck_no_warning_for_not_found_or_gated(tmp_path, monkeypat
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
     client = LogosBridgeClient(app, cfg)
 
-    for source in ("error:model-not-found", "error:model-gated"):
+    for source in ("error:model-not-found-or-unauthorized", "error:model-gated"):
         monkeypatch.setattr(
             "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
             lambda *a, source=source, **k: HfModelMetadata(source=source),
@@ -1382,20 +1382,27 @@ async def test_run_compatibility_precheck_rpc_returns_fit_result(tmp_path, monke
 
 @pytest.mark.asyncio
 async def test_run_compatibility_precheck_skips_nonexistent_repo_without_querying_vram(tmp_path, monkeypatch):
-    """A nonexistent HF repo can never work on any node — skip immediately,
-    without even querying GPU VRAM, and mark it a real (idle-based) verdict."""
+    """A nonexistent-or-unauthorized HF repo can never work right now — skip
+    immediately, without even querying GPU VRAM. But the Hub gives the
+    identical response for a private repo this token just can't see, so
+    this must stay a candidate, not a permanent verdict (like gating)."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import is_model_unsupported
-    from logos_worker_node.hf_model_info import REASON_MODEL_NOT_FOUND, HfModelMetadata
+    from logos_worker_node.hf_model_info import REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED, HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/does-not-exist"],
+    )
     client = LogosBridgeClient(app, cfg)
 
     monkeypatch.setattr(
         "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
-        lambda *a, **k: HfModelMetadata(source="error:model-not-found"),
+        lambda *a, **k: HfModelMetadata(source="error:model-not-found-or-unauthorized"),
     )
     gpu_query = MagicMock(side_effect=AssertionError("must not query VRAM for a nonexistent repo"))
     monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", gpu_query)
@@ -1404,19 +1411,16 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
         "run_compatibility_precheck", {"model": "org/does-not-exist"}
     )
 
-    assert response["unsupported_reason"] == REASON_MODEL_NOT_FOUND
+    assert response["unsupported_reason"] == REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
     gpu_query.assert_not_called()
     profile = app.state.model_profiles.get_profile("org/does-not-exist")
-    assert profile.calibration_unsupported is True
-    assert profile.calibration_unsupported_reason == REASON_MODEL_NOT_FOUND
+    assert profile is None or profile.calibration_unsupported is not True
+    assert client._list_uncalibrated_models() == ["org/does-not-exist"]  # noqa: SLF001
 
-    # Must also land in the authoritative registry — a profile-only flag
-    # gets silently cleared by the next heartbeat's reconciliation
-    # (runtime.build_runtime_status) since it isn't backed by this file.
+    # Never lands in the authoritative registry either — a token added
+    # later must let a private-but-real model calibrate normally.
     log_dir = tmp_path / "calibration_logs"
-    entry = is_model_unsupported(log_dir, "org/does-not-exist")
-    assert entry is not None
-    assert entry.reason_code == REASON_MODEL_NOT_FOUND
+    assert is_model_unsupported(log_dir, "org/does-not-exist") is None
 
 
 @pytest.mark.asyncio
@@ -1435,7 +1439,11 @@ async def test_run_compatibility_precheck_survives_a_broken_profile_store(tmp_pa
 
     monkeypatch.setattr(
         "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
-        lambda *a, **k: HfModelMetadata(source="error:model-not-found"),
+        lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
     )
 
     def _broken_write(*a, **k):
@@ -1444,22 +1452,19 @@ async def test_run_compatibility_precheck_survives_a_broken_profile_store(tmp_pa
     monkeypatch.setattr(app.state.model_profiles, "mark_calibration_unsupported", _broken_write)
 
     with caplog.at_level(logging.WARNING):
-        response = await client._execute_command(  # noqa: SLF001
-            "run_compatibility_precheck", {"model": "org/does-not-exist"}
-        )
+        response = await client._execute_command("run_compatibility_precheck", {"model": "org/too-big"})  # noqa: SLF001
 
     assert response["ok"] is True
-    assert response["unsupported_reason"] == "model-not-found"
+    assert response["unsupported_reason"] == "insufficient-vram-for-weights"
     assert any("failed to persist result" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio
 async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path, monkeypatch):
-    """Unlike not-found, a gated model must NOT be marked
-    calibration_unsupported: that flag drops it out of
-    _list_uncalibrated_models's candidate list, so it would never be
-    rechecked once an admin adds a working HF_TOKEN. It must be skipped
-    this attempt but stay eligible for every future session."""
+    """A gated model must NOT be marked calibration_unsupported: that flag
+    drops it out of _list_uncalibrated_models's candidate list, so it
+    would never be rechecked once an admin adds a working HF_TOKEN. It
+    must be skipped this attempt but stay eligible for every future session."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.hf_model_info import REASON_MODEL_GATED, HfModelMetadata
 
