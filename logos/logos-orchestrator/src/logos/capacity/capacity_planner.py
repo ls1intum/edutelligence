@@ -712,6 +712,14 @@ class CapacityPlanner:
         # replica at once (one extra replica per cycle is the escalation step;
         # the next cycle re-evaluates with the updated queues).
         cycle_balance_wake_models: set[str] = set()
+        # Lane ids reserved per provider for this cycle: every id the worker
+        # reports plus every id a load planned earlier in the same cycle
+        # claimed. The replica suffix scheme is not unique across models
+        # (planner-foo-2 is foo's replica 2 and foo-2's replica 1), so two
+        # loads planned in one batch must never be handed the same id — the
+        # demand and replication passes draw on this set instead of the
+        # reported snapshot, which cannot show lanes that don't exist yet.
+        cycle_reserved_lane_ids: dict[int, set[str]] = {}
 
         provider_ids = list(self._facade.provider_ids())
         # Sort providers by current queue pressure so the worker most under
@@ -771,6 +779,7 @@ class CapacityPlanner:
             except Exception:
                 continue
 
+            cycle_reserved_lane_ids.setdefault(provider_id, set()).update(lane.lane_id for lane in lanes)
             self._reconcile_load_failures(provider_id, lanes)
             self._update_idle_tracking(provider_id, lanes)
             self._record_kv_pressure_history(provider_id, lanes)
@@ -784,6 +793,7 @@ class CapacityPlanner:
                     best_provider_for_model=best_provider_for_model,
                     cluster_lanes_by_model=cluster_lanes_by_model,
                     cycle_balance_wake_models=cycle_balance_wake_models,
+                    cycle_reserved_lane_ids=cycle_reserved_lane_ids,
                 )
             )
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
@@ -807,6 +817,7 @@ class CapacityPlanner:
                     cluster_lanes_by_model,
                     cycle_planned_models,
                     cycle_planned_additional_models,
+                    cycle_reserved_lane_ids,
                 )
             )
 
@@ -3310,6 +3321,7 @@ class CapacityPlanner:
         best_provider_for_model: Optional[dict[str, int]] = None,
         cluster_lanes_by_model: Optional[dict[str, int]] = None,
         cycle_balance_wake_models: Optional[set[str]] = None,
+        cycle_reserved_lane_ids: Optional[dict[int, set[str]]] = None,
     ) -> List[CapacityPlanAction]:
         """Compute wake/load actions based on demand patterns.
 
@@ -3391,6 +3403,15 @@ class CapacityPlanner:
         # cycle-wide set at the end so the dedup check and the replication
         # pass can tell an extra copy apart from a demand-driven first lane.
         planned_additional_models: set[str] = set()
+        # Every lane id this worker holds (seeded by the cycle) plus every
+        # id a load planned earlier this cycle claimed: the suffix scheme is
+        # not unique across models, so each new load must claim its id here
+        # before the next model's allocation runs. (An explicit None check:
+        # `or {}` would replace a caller's empty dict with a throwaway one
+        # and silently drop the claims.)
+        if cycle_reserved_lane_ids is None:
+            cycle_reserved_lane_ids = {}
+        reserved_lane_ids = cycle_reserved_lane_ids.setdefault(provider_id, set())
         # Track which lanes have already been claimed as eviction victims this
         # cycle so we don't evict the same lane twice for two different loads.
         claimed_victims: set[str] = set()
@@ -3958,7 +3979,10 @@ class CapacityPlanner:
                 # Reserved against every lane on the worker, not just this
                 # model's: the suffix scheme is not unique across models
                 # (planner-foo-2 is foo's replica 2 and foo-2's replica 1).
-                lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes)
+                lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes, reserved_ids=reserved_lane_ids)
+                # Claim the id for the rest of the cycle: the reported snapshot
+                # the other models' allocations read from cannot show it yet.
+                reserved_lane_ids.add(lane_id)
                 if is_additional_lane:
                     reason = (
                         f"Additional lane: sustained demand eff={eff:.2f} ≥ "
@@ -4042,7 +4066,12 @@ class CapacityPlanner:
                     # the load gets rejected for "insufficient VRAM" that the
                     # planner itself is about to free in the same cycle. Trust
                     # the placement decision.
-                    lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes)
+                    lane_id = self._next_lane_id_for_model(
+                        provider_id, model_name, lanes, reserved_ids=reserved_lane_ids
+                    )
+                    # Claim the id for the rest of the cycle: the reported snapshot
+                    # the other models' allocations read from cannot show it yet.
+                    reserved_lane_ids.add(lane_id)
                     for vlane, vaction, _ in eviction_set:
                         if vlane.lane_id in claimed_victims:
                             continue
@@ -4107,7 +4136,8 @@ class CapacityPlanner:
                 profile = profiles.get(model_name)
                 if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
                     continue
-                lane_id = self._planner_lane_id(model_name)
+                lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes, reserved_ids=reserved_lane_ids)
+                reserved_lane_ids.add(lane_id)
                 actions.append(
                     CapacityPlanAction(
                         action="load",
@@ -4149,6 +4179,7 @@ class CapacityPlanner:
         cluster_lanes_by_model: dict[str, int],
         cycle_planned_models: set[str],
         cycle_planned_additional_models: Optional[set[str]] = None,
+        cycle_reserved_lane_ids: Optional[dict[int, set[str]]] = None,
     ) -> list[CapacityPlanAction]:
         """Cross-provider replication pass — runs once per cycle.
 
@@ -4205,6 +4236,13 @@ class CapacityPlanner:
                     lanes = self._facade.get_all_provider_lane_signals(pid)
                 except Exception:
                     continue
+                # The cycle seeds this set with the reported ids; the replica
+                # load about to be claimed must be visible to any further
+                # allocation on this worker in the same cycle. (None, not
+                # falsy: a caller's empty dict must keep receiving the claims.)
+                if cycle_reserved_lane_ids is None:
+                    cycle_reserved_lane_ids = {}
+                reserved_lane_ids = cycle_reserved_lane_ids.setdefault(pid, set())
                 # Skip workers that already host the model in any non-terminal
                 # state — including sleeping (would wake instead of replicate),
                 # starting (an in-flight load is in progress), and error (the
@@ -4258,7 +4296,8 @@ class CapacityPlanner:
                 # does not host this model, but another model may hold this
                 # one's replica-1 id (the suffix scheme is not unique
                 # across models).
-                lane_id = self._next_lane_id_for_model(pid, model_name, lanes)
+                lane_id = self._next_lane_id_for_model(pid, model_name, lanes, reserved_ids=reserved_lane_ids)
+                reserved_lane_ids.add(lane_id)
                 actions.append(
                     CapacityPlanAction(
                         action="load",
@@ -6078,6 +6117,7 @@ class CapacityPlanner:
         provider_id: int,
         model_name: str,
         lanes: Optional[List[LaneSchedulerSignals]] = None,
+        reserved_ids: Optional[set[str]] = None,
     ) -> str:
         """The lowest replica lane id no lane on the worker holds.
 
@@ -6088,13 +6128,18 @@ class CapacityPlanner:
         worker-wide rather than per-model because the replica suffix scheme
         is not unique across models: ``planner-foo-2`` is both replica 2 of
         ``foo`` and replica 1 of ``foo-2``, so a worker hosting one form
-        must not be handed a load for the other under the same id. With
-        nothing held, replica 1's id wins so a first load lands exactly
-        where it always did.
+        must not be handed a load for the other under the same id.
+        ``reserved_ids`` extends the reservation to ids claimed by loads
+        planned earlier in the same planning cycle — the reported snapshot
+        does not show those lanes yet, so without them two loads in one
+        batch would be handed the same id. With nothing held, replica 1's
+        id wins so a first load lands exactly where it always did.
         """
         if lanes is None:
             lanes = self._safe_get_lanes(provider_id)
         taken = {lane.lane_id for lane in lanes}
+        if reserved_ids:
+            taken |= reserved_ids
         if self._planner_lane_id(model_name) not in taken:
             return self._planner_lane_id(model_name)
         index = 2

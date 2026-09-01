@@ -1090,6 +1090,34 @@ class TestWorkerWideLaneIdReservation:
         assert ("load", "planner-foo-3") in kinds
         assert all(lane_id != "planner-foo-2" for _a, lane_id in kinds)
 
+    def test_two_loads_in_one_cycle_get_distinct_ids(self):
+        """foo already owns planner-foo, so one demand pass plans both an
+        additional foo lane (replica 1 held → planner-foo-2) and a first
+        foo-2 lane (replica 1 free → also planner-foo-2). The reported
+        snapshot the allocation reads from cannot show either new lane, so
+        the first plan must claim its id for the rest of the cycle — without
+        that both loads in the batch leave with the same id, which additive
+        mode rejects and apply_lanes mode resolves by overwriting the first.
+        """
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-foo", "foo", "running")],
+            capabilities=["foo", "foo-2"],
+            available_vram_mb=50_000,
+            profiles={"foo": _profile(), "foo-2": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        # foo is hot (additional-lane floor 2.0), foo-2 is warm (load floor
+        # 1.0): both loads are planned in this single demand pass, foo first.
+        planner._demand.get_ranked_models.return_value = [("foo", 2.5), ("foo-2", 1.5)]
+        planner._demand.get_score = lambda model: {"foo": 2.5, "foo-2": 1.5}[model]
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+        loads = {(a.model_name, a.lane_id) for a in actions if a.action == "load"}
+
+        assert loads == {("foo", "planner-foo-2"), ("foo-2", "planner-foo-2-2")}
+
     def test_replication_lane_skips_an_id_held_by_another_model(self):
         """The target worker does not host foo-2, but it holds
         planner-foo-2 for foo's replica 2: the speculative replica of
@@ -1118,6 +1146,48 @@ class TestWorkerWideLaneIdReservation:
 
         actions = planner._compute_replication_actions([1, 2], [("foo-2", 2.5)], {"foo-2": 1}, set())
         assert [(a.provider_id, a.lane_id) for a in actions] == [(2, "planner-foo-2-2")]
+
+    def test_replication_pass_skips_ids_claimed_by_the_demand_pass(self):
+        """The demand pass plans foo's additional lane on provider 1 and
+        claims planner-foo-2 (replica 1 held by the live lane) — the
+        reported snapshot provider 1's replication allocation reads from
+        cannot show it yet. The replication pass then places a foo-2
+        replica on the same provider: foo-2's replica 1 would land on the
+        very id the batch already emitted, so it must take the next free
+        one."""
+        provider_1 = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-foo", "foo", "running")],
+            capabilities=["foo", "foo-2"],
+            available_vram_mb=50_000,
+            profiles={"foo": _profile(), "foo-2": _profile()},
+        )
+        provider_2 = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[_lane("planner-foo-2", "foo-2", "running")],
+            capabilities=["foo-2"],
+            available_vram_mb=50_000,
+            profiles={"foo-2": _profile()},
+        )
+        planner = _planner(provider_1, score=2.5, replicate=True)
+        planner._facade = _MockFacade([provider_1, provider_2])
+        planner._demand.get_ranked_models.return_value = [("foo", 2.5)]
+        reserved: Dict[int, set] = {}
+
+        demand_actions = planner._compute_demand_actions(1, provider_1.lanes, cycle_reserved_lane_ids=reserved)
+        assert ("load", "planner-foo-2") in [(a.action, a.lane_id) for a in demand_actions]
+
+        replication_actions = planner._compute_replication_actions(
+            [1, 2],
+            [("foo-2", 2.5)],
+            {"foo-2": 1},
+            set(),
+            None,
+            reserved,
+        )
+        assert [(a.provider_id, a.lane_id) for a in replication_actions] == [(1, "planner-foo-2-2")]
 
 
 # ---------------------------------------------------------------------------

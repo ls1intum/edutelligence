@@ -516,6 +516,15 @@ export class LaneHealthPanel implements OnChanges {
     }
     this.addingLane.set(true);
     this.addError.set(null);
+    // The orchestrator starts the background load before it answers 202, so a
+    // status update can report the new starting lane while this request is
+    // still in flight. The resolution baseline must be the lanes as they stood
+    // before the request went out: captured after the answer arrives, a fast
+    // stream would already contain the accepted lane, no update could ever
+    // see it as fresh, and the pending note (and the withheld model) would
+    // stay up indefinitely.
+    const name = this.providerName;
+    const preRequestLaneIds = new Set(Object.keys(name ? (this.lanesByProvider[name] ?? {}) : {}));
     try {
       await this.statisticsService.addLane(pid, model);
       this.addingLane.set(false);
@@ -524,10 +533,9 @@ export class LaneHealthPanel implements OnChanges {
       // background, which for a large model is minutes. Without a word here the
       // picker just closes and the operator cannot tell the request from a no-op.
       this.acceptedModel.set(model);
-      // Baseline for acceptedModelIsResolved(): the lanes the accepted
-      // replica is not among yet.
-      const name = this.providerName;
-      this.acceptedLaneIds = new Set(Object.keys(name ? (this.lanesByProvider[name] ?? {}) : {}));
+      // Baseline for acceptedModelIsResolved(): the pre-request snapshot, so
+      // the accepted lane counts as fresh whatever the stream has shown since.
+      this.acceptedLaneIds = preRequestLaneIds;
     } catch (err: unknown) {
       this.addingLane.set(false);
       const e = err as { status?: number };
