@@ -115,9 +115,10 @@ async def test_unflagged_request_queues_as_plain_traffic():
 
 
 async def test_the_dispatcher_hands_out_background_app_first():
-    """An interactive request that arrived first must not be dispatched ahead
-    of a flagged one: capacity going free goes to the background call, not
-    the old wait."""
+    """On a fresh priority level the interleave cycle starts with the flagged
+    slot, so an interactive request that arrived first is not dispatched
+    ahead of the flagged one: the first free capacity goes to the background
+    call, not the old wait."""
     scheduler = _make_scheduler()
     interactive_wait = await _queue_request(
         scheduler, _make_request("req-interactive", {"messages": [{"role": "user", "content": "x" * 10_000}]})
