@@ -62,8 +62,11 @@ public class MeKeysService {
     /**
      * Rate-limit usage of the user's active keys inside one rate-limiter
      * window (see {@link #RATE_LIMIT_WINDOW_SECONDS}), keyed by key id.
-     * Keys with no traffic in the window are absent; the caller renders them
-     * at zero.
+     * Keys with no traffic in the window are absent — and stay absent: the
+     * caller must not render them at zero, because zero usage is the most
+     * reassuring possible reading for a rate-limit figure ("you have your
+     * entire budget available"). Unknown usage and genuinely-idle usage
+     * deserve different renderings; the UI shows an en dash for the former.
      */
     private Map<Integer, RateLimitUsageProjection> findRateLimitUsage(int userId) {
         Timestamp since = Timestamp.from(Instant.now().minusSeconds(RATE_LIMIT_WINDOW_SECONDS));
@@ -156,7 +159,7 @@ public class MeKeysService {
         m.put("used_micro_cents", p.getUsedMicroCents());
         m.put("settings", resolvedSettings(p));
         m.put("last_used_at", p.getLastUsedAt() != null ? p.getLastUsedAt().toString() : null);
-        m.put("rate_limit_usage", toRateLimitUsage(usage));
+        m.put("rate_limit_usage", usage == null ? null : toRateLimitUsage(usage));
 
         Map<String, Object> team = new LinkedHashMap<>();
         team.put("id", p.getTeamId());
@@ -170,10 +173,10 @@ public class MeKeysService {
     private Map<String, Object> toRateLimitUsage(RateLimitUsageProjection usage) {
         Map<String, Object> u = new LinkedHashMap<>();
         u.put("window_seconds", RATE_LIMIT_WINDOW_SECONDS);
-        u.put("cloud_requests", usage != null ? usage.getCloudRequests() : 0L);
-        u.put("cloud_tokens", usage != null ? usage.getCloudTokens() : 0L);
-        u.put("local_requests", usage != null ? usage.getLocalRequests() : 0L);
-        u.put("local_tokens", usage != null ? usage.getLocalTokens() : 0L);
+        u.put("cloud_requests", usage.getCloudRequests());
+        u.put("cloud_tokens", usage.getCloudTokens());
+        u.put("local_requests", usage.getLocalRequests());
+        u.put("local_tokens", usage.getLocalTokens());
         return u;
     }
 
