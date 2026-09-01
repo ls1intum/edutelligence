@@ -273,7 +273,7 @@ planner-<sanitized>-3      # replica 3
 ...
 ```
 
-`_next_lane_id_for_model()` picks the lowest replica id the worker does not already report for the model (in any runtime state — the worker refuses `add_lane` for an existing id), so replica 1's id is always reused when it is free.
+`_next_lane_id_for_model()` picks the lowest replica id no lane on the worker already reports (in any runtime state, **in any model** — the worker keys lanes by id alone and refuses `add_lane` for an existing id), so replica 1's id is always reused when it is free. The reservation must be worker-wide because the suffix scheme is not unique across models: `planner-foo-2` is both replica 2 of `foo` and replica 1 of `foo-2`, so a worker hosting one of those forms must not be handed a load for the other under the id it already holds. Every planner-owned emission (demand path, capability seeding, cross-provider replication, request-time cold load, manual "Load lane") allocates through that worker-wide reservation.
 
 In the cold-load branch of `_compute_demand_actions`, the first lane of a model on a worker keeps the full load semantics (demand floor, queued requests, announced use, eviction allowed). An **additional** lane on a worker that already runs the model awake is speculative scale-out and gets the same deal as the cross-provider replication pass (`_compute_replication_actions`):
 

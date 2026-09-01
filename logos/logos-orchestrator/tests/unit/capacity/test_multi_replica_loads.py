@@ -122,7 +122,12 @@ class TestPlannerLaneId:
 
 
 class TestNextLaneIdForModel:
-    """The lowest replica id the worker does not hold for the model."""
+    """The lowest replica id no lane on the worker holds.
+
+    The reservation is worker-wide, not per-model: the replica suffix scheme
+    is not unique across models (``planner-foo-2`` is replica 2 of ``foo``
+    and replica 1 of ``foo-2``), and the worker keys lanes by id alone.
+    """
 
     def _planner(self, lanes: List[LaneSchedulerSignals]) -> CapacityPlanner:
         planner = CapacityPlanner.__new__(CapacityPlanner)
@@ -162,10 +167,24 @@ class TestNextLaneIdForModel:
         planner = self._planner(lanes)
         assert planner._next_lane_id_for_model(1, "m") == "planner-m-2"
 
-    def test_other_models_lanes_do_not_block(self):
+    def test_other_models_lanes_do_not_block_a_free_replica_one(self):
         lanes = [_lane("planner-org_model-a-2", "other/model")]
         planner = self._planner(lanes)
         assert planner._next_lane_id_for_model(1, "org/model-a") == "planner-org_model-a"
+
+    def test_other_models_lanes_block_their_ids(self):
+        """foo's replica 2 and foo-2's replica 1 share one id. A worker that
+        holds it for one form must not be handed a load for the other under
+        the same id — the reservation spans every lane on the worker."""
+        lanes = [
+            _lane("planner-foo", "foo", "running"),
+            _lane("planner-foo-2", "foo-2", "running"),
+        ]
+        planner = self._planner(lanes)
+        # foo's replica-2 id is held by foo-2's replica 1 → skip to 3.
+        assert planner._next_lane_id_for_model(1, "foo") == "planner-foo-3"
+        # foo-2's replica-1 id is held (by itself) → its next id is 2.
+        assert planner._next_lane_id_for_model(1, "foo-2") == "planner-foo-2-2"
 
 
 # ---------------------------------------------------------------------------
@@ -1032,3 +1051,189 @@ class TestCycleDedupAdditionalLanes:
         loads = [a for a in actions_a + actions_b if a.action == "load" and a.model_name == "X"]
         assert len(loads) == 1
         assert loads[0].provider_id == 1
+
+
+# ---------------------------------------------------------------------------
+# Lane id reservation is worker-wide, not per-model
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerWideLaneIdReservation:
+    """The replica suffix scheme is not unique across models:
+    ``planner-foo-2`` is replica 2 of ``foo`` and replica 1 of ``foo-2``.
+    Every planner-owned emission must reserve its id against *all* lanes the
+    worker holds — the worker keys lanes by id alone and refuses a
+    duplicate — or a worker hosting one form gets a rejected load for the
+    other."""
+
+    def test_additional_lane_skips_an_id_held_by_another_model(self):
+        """foo replica 2 and foo-2 planned on the same worker: the worker
+        already holds planner-foo-2 for foo-2, so foo's additional lane
+        must land on planner-foo-3, not the id the worker already has."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[
+                _lane("planner-foo", "foo", "running"),
+                _lane("planner-foo-2", "foo-2", "running"),
+            ],
+            capabilities=["foo", "foo-2"],
+            available_vram_mb=50_000,
+            profiles={"foo": _profile(), "foo-2": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        planner._demand.get_ranked_models.return_value = [("foo", 2.5)]
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+        kinds = [(a.action, a.lane_id) for a in actions if a.model_name == "foo"]
+
+        assert ("load", "planner-foo-3") in kinds
+        assert all(lane_id != "planner-foo-2" for _a, lane_id in kinds)
+
+    def test_replication_lane_skips_an_id_held_by_another_model(self):
+        """The target worker does not host foo-2, but it holds
+        planner-foo-2 for foo's replica 2: the speculative replica of
+        foo-2 must not reuse that id."""
+        host = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-foo-2", "foo-2", "running")],
+            capabilities=["foo-2"],
+            available_vram_mb=50_000,
+            profiles={"foo-2": _profile()},
+        )
+        target = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[
+                _lane("planner-foo", "foo", "running"),
+                _lane("planner-foo-2", "foo", "running"),
+            ],
+            capabilities=["foo-2"],
+            available_vram_mb=50_000,
+            profiles={"foo-2": _profile()},
+        )
+        planner = _planner(host, score=2.5, replicate=True)
+        planner._facade = _MockFacade([host, target])
+
+        actions = planner._compute_replication_actions([1, 2], [("foo-2", 2.5)], {"foo-2": 1}, set())
+        assert [(a.provider_id, a.lane_id) for a in actions] == [(2, "planner-foo-2-2")]
+
+
+# ---------------------------------------------------------------------------
+# Cycle accounting: first lanes count and end the additional-only tag
+# ---------------------------------------------------------------------------
+
+
+class TestCycleAccountingFirstLanes:
+    """The per-cycle cluster count and the "additional only" tag must track
+    first lanes too: with the cross-provider best-first ranker off, the
+    cycle-wide dedup and the copy cap are all that keeps a hot model from
+    loading past MAX_REPLICAS_PER_MODEL in one cycle."""
+
+    @staticmethod
+    def _provider(provider_id: int, name: str, lanes: List[LaneSchedulerSignals]) -> _MockProvider:
+        return _MockProvider(
+            provider_id=provider_id,
+            name=name,
+            lanes=lanes,
+            capabilities=["foo"],
+            available_vram_mb=50_000,
+            profiles={"foo": _profile()},
+        )
+
+    @staticmethod
+    def _planner_for(provider: _MockProvider, *, dedup: bool) -> CapacityPlanner:
+        planner = _planner(provider, score=2.5, replicate=True)
+        planner._demand.get_ranked_models.return_value = [("foo", 2.5)]
+        planner._cross_provider_dedup = dedup
+        planner._cross_provider_best_first = False
+        return planner
+
+    def test_first_lane_untags_the_model_for_later_workers(self):
+        """Worker A plans a speculative additional lane; worker B's first
+        lane is the necessary one and proceeds; worker C's first lane would
+        be a second first lane in the same cycle and is suppressed — the
+        additional-only tag ends the moment B's first lane is planned."""
+        host = self._provider(1, "A", [_lane("planner-foo", "foo", "running")])
+        empty_b = self._provider(2, "B", [])
+        empty_c = self._provider(3, "C", [])
+        planner_a = self._planner_for(host, dedup=True)
+        planner_b = self._planner_for(empty_b, dedup=True)
+        planner_c = self._planner_for(empty_c, dedup=True)
+        cycle_planned_models: set = set()
+        cycle_planned_additional_models: set = set()
+        cluster = {"foo": 1}
+
+        actions_a = planner_a._compute_demand_actions(
+            1,
+            host.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+        assert ("load", 1, "planner-foo-2") in [(a.action, a.provider_id, a.lane_id) for a in actions_a]
+        assert "foo" in cycle_planned_additional_models
+
+        actions_b = planner_b._compute_demand_actions(
+            2,
+            [],
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+        assert ("load", 2, "planner-foo") in [(a.action, a.provider_id, a.lane_id) for a in actions_b]
+        # B's first lane ends the model's additional-only status.
+        assert "foo" not in cycle_planned_additional_models
+
+        actions_c = planner_c._compute_demand_actions(
+            3,
+            [],
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+        assert actions_c == []
+
+    def test_first_load_counts_towards_the_cap_for_later_additional_gates(self):
+        """Two live copies (A, C) plus B's demand-driven first lane reach
+        the cap before A's and C's passes run: both additional lanes must
+        stand down. With the count ignoring first loads, A's additional
+        would still pass its gate and push the cluster to four copies."""
+        host_a = self._provider(1, "A", [_lane("planner-foo", "foo", "running")])
+        empty_b = self._provider(2, "B", [])
+        host_c = self._provider(3, "C", [_lane("planner-foo", "foo", "running")])
+        # Dedup off: only the cap — fed by the cycle's cluster count — can
+        # save this one.
+        planner_a = self._planner_for(host_a, dedup=False)
+        planner_b = self._planner_for(empty_b, dedup=False)
+        planner_c = self._planner_for(host_c, dedup=False)
+        cycle_planned_models: set = set()
+        cycle_planned_additional_models: set = set()
+        cluster = {"foo": 2}
+
+        # Provider pass order: B (first lane) before A and C (additional).
+        actions_b = planner_b._compute_demand_actions(
+            2,
+            [],
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+        actions_a = planner_a._compute_demand_actions(
+            1,
+            host_a.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+        actions_c = planner_c._compute_demand_actions(
+            3,
+            host_c.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+
+        loads = [a for a in actions_a + actions_b + actions_c if a.action == "load" and a.model_name == "foo"]
+        assert [(a.provider_id, a.lane_id) for a in loads] == [(2, "planner-foo")]

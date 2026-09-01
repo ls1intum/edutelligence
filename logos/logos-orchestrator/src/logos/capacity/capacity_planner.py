@@ -1295,7 +1295,10 @@ class CapacityPlanner:
         # after reclaiming.  If the model truly can't fit (misconfiguration),
         # the reclaim loop will exhaust candidates and return None.
 
-        lane_id = self._planner_lane_id(model_name)
+        # Reserved against every lane on the worker: this model holds no
+        # lane, but another model may hold this one's replica-1 id (the
+        # suffix scheme is not unique across models).
+        lane_id = self._next_lane_id_for_model(provider_id, model_name)
         load_action = CapacityPlanAction(
             action="load",
             provider_id=provider_id,
@@ -3804,7 +3807,10 @@ class CapacityPlanner:
                     continue
                 # Replica 1's id when still free, else the next free index —
                 # an extra copy of an already-loaded model needs its own lane id.
-                lane_id = self._next_lane_id_for_model(provider_id, model_name, model_lanes)
+                # Reserved against every lane on the worker, not just this
+                # model's: the suffix scheme is not unique across models
+                # (planner-foo-2 is foo's replica 2 and foo-2's replica 1).
+                lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes)
                 if is_additional_lane:
                     reason = (
                         f"Additional lane: sustained demand eff={eff:.2f} ≥ "
@@ -3834,10 +3840,14 @@ class CapacityPlanner:
                     )
                 )
                 planned_models.add(model_name)
+                # Every planned load bumps the cycle's cluster count — a
+                # first lane on another worker is a copy for the cap just
+                # as much as an additional one, and a worker later in the
+                # cycle must see it.
+                if cluster_lanes_by_model is not None:
+                    cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
                 if is_additional_lane:
                     planned_additional_models.add(model_name)
-                    if cluster_lanes_by_model is not None:
-                        cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
             else:
                 # Contention. Same two-regime logic as the wake path:
                 # real queued requests bypass the ratio (victims are
@@ -3885,7 +3895,7 @@ class CapacityPlanner:
                     # the load gets rejected for "insufficient VRAM" that the
                     # planner itself is about to free in the same cycle. Trust
                     # the placement decision.
-                    lane_id = self._next_lane_id_for_model(provider_id, model_name, model_lanes)
+                    lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes)
                     for vlane, vaction, _ in eviction_set:
                         if vlane.lane_id in claimed_victims:
                             continue
@@ -3910,10 +3920,11 @@ class CapacityPlanner:
                         )
                     )
                     planned_models.add(model_name)
+                    # Same cluster-count bump as the no-eviction branch.
+                    if cluster_lanes_by_model is not None:
+                        cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
                     if is_additional_lane:
                         planned_additional_models.add(model_name)
-                        if cluster_lanes_by_model is not None:
-                            cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
                 else:
                     logger.info(
                         "Skipping load of %s on worker=%s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f, no queued demand",  # noqa: E501
@@ -3963,6 +3974,8 @@ class CapacityPlanner:
                 # Phase 1.3: capability-seed must also feed cycle dedup so a
                 # second provider doesn't seed the same model in the same cycle.
                 planned_models.add(model_name)
+                if cluster_lanes_by_model is not None:
+                    cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
 
         # Phase 1.3: lift this provider's planned models into the cycle-wide
         # set so subsequent providers in the iteration order skip them.
@@ -3970,6 +3983,11 @@ class CapacityPlanner:
             cycle_planned_models |= planned_models
         if cycle_planned_additional_models is not None:
             cycle_planned_additional_models |= planned_additional_models
+            # A first lane planned this pass ends the model's "additional
+            # only" status: a further first lane must dedupe against it
+            # again, so a cycle gets one demand-driven first lane per model
+            # — not one per worker without the model.
+            cycle_planned_additional_models -= planned_models - planned_additional_models
 
         return actions
 
@@ -4089,7 +4107,11 @@ class CapacityPlanner:
                 ):
                     continue
 
-                lane_id = self._planner_lane_id(model_name)
+                # Worker-wide reservation, not replica 1's id: the target
+                # does not host this model, but another model may hold this
+                # one's replica-1 id (the suffix scheme is not unique
+                # across models).
+                lane_id = self._next_lane_id_for_model(pid, model_name, lanes)
                 actions.append(
                     CapacityPlanAction(
                         action="load",
@@ -5901,17 +5923,22 @@ class CapacityPlanner:
         model_name: str,
         lanes: Optional[List[LaneSchedulerSignals]] = None,
     ) -> str:
-        """The lowest replica lane id the worker does not hold for this model.
+        """The lowest replica lane id no lane on the worker holds.
 
-        Every lane id the provider currently reports for the model — in any
-        runtime state, an errored or stopping lane still holds its id on the
-        worker — is off limits; the worker refuses ``add_lane`` for an
-        existing lane id. With nothing held, replica 1's id wins so a first
-        load lands exactly where it always did.
+        Every lane id the provider currently reports — in any runtime state,
+        an errored or stopping lane still holds its id on the worker, and in
+        *any model* — is off limits; the worker keys lanes by id alone and
+        refuses ``add_lane`` for an existing id. The reservation is
+        worker-wide rather than per-model because the replica suffix scheme
+        is not unique across models: ``planner-foo-2`` is both replica 2 of
+        ``foo`` and replica 1 of ``foo-2``, so a worker hosting one form
+        must not be handed a load for the other under the same id. With
+        nothing held, replica 1's id wins so a first load lands exactly
+        where it always did.
         """
         if lanes is None:
             lanes = self._safe_get_lanes(provider_id)
-        taken = {lane.lane_id for lane in lanes if lane.model_name == model_name}
+        taken = {lane.lane_id for lane in lanes}
         if self._planner_lane_id(model_name) not in taken:
             return self._planner_lane_id(model_name)
         index = 2
