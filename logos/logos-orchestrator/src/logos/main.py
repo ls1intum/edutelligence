@@ -3711,6 +3711,54 @@ async def _schedule_stream_resume(
     return context
 
 
+def _chunk_is_sse_metadata_only(chunk) -> bool:
+    """Whether a text-stream frame may be held back behind the pre-commit
+    window.
+
+    A chat stream can open with protocol metadata — a role-only delta with
+    empty content, an empty delta — that the client expects but that commits
+    no answer: yielding such a frame would pin the response to HTTP 200 while
+    nothing has been generated yet. Only chat-completion frames are held,
+    and only when every choice's delta carries no text and no structured
+    key (tool calls, function calls). Anything else — real content, a
+    non-chat protocol event, a degenerate frame, a line split across chunk
+    boundaries, an unparseable payload, a non-SSE body — counts as output
+    and commits the response immediately: when in doubt, the stream starts,
+    and only chat metadata is ever withheld. (Non-SSE payloads on the
+    audio-upload path never reach this check; there, buffering is disabled.)
+    """
+    if not chunk:
+        return True
+    if isinstance(chunk, bytes):
+        text = chunk.decode("utf-8", errors="replace")
+    else:
+        text = str(chunk)
+    saw_chat_frame = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("data: "):
+            continue
+        if stripped == "data: [DONE]":
+            continue
+        try:
+            blob = json.loads(stripped[6:])
+        except json.JSONDecodeError:
+            # Not a complete protocol frame (or split across chunks) — output.
+            return False
+        if not isinstance(blob, dict) or not isinstance(blob.get("choices"), list):
+            # Non-chat protocol event or degenerate frame — output.
+            return False
+        saw_chat_frame = True
+        for choice in blob["choices"]:
+            delta = choice.get("delta", {}) if isinstance(choice, dict) else None
+            if not isinstance(delta, dict):
+                return False
+            if delta.get("content") or any(key in delta for key in _STRUCTURED_DELTA_KEYS):
+                # Real content or a structured delta — output.
+                return False
+    return saw_chat_frame
+
+
 async def _streaming_response(
     context,
     payload,
@@ -3880,7 +3928,7 @@ async def _streaming_response(
             )
 
         async def _open_logosnode_stream(exec_ctx, exec_payload):
-            """Open a logosnode stream and pull its first chunk.
+            """Open a logosnode stream and pull it until output can be committed.
 
             Pulling *before* FastAPI commits a StreamingResponse is what
             turns a pre-token failure into a proper JSON error (and thus a
@@ -3889,24 +3937,50 @@ async def _streaming_response(
             preserved: a just-woken level-1 lane fails cleanly before
             stream_start, and a fresh pull on the same lane is transparent.
 
-            Returns ``(first_chunk, chunk_iter, error)`` — exactly one of
-            ``first_chunk`` and ``error`` is non-None; ``first_chunk`` may
-            itself be None for a stream that ends before emitting a chunk.
+            A text stream's first frames may be protocol metadata only — a
+            role-only delta with empty content (what a mock provider emits),
+            an empty choices frame. Yielding one of those would commit HTTP
+            200 while nothing has been generated yet, and a worker failure
+            right after it could no longer be re-dispatched: a mid-flight
+            resume needs a text prefix, and the response is already a 200.
+            So on text streams, initial metadata frames are buffered and
+            replayed ahead of the first real chunk (or of a clean stream
+            end); a failure while only metadata is held is still a pre-token
+            failure. Binary (audio-upload) streams are never buffered — their
+            payload is not SSE and every byte is output.
+
+            Returns ``(first_chunks, chunk_iter, error)`` — on success
+            ``first_chunks`` holds the frames to yield before continuing the
+            iteration (possibly empty when the stream ends before emitting
+            anything); on error ``error`` is non-None and ``chunk_iter`` is
+            None.
             """
+            buffering = not is_audio_upload_path(request_path or "")
             attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
             for attempt in range(attempts):
                 chunk_iter = _new_logosnode_chunk_iter(exec_ctx, exec_payload)
+                held: list = []
                 try:
-                    return await chunk_iter.__anext__(), chunk_iter, None
+                    while True:
+                        chunk = await chunk_iter.__anext__()
+                        if chunk and (not buffering or not _chunk_is_sse_metadata_only(chunk)):
+                            return held + [chunk], chunk_iter, None
+                        # Empty frame, or a metadata-only frame on a text
+                        # stream: hold it back until real output arrives or
+                        # the stream fails (error below) / ends (replayed
+                        # via the StopAsyncIteration return).
+                        held.append(chunk)
                 except StopAsyncIteration:
-                    return None, chunk_iter, None
+                    return held, chunk_iter, None
                 except Exception as e:
                     with suppress(Exception):
                         await chunk_iter.aclose()
                     # An upstream error status (429/5xx) is not the just-woken
                     # race this same-lane retry exists for: the lane answered,
                     # so re-pulling it cannot help. Surface it so the internal
-                    # retry can re-dispatch to another lane instead.
+                    # retry can re-dispatch to another lane instead. The
+                    # failure still counts as pre-token: only metadata was
+                    # held back, nothing was committed.
                     if attempt < attempts - 1 and not isinstance(e, UpstreamStreamError):
                         logger.warning(
                             "logosnode pre-token stream failure (attempt %d/%d), retrying: %s",
@@ -3918,7 +3992,7 @@ async def _streaming_response(
                         continue
                     return None, None, e
 
-        first_chunk, open_iter, open_error = await _open_logosnode_stream(context, stream_payload)
+        first_chunks, open_iter, open_error = await _open_logosnode_stream(context, stream_payload)
         if open_error is not None:
             logger.error(
                 "logosnode pre-token stream failed after %d attempt(s) (model_id=%s, provider_id=%s): %s",
@@ -3954,11 +4028,11 @@ async def _streaming_response(
             # the clients that left *before* the first token.
             stream_completed = False
             try:
-                if first_chunk is not None:
-                    # The first chunk was pulled before the response was
-                    # committed, so its time-to-first-token is recorded here
+                for first_chunk in first_chunks:
+                    # The first chunks were pulled before the response was
+                    # committed, so the time-to-first-token is recorded here
                     # instead of in the loop below.
-                    if first_chunk:
+                    if first_chunk and not ttft_recorded:
                         if log_id:
                             with DBManager() as db:
                                 db.set_time_at_first_token(log_id)
@@ -4066,7 +4140,7 @@ async def _streaming_response(
                                         active_node["provider_id"] = resumed_ctx.provider_id
                                         old_iter = open_iter
                                         (
-                                            resumed_first,
+                                            resumed_first_chunks,
                                             resumed_iter,
                                             resumed_error,
                                         ) = await _open_logosnode_stream(resumed_ctx, resume_payload)
@@ -4078,12 +4152,12 @@ async def _streaming_response(
                                             await _close_quietly(old_iter)
                                             resumed = True
                                             resume_opened = True
-                                            if resumed_first is not None:
-                                                stream_log.feed(resumed_first)
+                                            for resumed_chunk in resumed_first_chunks:
+                                                stream_log.feed(resumed_chunk)
                                                 if stream_log.terminal_event_received:
                                                     stream_completed = True
                                                 _live_streams.update(request_id, stream_log.streamed_tokens())
-                                                yield resumed_first
+                                                yield resumed_chunk
                                         else:
                                             # The takeover could not open a
                                             # stream either: release its slot

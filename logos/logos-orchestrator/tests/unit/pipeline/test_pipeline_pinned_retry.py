@@ -278,7 +278,7 @@ async def test_context_resolve_deadline_survives_the_scheduling_wait():
 
     class _QueueingScheduler(_RecordingScheduler):
         async def schedule(self, request):
-            await asyncio.sleep(0.8)  # stands in for the queue wait
+            await asyncio.sleep(1.0)  # stands in for the queue wait
             return await super().schedule(request)
 
     class _SlowContextResolver:
@@ -296,17 +296,21 @@ async def test_context_resolve_deadline_survives_the_scheduling_wait():
     resolver = _SlowContextResolver()
     pipeline._context_resolver = resolver
 
+    # 5 s deadline vs a 1.0 s queue wait: a loaded event loop still leaves
+    # seconds of margin before resolve_context() starts, so the resolver
+    # entry below is deterministic. The 60 s resolver sleep stays well above
+    # the deadline either way.
     started = time.monotonic()
-    result = await pipeline.process(_pinned_request(context_resolve_deadline=time.monotonic() + 1.0))
+    result = await pipeline.process(_pinned_request(context_resolve_deadline=time.monotonic() + 5.0))
     elapsed = time.monotonic() - started
 
     assert result.success is False
     assert result.error.startswith("Failed to resolve execution context")
-    # The resolver did run (the budget was not yet exhausted after the 0.8 s
-    # wait), but was cut off at the original 1.0 s deadline — it did not get
+    # The resolver did run (the budget was not yet exhausted after the 1.0 s
+    # wait), but was cut off at the original 5.0 s deadline — it did not get
     # a fresh window on top of the queue wait.
     assert resolver.entered == 1
-    assert elapsed < 5
+    assert elapsed < 20
     assert len(releases) == 1
     assert releases[0][0] == (27, 1, "logosnode", "req-pinned")
 

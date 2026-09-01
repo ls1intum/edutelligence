@@ -339,6 +339,80 @@ async def test_a_429_lane_answer_is_a_pre_stream_error_not_a_committed_200(monke
     assert response.status_code == 429
 
 
+@pytest.mark.asyncio
+async def test_a_role_only_first_frame_is_not_a_committed_200_when_the_lane_then_fails(monkeypatch):
+    """End to end: a chat stream can open with a role-only delta (empty
+    content — what a mock provider emits). That frame carries no generated
+    output: if the lane then fails before its first content token, the
+    answer must still come back as a pre-stream JSON error the internal
+    retry can re-dispatch, not a committed 200 stream — there is no text
+    prefix to resume from once the 200 is out."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    # One pre-token attempt: the test pins the buffering, not the same-lane
+    # retry that exists for the just-woken race.
+    monkeypatch.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 0, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-roleonly",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # First frame: a role-only delta — no generated content yet.
+    await _feed(
+        registry,
+        cmd_id,
+        {
+            "type": "stream_chunk",
+            "chunk": (
+                b'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", '
+                b'"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]}\n\n'
+            ),
+        },
+    )
+    # Worker failure before the first content token.
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    await _drain_pending_tasks()
+
+    assert not isinstance(
+        response, StreamingResponse
+    ), "the failure after a role-only frame was committed as a 200 stream"
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+
+
 # ---------------------------------------------------------------------------
 # Non-streaming path — same exposure, same fix
 # ---------------------------------------------------------------------------

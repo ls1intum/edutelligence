@@ -551,7 +551,10 @@ class RequestPipeline:
                 )
                 first_attempt = False
 
-            await asyncio.sleep(self._CONTEXT_RESOLVE_INTERVAL_S)
+            # The sleep itself must not outrun the budget: with less than one
+            # interval left, a full interval would cross the absolute
+            # deadline before the next pre-check can act on it.
+            await asyncio.sleep(min(self._CONTEXT_RESOLVE_INTERVAL_S, max(0.0, deadline - time.monotonic())))
 
     def _release_scheduler_safe(self, scheduling_result, request_id: str, reason: str) -> None:
         try:
