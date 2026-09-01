@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
 _DEFAULT_LANE_CONTEXT_LENGTH = 4096
+# Container path of the model volume. Compose mounts the model volume here,
+# and existing Ollama-era configs (and the engines.ollama migration) may
+# still carry LEGACY_OLLAMA_MODELS_PATH — WorkerConfig._translate_legacy_ollama_models_path
+# rewrites it to NEW_MODELS_PATH so a config left on the old path keeps working.
+NEW_MODELS_PATH = "/usr/share/logos/models"
+LEGACY_OLLAMA_MODELS_PATH = "/usr/share/ollama/.ollama/models"
 
 
 def _normalize_gpu_devices(raw: str) -> str:
@@ -409,6 +415,29 @@ class WorkerConfig(BaseModel):
     @classmethod
     def _validate_gpu_devices(cls, value: str) -> str:
         return _normalize_gpu_devices(value)
+
+    @field_validator("models_path")
+    @classmethod
+    def _translate_legacy_ollama_models_path(cls, value: str) -> str:
+        """Translate the Ollama-era container path to the current mount point.
+
+        Existing deployment configs (and the engines.ollama migrator) may
+        still carry the Ollama-era container path. The container now mounts
+        the model volume at /usr/share/logos/models (resolving the legacy
+        OLLAMA_MODELS_MOUNT variable / pre-existing volume), so a config
+        left on the old path would point at a directory that no longer
+        exists in the container. Translated for backwards compatibility.
+        """
+        if value == LEGACY_OLLAMA_MODELS_PATH:
+            logger.warning("worker.models_path: translating legacy Ollama container path %s -> %s. "
+                           "Update your config file to the new path.", value, NEW_MODELS_PATH)
+            return NEW_MODELS_PATH
+        if value.startswith(LEGACY_OLLAMA_MODELS_PATH + "/"):
+            translated = NEW_MODELS_PATH + value[len(LEGACY_OLLAMA_MODELS_PATH):]
+            logger.warning("worker.models_path: translating legacy Ollama container subpath %s -> %s. "
+                           "Update your config file to the new path.", value, translated)
+            return translated
+        return value
 
 
 class LogosConfig(BaseModel):

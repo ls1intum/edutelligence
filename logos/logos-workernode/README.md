@@ -57,8 +57,10 @@ All five hang off a single root, resolved at boot:
    knob — see `config.example.yml`).
 3. otherwise `worker.models_path` (default in `config.yml`:
    `/usr/share/logos/models`) — used because the standard
-   `docker-compose.yml` already mounts that path as a named volume
-   (`logos-models`).
+   `docker-compose.yml` already mounts that path as a volume. The source is
+   resolved backward-compatibly: `LOGOS_MODELS_MOUNT` → legacy
+   `OLLAMA_MODELS_MOUNT` → the pre-existing `ollama-models` named volume
+   (see the mount comment in `docker-compose.yml`).
 
 Layout under `<root>/`:
 
@@ -71,9 +73,10 @@ Layout under `<root>/`:
 
 **Default deployment** — leave both `LOGOS_WORKER_CACHE_ROOT` and
 `worker.cache_path` unset; everything defaults to
-`worker.models_path` and is preserved by the `logos-models`
-named volume in `docker-compose.yml` (the path keeps its historical name).
-This is the expected setup for ASE/Ansible deployments.
+`worker.models_path` and is preserved by the model volume in
+`docker-compose.yml` (resolved `LOGOS_MODELS_MOUNT` → `OLLAMA_MODELS_MOUNT`
+→ the pre-existing `ollama-models` named volume, so in-place upgrades keep
+their cached weights). This is the expected setup for ASE/Ansible deployments.
 
 **Custom storage layout** — set `worker.cache_path: /var/cache/logos-worker`
 (or any persistent path) in `config.yml` and mount that path as a Docker
