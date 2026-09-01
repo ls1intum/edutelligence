@@ -66,6 +66,13 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  * (cost: a cloud pair) has a derived value for that dimension, so the fleet
  * never mixes auto- and manually-ranked scales.
  *
+ * A model that leaves a dimension's population (loses its last pair for
+ * latency, its last cloud pair for cost) no longer has data supporting its
+ * derived weight: its non-pinned weight in that dimension falls back to the
+ * default instead of keeping the last derived value. The fallback is ungated
+ * - it mixes no relative scale - and is a no-op for models that never had
+ * data, which are already at the default.
+ *
  * A dimension an admin set manually (models.weight_overrides) is never
  * overwritten: the weight write is a targeted UPDATE whose WHERE clause
  * re-checks the override map at write time, so a pin committed concurrently
@@ -286,22 +293,39 @@ public class ModelMetricsService {
                 }
             }
 
-            // A model without a pair is not in either population, so models without
-            // data or traffic stay on their current (manual/default) weight.
             // Under-sampled models are in the latency population (paired) but not in
             // the latency data set (not enough samples), so they'd create a mixed
-            // scale -> hold the write for that dimension until full coverage.
+            // scale -> hold the ranking write for that dimension until full coverage.
             boolean latencyFull = !pairedModelIds.isEmpty() && latencyValues.keySet().containsAll(pairedModelIds);
             boolean costFull = !cloudPairedModelIds.isEmpty() && costValues.keySet().containsAll(cloudPairedModelIds);
-            if (!latencyFull && !costFull) return false;
             Map<Integer, Integer> latencyWeights = latencyFull ? modelWeightService.rankValuesToWeights(latencyValues) : Map.of();
             Map<Integer, Integer> costWeights = costFull ? modelWeightService.rankValuesToWeights(costValues) : Map.of();
 
             int updated = 0;
+            int cleared = 0;
             for (Model model : modelRepository.findAll()) {
                 // Compare first, so a steady-state run is a no-op and we don't
                 // saveAll/notify needlessly (even though the entity is loaded in the
                 // transaction, we don't dirty it unless there's a real change).
+                //
+                // A model that left a dimension's population (no pairs at all for
+                // latency, no cloud pair for cost) no longer has data supporting
+                // its derived weight: the non-pinned weight falls back to the
+                // default instead of keeping the last derived value forever. The
+                // write goes through the same guarded update, so a manual pin
+                // survives; a model that never had data is already at the default,
+                // so this only writes when a derived value actually goes stale.
+                // Ungated on purpose: a fallback to the neutral default mixes no
+                // relative scale, which is what the full-population gating above
+                // protects.
+                if (!pairedModelIds.contains(model.getId()) && model.getWeightLatency() != null
+                        && model.getWeightLatency() != 0) {
+                    cleared += modelRepository.updateWeightLatencyGuarded(model.getId(), 0);
+                }
+                if (!cloudPairedModelIds.contains(model.getId()) && model.getWeightCost() != null
+                        && model.getWeightCost() != 0) {
+                    cleared += modelRepository.updateWeightCostGuarded(model.getId(), 0);
+                }
                 Integer latencyWeight = latencyWeights.get(model.getId());
                 if (latencyWeight != null && !latencyWeight.equals(model.getWeightLatency())) {
                     updated += modelRepository.updateWeightLatencyGuarded(model.getId(), latencyWeight);
@@ -311,9 +335,9 @@ public class ModelMetricsService {
                     updated += modelRepository.updateWeightCostGuarded(model.getId(), costWeight);
                 }
             }
-            if (updated == 0) return false;
-            log.info("metrics_derivation: updated {} model weights (latency ranked: {} models, cost ranked: {} models)",
-                updated, latencyWeights.size(), costWeights.size());
+            if (updated == 0 && cleared == 0) return false;
+            log.info("metrics_derivation: updated {} model weights (latency ranked: {} models, cost ranked: {} models), "
+                + "cleared {} stale weights", updated, latencyWeights.size(), costWeights.size(), cleared);
             return true;
         });
         return Boolean.TRUE.equals(changed);

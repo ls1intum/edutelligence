@@ -435,11 +435,13 @@ class ModelMetricsControllerTest {
         // 8000 MB at 0.0001 USD/MB-hour over 500 ms and 3000 ms.
         assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.000111"));
         assertThat(costOf(5102, 6101)).isEqualByComparingTo(new BigDecimal("0.000667"));
-        // With no cloud pair left, the cost dimension is held fleet-wide:
-        // the local figures are display-only and never feed the cost ranking,
-        // so the weights keep their last cloud-derived values.
-        assertThat(weightCost(5101)).isEqualTo(4);
-        assertThat(weightCost(5102)).isEqualTo(-4);
+        // Both models lost their last cloud pair: the stale cloud-derived
+        // cost weights fall back to the default instead of surviving on a
+        // pair that no longer exists (the local figures are display-only and
+        // never feed the cost ranking).
+        awaitUntil(() -> weightCost(5101) == 0 && weightCost(5102) == 0);
+        assertThat(weightCost(5101)).isZero();
+        assertThat(weightCost(5102)).isZero();
     }
 
     @Test
@@ -456,8 +458,42 @@ class ModelMetricsControllerTest {
             .isZero();
         // ...and the survivors are re-derived and the models re-ranked right
         // away - not at the next daily job. On the local pairs 5102 (900 ms)
-        // now beats 5101 (40000 ms), so the latency ranking flips.
-        awaitUntil(() -> weightLatency(5101) == -4 && weightLatency(5102) == 4);
+        // now beats 5101 (40000 ms), so the latency ranking flips; and both
+        // models lost their last cloud pair, so the stale cloud-derived cost
+        // weights fall back to the default.
+        awaitUntil(() -> weightLatency(5101) == -4 && weightLatency(5102) == 4
+            && weightCost(5101) == 0 && weightCost(5102) == 0);
+        assertThat(weightLatency(5101)).isEqualTo(-4);
+        assertThat(weightLatency(5102)).isEqualTo(4);
+        assertThat(weightCost(5101)).isZero();
+        assertThat(weightCost(5102)).isZero();
+    }
+
+    @Test
+    void lastCloudPairDisconnect_clearsStaleCostWeightAndKeepsPins() throws Exception {
+        modelMetricsService.deriveAllMetrics();
+        // Baseline: both models are ranked on their cloud costs (5101 cheaper).
+        assertThat(weightCost(5101)).isEqualTo(4);
+        assertThat(weightCost(5102)).isEqualTo(-4);
+
+        // A manually pinned cost weight must survive the population leave.
+        jdbc.update("UPDATE models SET weight_cost = 7, weight_overrides = '{\"cost\": true}' WHERE id = 5101");
+
+        // Through the endpoint, so the post-service async re-derivation fires.
+        mvc.perform(post("/logosdb/disconnect_model_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5101,\"provider_id\":6101}"))
+           .andExpect(status().isOk());
+
+        // 5101 lost its last cloud pair (5102 keeps its 6101 pair): 5101's
+        // auto-derived cost weight would fall back to the default, but its
+        // pin protects it; 5102, re-ranked alone on the relative scale,
+        // lands on the neutral 0. On the surviving local pairs the latency
+        // ranking flips (900 ms beats 40000 ms).
+        awaitUntil(() -> weightCost(5102) == 0 && weightLatency(5101) == -4 && weightLatency(5102) == 4);
+        assertThat(weightCost(5101)).isEqualTo(7);
+        assertThat(weightCost(5102)).isZero();
         assertThat(weightLatency(5101)).isEqualTo(-4);
         assertThat(weightLatency(5102)).isEqualTo(4);
     }
