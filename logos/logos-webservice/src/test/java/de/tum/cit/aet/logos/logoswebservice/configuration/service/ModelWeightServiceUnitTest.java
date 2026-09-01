@@ -75,11 +75,24 @@ class ModelWeightServiceUnitTest {
     }
 
     @Test
-    void rankValuesToWeights_tiedValues_deterministicByModelId() {
+    void rankValuesToWeights_twoModelsEqualValues_getIdenticalWeights() {
+        // Regression: equal observed values must not be scored by iteration
+        // order — previously the second model in id order received +2 while
+        // the first got -2.
+        Map<Integer, Integer> result = svc.rankValuesToWeights(
+            Map.of(5001, 500.0, 5002, 500.0));
+        // 1 distinct value -> both -4 before rebalance; median -4 -> 0 / 0
+        assertThat(result).containsEntry(5001, 0).containsEntry(5002, 0);
+    }
+
+    @Test
+    void rankValuesToWeights_tiedValues_getEqualWeights() {
+        // The score depends on the rank among the distinct values: 5001 and
+        // 5002 share the worst value and therefore a weight, 5003 is best.
         Map<Integer, Integer> result = svc.rankValuesToWeights(
             Map.of(5001, 3000.0, 5002, 3000.0, 5003, 500.0));
-        // desc by value, ties broken by descending id (reversed): 5002 (pos0), 5001 (pos1), 5003 (pos2)
-        // 2 distinct values -> -8/0/+8 before rebalance; median 0
-        assertThat(result).containsEntry(5002, -8).containsEntry(5001, 0).containsEntry(5003, 8);
+        // 2 distinct values -> tied pair -8/-8, best 0; median -8 -> 0/0/8
+        assertThat(result).containsEntry(5001, 0).containsEntry(5002, 0).containsEntry(5003, 8);
+        assertThat(result.get(5001)).isEqualTo(result.get(5002));
     }
 }

@@ -122,8 +122,11 @@ public class ModelWeightService {
     /**
      * Map per-model derived values (lower value = better, e.g. latency in ms
      * or cost in $/M tokens) onto the same relative weight scale used for the
-     * manual rankings. Models with equal values keep a stable order by id.
-     * Returns modelId -> weight, where a higher weight means a better model.
+     * manual rankings. The score depends on the rank of a model's value among
+     * the distinct values — not on the model's position in the iteration — so
+     * models with equal values get equal weights; the id only fixes the
+     * iteration order. Returns modelId -> weight, where a higher weight means
+     * a better model.
      */
     public Map<Integer, Integer> rankValuesToWeights(Map<Integer, Double> values) {
         if (values.isEmpty()) return Map.of();
@@ -132,10 +135,21 @@ public class ModelWeightService {
                 .thenComparingInt(id -> id)
                 .reversed())
             .toList();
-        int uniqueScoreCount = (int) values.values().stream().distinct().count();
+        // Worst distinct value first, so rank 0 is the worst score position;
+        // models sharing a value share a rank and therefore a weight.
+        List<Double> distinctValues = values.values().stream()
+            .distinct()
+            .sorted(Comparator.reverseOrder())
+            .toList();
+        Map<Double, Integer> rankByValue = new HashMap<>();
+        for (int rank = 0; rank < distinctValues.size(); rank++) {
+            rankByValue.put(distinctValues.get(rank), rank);
+        }
         ModelScore[] scored = new ModelScore[ids.size()];
         for (int i = 0; i < ids.size(); i++) {
-            scored[i] = new ModelScore(computeScore(i, uniqueScoreCount), ids.get(i));
+            Integer id = ids.get(i);
+            int rank = rankByValue.get(values.get(id));
+            scored[i] = new ModelScore(computeScore(rank, distinctValues.size()), id);
         }
         Map<Integer, Integer> result = new HashMap<>();
         for (ModelScore entry : rebalance(scored)) {
