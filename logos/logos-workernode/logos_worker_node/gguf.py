@@ -160,6 +160,11 @@ _REMOTE_GGUF_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9
 # Multi-file shard suffix: …-Q4_K_M-00001-of-00004.gguf
 _SHARD_SUFFIX_RE = re.compile(r"-\d+-of-\d+$")
 
+# Multi-file shard indices anywhere in the name (the suffix form above only
+# matches the trailing …-00001-of-00004, so this also covers the
+# …-00001-of-00002-Q4_K_M.gguf layout where the quant comes last).
+_SHARD_INDEX_RE = re.compile(r"-\d+-of-\d+")
+
 
 def is_valid_gguf_quant_type(quant_type: str) -> bool:
     """Whether *quant_type* is a known GGUF quantization name.
@@ -446,12 +451,21 @@ def download_allow_patterns(model: str, quant: str) -> list[str] | None:
     Returns None when the model is not a GGUF reference (a full repo download
     is correct then). Mirrors the plugin's download_gguf pattern set so the
     prefetch and the plugin resolve to the same files.
+
+    A file reference that names one shard of a multi-file quant (``…-00001-of-
+    00002.gguf``) is expanded to a pattern covering every shard of the family,
+    so the prefetch fetches the complete model instead of a single shard the
+    lane would then have to download at startup (or fail on offline).
     """
     model = (model or "").strip()
     if is_gguf_file_ref(model):
-        if "/" in model:
-            return [model.rsplit("/", 1)[1]]
-        return [model]
+        basename = model.rsplit("/", 1)[1] if "/" in model else model
+        if _SHARD_INDEX_RE.search(basename):
+            # Wildcard the shard indices so the pattern matches the whole
+            # family; the leading * (fnmatch crosses path separators) covers
+            # weights kept in a subdirectory.
+            return ["*" + _SHARD_INDEX_RE.sub("-*-of-*", basename)]
+        return [basename]
     if not is_gguf_model(model):
         return None
     quantized = quant or ""

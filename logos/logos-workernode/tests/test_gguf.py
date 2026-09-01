@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 
 import pytest
@@ -294,6 +295,29 @@ def test_download_allow_patterns_non_gguf_is_none() -> None:
 def test_download_allow_patterns_file_ref() -> None:
     # The pattern is the repo file name — HF allow_patterns match on names.
     assert gguf.download_allow_patterns("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf", "") == ["Qwen3-8B-Q4_K_M.gguf"]
+
+
+def test_download_allow_patterns_sharded_file_ref_fetches_whole_family() -> None:
+    # An explicit reference to ONE shard of a multi-file quant must download
+    # every shard of the family — the lane loads the whole model, so a single
+    # shard would leave it incomplete (fetched at startup, or failing offline).
+    patterns = gguf.download_allow_patterns("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "")
+    assert patterns == ["*Qwen3-8B-Q4_K_M-*-of-*.gguf"]
+    # Covers both shards of the family, in the repo root or a subdirectory …
+    assert fnmatch.fnmatch("Qwen3-8B-Q4_K_M-00001-of-00002.gguf", patterns[0])
+    assert fnmatch.fnmatch("Qwen3-8B-Q4_K_M-00002-of-00002.gguf", patterns[0])
+    assert fnmatch.fnmatch("quants/Qwen3-8B-Q4_K_M-00002-of-00002.gguf", patterns[0])
+    # … but nothing from a different quant or a single-file reference.
+    assert not fnmatch.fnmatch("Qwen3-8B-Q4_K_S.gguf", patterns[0])
+    assert not fnmatch.fnmatch("Qwen3-8B-Q4_K_M.gguf", patterns[0])
+
+
+def test_download_allow_patterns_sharded_file_ref_quant_last() -> None:
+    # The alternative layout where the quant follows the shard indices.
+    patterns = gguf.download_allow_patterns("unsloth/Qwen3-8B-GGUF/Qwen3-8B-00001-of-00002-Q4_K_M.gguf", "")
+    assert patterns == ["*Qwen3-8B-*-of-*-Q4_K_M.gguf"]
+    assert fnmatch.fnmatch("Qwen3-8B-00001-of-00002-Q4_K_M.gguf", patterns[0])
+    assert fnmatch.fnmatch("Qwen3-8B-00002-of-00002-Q4_K_M.gguf", patterns[0])
 
 
 def test_download_allow_patterns_repo_without_quant_is_none() -> None:
