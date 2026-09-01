@@ -21,6 +21,7 @@
     <include file="liquibase/changelog/015_model_provider_benchmarks.xml"/>
     <include file="liquibase/changelog/016_model_profiles_max_reported_context_length.xml"/>
     <include file="liquibase/changelog/017_provider_performance.xml"/>
+    <include file="liquibase/changelog/018_model_aliases.xml"/>
     <include file="liquibase/changelog/020_agent_sessions.xml"/>
 
 </databaseChangeLog>
