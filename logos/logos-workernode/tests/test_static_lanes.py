@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from logos_worker_node.lane_manager import LaneManager, PortAllocator, _lane_id_from_config
-from logos_worker_node.models import AppConfig, LaneConfig, OllamaConfig, ProcessState, ProcessStatus, VllmConfig
+from logos_worker_node.models import AppConfig, LaneConfig, ProcessState, ProcessStatus, VllmConfig, WorkerConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,7 +71,7 @@ async def test_static_lanes_survive_apply_lanes(monkeypatch) -> None:
     """Static lane must not be removed when the planner sends apply_lanes without it."""
     _patch_create_handle(monkeypatch)
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15020,
         max_lanes=3,
@@ -103,7 +103,7 @@ async def test_static_lane_cannot_be_removed(monkeypatch) -> None:
     """remove_lane() must raise ValueError for a static lane."""
     _patch_create_handle(monkeypatch)
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15010,
     )
@@ -124,7 +124,7 @@ async def test_static_lane_cannot_be_removed(monkeypatch) -> None:
 async def test_static_lane_status_has_is_static_flag(monkeypatch) -> None:
     """LaneStatus.is_static must be True for static lanes and False for dynamic lanes."""
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15001,
         lane_port_end=15010,
     )
@@ -200,7 +200,7 @@ def test_static_lanes_config_default_empty() -> None:
 
 def test_is_static_lane_method() -> None:
     """LaneManager.is_static_lane() returns correct values."""
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     manager.register_static_lanes({"lane-a", "lane-b"})
 
     assert manager.is_static_lane("lane-a") is True
@@ -213,7 +213,7 @@ async def test_static_lanes_excluded_from_to_remove_in_apply(monkeypatch) -> Non
     """Even without re-injection, static lanes in current set are excluded from to_remove."""
     _patch_create_handle(monkeypatch)
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15020,
     )
@@ -239,7 +239,7 @@ async def test_max_lanes_accounts_for_static_lanes(monkeypatch) -> None:
     """apply_lanes should reject if desired + static re-injected > MAX_LANES."""
     _patch_create_handle(monkeypatch)
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15020,
         max_lanes=2,

@@ -1385,7 +1385,7 @@ class LogosBridgeClient:
             if tp < min_tp:
                 return
 
-            models_path = cfg.engines.ollama.models_path if cfg.engines else ""
+            models_path = cfg.worker.models_path
             cache_root = sc.resolve_cache_root(models_path)
             if not cache_root:
                 return

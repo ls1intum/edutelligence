@@ -113,7 +113,7 @@ async def test_ndjson_stream_is_forwarded_byte_for_byte(monkeypatch):
         b'"message":{"content":"!"},"done":true}\n',
     ]
 
-    assert await collect_stream(monkeypatch, chunks, url="http://ollama:11434/api/chat") == b"".join(chunks)
+    assert await collect_stream(monkeypatch, chunks, url="http://worker:8000/api/chat") == b"".join(chunks)
 
 
 @pytest.mark.parametrize(
@@ -142,7 +142,7 @@ async def test_non_sse_mid_stream_error_does_not_append_sse_frames(monkeypatch, 
         [
             chunk
             async for chunk in Executor().execute_streaming(
-                "http://ollama:11434/api/chat",
+                "http://worker:8000/api/chat",
                 {},
                 {"model": "local"},
                 status=status,

@@ -5,11 +5,11 @@ vLLM uses continuous batching — no fixed ``num_parallel``.  It handles
 arbitrary concurrency dynamically and exposes an OpenAI-compatible API
 at ``/v1/completions``, ``/v1/chat/completions``, and ``/v1/models``.
 
-Key differences from Ollama:
+Key characteristics:
 - No model pull/push/delete — model is specified at launch time and must
   exist locally (HuggingFace cache or explicit path).
 - No ``num_parallel`` — continuous batching handles all concurrency.
-- ``num_ctx`` equivalent is ``--max-model-len``.
+- The context window is ``--max-model-len``.
 - GPU pinning via ``CUDA_VISIBLE_DEVICES`` or ``--tensor-parallel-size``.
 - Optional stability controls: ``disable_custom_all_reduce`` (per-lane)
   and ``nccl_p2p_available`` (global engine config, default False).
@@ -38,11 +38,11 @@ import httpx
 from logos_worker_node.models import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
     LaneConfig,
-    OllamaConfig,
     ProcessState,
     ProcessStatus,
     VllmConfig,
     VllmEngineConfig,
+    WorkerConfig,
 )
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
@@ -390,7 +390,7 @@ class VllmProcessHandle:
         self,
         lane_id: str,
         port: int,
-        global_config: OllamaConfig,
+        global_config: WorkerConfig,
         vllm_engine_config: VllmEngineConfig | None = None,
         model_profiles: Any | None = None,
         per_gpu_total_mb: Callable[[], float] | None = None,
@@ -2095,10 +2095,10 @@ class VllmProcessHandle:
 
         # All four worker caches (HF_HOME, VLLM_CACHE_ROOT, TORCHINDUCTOR_CACHE_DIR,
         # FLASHINFER_WORKSPACE_BASE) hang off this single root.  Default is the
-        # ollama models_path because the standard docker-compose mounts that as
-        # a persistent named volume; deployments without ollama (or with a
-        # different storage layout) can override globally via
-        # LOGOS_WORKER_CACHE_ROOT, or per-cache via the individual env vars.
+        # worker's persistent model store (worker.models_path) because the
+        # standard docker-compose mounts that as a persistent named volume;
+        # deployments with a different storage layout can override globally
+        # via LOGOS_WORKER_CACHE_ROOT, or per-cache via the individual env vars.
         cache_root_dir = self._resolve_persistent_cache_root(gc)
 
         # HuggingFace cache — write into the persistent root.
@@ -2245,21 +2245,29 @@ class VllmProcessHandle:
         """Single root directory for all worker-side persistent caches.
 
         Resolution order:
-          1. ``LOGOS_WORKER_CACHE_ROOT`` env var if non-empty.
-          2. ``gc.models_path`` (the ollama models_path) — used because the
-             standard docker-compose mounts that as a persistent named volume,
-             so it's the one path the worker can rely on surviving container
-             rebuilds in the default deployment.
+          1. ``LOGOS_WORKER_CACHE_ROOT`` env var if non-empty (config.yml's
+             ``worker.cache_path`` is lifted into this env var at load time,
+             but is also consulted directly below so the resolver stays
+             correct for configs built without that propagation).
+          2. ``gc.cache_path`` (``worker.cache_path``) if non-empty.
+          3. ``gc.models_path`` (the worker's persistent model store,
+             ``worker.models_path``) — used because the standard docker-compose
+             mounts that as a persistent named volume, so it's the one path
+             the worker can rely on surviving container rebuilds in the
+             default deployment.
 
         ``HF_HOME``, ``VLLM_CACHE_ROOT``, ``TORCHINDUCTOR_CACHE_DIR`` and
         ``FLASHINFER_WORKSPACE_BASE`` all derive from this root; deployments
-        without ollama (or with a different storage layout) only need to set
+        with a different storage layout only need to set
         ``LOGOS_WORKER_CACHE_ROOT`` to point at any persistent path they have
         — no need to override each cache env var individually.
         """
         override = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
         if override:
             return override
+        cache_path = (getattr(gc, "cache_path", "") or "").strip()
+        if cache_path:
+            return cache_path
         return getattr(gc, "models_path", "") or ""
 
     def _resolve_hf_home(self, cache_root_dir: str) -> str:
@@ -2585,7 +2593,7 @@ class VllmProcessHandle:
         """Wait for vLLM's health endpoint to respond."""
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
-        delay = 0.5  # vLLM is slower to start than Ollama
+        delay = 0.5
         while loop.time() < deadline:
             if self._process is not None and self._process.returncode is not None:
                 logger.error(

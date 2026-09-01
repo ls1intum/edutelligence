@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Ollama is no longer served by Logos. The shared schema types
+         providers.provider_type as a Postgres ENUM ('logosnode', 'cloud'), so
+         an 'ollama' row cannot exist in a database created from this
+         changelog — but deployments with hand-altered or pre-Logos schemas
+         may still carry such rows. Refuse to start LOUDLY instead of routing
+         traffic to a provider type nothing serves: converting them to
+         'logosnode' would silently point requests at workers that do not
+         have the Ollama engine anymore. Fix the data (re-type as
+         'logosnode' or delete the row), then restart. -->
+    <changeSet id="019-refuse-ollama-typed-providers" author="wasnertobias">
+        <sql splitStatements="false">
+            DO $$
+            DECLARE
+                stale_count INTEGER;
+                stale_list  TEXT;
+            BEGIN
+                SELECT COUNT(*) INTO stale_count
+                FROM providers
+                WHERE LOWER(provider_type::text) = 'ollama';
+                IF stale_count &gt; 0 THEN
+                    SELECT COALESCE(STRING_AGG('#' || p.id || ' ' || p.name, ', '), '')
+                    INTO stale_list
+                    FROM providers p
+                    WHERE LOWER(p.provider_type::text) = 'ollama';
+                    RAISE EXCEPTION
+                        'Logos no longer supports providers of type ''ollama'' and % provider row(s) still use it: %. Re-type them as ''logosnode'' (worker-backed) or delete them, then restart the webservice.',
+                        stale_count, stale_list;
+                END IF;
+            END;
+            $$;
+        </sql>
+        <rollback>
+            <!-- No-op: this changeSet only validates existing data. -->
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

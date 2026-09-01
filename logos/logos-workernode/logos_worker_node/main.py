@@ -287,19 +287,19 @@ def _log_storage_layout(cfg) -> None:
     """Log the resolved storage paths for HF + the four compilation/JIT caches.
 
     Surfaces (a) where the cache root resolves from — env var vs. config field
-    vs. ollama-path fallback — and (b) the absolute path each cache will use,
-    so a single grep at boot is enough to debug "is X being persisted?"
+    vs. worker.models_path fallback — and (b) the absolute path each cache will
+    use, so a single grep at boot is enough to debug "is X being persisted?"
     questions.
     """
     from logos_worker_node.vllm_process import VllmProcessHandle
 
-    cache_root = VllmProcessHandle._resolve_persistent_cache_root(cfg.engines.ollama)
+    cache_root = VllmProcessHandle._resolve_persistent_cache_root(cfg.worker)
     if os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip():
         source = "LOGOS_WORKER_CACHE_ROOT env var"
     elif cfg.worker.cache_path:
         source = "config.yml worker.cache_path"
     else:
-        source = "fallback: engines.ollama.models_path"
+        source = "fallback: worker.models_path"
 
     hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
     cache_dir = os.path.join(cache_root, ".cache")
@@ -348,13 +348,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
     # workspace_base is the parent of .cache/flashinfer; flashinfer 0.6.x reads
     # FLASHINFER_WORKSPACE_BASE (not FLASHINFER_JIT_DIR) to relocate its cache.
-    # Honor LOGOS_WORKER_CACHE_ROOT first so deployments without ollama can
-    # point all worker caches at any persistent path; default to the ollama
-    # models_path which is the persistent volume in the standard compose.
+    # Resolved through the shared persistent cache root resolver
+    # (LOGOS_WORKER_CACHE_ROOT > worker.cache_path > worker.models_path) so
+    # the FlashInfer JIT cache always lands on the same persistent volume as
+    # every other worker cache.
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
+        from logos_worker_node.vllm_process import VllmProcessHandle
 
-        workspace_base = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip() or cfg.engines.ollama.models_path
+        workspace_base = VllmProcessHandle._resolve_persistent_cache_root(cfg.worker)
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
@@ -372,7 +374,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # ── tmpfs RAM cache (created before calibration so models can be loaded
     # from RAM during VRAM measurement, then evicted to free space) ──────────
-    hf_home = os.environ.get("HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache"))
+    hf_home = os.environ.get("HF_HOME", os.path.join(cfg.worker.models_path, ".hf_cache"))
     model_cache = create_model_cache(
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,
@@ -511,7 +513,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.info("No models eligible to pre-populate into RAM cache")
 
     lane_manager = LaneManager(
-        global_config=cfg.engines.ollama,
+        global_config=cfg.worker,
         vllm_engine_config=cfg.engines.vllm,
         lane_port_start=cfg.worker.lane_port_start,
         lane_port_end=cfg.worker.lane_port_end,

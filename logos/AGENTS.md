@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Logos** is an LLM Engineering Platform that acts as an intelligent proxy between LLM consumers and multiple LLM providers (Azure, Ollama, OpenAI). It provides usage logging, billing, central resource management, policy-based model selection, scheduling, and monitoring.
+**Logos** is an LLM Engineering Platform that acts as an intelligent proxy between LLM consumers and multiple LLM providers (worker-backed vLLM lanes, Azure, OpenAI). It provides usage logging, billing, central resource management, policy-based model selection, scheduling, and monitoring.
 
 ## Tech Stack
 
@@ -55,11 +55,10 @@ logos/
 │   ├── queue/
 │   │   └── priority_queue.py          # Thread-safe priority queue
 │   ├── sdi/                           # Scheduling Data Interface
-│   │   ├── ollama_facade.py
+│   │   ├── logosnode_facade.py
 │   │   └── azure_facade.py
 │   ├── monitoring/
-│   │   ├── recorder.py                # Request event monitoring
-│   │   └── ollama_monitor.py          # Background VRAM/model polling
+│   │   └── recorder.py                # Request event monitoring
 │   └── jobs/
 │       └── job_service.py             # Async job persistence
 └── tests/
@@ -69,8 +68,7 @@ logos/
     │   ├── sdi/                       # Tests for SDI facades
     │   ├── queue/                     # Tests for priority queue
     │   └── responses/                 # Tests for proxy behavior
-    ├── integration/                   # Full endpoint tests with mock providers
-    └── scheduling_data/               # SDI-specific tests
+    └── integration/                   # Full endpoint tests with mock providers
 ```
 
 ## Architecture & Key Patterns
@@ -365,7 +363,7 @@ ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name
 1. **main.py is large** (~1690+ lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
 3. **No Alembic** — migrations are plain SQL files. Apply via `run_all_migrations.sh` (uses `docker exec`) or run manually.
-4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances)
+4. **Provider types**: `cloud` (Azure/OpenAI), `logosnode` (worker-backed vLLM lanes)
 5. **Token tracking exists** in the `usage_tokens` and `token_prices` tables.
 6. **The `process` table is the key auth entity** — each process has a unique `logos_key`.
 7. **Profiles control model access** — `profile_model_permissions` links profiles to models.

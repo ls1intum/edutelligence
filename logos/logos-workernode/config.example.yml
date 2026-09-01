@@ -10,7 +10,6 @@
 # Model identifiers must be HuggingFace Hub IDs (org/name), e.g.
 #   Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
 #   meta-llama/Llama-3.1-8B-Instruct
-# Ollama tags (llama3.1:8b) are only valid in Ollama lanes (vllm: false).
 # =============================================================================
 
 
@@ -58,15 +57,28 @@ worker:
   # container at this path so a host-side watchdog can detect it.
   reboot_sentinel_path: /host/reboot-requested
 
+  # Persistent model store directory (the deployment's model volume). Holds
+  # the HuggingFace model store that vLLM lanes load from. Also the default
+  # root for the worker's caches when cache_path below is empty.
+  # Backward compatibility: an Ollama-era config left on the old container
+  # path (/usr/share/ollama/.ollama/models) is auto-translated to this path
+  # at load time (with a warning) — no manual edit required, but prefer
+  # updating the config file itself.
+  models_path: /usr/share/logos/models
+
+  # Worker-wide default GPU placement: "all" | "none" | "0,1" (comma-separated
+  # GPU indices). A lane's own gpu_devices overrides this when set.
+  gpu_devices: all
+
   # Persistent root directory for HF model weights and the worker's
   # compilation/JIT caches:
   #   <cache_path>/.hf_cache/             — HuggingFace model weights (HF_HOME)
   #   <cache_path>/.cache/vllm/           — vLLM compilation artifacts
   #   <cache_path>/.cache/torch_inductor/ — torch.compile / FX graph cache
   #   <cache_path>/.cache/flashinfer/…    — FlashInfer JIT kernels
-  # Empty (default) → fall back to engines.ollama.models_path so existing
-  # ollama-aware deployments keep working unchanged. Set this to any
-  # persistent path mounted as a Docker volume for non-ollama deployments.
+  # Empty (default) → fall back to worker.models_path, the persistent volume
+  # in the standard docker-compose. Set this to any other persistent path
+  # mounted as a Docker volume when your storage layout differs.
   # The env var LOGOS_WORKER_CACHE_ROOT, when set, overrides this field.
   cache_path: ""
 
@@ -156,47 +168,7 @@ logos:
 # ── Engine defaults ───────────────────────────────────────────────────────────
 engines:
 
-  # ── Ollama (CPU / non-vLLM lanes) ──────────────────────────────────────────
-  ollama:
-    # Path to the ollama binary inside the container. Rarely needs changing.
-    ollama_binary: /usr/local/bin/ollama
-
-    # Which GPUs Ollama may use. "all" | "none" | "0,1" comma-separated indices.
-    gpu_devices: all
-
-    # Maximum number of queued inference requests per lane.
-    max_queue: 512
-
-    # Spread load across multiple GPUs rather than filling one at a time.
-    sched_spread: false
-
-    # Enable Ollama's multi-user KV-cache sharing (experimental).
-    multiuser_cache: false
-
-    # Headroom (bytes) subtracted from GPU VRAM before Ollama's own allocation.
-    # Use this if Ollama under-counts VRAM used by other processes.
-    gpu_overhead_bytes: 0
-
-    # Timeout for loading a model into memory (e.g. "2m", "90s"). Empty = Ollama default.
-    load_timeout: ""
-
-    # Allowed CORS origins for Ollama's HTTP API. Usually not needed inside Docker.
-    origins: []
-
-    # Disable Ollama's automatic model pruning.
-    noprune: false
-
-    # Override Ollama's GGML backend library path. Empty = auto.
-    llm_library: ""
-
-    # Directory where Ollama model blobs are stored.
-    models_path: /usr/share/ollama/.ollama/models
-
-    # Arbitrary environment variable overrides passed to the Ollama process.
-    env_overrides: {}
-
-
-  # ── vLLM (GPU lanes) ───────────────────────────────────────────────────────
+  # ── vLLM (all lanes) ───────────────────────────────────────────────────────
   vllm:
     # Prometheus metrics endpoint exposed by each vLLM lane.
     metrics_path: /metrics
@@ -364,23 +336,17 @@ engines:
 #
 # Lane fields:
 #
-#   model: str (required)        — HuggingFace Hub ID for vLLM lanes;
-#                                  Ollama tag (name:tag) for Ollama lanes.
-#   vllm: bool                   — true = vLLM lane, false = Ollama lane.
+#   model: str (required)        — HuggingFace Hub ID.
+#   vllm: bool                   — always true; kept for compatibility with
+#                                  existing configs. Explicitly setting it to
+#                                  false is rejected (the Ollama engine was
+#                                  removed).
 #   lane_id: str                 — stable identifier for this lane. Defaults to
 #                                  the model name. Set explicitly when running
 #                                  multiple lanes of the same model.
 #   gpu_devices: "all"|"0,1"    — GPUs this lane may use. Default: all.
 #
-#   ── Ollama-lane fields (vllm: false) ────────────────────────────────────
-#   num_parallel: int            — concurrent requests Ollama handles per lane.
-#   context_length: int          — maximum context window in tokens.
-#   keep_alive: str              — how long Ollama keeps the model warm after
-#                                  the last request ("5m", "1h", "-1" = forever).
-#   kv_cache_type: str           — KV cache quantization: "f16" | "q8_0" | "q4_0".
-#   flash_attention: bool        — enable Flash Attention in Ollama.
-#
-#   ── vLLM-lane fields (vllm: true) ───────────────────────────────────────
+#   ── vLLM-lane fields ─────────────────────────────────────────────────────
 #   vllm_config:                 — vLLM-specific settings for this lane.
 #     tensor_parallel_size: int  — number of GPUs for tensor parallelism.
 #     max_model_len: int         — context length cap.
@@ -405,17 +371,10 @@ engines:
 lanes: []
 # lanes:
 #   - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
-#     vllm: true
 #     vllm_config:
 #       tensor_parallel_size: 1
 #       kv_cache_memory_bytes: 4G
 #       quantization: awq
-#
-#   - model: qwen2.5-coder:7b
-#     vllm: false
-#     num_parallel: 4
-#     context_length: 8192
-#     keep_alive: 10m
 
 
 # ── Static lanes (pinned, never removed by the capacity planner) ─────────────
@@ -431,7 +390,6 @@ lanes: []
 static_lanes: []
 # static_lanes:
 #   - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
-#     vllm: true
 #     gpu_devices: "0"
 #     vllm_config:
 #       tensor_parallel_size: 1
@@ -439,7 +397,6 @@ static_lanes: []
 #       quantization: awq
 #
 #   - model: meta-llama/Llama-3.1-8B-Instruct
-#     vllm: true
 #     gpu_devices: "1"
 #     vllm_config:
 #       tensor_parallel_size: 1
@@ -460,7 +417,7 @@ static_lanes: []
 #   sleeping_residual_mb: int  — VRAM retained while the model is asleep
 #                                (vLLM sleep mode, step 5/5 of calibration).
 #
-#   engine: str                — "vllm" or "ollama".
+#   engine: str                — "vllm".
 #   tensor_parallel_size: int  — TP degree this profile applies to.
 #
 #   kv_per_token_bytes: int    — bytes of KV cache per token per layer.

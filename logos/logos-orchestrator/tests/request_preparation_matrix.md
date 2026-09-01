@@ -33,7 +33,6 @@ This matrix tracks the request-path and capacity-planner scenarios covered by te
 | Least-active replica wins | Multiple running lanes for the same model | `tests/unit/main/test_node_controller_integration.py::test_registry_selects_least_active_lane` |
 | Lower backend queue wins | Same model, same active count, different `queue_waiting` / `requests_running` | `tests/unit/main/test_node_controller_integration.py::test_registry_prefers_lane_with_lower_vllm_queue_pressure` |
 | Request-ready selector rejects cold vLLM lane | vLLM lane exists but is not ready for request-time infer | `tests/unit/main/test_node_controller_integration.py::test_registry_request_ready_selection_excludes_cold_vllm_lane` |
-| Request-ready selector allows starting non-vLLM lane | Non-vLLM lane can lazy-load on first request | `tests/unit/main/test_node_controller_integration.py::test_registry_request_ready_selection_allows_starting_non_vllm_lane` |
 | Parallel command isolation | Multiple command RPCs complete out of order without crossing streams | `tests/unit/main/test_node_controller_integration.py::test_registry_parallel_command_roundtrip_out_of_order` |
 | Parallel stream isolation | Multiple stream RPCs stay isolated by command id | `tests/unit/main/test_node_controller_integration.py::test_registry_parallel_stream_roundtrip_is_isolated` |
 | Stale session rejection / worker conflict | Offline or conflicting worker sessions | `tests/unit/main/test_node_controller_integration.py::test_registry_stale_session_raises`, `tests/unit/main/test_node_controller_integration.py::test_registry_rejects_different_worker_for_active_provider` |
@@ -42,7 +41,7 @@ This matrix tracks the request-path and capacity-planner scenarios covered by te
 
 | Scenario | State / Setup | Coverage |
 | --- | --- | --- |
-| Loaded plus sleeping aggregation | One loaded vLLM lane plus one sleeping lane for same model | `tests/unit/sdi/test_scheduler_view.py::test_scheduler_view_loaded_vllm_and_sleeping_ollama` |
+| Loaded plus sleeping aggregation | One loaded lane plus one sleeping lane for same model | `tests/unit/sdi/test_scheduler_view.py::test_scheduler_view_loaded_and_sleeping_lanes` |
 | All lanes cold | No loaded lane exists for the model | `tests/unit/sdi/test_scheduler_view.py::test_scheduler_view_all_cold_lanes` |
 | Backend metrics flow through | Queue depth, running requests, TTFT histogram propagate into scheduler view | `tests/unit/sdi/test_scheduler_view.py::test_scheduler_view_vllm_with_backend_metrics` |
 | Stopped / error lanes retained in view | Lowest-rank states still appear in the model view | `tests/unit/sdi/test_scheduler_view.py::test_scheduler_view_includes_stopped_error_lanes` |
@@ -75,7 +74,6 @@ This matrix tracks the request-path and capacity-planner scenarios covered by te
 | Idle sleep thresholds | Loaded lane idles into L1 sleep, sleeping lane idles into L2 | `tests/unit/capacity/test_capacity_planner.py::test_idle_sleep_l1_after_threshold`, `tests/unit/capacity/test_capacity_planner.py::test_idle_sleep_l2_after_threshold` |
 | No background stop for sleeping lanes | Background planner deepens sleep instead of stopping | `tests/unit/capacity/test_capacity_planner.py::test_idle_lane_stays_sleeping_without_background_stop` |
 | Active-request guards | No idle sleep/deepen while requests are active | `tests/unit/capacity/test_capacity_planner.py::test_idle_sleep_skips_active_requests`, `tests/unit/capacity/test_capacity_planner.py::test_idle_sleep_l2_skips_active_requests` |
-| Ollama skip | Non-vLLM lanes do not get sleep actions | `tests/unit/capacity/test_capacity_planner.py::test_no_sleep_for_ollama_lanes` |
 | Demand wake / load / no-op | High demand wakes sleeping lane or loads missing model; low demand does nothing | `tests/unit/capacity/test_capacity_planner.py::test_demand_wake_sleeping_lane`, `tests/unit/capacity/test_capacity_planner.py::test_demand_load_new_model`, `tests/unit/capacity/test_capacity_planner.py::test_demand_below_threshold_no_action` |
 | Offline-provider and capability gating | Skip offline providers and models outside worker capabilities | `tests/unit/capacity/test_capacity_planner.py::test_demand_actions_skip_offline_provider`, `tests/unit/capacity/test_capacity_planner.py::test_demand_actions_respect_worker_capabilities` |
 | Capability seeding | Zero-lane worker can pre-load demanded capability models | `tests/unit/capacity/test_capacity_planner.py::test_capability_seeding_zero_lane_worker` |

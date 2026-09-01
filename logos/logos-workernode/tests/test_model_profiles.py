@@ -11,6 +11,12 @@ from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileReg
 # ---------------------------------------------------------------------------
 
 
+def _seed_disk_size(registry: ModelProfileRegistry, model_name: str, disk_size_bytes: int) -> None:
+    """Inject the legacy disk_size_bytes field the way _load_persisted does."""
+    registry._profiles[model_name] = ModelProfileRecord(disk_size_bytes=disk_size_bytes)
+    registry._persist()
+
+
 def test_record_loaded_vram_with_kv_derives_base_residency():
     """When kv_cache_sent_mb is known, base_residency = loaded - kv_cache."""
     registry = ModelProfileRegistry()
@@ -43,11 +49,11 @@ def test_record_loaded_vram_without_kv_leaves_base_residency_none():
 
 
 def test_record_loaded_vram_without_kv_updates_loaded_vram_only():
-    """For non-vllm engines or missing kv budget, only loaded_vram_mb is tracked."""
+    """Without a kv budget, only loaded_vram_mb is tracked."""
     registry = ModelProfileRegistry()
-    registry.record_loaded_vram("gemma:2b", 3000.0, engine="ollama")
+    registry.record_loaded_vram("gemma-2b", 3000.0, engine="vllm")
 
-    profile = registry.get_profile("gemma:2b")
+    profile = registry.get_profile("gemma-2b")
     assert profile.loaded_vram_mb == 3000.0
     assert profile.base_residency_mb is None
 
@@ -104,10 +110,10 @@ def test_record_sleeping_vram_ema():
     assert abs(profile.sleeping_residual_mb - 530.0) < 1.0
 
 
-def test_record_disk_size_stores_metadata_only():
-    """record_disk_size stores the value but does NOT derive base_residency from it."""
+def test_disk_size_bytes_does_not_derive_base_residency():
+    """The legacy disk_size_bytes field is informational — no base_residency from it."""
     registry = ModelProfileRegistry()
-    registry.record_disk_size("llama3:8b", 4_000_000_000)
+    _seed_disk_size(registry, "llama3:8b", 4_000_000_000)
 
     profile = registry.get_profile("llama3:8b")
     assert profile is not None
@@ -163,7 +169,7 @@ def test_estimate_base_residency_returns_none_when_unknown():
 def test_get_all_profiles():
     registry = ModelProfileRegistry()
     registry.record_loaded_vram("llama3:8b", 8000.0)
-    registry.record_disk_size("qwen3:8b", 5_000_000_000)
+    _seed_disk_size(registry, "qwen3:8b", 5_000_000_000)
 
     profiles = registry.get_all_profiles()
     assert len(profiles) == 2
@@ -193,7 +199,7 @@ def test_persist_and_reload(tmp_path):
     )
     registry1.record_successful_load_util("llama3:8b", 0.72)
     registry1.record_sleeping_vram("llama3:8b", 512.0)
-    registry1.record_disk_size("qwen3:8b", 5_000_000_000)
+    _seed_disk_size(registry1, "qwen3:8b", 5_000_000_000)
 
     registry2 = ModelProfileRegistry(state_dir=state_dir)
     profiles = registry2.get_all_profiles()

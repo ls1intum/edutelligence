@@ -22,9 +22,6 @@
               <span class="lane-id">{{ row.laneId }}</span>
               <span class="state-label" [style.color]="row.stateColor">{{ row.lane.runtime_state.toUpperCase() }}</span>
               <div class="lane-badges">
-                <span class="badge" [class.badge--vllm]="row.lane.vllm" [class.badge--ollama]="!row.lane.vllm">
-                  {{ row.lane.vllm ? 'vllm' : 'ollama' }}
-                </span>
                 @if (canUnload) {
                   <button
                     class="btn-unload"
@@ -84,46 +81,40 @@
               </div>
             }
 
-            @if (row.lane.vllm) {
-              <div class="lane-stats">
-                @if (row.lane.gpu_cache_usage_percent != null) {
-                  <div class="kv-section">
-                    <div class="kv-header">
-                      <span class="stat-label">KV cache</span>
-                      <span class="stat-value" [style.color]="row.kvColor">{{ row.lane.gpu_cache_usage_percent.toFixed(1) }}%</span>
-                    </div>
-                    <div class="bar-track">
-                      <div
-                        class="bar-fill"
-                        [style.width.%]="minKvPct(row.lane.gpu_cache_usage_percent)"
-                        [style.background]="row.kvColor"
-                      ></div>
-                    </div>
+            <div class="lane-stats">
+              @if (row.lane.gpu_cache_usage_percent != null) {
+                <div class="kv-section">
+                  <div class="kv-header">
+                    <span class="stat-label">KV cache</span>
+                    <span class="stat-value" [style.color]="row.kvColor">{{ row.lane.gpu_cache_usage_percent.toFixed(1) }}%</span>
                   </div>
-                }
-                <div class="metrics-row">
-                  @if (row.ttftLabel != null) {
-                    <span class="stat-label">TTFT p95 <span class="stat-value" [style.color]="row.ttftColor">{{ row.ttftLabel }}</span></span>
-                  }
-                  @if (row.lane.prefix_cache_hit_rate != null) {
-                    <span class="stat-label">Prefix hit <span class="stat-value neutral">{{ (row.lane.prefix_cache_hit_rate * 100).toFixed(1) }}%</span></span>
-                  }
-                  @if (row.lane.mtp_acceptance_rate != null) {
-                    <span class="stat-label">MTP accept <span class="stat-value neutral">{{ (row.lane.mtp_acceptance_rate * 100).toFixed(1) }}%</span></span>
-                  }
-                  @if (row.lane.queue_waiting != null) {
-                    <span class="stat-label">Queue <span class="stat-value neutral">{{ row.lane.queue_waiting }}</span></span>
-                  }
-                  @if (row.runningLabel != null) {
-                    <span class="stat-label" [attr.title]="row.runningTooltip">Running <span class="stat-value neutral">{{ row.runningLabel }}</span></span>
-                  }
+                  <div class="bar-track">
+                    <div
+                      class="bar-fill"
+                      [style.width.%]="minKvPct(row.lane.gpu_cache_usage_percent)"
+                      [style.background]="row.kvColor"
+                    ></div>
+                  </div>
                 </div>
+              }
+              <div class="metrics-row">
+                @if (row.ttftLabel != null) {
+                  <span class="stat-label">TTFT p95 <span class="stat-value" [style.color]="row.ttftColor">{{ row.ttftLabel }}</span></span>
+                }
+                @if (row.lane.prefix_cache_hit_rate != null) {
+                  <span class="stat-label">Prefix hit <span class="stat-value neutral">{{ (row.lane.prefix_cache_hit_rate * 100).toFixed(1) }}%</span></span>
+                }
+                @if (row.lane.mtp_acceptance_rate != null) {
+                  <span class="stat-label">MTP accept <span class="stat-value neutral">{{ (row.lane.mtp_acceptance_rate * 100).toFixed(1) }}%</span></span>
+                }
+                @if (row.lane.queue_waiting != null) {
+                  <span class="stat-label">Queue <span class="stat-value neutral">{{ row.lane.queue_waiting }}</span></span>
+                }
+                @if (row.runningLabel != null) {
+                  <span class="stat-label" [attr.title]="row.runningTooltip">Running <span class="stat-value neutral">{{ row.runningLabel }}</span></span>
+                }
               </div>
-            } @else {
-              <div class="lane-na">
-                Active <span class="neutral">{{ row.lane.active_requests }}</span> · KV/TTFT n/a
-              </div>
-            }
+            </div>
           </div>
         </div>
       </div>

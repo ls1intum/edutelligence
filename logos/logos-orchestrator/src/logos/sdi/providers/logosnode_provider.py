@@ -24,7 +24,7 @@ from ..models import (
     ModelProfile,
     ModelSchedulerView,
     ModelStatus,
-    OllamaCapacity,
+    WorkerCapacity,
 )
 
 try:
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 class LogosNodeDataProvider:
-    """Unified local-provider SDI source for direct Ollama and worker-backed lanes."""
+    """Unified local-provider SDI source for worker-backed lanes."""
 
     DEFAULT_PARALLEL_CAPACITY = 200
 
@@ -365,33 +365,19 @@ class LogosNodeDataProvider:
                 continue
 
             matched_lanes += 1
-            is_vllm = bool(lane.get("vllm"))
-            if is_vllm:
-                # vLLM's `num_parallel` is the concurrency the engine
-                # guarantees at *full context*, so it is a lower bound on
-                # capacity, not a ceiling — measured on dev, a lane
-                # reporting 4 served 23 concurrent requests at 47% KV, and a
-                # production lane reporting 1 served 8. Using it here would
-                # have the local ledger throttle by 5-8x exactly where the
-                # admission gate was changed to stop doing so.  What the
-                # engine can really hold is bounded by the KV cache, which
-                # `evaluate_admission` reads live; this ledger only needs a
-                # ceiling loose enough not to bind before that does.
-                capacity_hint = self.DEFAULT_PARALLEL_CAPACITY
-            else:
-                # Ollama's num_parallel is an explicit `--parallel` slot
-                # count — a real ceiling, and the only one available.
-                capacity_hint = lane.get("num_parallel")
+            # vLLM's `num_parallel` is the concurrency the engine
+            # guarantees at *full context*, so it is a lower bound on
+            # capacity, not a ceiling — measured on dev, a lane
+            # reporting 4 served 23 concurrent requests at 47% KV, and a
+            # production lane reporting 1 served 8. Using it here would
+            # have the local ledger throttle by 5-8x exactly where the
+            # admission gate was changed to stop doing so.  What the
+            # engine can really hold is bounded by the KV cache, which
+            # `evaluate_admission` reads live; this ledger only needs a
+            # ceiling loose enough not to bind before that does.
+            total_capacity += self.DEFAULT_PARALLEL_CAPACITY
 
-            try:
-                capacity = int(capacity_hint) if capacity_hint is not None else 0
-            except (TypeError, ValueError):
-                capacity = 0
-
-            if capacity > 0:
-                total_capacity += capacity
-
-        if matched_lanes == 0 or total_capacity <= 0:
+        if matched_lanes == 0:
             return None, "config"
         return max(1, total_capacity), "runtime"
 
@@ -433,7 +419,7 @@ class LogosNodeDataProvider:
                 provider_type="logosnode",
             )
 
-    def get_capacity_info(self) -> OllamaCapacity:
+    def get_capacity_info(self) -> WorkerCapacity:
         self.refresh_data()
         runtime_free_mb = None
         runtime_total_mb = None
@@ -451,7 +437,7 @@ class LogosNodeDataProvider:
                 runtime_total_mb if runtime_total_mb is not None and runtime_total_mb > 0 else self.total_vram_mb
             )
             available_vram_mb = runtime_free_mb if runtime_free_mb is not None else max(0, total_vram_mb - used_vram_mb)
-            return OllamaCapacity(
+            return WorkerCapacity(
                 available_vram_mb=available_vram_mb,
                 total_vram_mb=total_vram_mb,
                 loaded_models=list(self._loaded_models.keys()),
@@ -466,7 +452,6 @@ class LogosNodeDataProvider:
         backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
         lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
         vllm_config = lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
-        is_vllm = bool(lane.get("vllm"))
         gpu_cache_usage_percent = backend_metrics.get("gpu_cache_usage_percent")
         if gpu_cache_usage_percent is None:
             gpu_cache_usage_percent = backend_metrics.get("gpu_cache_usage_perc")
@@ -476,16 +461,11 @@ class LogosNodeDataProvider:
             model_name=str(lane.get("model", "")),
             runtime_state=str(lane.get("runtime_state", "error")),
             sleep_state=str(lane.get("sleep_state", "unsupported")),
-            is_vllm=is_vllm,
             active_requests=int(lane.get("active_requests", 0) or 0),
             queue_waiting=_lane_metric_float(backend_metrics.get("queue_waiting")),
-            requests_running=(
-                _lane_metric_float(backend_metrics.get("requests_running"))
-                if is_vllm
-                else float(int(lane.get("active_requests", 0) or 0))
-            ),
+            requests_running=_lane_metric_float(backend_metrics.get("requests_running")),
             gpu_cache_usage_percent=(
-                _lane_metric_float(gpu_cache_usage_percent) if is_vllm and gpu_cache_usage_percent is not None else None
+                _lane_metric_float(gpu_cache_usage_percent) if gpu_cache_usage_percent is not None else None
             ),
             ttft_p95_seconds=_lane_ttft_p95_seconds(backend_metrics),
             e2e_latency_p50_seconds=_lane_e2e_latency_p50_seconds(backend_metrics),
@@ -493,12 +473,12 @@ class LogosNodeDataProvider:
             num_parallel=int(lane.get("num_parallel", 0) or 0),
             gpu_memory_utilization=(
                 _lane_metric_float(vllm_config.get("gpu_memory_utilization"))
-                if is_vllm and vllm_config.get("gpu_memory_utilization") is not None
+                if vllm_config.get("gpu_memory_utilization") is not None
                 else None
             ),
             tensor_parallel_size=(
                 int(vllm_config.get("tensor_parallel_size", 0) or 0)
-                if is_vllm and vllm_config.get("tensor_parallel_size") is not None
+                if vllm_config.get("tensor_parallel_size") is not None
                 else None
             ),
             gpu_devices=str(
@@ -673,7 +653,7 @@ class LogosNodeDataProvider:
                 lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
                 vllm_config = lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
                 if profile.engine is None:
-                    profile.engine = "vllm" if bool(lane.get("vllm")) else "ollama"
+                    profile.engine = "vllm"
                 if (
                     profile.observed_gpu_memory_utilization is None
                     and vllm_config.get("gpu_memory_utilization") is not None
@@ -706,7 +686,7 @@ class LogosNodeDataProvider:
                         lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
                     )
                     if profile.engine is None:
-                        profile.engine = "vllm" if bool(lane.get("vllm")) else "ollama"
+                        profile.engine = "vllm"
                     if (
                         profile.observed_gpu_memory_utilization is None
                         and vllm_config.get("gpu_memory_utilization") is not None
@@ -942,13 +922,11 @@ class LogosNodeDataProvider:
         if _lane_metric_float(backend.get("queue_waiting")) > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
             return 0, "backend_queue"
 
-        cache_usage = None
-        if bool(lane.get("vllm")):
-            cache_usage = backend.get("gpu_cache_usage_percent")
-            if cache_usage is None:
-                cache_usage = backend.get("gpu_cache_usage_perc")
-            if cache_usage is not None and _lane_metric_float(cache_usage) >= self.KV_CACHE_PRESSURE_PERCENT:
-                return 0, "kv_cache_pressure"
+        cache_usage = backend.get("gpu_cache_usage_percent")
+        if cache_usage is None:
+            cache_usage = backend.get("gpu_cache_usage_perc")
+        if cache_usage is not None and _lane_metric_float(cache_usage) >= self.KV_CACHE_PRESSURE_PERCENT:
+            return 0, "kv_cache_pressure"
 
         try:
             guaranteed = int(lane.get("num_parallel") or 0)

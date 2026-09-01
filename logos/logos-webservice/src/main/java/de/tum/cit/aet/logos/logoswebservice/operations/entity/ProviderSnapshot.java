@@ -11,8 +11,8 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 @Entity
-@Table(name = "ollama_provider_snapshots")
-public class OllamaProviderSnapshot {
+@Table(name = "provider_snapshots")
+public class ProviderSnapshot {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

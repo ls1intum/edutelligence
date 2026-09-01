@@ -13,8 +13,8 @@ from .models import (
     ModelProfile,
     ModelSchedulerView,
     ModelStatus,
-    OllamaCapacity,
     RequestMetrics,
+    WorkerCapacity,
 )
 from .providers.logosnode_provider import LogosNodeDataProvider
 
@@ -150,7 +150,7 @@ class LogosNodeSchedulingDataFacade:
         provider = self._get_provider_for_model(model_id, provider_id)
         return provider.get_model_status(model_id)
 
-    def get_capacity_info(self, provider_id: int) -> OllamaCapacity:
+    def get_capacity_info(self, provider_id: int) -> WorkerCapacity:
         if int(provider_id) not in self._providers:
             raise KeyError(f"Provider '{provider_id}' not found")
         return self._providers[int(provider_id)].get_capacity_info()

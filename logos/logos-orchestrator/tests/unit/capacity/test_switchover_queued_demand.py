@@ -132,7 +132,6 @@ def _lane(
         model_name=model_name,
         runtime_state=runtime_state,
         sleep_state=sleep_state,
-        is_vllm=True,
         active_requests=active_requests,
         queue_waiting=queue_waiting,
         requests_running=0.0,

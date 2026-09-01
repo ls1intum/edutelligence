@@ -5,7 +5,7 @@
 SDI provides a **pure data interface** for accessing real-time scheduling information from heterogeneous providers. It does NOT implement scheduling algorithms - it provides data that schedulers use to make decisions.
 
 **Key Features:**
-- Queries Ollama `/api/ps` for VRAM usage, loaded models, expiration times
+- Reads LogosNode worker state (lanes, VRAM, KV cache, engine metrics) from live runtime snapshots
 - Tracks Azure rate limits from response headers (per-deployment)
 - Accurate cold-start prediction using real data
 - Multi-provider routing
@@ -22,67 +22,61 @@ SDI provides a **pure data interface** for accessing real-time scheduling inform
        ┌───────────┴────────────┐
        ▼                        ▼
 ┌──────────────┐          ┌─────────────┐
-│   Ollama     │          │   Azure     │
-│   Facade     │          │   Facade    │
+│  LogosNode   │          │   Azure     │
+│  Facade      │          │   Facade    │
 │              │          │             │
 └──────┬───────┘          └──────┬──────┘
        │                         │
        │ manages N providers     │ manages N providers
        ▼                         ▼
 ┌──────────────┐          ┌─────────────┐
-│   Ollama     │          │   Azure     │
-│   Provider   │          │   Provider  │
+│  LogosNode   │          │   Azure     │
+│  Provider    │          │   Provider  │
 └──────┬───────┘          └──────┬──────┘
        │                         │
        ▼                         ▼
-   /api/ps              rate limit headers
+  worker runtime        rate limit headers
+  snapshots (WS)
 ```
 
 **Components:**
 
 *Facades (Type-Safe APIs):*
-- **OllamaSchedulingDataFacade**: Manages multiple Ollama servers, returns dataclasses
+- **LogosNodeSchedulingDataFacade**: Manages multiple workers, returns dataclasses
 - **AzureSchedulingDataFacade**: Manages Azure deployments with per-deployment rate limits
 
 *Provider Implementations:*
-- **OllamaDataProvider**: Polls /api/ps for VRAM and model status
+- **LogosNodeDataProvider**: Reads lane/model state from the worker's runtime registry
 - **AzureDataProvider**: Tracks per-deployment rate limits from API headers
 
 *Data Models:*
 - **ModelStatus**: Common model status (used by both provider types)
-- **OllamaCapacity**: VRAM capacity info
+- **WorkerCapacity**: VRAM capacity info (legacy class name — holds worker capacity)
 - **AzureCapacity**: Per-deployment rate limit info
+- **LaneSchedulerSignals**: Per-lane engine signals (KV pressure, TTFT, concurrency)
+- **ModelSchedulerView**: Aggregated per-model view across a provider's lanes
 - **RequestMetrics**: Request lifecycle metrics
 
 ## Quick Start
 
-### Option 1: Ollama Facade (Multiple Servers)
+### Option 1: LogosNode Facade (Multiple Workers)
 
 ```python
 from logos.queue import PriorityQueueManager
-from logos import OllamaSchedulingDataFacade
+from logos import LogosNodeSchedulingDataFacade
 
 # Initialize queue manager and facade
 queue_mgr = PriorityQueueManager()
-facade = OllamaSchedulingDataFacade(queue_mgr, db_manager)
+facade = LogosNodeSchedulingDataFacade(queue_mgr, db_manager, runtime_registry=registry)
 
-# Register models from multiple Ollama servers
+# Register models served by a worker
 facade.register_model(
     model_id=1,
     provider_name='gpu-1',
-    ollama_admin_url='http://gpu-1.internal:11434',
-    model_name='llama3.3:latest',
+    logosnode_admin_url='http://gpu-1.internal:5000',
+    model_name='Qwen/Qwen3-8B',
     total_vram_mb=49152,  # 48GB
     provider_id=1
-)
-
-facade.register_model(
-    model_id=2,
-    provider_name='gpu-2',
-    ollama_admin_url='http://gpu-2.internal:11434',
-    model_name='llama3.1:8b',
-    total_vram_mb=49152,
-    provider_id=2
 )
 
 # Query model status (returns ModelStatus dataclass)
@@ -91,14 +85,14 @@ if status.is_loaded and status.queue_depth < 3:
     # Good candidate: warm and not overloaded
     schedule_to_model(1)
 
-# Get capacity info (returns OllamaCapacity dataclass)
+# Get capacity info (returns WorkerCapacity dataclass)
 capacity = facade.get_capacity_info(1)
 if capacity.available_vram_mb > 4096:
     # Enough VRAM to load new model
     load_model('new-model')
 
 # Track request lifecycle (3 stages)
-facade.on_request_start('req-123', model_id=1, priority='high')
+facade.on_request_start('req-123', model_id=1, provider_id=1, priority='high')
 # ... request queued ...
 facade.on_request_begin_processing('req-123')
 # ... request processing ...
@@ -144,13 +138,18 @@ facade.update_rate_limits(10, 'gpt-4o', response.headers)
 
 ## Key Methods
 
-**OllamaSchedulingDataFacade API:**
-- `register_model(model_id, provider_name, ollama_admin_url, model_name, total_vram_mb, provider_id)` - Register Ollama model
+**LogosNodeSchedulingDataFacade API:**
+- `register_model(model_id, provider_name, logosnode_admin_url, model_name, total_vram_mb, provider_id)` - Register worker model
 - `get_model_status(model_id, provider_id)` → `ModelStatus` - Get current status (returns dataclass)
-- `get_capacity_info(provider_id)` → `OllamaCapacity` - Get VRAM availability (returns dataclass)
-- `on_request_start(request_id: str, model_id: int, priority: str = 'normal')` - Track request arrival (→ queue)
-- `on_request_begin_processing(request_id: str)` - Track processing start (queue → active)
-- `on_request_complete(request_id: str, was_cold_start: bool, duration_ms: int)` → `RequestMetrics` - Track completion
+- `get_capacity_info(provider_id)` → `WorkerCapacity` - Get VRAM availability (returns dataclass)
+- `get_model_scheduler_view(model_id, provider_id)` → `ModelSchedulerView` - Aggregated lane view
+- `get_all_provider_lane_signals(provider_id)` → `list[LaneSchedulerSignals]` - All lanes on a worker
+- `get_model_profiles(provider_id)` → `dict[str, ModelProfile]` - Calibrated profiles
+- `evaluate_admission(model_id, provider_id)` → `AdmissionDecision` - Forwarding gate
+- `is_provider_online(provider_id)` → `bool` - Live, non-stale worker session
+- `on_request_start(request_id, model_id, provider_id, priority='normal')` - Track request arrival (→ queue)
+- `on_request_begin_processing(request_id)` - Track processing start (queue → active)
+- `on_request_complete(request_id, was_cold_start, duration_ms)` → `RequestMetrics` - Track completion
 
 **AzureSchedulingDataFacade API:**
 - `register_model(model_id, provider_name, model_name, model_endpoint, provider_id)` - Register Azure model
@@ -195,7 +194,7 @@ SDI tracks requests through three stages:
 **Example:**
 ```python
 # Request arrives
-facade.on_request_start('req-123', model_id=1, priority='high')
+facade.on_request_start('req-123', model_id=1, provider_id=1, priority='high')
 # status.queue_depth = 1, status.active_requests = 0
 
 # Processing starts
@@ -209,32 +208,23 @@ metrics = facade.on_request_complete('req-123', was_cold_start=False, duration_m
 
 ## Data Sources
 
-### Ollama: /api/ps Endpoint
+### LogosNode: Worker Runtime Snapshots
 
-Polls every 5 seconds to get ground truth:
+Workers report their lanes, device memory, and engine metrics over the
+persistent WebSocket session; the orchestrator keeps the latest snapshot per
+provider in the `LogosNodeRuntimeRegistry`, which `LogosNodeDataProvider`
+reads (no polling of an HTTP endpoint).
 
-```bash
-curl http://gpu-vm-1:11434/api/ps | jq
-```
+**Provided Data (per lane):**
+- `runtime_state` / `sleep_state`: lane lifecycle (loaded, running, sleeping, cold, …)
+- `active_requests`, `requests_running`, `queue_waiting`: live engine load
+- `gpu_cache_usage_percent`: KV cache pressure (preemption imminence)
+- `ttft_histogram`, `prefix_cache_hit_rate`, `mtp_acceptance_rate`: engine metrics
+- `effective_vram_mb`: VRAM held by the lane
 
-**Response:**
-```json
-{
-  "models": [
-    {
-      "name": "llama3.3:latest",
-      "size_vram": 8589934592,
-      "expires_at": "2025-01-11T15:35:00Z"
-    }
-  ]
-}
-```
-
-**Provided Data:**
-- `is_loaded`: Model in response and not expired
-- `expires_at`: When model will be unloaded from VRAM
-- `available_vram_mb`: `total_vram_mb - sum(size_vram) / 1024²`
-
+**Provided Data (per provider):**
+- `is_loaded`: model has at least one loaded/running lane
+- `available_vram_mb`: free device memory from the latest snapshot
 
 ### Azure: Rate Limit Headers
 
@@ -261,8 +251,8 @@ CREATE TABLE providers (
     base_url TEXT NOT NULL,
     provider_type VARCHAR(20) NOT NULL,
 
-    -- SDI: Ollama monitoring
-    ollama_admin_url TEXT DEFAULT '', -- used for /api/ps calls
+    -- SDI: worker monitoring (legacy column name — holds the worker's base URL)
+    ollama_admin_url TEXT DEFAULT '',
     total_vram_mb INTEGER DEFAULT NULL,
 
     -- SDI: Configuration
@@ -276,18 +266,17 @@ CREATE TABLE providers (
 
 **Configuration Hierarchy:**
 1. `providers` table (provider defaults)
-2. Hardcoded defaults in `OllamaDataProvider`
+2. Hardcoded defaults in `LogosNodeDataProvider`
 
 ## Two-URL Architecture
 
-**Important distinction for Ollama:**
-
 1. **base_url** (execution): Where to send user requests
-   - Example: `https://gpu.aet.cit.tum.de/` (OpenWebUI proxy)
+   - Example: `https://gpu.aet.cit.tum.de/` (proxy)
    - Used by main application for forwarding
 
-2. **ollama_admin_url** (monitoring): Where to query /api/ps
-   - Example: `http://gpu-vm-1.internal:11434` (direct Ollama)
+2. **ollama_admin_url** (monitoring): The worker's own base URL (legacy
+   column name — historically the direct Ollama /api/ps URL)
+   - Example: `http://gpu-vm-1.internal:5000`
    - Used by SDI for monitoring only
 
 Cloud providers only need `base_url` (no monitoring URL).
@@ -303,10 +292,10 @@ SDI provides priority-aware queue state tracking. The `ModelStatus` dataclass in
 The `queue_state` field provides detailed queue information:
 
 ```python
-from logos import OllamaSchedulingDataFacade
+from logos import LogosNodeSchedulingDataFacade
 
-facade = OllamaSchedulingDataFacade(...)
-status = facade.get_model_status(1)
+facade = LogosNodeSchedulingDataFacade(...)
+status = facade.get_model_status(1, provider_id=1)
 
 # Access queue state
 print(f"LOW priority:    {status.queue_state.low}")
@@ -332,7 +321,7 @@ class ModelStatus:
     provider_type: str
 
     @property
-    def queue_depth(self) -> int:
+    def queue_depth(self):
         """Convenience property: returns sum of all priority levels"""
         return self.queue_state.total
 ```
@@ -347,23 +336,23 @@ class QueueStatePerPriority:
     high: int = 0
 
     @property
-    def total(self) -> int:
+    def total(self):
         return self.low + self.normal + self.high
 ```
 
 ### Integration with Priority Queue Manager
 
-OllamaSchedulingDataFacade requires a PriorityQueueManager for accurate queue state tracking:
+LogosNodeSchedulingDataFacade requires a PriorityQueueManager for accurate queue state tracking:
 
 ```python
 from logos.queue import PriorityQueueManager
-from logos import OllamaSchedulingDataFacade
+from logos import LogosNodeSchedulingDataFacade
 
 # Create queue manager
 queue_mgr = PriorityQueueManager()
 
-# Initialize facade with queue manager (REQUIRED for Ollama)
-facade = OllamaSchedulingDataFacade(queue_mgr, db_manager)
+# Initialize facade with queue manager (REQUIRED for worker-backed providers)
+facade = LogosNodeSchedulingDataFacade(queue_mgr, db_manager, runtime_registry=registry)
 
 # Queue state accurately reflects 3 priority levels (LOW/NORMAL/HIGH)
 # from the queue manager
@@ -376,7 +365,7 @@ Schedulers can use detailed queue state for better decisions:
 ```python
 # Query multiple models
 models = [1, 2, 3]
-statuses = [facade.get_model_status(mid) for mid in models]
+statuses = [facade.get_model_status(mid, provider_id=1) for mid in models]
 
 # Score based on priority queue state
 def score_model(status):
@@ -409,4 +398,4 @@ print(f"Selected model {best_model.model_id}")
 
 - Priority Queue Subsystem: `src/logos/queue/README.md`
 - [Pipeline schedulers](../pipeline/README.md)
-- Integration Tests: `tests/scheduling_data/` (comprehensive Queue + SDI + Scheduler tests)
+- Integration Tests: `tests/integration/` (end-to-end SDI + scheduling tests)

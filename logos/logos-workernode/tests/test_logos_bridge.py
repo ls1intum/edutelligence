@@ -23,18 +23,15 @@ class _DummyApp:
 def _make_lane_status() -> LaneStatus:
     return LaneStatus(
         lane_id="lane-a",
-        lane_uid="ollama:lane-a",
+        lane_uid="vllm:lane-a",
         model="qwen2.5-coder:32b",
         port=19001,
-        vllm=False,
         process=ProcessStatus(state=ProcessState.RUNNING, pid=1001),
         runtime_state="running",
         routing_url="http://127.0.0.1:19001",
         inference_endpoint="/v1/chat/completions",
         num_parallel=4,
         context_length=4096,
-        keep_alive="5m",
-        kv_cache_type="q8_0",
         flash_attention=True,
     )
 

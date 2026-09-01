@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Benchmark: qwen3:30b-a3b — Ollama vs vLLM (GGUF)
+Benchmark: qwen3:30b-a3b on vLLM (GGUF)
 High-throughput scenario simulating concurrent student requests.
 
 Tests: N=1, 4, 8, 16, 32 concurrent requests
@@ -10,7 +10,6 @@ import asyncio
 import json
 import os
 import statistics
-import sys
 import time
 
 import httpx
@@ -89,7 +88,6 @@ async def run_batch(
     url: str,
     model: str,
     concurrency: int,
-    is_ollama: bool,
 ) -> dict:
     """Run a batch of concurrent requests."""
     payload = {
@@ -99,10 +97,6 @@ async def run_batch(
         "temperature": 0.1,
         "stream": True,
     }
-    # qwen3 thinking mode off for fair comparison
-    if not is_ollama:
-        # vLLM: use extra_body or just rely on temperature
-        pass
 
     async with httpx.AsyncClient() as client:
         tasks = [single_request(client, url, payload, i) for i in range(concurrency)]
@@ -161,26 +155,12 @@ async def warmup(url: str, model: str):
 
 
 async def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("ollama", "vllm"):
-        print("Usage: python bench_qwen3.py [ollama|vllm]")
-        print("Env overrides: OLLAMA_URL, VLLM_URL")
-        sys.exit(1)
-
-    backend = sys.argv[1]
+    url = os.environ.get("VLLM_URL", "http://localhost:8000/v1/chat/completions")
+    model = "/tmp/qwen3-30b-a3b.gguf"
+    print(f"\n{'='*60}")
+    print(f"BENCHMARK: qwen3:30b-a3b on vLLM (GGUF)")
+    print(f"{'='*60}")
     concurrency_levels = [1, 4, 8, 16, 32]
-
-    if backend == "ollama":
-        url = os.environ.get("OLLAMA_URL", "http://localhost:11435/v1/chat/completions")
-        model = "qwen3:30b-a3b"
-        print(f"\n{'='*60}")
-        print(f"BENCHMARK: qwen3:30b-a3b on OLLAMA")
-        print(f"{'='*60}")
-    else:
-        url = os.environ.get("VLLM_URL", "http://localhost:8000/v1/chat/completions")
-        model = "/tmp/qwen3-30b-a3b.gguf"
-        print(f"\n{'='*60}")
-        print(f"BENCHMARK: qwen3:30b-a3b on vLLM (GGUF)")
-        print(f"{'='*60}")
 
     print(f"URL: {url}")
     print(f"Model: {model}")
@@ -192,7 +172,7 @@ async def main():
     all_results = []
     for n in concurrency_levels:
         print(f"\n--- N={n} concurrent requests ---")
-        result = await run_batch(url, model, n, is_ollama=(backend == "ollama"))
+        result = await run_batch(url, model, n)
         all_results.append(result)
 
         if "error_msgs" in result:
@@ -206,7 +186,7 @@ async def main():
             print(f"  Errors:         {result['errors']}")
 
     print(f"\n{'='*60}")
-    print(f"SUMMARY: {backend.upper()}")
+    print(f"SUMMARY: vLLM")
     print(f"{'='*60}")
     print(
         f"{'N':>4s} {'Agg tok/s':>10s} {'Avg lat':>8s} {'P50 lat':>8s} {'P95 lat':>8s} {'TTFT ms':>8s} {'Errors':>6s}"

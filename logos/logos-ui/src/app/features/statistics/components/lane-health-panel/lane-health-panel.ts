@@ -50,8 +50,7 @@ function ttftColor(secs: number): string {
  *
  * Returns null when the lane reports no running count (the line stays
  * hidden) and plain "a" while c is unknown (lane still starting up, or the
- * startup log not parsed yet). Ollama lanes keep their "Active" line and
- * never reach here.
+ * startup log not parsed yet).
  */
 function runningLabel(
   lane: Pick<LaneSignalData, 'requests_running' | 'num_parallel'>,
@@ -110,8 +109,8 @@ export type LaneSleepAction = 'sleep' | 'wake' | null;
  * drains in-flight requests (mode="wait"), so on a busy lane the click would
  * block for as long as the drain takes — the panel offers the action only
  * where it takes effect immediately. Lanes whose backend has no sleep mode
- * (Ollama reports sleep_state "unsupported", a vLLM lane that never slept
- * reports "unknown") offer neither.
+ * (sleep mode disabled reports sleep_state "unsupported", a lane that never
+ * slept reports "unknown") offer neither.
  */
 export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   if (lane.sleep_state === 'sleeping') return 'wake';

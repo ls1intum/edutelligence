@@ -43,7 +43,7 @@ services:
       # Stuck-detection dwell (seconds) before a no-progress lane may be killed
       # (empty = code default 180s). Raise to reduce false positives on slow lanes.
       LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
-      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      HF_HOME: /usr/share/logos/models/.hf_cache
       # ── GPU / CUDA ────────────────────────────────────────────────────
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
@@ -77,7 +77,12 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ./data:/app/data
-      - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
+      # Model volume — backward-compatible source resolution (kept for one
+      # release): LOGOS_MODELS_MOUNT → legacy OLLAMA_MODELS_MOUNT → the
+      # pre-existing `ollama-models` named volume. In-place upgrades keep
+      # their cached model weights (the legacy env var / volume still
+      # resolves); fresh deployments set LOGOS_MODELS_MOUNT (.env.example).
+      - ${LOGOS_MODELS_MOUNT:-${OLLAMA_MODELS_MOUNT:-ollama-models}}:/usr/share/logos/models
       - ./certs:/app/certs:ro
       # Custom Jinja chat templates, referenced per model via
       # engines.vllm.model_overrides.<model>.chat_template in config.yml.
@@ -135,7 +140,7 @@ services:
       # (empty = code default 180s). Raise to reduce false positives on slow lanes.
       LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
       HF_TOKEN: ${HF_TOKEN:-}
-      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      HF_HOME: /usr/share/logos/models/.hf_cache
       LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
@@ -150,7 +155,12 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ./data:/app/data
-      - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
+      # Model volume — backward-compatible source resolution (kept for one
+      # release): LOGOS_MODELS_MOUNT → legacy OLLAMA_MODELS_MOUNT → the
+      # pre-existing `ollama-models` named volume. In-place upgrades keep
+      # their cached model weights (the legacy env var / volume still
+      # resolves); fresh deployments set LOGOS_MODELS_MOUNT (.env.example).
+      - ${LOGOS_MODELS_MOUNT:-${OLLAMA_MODELS_MOUNT:-ollama-models}}:/usr/share/logos/models
       - ./tools:/app/tools:ro
       - ./calibration_logs:/app/calibration_logs
       # tmpfs RAM cache for calibration — models load faster from RAM
@@ -159,5 +169,9 @@ services:
         tmpfs:
           size: ${TMPFS_SIZE:-0}
 
+# `ollama-models` is the pre-upgrade volume name — kept for one release so
+# in-place upgrades resolve to the volume that already holds the cached
+# weights (see the mount comment above).
 volumes:
+  logos-models:
   ollama-models:

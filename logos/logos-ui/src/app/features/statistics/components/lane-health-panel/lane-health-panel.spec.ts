@@ -105,7 +105,6 @@ describe('formatContextWindow', () => {
 function lane(overrides: Partial<LaneSignalData> = {}): LaneSignalData {
   return {
     model: 'org/model-a',
-    vllm: true,
     runtime_state: 'loaded',
     sleep_state: 'awake',
     gpu_devices: null,
@@ -153,8 +152,8 @@ describe('laneSleepAction', () => {
   });
 
   it('withholds both actions from a lane the backend cannot sleep', () => {
-    // Ollama lanes report "unsupported"; a vLLM lane that never slept reports
-    // "unknown" until its first transition.
+    // A lane with sleep mode disabled reports "unsupported"; a lane that
+    // never slept reports "unknown" until its first transition.
     expect(laneSleepAction(lane({ sleep_state: 'unsupported' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: 'unknown' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: null }))).toBeNull();

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- The table was named after the Ollama /api/ps endpoint it originally
+         polled, but it now stores the live runtime snapshots (VRAM, loaded
+         models, scheduler signals) that LogosNode workers report over the
+         persistent WebSocket session. Rename it to the engine-neutral name;
+         the data and all indexes are untouched. -->
+    <changeSet id="018-rename-provider-snapshots" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="ollama_provider_snapshots"/>
+        </preConditions>
+        <sql>ALTER TABLE ollama_provider_snapshots RENAME TO provider_snapshots;</sql>
+        <rollback>
+            <sql>ALTER TABLE provider_snapshots RENAME TO ollama_provider_snapshots;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

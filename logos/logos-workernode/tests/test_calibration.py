@@ -1834,7 +1834,7 @@ def test_node_transient_classifier_matches_eio():
     tail = (
         "(APIServer pid=611559) FileNotFoundError: [Errno 2] No such file ...\n"
         "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
-        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--zai-org--GLM-Image'"
+        "'/usr/share/logos/models/.hf_cache/hub/models--zai-org--GLM-Image'"
     )
     pat = _classify_node_transient_error(tail)
     assert pat is not None
@@ -1902,7 +1902,7 @@ def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     patches["spawn"] = _spawn_writing_log(
         log_path,
         "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
-        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
+        "'/usr/share/logos/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
     )
     # Make sure _record_failed_command and _record_unsupported_model are real
     # (not pre-patched out) so we can detect any accidental writes.

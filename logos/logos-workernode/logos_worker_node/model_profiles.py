@@ -95,7 +95,7 @@ def _ema(previous: float | None, current: float) -> float:
 class ModelProfileRecord:
     loaded_vram_mb: float | None = None
     sleeping_residual_mb: float | None = None
-    disk_size_bytes: int | None = None  # informational; from Ollama /api/tags
+    disk_size_bytes: int | None = None  # informational; legacy field — still read from persisted profiles
     base_residency_mb: float | None = None  # full awake footprint; semantics depend on residency_source (see below)
     kv_budget_mb: float | None = None  # last observed kv_cache_sent (informational)
     # KV cache envelope discovered by calibration on this hardware. The planner
@@ -743,16 +743,6 @@ class ModelProfileRegistry:
                     host_ram_mb if profile.host_ram_mb is None else _ema(profile.host_ram_mb, host_ram_mb)
                 )
             profile.last_measured_epoch = time.time()
-        self._persist()
-
-    def record_disk_size(self, model_name: str, disk_size_bytes: int) -> None:
-        """Store disk size reported by Ollama /api/tags. Informational only."""
-        if disk_size_bytes <= 0:
-            return
-
-        with self._lock:
-            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
-            profile.disk_size_bytes = disk_size_bytes
         self._persist()
 
     def mark_sleep_mode_disabled(self, model_name: str, disabled: bool) -> bool:

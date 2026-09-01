@@ -259,21 +259,7 @@ _du = _make_module("dateutil")
 _make_submodule(_du, "parser", {"isoparse": _noop, "parse": _noop})
 
 # ---------------------------------------------------------------------------
-# 10. aiohttp  (async HTTP for Ollama monitoring)
-# ---------------------------------------------------------------------------
-
-_aiohttp = _make_module(
-    "aiohttp",
-    {
-        "ClientSession": _noop,
-        "ClientTimeout": _noop,
-        "TCPConnector": _noop,
-        "ClientError": type("ClientError", (Exception,), {}),
-    },
-)
-
-# ---------------------------------------------------------------------------
-# 11. matplotlib  (plotting — only used in test_model_data.py)
+# 10. matplotlib  (plotting — only used in test_model_data.py)
 # ---------------------------------------------------------------------------
 
 _mpl = _make_module("matplotlib")

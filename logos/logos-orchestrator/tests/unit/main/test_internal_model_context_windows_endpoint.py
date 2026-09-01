@@ -61,7 +61,7 @@ async def test_returns_served_windows_per_model(monkeypatch):
                     "context_length": 4096,
                     "backend_metrics": {"max_model_len": 40960},
                 },
-                {"model": "mistral-7b", "vllm": False, "context_length": 32768, "backend_metrics": {}},
+                {"model": "mistral-7b", "vllm": True, "context_length": 32768, "backend_metrics": {}},
             ],
             "model_profiles": {},
         }
