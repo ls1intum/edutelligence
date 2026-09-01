@@ -566,8 +566,32 @@ def test_build_resume_payload_appends_partial_answer_as_assistant_message():
     ]
     assert out["temperature"] == 0.2
     assert out["max_tokens"] == 50
+    # The vLLM continuation contract keeps the trailing assistant message
+    # open so the engine continues the prefix instead of opening a fresh
+    # turn to answer it.
+    assert out["continue_final_message"] is True
+    assert out["add_generation_prompt"] is False
     # The original payload is not mutated.
     assert len(base["messages"]) == 1
+
+
+@pytest.mark.parametrize(
+    "limit_key",
+    ["max_tokens", "max_completion_tokens", "max_output_tokens"],
+)
+def test_build_resume_payload_shrinks_the_completion_budget_by_the_streamed_prefix(limit_key):
+    base = {"messages": [{"role": "user", "content": "hi"}], limit_key: 100}
+    out = main._build_resume_payload(base, "partial answer", streamed_completion_tokens=40)
+
+    assert out is not None
+    assert out[limit_key] == 60
+
+
+def test_build_resume_payload_refuses_when_the_prefix_filled_the_budget():
+    base = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+    # 100 requested, 100 already streamed: there is nothing left to generate.
+    assert main._build_resume_payload(base, "partial answer", streamed_completion_tokens=100) is None
+    assert main._build_resume_payload(base, "partial answer", streamed_completion_tokens=140) is None
 
 
 @pytest.mark.parametrize(
@@ -616,7 +640,7 @@ def _result_with_context(ctx):
 
 
 async def test_schedule_stream_resume_returns_logosnode_context(retry_env):
-    ctx = SimpleNamespace(model_id=27, provider_id=2, provider_type="logosnode", lane_id="lane-2")
+    ctx = SimpleNamespace(model_id=27, provider_id=2, provider_type="logosnode", lane_id="lane-2", engine="vllm")
     pipeline = _resume_pipeline(_result_with_context(ctx))
     retry_env.setattr(main, "_pipeline", pipeline, raising=False)
 
@@ -697,7 +721,7 @@ async def test_schedule_stream_resume_rejects_non_logosnode_takeover(retry_env):
     """A cloud deployment would restart the answer from scratch — only a local
     lane can continue after the partial prefix, so the slot is released and
     None comes back."""
-    ctx = SimpleNamespace(model_id=27, provider_id=9, provider_type="cloud", lane_id=None)
+    ctx = SimpleNamespace(model_id=27, provider_id=9, provider_type="cloud", lane_id=None, engine=None)
     pipeline = _resume_pipeline(_result_with_context(ctx))
     retry_env.setattr(main, "_pipeline", pipeline, raising=False)
 
@@ -718,6 +742,33 @@ async def test_schedule_stream_resume_rejects_non_logosnode_takeover(retry_env):
 
     assert out is None
     pipeline.scheduler.release.assert_called_once_with(27, 9, "cloud", "req-1")
+
+
+async def test_schedule_stream_resume_rejects_non_vllm_lane_takeover(retry_env):
+    """An Ollama lane cannot keep the partial assistant message open — the
+    takeover would start a second, full answer — so it is refused the same
+    way a cloud placement is: slot released, None back."""
+    ctx = SimpleNamespace(model_id=27, provider_id=9, provider_type="logosnode", lane_id="lane-9", engine="ollama")
+    pipeline = _resume_pipeline(_result_with_context(ctx))
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    budget = main.RetryBudget(max_attempts=3, deadline_s=100.0, now=lambda: 1000.0)
+
+    out = await main._schedule_stream_resume(
+        request_id="req-1",
+        model_id=27,
+        failed_provider_id=1,
+        deployments=DEPLOYMENTS,
+        resume_payload={"messages": []},
+        request_path=None,
+        policy=None,
+        default_priority=0,
+        api_key_id=None,
+        budget=budget,
+    )
+
+    assert out is None
+    pipeline.scheduler.release.assert_called_once_with(27, 9, "logosnode", "req-1")
 
 
 # ---------------------------------------------------------------------------

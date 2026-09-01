@@ -1503,11 +1503,16 @@ class _StreamingLogAccumulator:
             delta = choices[0].get("delta", {})
             if isinstance(delta, dict):
                 content = delta.get("content", "")
+                # Structured output can ride in the same delta as a content
+                # piece, so the flag is checked independently — an `elif`
+                # would miss it whenever both are present, and a mid-flight
+                # resume must not continue a stream that is emitting tool
+                # calls.
+                if any(key in delta for key in _STRUCTURED_DELTA_KEYS):
+                    self.saw_structured_delta = True
                 if content:
                     self.full_text += content
                     self.delta_count += 1
-                elif any(key in delta for key in _STRUCTURED_DELTA_KEYS):
-                    self.saw_structured_delta = True
 
     def _consume_responses_event(self, event_type: str, blob: Dict[str, Any]) -> None:
         """Consume one Responses-API SSE event (``{"type": "response.*", ...}``)."""
@@ -3535,18 +3540,32 @@ async def _close_quietly(chunk_iter) -> None:
         await aclose()
 
 
-def _build_resume_payload(base_payload: Dict[str, Any], prefix_text: str) -> Optional[Dict[str, Any]]:
+def _build_resume_payload(
+    base_payload: Dict[str, Any],
+    prefix_text: str,
+    streamed_completion_tokens: int = 0,
+) -> Optional[Dict[str, Any]]:
     """Build the payload that continues a chat completion after ``prefix_text``.
 
     A plain-text chat-completions request can be expressed as a continuation:
     the partial answer is appended as a trailing assistant message, and the
     engine keeps generating after it — to the caller the stream looks like it
-    paused. Parallel candidates and JSON-structured output cannot be
-    continued that way (the shape of the partial answer is not guaranteed to
-    extend), and non-chat payloads have no ``messages`` to append to — return
-    None so the caller falls back to the error frame. Streams that were
-    emitting tool calls are already excluded by the ``saw_structured_delta``
-    guard at the call site.
+    paused. That "keeps generating after it" is what the two continuation
+    fields buy: vLLM closes a trailing assistant message and opens a fresh
+    turn by default (``add_generation_prompt=true``,
+    ``continue_final_message=false``), which would answer the prefix with a
+    second, complete answer. With ``continue_final_message=true`` the last
+    message stays open — and the two fields are mutually exclusive, so
+    ``add_generation_prompt`` must be false alongside it. Only vLLM lanes
+    accept the contract (Ollama lanes are refused at scheduling time), so
+    every payload that reaches a lane is a vLLM continuation.
+
+    Parallel candidates and JSON-structured output cannot be continued that
+    way (the shape of the partial answer is not guaranteed to extend), and
+    non-chat payloads have no ``messages`` to append to — return None so the
+    caller falls back to the error frame. Streams that were emitting tool
+    calls are already excluded by the ``saw_structured_delta`` guard at the
+    call site.
     """
     messages = base_payload.get("messages")
     if not isinstance(messages, list) or not messages:
@@ -3557,7 +3576,26 @@ def _build_resume_payload(base_payload: Dict[str, Any], prefix_text: str) -> Opt
         return None
     if base_payload.get("response_format"):
         return None
-    return {**base_payload, "messages": [*messages, {"role": "assistant", "content": prefix_text}]}
+
+    # The prefix already consumed part of the requested completion budget:
+    # hand the takeover only the remainder, or it may overshoot the answer
+    # the caller asked for. A request whose budget the prefix already filled
+    # has nothing left to generate — no continuation to build.
+    payload = {
+        **base_payload,
+        "messages": [*messages, {"role": "assistant", "content": prefix_text}],
+        "continue_final_message": True,
+        "add_generation_prompt": False,
+    }
+    if streamed_completion_tokens > 0:
+        for key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+            limit = payload.get(key)
+            if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+                remaining = limit - int(streamed_completion_tokens)
+                if remaining <= 0:
+                    return None
+                payload[key] = remaining
+    return payload
 
 
 async def _schedule_stream_resume(
@@ -3580,8 +3618,9 @@ async def _schedule_stream_resume(
     already failed it excluded so a peer can take over immediately. Returns
     the new execution context, or None when the resume cannot be honoured:
     retry budget exhausted, no placement left, or the scheduler picked a
-    non-logosnode deployment, which would restart the answer rather than
-    continue it.
+    placement that cannot continue an open assistant message — a cloud
+    deployment, which would restart the answer, or a non-vLLM lane, which
+    has no continuation contract.
     """
     if not budget.can_retry():
         return None
@@ -3618,9 +3657,13 @@ async def _schedule_stream_resume(
         logger.info("Stream resume not scheduled for request %s: %s", request_id, result.error)
         return None
     context = result.execution_context
-    if context.provider_type != "logosnode" or not context.lane_id:
-        # A cloud deployment would restart the answer from scratch; only a
-        # local lane can continue generation after the partial prefix.
+    if context.provider_type != "logosnode" or not context.lane_id or context.engine != "vllm":
+        # A cloud deployment would restart the answer from scratch, and an
+        # Ollama lane has no continuation contract at all: without
+        # ``continue_final_message`` the appended prefix is treated as a
+        # completed turn and the takeover starts a second, full answer.
+        # Only a vLLM lane can continue the generation in place, so anything
+        # else is refused and the caller ends in the error frame.
         try:
             _pipeline.scheduler.release(
                 context.model_id,
@@ -3933,7 +3976,15 @@ async def _streaming_response(
                         if not resumed and _RESUME_ENABLED and retry_budget is not None and deployments:
                             prefix = stream_log.full_text
                             if prefix and not stream_log.saw_structured_delta:
-                                resume_payload = _build_resume_payload(prepared_payload, prefix)
+                                # Delta count stands in for the streamed
+                                # completion figure: the exact count only
+                                # settles with the terminal usage event, which
+                                # never arrives on a failed stream.
+                                resume_payload = _build_resume_payload(
+                                    prepared_payload,
+                                    prefix,
+                                    streamed_completion_tokens=stream_log.streamed_tokens().get("completion_tokens", 0),
+                                )
                                 if resume_payload is not None:
                                     if not is_audio_upload_path(request_path or ""):
                                         resume_payload = {
