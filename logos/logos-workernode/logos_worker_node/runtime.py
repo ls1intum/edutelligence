@@ -184,7 +184,12 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
 
     lanes = await lane_manager.get_all_statuses()
     devices = await gpu_collector.get_snapshot()
-    if not devices.nvidia_smi_available:
+    # Either flag means "measured device telemetry": nvidia_smi_available for
+    # the CUDA collector, telemetry_available for the Metal collector, which
+    # leaves the NVIDIA-specific flag false by design (its snapshot is the
+    # measured Metal working set, not nvidia-smi data). Only the derived
+    # summary sets neither, so that — and only that — is replaced below.
+    if not (devices.nvidia_smi_available or devices.telemetry_available):
         devices = _build_derived_device_summary(lanes)
 
     capacity = CapacitySummary(

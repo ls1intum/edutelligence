@@ -65,6 +65,28 @@ def handle():
         yield make_handle()
 
 
+def _effective_bind(cmd: list[str]) -> tuple[str | None, str | None]:
+    """Resolve --host/--port the way argparse does: plain store actions, so
+    the LAST occurrence wins, in either separated ("--host X") or equals
+    ("--host=X") form."""
+    host: str | None = None
+    port: str | None = None
+    i = 0
+    while i < len(cmd):
+        token = cmd[i]
+        if token == "--host":
+            host, i = cmd[i + 1], i + 2
+        elif token.startswith("--host="):
+            host, i = token.split("=", 1)[1], i + 1
+        elif token == "--port":
+            port, i = cmd[i + 1], i + 2
+        elif token.startswith("--port="):
+            port, i = token.split("=", 1)[1], i + 1
+        else:
+            i += 1
+    return host, port
+
+
 class TestBuildCmd:
     def test_emits_no_cuda_only_flags(self, handle) -> None:
         cmd = handle._build_cmd(make_lane())
@@ -137,9 +159,47 @@ class TestBuildCmd:
     def test_enforce_eager_is_passed_through(self, handle) -> None:
         assert "--enforce-eager" in handle._build_cmd(make_lane(enforce_eager=True))
 
-    def test_extra_args_are_appended_last(self, handle) -> None:
+    def test_extra_args_are_appended_before_the_enforced_bind(self, handle) -> None:
+        """The enforced bind is repeated AFTER all extras: argparse keeps
+        the last occurrence, so operator-supplied extras cannot shadow it."""
         cmd = handle._build_cmd(make_lane(extra_args=["--seed", "42"]))
-        assert cmd[-2:] == ["--seed", "42"]
+        last_host = max(i for i, tok in enumerate(cmd) if tok == "--host")
+        assert cmd.index("--seed") < last_host
+        assert cmd[-4:] == ["--host", "127.0.0.1", "--port", "11436"]
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            ["--host", "0.0.0.0", "--port", "9999"],
+            ["--host=0.0.0.0", "--port=9999"],
+            ["--host=192.168.1.50", "--port", "9999"],
+        ],
+    )
+    def test_per_model_extra_args_cannot_override_the_bind(self, handle, extra) -> None:
+        """The lane API is unauthenticated; a --host/--port smuggled in
+        through the operator-editable extra_args (either separated or equals
+        form) must not override the loopback bind."""
+        cmd = handle._build_cmd(make_lane(extra_args=list(extra)))
+        assert _effective_bind(cmd) == ("127.0.0.1", "11436")
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            ["--host", "0.0.0.0", "--port", "9999"],
+            ["--host=0.0.0.0", "--port=9999"],
+        ],
+    )
+    def test_global_extra_args_cannot_override_the_bind(self, extra) -> None:
+        with patch.object(MetalVllmProcessHandle, "_resolve_vllm_binary", return_value=["/fake/vllm"]):
+            h = MetalVllmProcessHandle(
+                "lane-metal-0",
+                11436,
+                OllamaConfig(),
+                VllmEngineConfig(global_extra_args=list(extra)),
+                metal_config=MetalConfig(),
+            )
+            cmd = h._build_cmd(make_lane())
+        assert _effective_bind(cmd) == ("127.0.0.1", "11436")
 
     def test_quantization_is_omitted_unless_set(self, handle) -> None:
         """MLX checkpoints declare quantization in config.json; vLLM infers it."""
@@ -227,7 +287,13 @@ class TestDisabledCudaMachinery:
         assert handle._detect_cuda_arch() is None
 
     def test_no_stuck_vram_or_fatal_cuda_state(self, handle) -> None:
-        assert handle.has_stuck_vram() is False
+        # Read as an attribute, deliberately NOT called: the base class
+        # declares has_stuck_vram as a property and
+        # LaneManager._recover_dead_lanes reads it as an attribute. A plain
+        # method override would hand that reader a bound method, which is
+        # always truthy — every stopped Metal lane would be misread as stuck
+        # VRAM and automatic crash recovery silently skipped.
+        assert handle.has_stuck_vram is False
         assert handle.has_fatal_cuda_errors is False
 
     def test_compile_cache_purge_is_a_noop(self, handle) -> None:

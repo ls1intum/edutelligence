@@ -126,6 +126,7 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         )
         return any(p in blob for p in patterns)
 
+    @property
     def has_stuck_vram(self) -> bool:
         """Always False: no driver-resident contexts survive a killed process.
 
@@ -133,6 +134,11 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         what the stuck-VRAM path and the auto-reboot watchdog exist for. Metal
         memory is plain unified memory owned by the process and reclaimed by the
         kernel on exit, so that failure mode does not exist here.
+
+        Must stay a property: the base class declares it as one and
+        LaneManager._recover_dead_lanes reads it as an attribute — a plain
+        method would hand the reader a bound method, which is truthy, and
+        every stopped Metal lane would be misread as stuck VRAM.
         """
         return False
 
@@ -301,6 +307,13 @@ class MetalVllmProcessHandle(VllmProcessHandle):
 
         cmd.extend(self._vllm_engine_config.global_extra_args)
         cmd.extend(vc.extra_args)
+
+        # Repeat the bind settings AFTER the extras: argparse keeps the last
+        # occurrence, so a --host/--port smuggled in through global_extra_args
+        # or per-model extra_args (either "--host 0.0.0.0" or
+        # "--host=0.0.0.0" form) would otherwise override the loopback bind
+        # and expose the unauthenticated API to the local network.
+        cmd.extend(["--host", "127.0.0.1", "--port", str(self.port)])
         return cmd
 
     # ------------------------------------------------------------------

@@ -53,7 +53,7 @@ CI (GitHub Actions)                    Mac (native)
 | CPU | Apple Silicon (arm64) — Rosetta Python cannot load MLX |
 | Python | 3.12+, native arm64 |
 | Docker | only to fetch and unpack the artifact |
-| vllm-metal | ≥ 0.3.0.dev20260826 for Qwen3.8 (0.2.0 cannot load it) |
+| vllm-metal | ≥ 0.28.0 for Qwen3.8 (0.2.0 cannot load it) |
 | RAM | see the sizing table below |
 
 ---
@@ -112,7 +112,7 @@ The reference model for this document is
 `mlx-community/Qwen3.8-27B-4bit` (15.1 GB) and
 `mlx-community/Qwen3.8-27B-8bit` (27.5 GB). It is the model the *Sizing*
 table measures, and the reason the *Requirements* table pins
-vllm-metal ≥ 0.3.0.dev20260826.
+vllm-metal ≥ 0.28.0.
 
 The seeded `config.yml` advertises the **4bit** build by default — the only
 one that fits the 36 GB reference machine. On a 64 GB+ Mac, point
@@ -365,24 +365,36 @@ public once (Package settings → Change visibility). Until then:
 
 ## Version pinning
 
-The installer is pinned to a release tag **plus a SHA256 checksum** in
-`install-macos.sh` (`VLLM_METAL_REF` / `VLLM_METAL_INSTALLER_SHA256`) — not
-to `main`. This is an ordinary supply-chain concern for a CI image, but a
-sharper one here: the installer executes on a contributor's personal Mac,
-which is also the machine that will hold other people's prompts in memory. A
-moving `main` can change the venv layout, the CLI flags the worker builds
-against, or the wheel set it resolves — and the worker would only notice
-when lanes stop starting. What runs must be exactly the bytes the checksum
-describes.
+The installer and everything it executes or installs are pinned to a
+release tag **plus SHA256 checksums** in `install-macos.sh`
+(`VLLM_METAL_REF` and the four `*_SHA256` constants) — not to `main` or
+`/releases/latest`. This is an ordinary supply-chain concern for a CI
+image, but a sharper one here: the installer executes on a contributor's
+personal Mac, which is also the machine that will hold other people's
+prompts in memory. A moving `main` can change the venv layout, the CLI
+flags the worker builds against, or the wheel set it resolves — and the
+worker would only notice when lanes stop starting. What runs must be
+exactly the bytes the checksums describe.
 
-vLLM itself is still **not** pinned directly: vllm-metal's `install.sh` pins
-it by full wheel URL (PyPI carries no macOS vLLM wheel) together with a
-matched mlx and torch; pulling that set apart is how you get an unbootable
-lane. The pinned installer from the requirements table installs vLLM 0.28.0 —
-the same release the CUDA image pins — and the installer's version floor
-(`VLLM_METAL_MIN_VERSION`, asserted against the installed distribution on
-every run) makes the documented requirement enforceable instead of
-aspirational.
+At the pinned release, upstream's `install.sh` only checksums itself and
+then performs three further fetches: it sources `scripts/lib.sh` from the
+mutable `main` branch (executed code), selects the vllm-metal wheel from
+`/releases/latest`, and derives the vLLM core wheel URL from a release
+lookup. `install-macos.sh` therefore fetches all four artifacts —
+installer, `lib.sh`, vLLM core wheel, vllm-metal wheel — from the pinned
+tag, verifies each SHA256 *before* the installer runs, stages them, and
+rewrites exactly those statements in the installer to point at the staged
+copies (exact-string patch, fail-loud: if upstream changed a line, the
+install aborts instead of running a half-patched installer). The staged
+installer is kept as a plain file in its own directory: a `scripts/lib.sh`
+sibling would switch upstream into its source-checkout branch. The venv is
+still created by the upstream installer, which installs a matched
+(vllm, mlx, torch) set — the pinned release gives vLLM 0.28.0, the same
+release the CUDA image pins. PyPI carries no macOS vLLM wheel, and pulling
+that set apart in our own requirements file is how you get an unbootable
+lane. And the installer's version floor (`VLLM_METAL_MIN_VERSION`, asserted
+against the installed distribution on every run) makes the documented
+requirement enforceable instead of aspirational.
 
 That is why `MetalVllmProcessHandle` builds its own command line instead of
 filtering the CUDA one, and why `tests/test_metal_process.py` cross-checks the
@@ -390,12 +402,18 @@ generated flags against the *installed* vllm-metal whenever the suite runs on a
 Mac. `logos_update-vllm.yml` only touches `Dockerfile`, not `Dockerfile.mlx`,
 so automated vLLM bumps do not reach this path.
 
-Keep vllm-metal current. It moves fast and dev builds are published daily;
-Qwen3.8 support landed in 08/2026, and 0.2.0 could not serve it at all. To
-upgrade, pick the release to move to, download its `install.sh`, then update
-`VLLM_METAL_REF` **and** `VLLM_METAL_INSTALLER_SHA256` together in
-`install-macos.sh` (bump `VLLM_METAL_MIN_VERSION` if the new floor applies)
-and re-run it — it is idempotent. Do not pipe a fetched installer into bash:
+Keep vllm-metal current. It moves fast and dev builds are published daily —
+but upstream prunes old dev releases, so the pin is the **stable** cut:
+v0.28.0 is the stable release that contains the build the *Sizing*
+measurements were taken with, plus 14 follow-up bugfix commits. Qwen3.8
+support landed in 08/2026, and 0.2.0 could not serve it at all. To upgrade,
+pick the stable release to move to, download its `install.sh`, its
+`scripts/lib.sh`, its release wheel, and the vLLM core wheel it names (the
+tag in `.github/vllm-release-tag.commit` at that release), compute the four
+SHA256s, and update `VLLM_METAL_REF` **and all four checksums** together in
+`install-macos.sh` (bump `VLLM_METAL_MIN_VERSION` if the new floor applies),
+re-check the four patch patterns against the new installer, and re-run the
+script — it is idempotent. Do not pipe a fetched installer into bash:
 verify the checksum first, as the installer now does for itself.
 
 Two things to re-check after an upgrade, both of which changed between 0.2.0

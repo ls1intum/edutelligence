@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from logos_worker_node.models import (
+    DeviceInfo,
     DeviceSummary,
     LaneConfig,
     LaneStatus,
@@ -38,6 +39,51 @@ class _GpuCollector:
         )
 
 
+class _MetalCollector:
+    """A healthy Metal snapshot: measured working set, no nvidia-smi.
+
+    nvidia_smi_available stays False by design (this is not nvidia-smi
+    data); telemetry_available is what marks it as measured.
+    """
+
+    async def get_snapshot(self):
+        return DeviceSummary(
+            timestamp=datetime(2026, 9, 1, 10, 0, 0, tzinfo=timezone.utc),
+            mode="metal",
+            nvidia_smi_available=False,
+            telemetry_available=True,
+            degraded_reason="",
+            devices=[
+                DeviceInfo(
+                    device_id="apple-gpu",
+                    kind="metal",
+                    name="Apple M3 Pro",
+                    memory_used_mb=12000.0,
+                    memory_total_mb=24000.0,
+                    memory_free_mb=12000.0,
+                )
+            ],
+            total_memory_mb=24000.0,
+            used_memory_mb=12000.0,
+            free_memory_mb=12000.0,
+        )
+
+
+class _NvidiaCollector:
+    async def get_snapshot(self):
+        return DeviceSummary(
+            timestamp=datetime(2026, 9, 1, 10, 0, 0, tzinfo=timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            telemetry_available=True,
+            degraded_reason="",
+            devices=[],
+            total_memory_mb=8192.0,
+            used_memory_mb=1024.0,
+            free_memory_mb=7168.0,
+        )
+
+
 class _Bridge:
     worker_id = "worker-1"
 
@@ -48,7 +94,7 @@ class _Bridge:
         )
 
 
-def _make_app(lanes):
+def _make_app(lanes, collector=None):
     worker_cfg = SimpleNamespace(
         name="logos-workernode",
         max_lanes=0,
@@ -60,7 +106,7 @@ def _make_app(lanes):
     state = SimpleNamespace(
         config=SimpleNamespace(worker=worker_cfg, engines=engines_cfg),
         lane_manager=_LaneManager(lanes),
-        gpu_collector=_GpuCollector(),
+        gpu_collector=collector or _GpuCollector(),
         logos_bridge=_Bridge(),
     )
     return SimpleNamespace(state=state)
@@ -103,3 +149,43 @@ async def test_build_runtime_status_uses_proc_meminfo_for_degraded_ollama(monkey
     assert runtime.devices.free_memory_mb == 5120.0
     assert runtime.capacity.free_memory_mb == 5120.0
     assert runtime.devices.devices[0].name == "system-memory"
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_preserves_measured_metal_telemetry(monkeypatch):
+    """A healthy Metal snapshot leaves nvidia_smi_available False by design
+    (its measured working set is not nvidia-smi data) but sets
+    telemetry_available. It must not be discarded for the derived summary —
+    that would replace the measured working-set budget with host memory and
+    gate lane loads on the wrong numbers."""
+    monkeypatch.setattr(
+        "logos_worker_node.runtime._read_proc_meminfo_mb",
+        lambda: (36864.0, 8192.0, 28672.0),
+    )
+
+    runtime = await build_runtime_status(_make_app([], _MetalCollector()))
+
+    assert runtime.devices.mode == "metal"
+    assert runtime.devices.nvidia_smi_available is False
+    assert runtime.devices.telemetry_available is True
+    assert runtime.devices.total_memory_mb == 24000.0
+    assert runtime.devices.used_memory_mb == 12000.0
+    assert runtime.devices.free_memory_mb == 12000.0
+    assert runtime.capacity.free_memory_mb == 12000.0
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_preserves_measured_nvidia_telemetry(monkeypatch):
+    """The measured/derived decision is the OR of both availability flags:
+    an nvidia-smi snapshot must keep passing through unchanged."""
+    monkeypatch.setattr(
+        "logos_worker_node.runtime._read_proc_meminfo_mb",
+        lambda: (16384.0, 4096.0, 12288.0),
+    )
+
+    runtime = await build_runtime_status(_make_app([], _NvidiaCollector()))
+
+    assert runtime.devices.mode == "nvidia"
+    assert runtime.devices.nvidia_smi_available is True
+    assert runtime.devices.total_memory_mb == 8192.0
+    assert runtime.capacity.free_memory_mb == 7168.0
