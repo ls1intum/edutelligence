@@ -1159,7 +1159,9 @@ class LogosNodeRuntimeRegistry:
         # the caller before any body bytes are committed, or FastAPI commits a
         # 200 StreamingResponse for the error body and the transient status is
         # never retried. So a non-2xx start is buffered and surfaced as an
-        # UpstreamStreamError at stream_end, never yielded.
+        # UpstreamStreamError at stream_end, never yielded. Every status
+        # outside the 2xx range counts — a 3xx the worker did not follow is a
+        # redirect page, not a token stream.
         error_status = None
         error_body: list[bytes] = []
         try:
@@ -1171,7 +1173,7 @@ class LogosNodeRuntimeRegistry:
                 event_type = event.get("type")
                 if event_type == "stream_start":
                     status_code = event.get("status_code")
-                    if isinstance(status_code, int) and status_code >= 400:
+                    if isinstance(status_code, int) and not 200 <= status_code < 300:
                         error_status = status_code
                     continue
                 if event_type == "stream_chunk":

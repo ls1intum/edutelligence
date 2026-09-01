@@ -3676,7 +3676,11 @@ async def _schedule_stream_resume(
         pinned_model_id=model_id,
         priority_override=Priority.RESUME.value,
         exclude_provider_ids=budget.excluded_providers() or None,
+        # The absolute deadline is authoritative: the resume's queue wait
+        # consumes from the same budget, so the resolver recomputes what is
+        # left after scheduling instead of re-anchoring this relative bound.
         context_resolve_timeout_s=budget.remaining_s(),
+        context_resolve_deadline=budget.deadline_at,
     )
     try:
         result = await _pipeline.process(resume_request)
@@ -4918,7 +4922,14 @@ def _next_retry_request(base: PipelineRequest, result, budget: RetryBudget) -> P
         api_key_id=base.api_key_id,
         pinned_model_id=result.model_id,
         exclude_provider_ids=budget.excluded_providers() or None,
-        context_resolve_timeout_s=budget.remaining_s() or None,
+        # The relative bound is captured here, before scheduling — but the
+        # absolute deadline is authoritative: the queue wait consumes from
+        # the same budget, so the resolver recomputes what is left after
+        # scheduling instead of re-anchoring this value. A zero bound stays
+        # zero (exhausted budget), never None (which would restore the
+        # default lane-readiness window).
+        context_resolve_timeout_s=budget.remaining_s(),
+        context_resolve_deadline=budget.deadline_at,
     )
 
 

@@ -902,6 +902,10 @@ async def test_retry_request_bounds_clamp_to_the_post_backoff_deadline(retry_env
     retry_req = pipeline.requests[1]
     assert retry_req.payload["timeout_s"] == 6.0
     assert retry_req.context_resolve_timeout_s == 6.0
+    # The retry also carries the budget's ABSOLUTE deadline (10s on the fake
+    # clock) so the resolver recomputes the bound after the queue wait
+    # instead of re-anchoring 6.0 fresh.
+    assert retry_req.context_resolve_deadline == 10.0
 
 
 @pytest.mark.asyncio
@@ -934,3 +938,4 @@ async def test_terminal_status_retry_bounds_clamp_to_the_post_backoff_deadline(r
     retry_req = pipeline.requests[1]
     assert retry_req.payload["timeout_s"] == 6.0
     assert retry_req.context_resolve_timeout_s == 6.0
+    assert retry_req.context_resolve_deadline == 10.0

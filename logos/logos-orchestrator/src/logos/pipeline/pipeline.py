@@ -105,6 +105,12 @@ class PipelineRequest:
     # request, tighter than the pipeline default when the retry deadline is
     # running out.
     context_resolve_timeout_s: Optional[float] = None
+    # The retry budget's ABSOLUTE (monotonic) deadline, when this request
+    # belongs to an internal retry or a stream resume. It propagates through
+    # scheduling: the queue wait consumes from the same budget, so the
+    # resolution bound is recomputed as the time left after scheduling —
+    # never re-anchored as a fresh relative timeout.
+    context_resolve_deadline: Optional[float] = None
 
 
 @dataclass
@@ -377,6 +383,9 @@ class RequestPipeline:
             request_path=request.request_path,
             request_id=request_id,
             context_resolve_timeout_s=request.context_resolve_timeout_s,
+            # The budget's absolute deadline, so the scheduling wait above
+            # consumes from it instead of the resolver starting a fresh one.
+            context_resolve_deadline=request.context_resolve_deadline,
         )
         if not ctx_result.success:
             return ctx_result
@@ -421,21 +430,39 @@ class RequestPipeline:
         request_id: str,
         request_path: Optional[str] = None,
         context_resolve_timeout_s: Optional[float] = None,
+        context_resolve_deadline: Optional[float] = None,
     ) -> "PipelineResult":
         """Resolve execution context, retrying for logosnode providers whose lane may still be starting.
 
+        ``context_resolve_deadline`` is the retry budget's absolute deadline:
+        the scheduling wait above already consumed part of it, so the bound
+        is the time left NOW, not a fresh relative timeout — otherwise a
+        retry that spent N seconds queueing would get N more seconds to
+        resolve on top. An exhausted budget is a hard stop (the pre-check
+        below) and never falls back to the default lane-readiness window.
         ``context_resolve_timeout_s`` tightens the default bound for requests
-        whose overall retry deadline is running out: a retry must not spend
-        the whole lane-readiness window when the budget is nearly gone. The
-        bound covers each individual ``resolve_context`` call as well as the
-        wait loop around it — the call itself can sleep through many
+        that carry no such deadline: they must not spend the whole
+        lane-readiness window when the budget is nearly gone. The bound
+        covers each individual ``resolve_context`` call as well as the wait
+        loop around it — the call itself can sleep through many
         lane-selection rounds before returning — and an expired bound fails
         through the same context-failure path (reservation release included).
         """
-        timeout_s = self._CONTEXT_RESOLVE_TIMEOUT_S
-        if context_resolve_timeout_s is not None and context_resolve_timeout_s > 0:
-            timeout_s = min(timeout_s, context_resolve_timeout_s)
-        deadline = time.monotonic() + timeout_s
+        if context_resolve_deadline is not None:
+            deadline = context_resolve_deadline
+            timeout_s = max(0.0, deadline - time.monotonic())
+        else:
+            default_s = self._CONTEXT_RESOLVE_TIMEOUT_S
+            if context_resolve_timeout_s is None:
+                timeout_s = default_s
+            elif context_resolve_timeout_s > 0:
+                timeout_s = min(default_s, context_resolve_timeout_s)
+            else:
+                # Zero (or negative) bound = no resolution budget left: the
+                # pre-check below fails immediately instead of restoring the
+                # default window.
+                timeout_s = 0.0
+            deadline = time.monotonic() + timeout_s
         first_attempt = True
 
         while True:

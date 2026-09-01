@@ -265,3 +265,80 @@ async def test_context_resolve_call_is_cut_off_at_the_remaining_retry_budget():
     # The context-failure path released the scheduler reservation.
     assert len(releases) == 1
     assert releases[0][0] == (27, 1, "logosnode", "req-pinned")
+
+
+@pytest.mark.asyncio
+async def test_context_resolve_deadline_survives_the_scheduling_wait():
+    """The budget's absolute deadline must survive scheduling: a retry that
+    spends most of its remaining time queueing must still be cut off at the
+    ORIGINAL deadline, not re-anchored to a fresh full window after the
+    wait (queue wait + full resolution timeout)."""
+    releases = []
+    pipeline, _classifier, _scheduler = _build_pipeline()
+
+    class _QueueingScheduler(_RecordingScheduler):
+        async def schedule(self, request):
+            await asyncio.sleep(0.8)  # stands in for the queue wait
+            return await super().schedule(request)
+
+    class _SlowContextResolver:
+        def __init__(self):
+            self.entered = 0
+
+        async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+            self.entered += 1
+            await asyncio.sleep(60)
+            return _StubExecutionContext(model_id, provider_id)
+
+    queueing = _QueueingScheduler()
+    queueing.release = lambda *args, **kwargs: releases.append((args, kwargs))  # noqa: ARG005
+    pipeline._scheduler = queueing
+    resolver = _SlowContextResolver()
+    pipeline._context_resolver = resolver
+
+    started = time.monotonic()
+    result = await pipeline.process(_pinned_request(context_resolve_deadline=time.monotonic() + 1.0))
+    elapsed = time.monotonic() - started
+
+    assert result.success is False
+    assert result.error.startswith("Failed to resolve execution context")
+    # The resolver did run (the budget was not yet exhausted after the 0.8 s
+    # wait), but was cut off at the original 1.0 s deadline — it did not get
+    # a fresh window on top of the queue wait.
+    assert resolver.entered == 1
+    assert elapsed < 5
+    assert len(releases) == 1
+    assert releases[0][0] == (27, 1, "logosnode", "req-pinned")
+
+
+@pytest.mark.asyncio
+async def test_exhausted_resolve_budget_never_restores_the_default_window():
+    """A retry whose budget ran out before or during scheduling must fail
+    through the context-failure path immediately — an exhausted bound must
+    not fall back to the 600 s default lane-readiness window."""
+    releases = []
+    pipeline, _classifier, scheduler = _build_pipeline()
+    scheduler.release = lambda *args, **kwargs: releases.append((args, kwargs))  # noqa: ARG005
+
+    class _SlowContextResolver:
+        def __init__(self):
+            self.entered = 0
+
+        async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+            self.entered += 1
+            await asyncio.sleep(60)
+            return _StubExecutionContext(model_id, provider_id)
+
+    resolver = _SlowContextResolver()
+    pipeline._context_resolver = resolver
+
+    started = time.monotonic()
+    result = await pipeline.process(_pinned_request(context_resolve_deadline=time.monotonic() - 5.0))
+    elapsed = time.monotonic() - started
+
+    assert result.success is False
+    assert result.error.startswith("Failed to resolve execution context")
+    # The pre-check fired before entering the resolver: no 600 s window.
+    assert resolver.entered == 0
+    assert elapsed < 5
+    assert len(releases) == 1

@@ -264,6 +264,27 @@ async def test_a_5xx_stream_start_surfaces_as_upstream_error_not_a_200():
 
 
 @pytest.mark.asyncio
+async def test_a_3xx_stream_start_surfaces_as_upstream_error_not_a_200():
+    """A redirect the worker did not follow is not a token stream: the 3xx
+    answer must surface as an error before any body bytes are committed, not
+    be yielded as a successful 200 stream."""
+    registry, websocket = _registry_with_session()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 302})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"Found. Move to http://other-host"})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "HTTP 302"})
+    with pytest.raises(UpstreamStreamError) as excinfo:
+        await consumer
+    assert excinfo.value.status_code == 302
+    assert excinfo.value.body == b"Found. Move to http://other-host"
+    await _drain_pending_tasks()
+
+
+@pytest.mark.asyncio
 async def test_a_429_lane_answer_is_a_pre_stream_error_not_a_committed_200(monkeypatch):
     """End to end: a lane that answers 429 before any token must come back as
     a 429 JSON error — not a committed 200 StreamingResponse — so the internal
