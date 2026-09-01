@@ -1,4 +1,5 @@
 import {
+  acceptedModelIsResolved,
   countLiveLanesByModel,
   filterLoadableModels,
   formatContextWindow,
@@ -231,5 +232,68 @@ describe('lane picker loadability', () => {
       { model_id: 2, model_name: 'qux' },
     ];
     expect(filterLoadableModels(models, ' foo/baz ').map((m) => m.model_name)).toEqual(['qux']);
+  });
+});
+
+/**
+ * When the "load accepted" note goes away.
+ *
+ * The note is keyed to the lane ids the provider reported when the load was
+ * accepted. The regression it guards: an accepted *additional* replica was
+ * released the moment the picker re-read the stream, because a *sibling*
+ * lane of the model satisfied "the lane has arrived" — re-offering the model
+ * while the accepted copy was still minutes from showing up.
+ */
+describe('acceptedModelIsResolved', () => {
+  const sibling = lane({ model: 'foo', runtime_state: 'running' });
+
+  it('stays up while only sibling lanes of the model are in the stream', () => {
+    // The accepted additional replica has not shown up; the pre-existing
+    // lane reporting the same model does not end the note.
+    const lanes = { 'planner-foo': sibling };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(false);
+  });
+
+  it('is resolved when the accepted replica shows up under a fresh id', () => {
+    const lanes = {
+      'planner-foo': sibling,
+      'planner-foo-2': lane({ model: 'foo', runtime_state: 'starting' }),
+    };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(true);
+  });
+
+  it('is resolved when the accepted replica failed into an error row', () => {
+    // The replica arrived in the stream but is not serving: the note is done,
+    // the row shows why, and the model may be offered for a retry.
+    const lanes = {
+      'planner-foo': sibling,
+      'planner-foo-2': lane({ model: 'foo', runtime_state: 'error' }),
+    };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(true);
+  });
+
+  it('is resolved for a first lane on an empty provider', () => {
+    const lanes = { 'planner-foo': lane({ model: 'foo', runtime_state: 'starting' }) };
+    expect(acceptedModelIsResolved('foo', [], lanes)).toBe(true);
+  });
+
+  it('ignores a new lane of another model', () => {
+    const lanes = {
+      'planner-foo': sibling,
+      'planner-bar': lane({ model: 'bar', runtime_state: 'loaded' }),
+    };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(false);
+  });
+
+  it('ignores a state change of a pre-existing lane', () => {
+    // Same id the baseline knew, new state: the sibling woke up or dropped,
+    // the accepted replica still has not shown up.
+    const lanes = { 'planner-foo': lane({ model: 'foo', runtime_state: 'loaded' }) };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(false);
+  });
+
+  it('matches model names case-insensitively', () => {
+    const lanes = { 'planner-foo-2': lane({ model: 'Foo', runtime_state: 'loaded' }) };
+    expect(acceptedModelIsResolved(' foo ', ['planner-foo'], lanes)).toBe(true);
   });
 });

@@ -627,7 +627,7 @@ class TestErroredLaneBackoff:
         )
         planner = _planner(provider, score=2.5, replicate=True)
 
-        planner._mark_errored_lanes(1, provider.lanes)
+        planner._reconcile_load_failures(1, provider.lanes)
         assert planner._lane_is_in_load_failure_cooldown(1, "planner-X-2") is True
         assert planner._lane_is_in_load_failure_cooldown(1, "planner-X") is False
 
@@ -635,7 +635,7 @@ class TestErroredLaneBackoff:
         # down — one log line per cooldown window, not one per cycle.
         key = planner._lane_key(1, "planner-X-2")
         until_before = planner._lane_load_failure_until[key]
-        planner._mark_errored_lanes(1, provider.lanes)
+        planner._reconcile_load_failures(1, provider.lanes)
         assert planner._lane_load_failure_until[key] == until_before
 
     def test_replication_skips_a_worker_whose_copy_errored(self):
@@ -668,3 +668,367 @@ class TestErroredLaneBackoff:
         broken.lanes = []
         actions = planner._compute_replication_actions([1, 2], [("X", 2.5)], {"X": 1}, set())
         assert [(a.provider_id, a.lane_id) for a in actions] == [(2, "planner-X")]
+
+
+# ---------------------------------------------------------------------------
+# A load that timed out in starting: the marker outlives the cooldown
+# ---------------------------------------------------------------------------
+
+
+class TestStuckStartingBackoff:
+    """A load the worker accepted can time out in confirmation and leave its
+    lane in ``starting`` indefinitely. The per-lane cooldown expires after
+    120s on a timer — but the lane is still stuck and still holding its id.
+    The persistent load-failure marker therefore blocks allocation until the
+    lane serves again or leaves the worker, not until the clock runs out."""
+
+    @staticmethod
+    def _expire(planner: CapacityPlanner, provider_id: int, lane_id: str) -> None:
+        planner._mark_load_failure(provider_id, lane_id, details="load confirmation timed out")
+        planner._lane_load_failure_until[planner._lane_key(provider_id, lane_id)] = time.time() - 1
+
+    def test_stuck_replica_still_blocks_after_cooldown_expiry(self):
+        """Replica 1 runs, replica 2 timed out in starting, and its cooldown
+        has run out: the cycle must NOT allocate a fresh suffix on top —
+        before the marker it saw the lane as active and cooled down."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running"), _lane("planner-X-2", "X", "starting")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        self._expire(planner, 1, "planner-X-2")
+
+        assert planner._compute_demand_actions(1, provider.lanes) == []
+
+    def test_gate_names_the_stuck_lane_not_the_expired_cooldown(self):
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running"), _lane("planner-X-2", "X", "starting")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        self._expire(planner, 1, "planner-X-2")
+
+        reason = planner._model_cold_load_blocked_reason(1, "X", provider.lanes)
+        assert reason is not None
+        assert "planner-X-2" in reason
+        assert "not serving" in reason
+
+    def test_stuck_first_lane_blocks_a_reload_on_a_fresh_id(self):
+        """The model's only lane timed out in starting and its cooldown is
+        gone: without the marker the planner treats the stuck lane as active
+        and plans an *additional* lane under a fresh suffix instead of
+        backing off the whole model."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "starting")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        self._expire(planner, 1, "planner-X")
+
+        assert planner._compute_demand_actions(1, provider.lanes) == []
+
+    def test_stuck_lane_keeps_the_cooldown_alive_across_cycles(self):
+        """A lane still ``starting`` with a marker re-arms the per-lane
+        cooldown every cycle, so the cooldown readers (gate, ranker,
+        pre-pass) agree with the marker even after the timer ran out."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running"), _lane("planner-X-2", "X", "starting")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        self._expire(planner, 1, "planner-X-2")
+
+        planner._reconcile_load_failures(1, provider.lanes)
+
+        assert planner._lane_is_in_load_failure_cooldown(1, "planner-X-2") is True
+
+    def test_lane_reaching_serving_state_clears_the_marker(self):
+        """The load that timed out in confirmation finishes afterwards: the
+        lane reports running, the marker and the cooldown drop, and the model
+        can scale out again on the next free suffix."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running"), _lane("planner-X-2", "X", "starting")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        self._expire(planner, 1, "planner-X-2")
+        planner._reconcile_load_failures(1, provider.lanes)
+        assert (1, "planner-X-2") in planner._load_failed_lane_ids
+
+        provider.lanes = [_lane("planner-X", "X", "running"), _lane("planner-X-2", "X", "running")]
+        planner._reconcile_load_failures(1, provider.lanes)
+        assert (1, "planner-X-2") not in planner._load_failed_lane_ids
+        assert planner._lane_is_in_load_failure_cooldown(1, "planner-X-2") is False
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+        assert ("load", 1, "planner-X-3") in [(a.action, a.provider_id, a.lane_id) for a in actions]
+
+    def test_confirmed_load_action_clears_the_marker(self):
+        """The execution path confirms the load: the marker drops with the
+        cooldown, whatever the next cycle's reconciliation would do."""
+        planner = _planner(
+            _MockProvider(
+                provider_id=1,
+                name="A",
+                lanes=[_lane("planner-X", "X", "starting")],
+                capabilities=["X"],
+                available_vram_mb=50_000,
+                profiles={"X": _profile()},
+            ),
+            score=2.5,
+            replicate=True,
+        )
+        self._expire(planner, 1, "planner-X")
+        planner._lane_was_cold_loaded = {}
+
+        from logos.sdi.models import CapacityPlanAction
+
+        planner._record_confirmed_action_state(
+            CapacityPlanAction(
+                action="load",
+                provider_id=1,
+                lane_id="planner-X",
+                model_name="X",
+                params={},
+                reason="test",
+            ),
+            time.time(),
+        )
+        assert (1, "planner-X") not in planner._load_failed_lane_ids
+        assert planner._lane_is_in_load_failure_cooldown(1, "planner-X") is False
+
+    def test_marker_pruned_when_the_lane_leaves_the_worker(self):
+        """The stuck lane is gone from the worker (crashed away, manually
+        removed): its marker drops with it and the id is free for a fresh
+        first lane."""
+        planner = _planner(
+            _MockProvider(
+                provider_id=1,
+                name="A",
+                lanes=[_lane("planner-X", "X", "starting")],
+                capabilities=["X"],
+                available_vram_mb=50_000,
+                profiles={"X": _profile()},
+            ),
+            score=2.5,
+            replicate=True,
+        )
+        self._expire(planner, 1, "planner-X")
+
+        planner._reconcile_load_failures(1, [])
+        assert (1, "planner-X") not in planner._load_failed_lane_ids
+
+        provider_lanes: List[LaneSchedulerSignals] = []
+        actions = planner._compute_demand_actions(1, provider_lanes)
+        assert ("load", 1, "planner-X") in [(a.action, a.provider_id, a.lane_id) for a in actions]
+
+    def test_starting_lane_without_a_marker_is_not_blocked(self):
+        """Guard against over-blocking: a plain in-flight load (no failure
+        ever marked) still counts as active and still allows scale-out —
+        the marker, not the ``starting`` state, is what blocks."""
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running"), _lane("planner-X-2", "X", "starting")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+
+        actions = planner._compute_demand_actions(1, provider.lanes)
+        assert ("load", 1, "planner-X-3") in [(a.action, a.provider_id, a.lane_id) for a in actions]
+
+
+# ---------------------------------------------------------------------------
+# Cycle-wide dedup: an additional lane must not shadow a first lane
+# ---------------------------------------------------------------------------
+
+
+class TestCycleDedupAdditionalLanes:
+    """Same-node speculative loads and the cross-provider replication pass
+    used to share one cycle-wide set, so an *additional* lane planned on a
+    worker that already hosts the model suppressed the *first* lane on a
+    worker without it. Additional lanes are now tagged separately, and the
+    per-cycle cluster count is kept current so the copy cap holds within a
+    cycle even with the dedup off."""
+
+    def test_first_lane_proceeds_despite_additional_planned_elsewhere(self):
+        """Worker A hosts X and plans a speculative second lane; worker B
+        does not host X at all. B's demand-driven first lane must not be
+        displaced by A's opportunistic copy — with dedup on."""
+        host = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        empty = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        host_planner = _planner(host, score=2.5, replicate=True)
+        empty_planner = _planner(empty, score=2.5, replicate=True)
+        host_planner._cross_provider_dedup = True
+        empty_planner._cross_provider_dedup = True
+        cycle_planned_models: set = set()
+        cycle_planned_additional_models: set = set()
+        cluster = {"X": 1}
+
+        host_actions = host_planner._compute_demand_actions(
+            1,
+            host.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+        assert ("load", 1, "planner-X-2") in [(a.action, a.provider_id, a.lane_id) for a in host_actions]
+        assert "X" in cycle_planned_additional_models
+
+        empty_actions = empty_planner._compute_demand_actions(
+            2,
+            empty.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+        # B's first lane is the necessary action — it proceeds.
+        assert ("load", 2, "planner-X") in [(a.action, a.provider_id, a.lane_id) for a in empty_actions]
+
+    def test_first_lane_planned_elsewhere_still_suppresses(self):
+        """The dedup itself still works: worker A plans the first lane, so
+        worker B's second first lane for the same model is skipped —
+        one cold load per model per cycle."""
+        empty_a = _MockProvider(
+            provider_id=1, name="A", lanes=[], capabilities=["X"], available_vram_mb=50_000, profiles={"X": _profile()}
+        )
+        empty_b = _MockProvider(
+            provider_id=2, name="B", lanes=[], capabilities=["X"], available_vram_mb=50_000, profiles={"X": _profile()}
+        )
+        planner_a = _planner(empty_a, score=2.5, replicate=False)
+        planner_b = _planner(empty_b, score=2.5, replicate=False)
+        planner_a._cross_provider_dedup = True
+        planner_b._cross_provider_dedup = True
+        cycle_planned_models: set = set()
+        cycle_planned_additional_models: set = set()
+
+        actions_a = planner_a._compute_demand_actions(
+            1,
+            empty_a.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+        )
+        assert ("load", 1, "planner-X") in [(a.action, a.provider_id, a.lane_id) for a in actions_a]
+        assert "X" not in cycle_planned_additional_models  # first lane, not an extra copy
+
+        actions_b = planner_b._compute_demand_actions(
+            2,
+            empty_b.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+        )
+        assert actions_b == []
+
+    def test_replication_places_a_copy_when_only_an_additional_was_planned(self):
+        """The cross-provider pass runs after the demand pass. A speculative
+        additional lane on the host worker must not suppress the pass's
+        first lane on a worker without the model."""
+        healthy = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        empty = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(healthy, score=2.5, replicate=True)
+        planner._facade = _MockFacade([healthy, empty])
+
+        # Only an additional lane was planned this cycle → the pass proceeds.
+        actions = planner._compute_replication_actions([1, 2], [("X", 2.5)], {"X": 1}, {"X"}, {"X"})
+        assert [(a.provider_id, a.lane_id) for a in actions] == [(2, "planner-X")]
+
+        # A demand-driven first lane was planned → the pass stays out.
+        actions = planner._compute_replication_actions([1, 2], [("X", 2.5)], {"X": 1}, {"X"}, set())
+        assert actions == []
+
+    def test_cluster_copy_cap_holds_across_workers_in_one_cycle(self):
+        """Two workers each host one copy of X (cluster count 2 of the cap
+        3) and both want a speculative second copy. The first worker's
+        planned lane must bump the cycle's cluster count, so the second
+        worker sees the cap and stands down — with the dedup off, so only
+        the count can save it."""
+        worker_a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        worker_b = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner_a = _planner(worker_a, score=2.5, replicate=True)
+        planner_b = _planner(worker_b, score=2.5, replicate=True)
+        cycle_planned_models: set = set()
+        cycle_planned_additional_models: set = set()
+        cluster = {"X": 2}
+
+        actions_a = planner_a._compute_demand_actions(
+            1,
+            worker_a.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+        actions_b = planner_b._compute_demand_actions(
+            2,
+            worker_b.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            cluster_lanes_by_model=cluster,
+        )
+
+        loads = [a for a in actions_a + actions_b if a.action == "load" and a.model_name == "X"]
+        assert len(loads) == 1
+        assert loads[0].provider_id == 1

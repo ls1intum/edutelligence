@@ -286,6 +286,8 @@ So a hot model on a roomy node grows by one lane per cycle while the demand stay
 
 A replica load can also fail after the worker accepted it — the lane lands in `error`, or its confirmation times out. It then keeps holding its lane id, and `_next_lane_id_for_model()` would answer with the next free suffix: under sustained demand that is a fresh errored lane every cycle. So while any lane of the model on a worker is in error state or in load-failure cooldown, a new cold load of the model on that worker is skipped (`_model_cold_load_blocked_reason`), and the best-first ranker treats the worker as infeasible for the model — demand moves to a healthy worker, or waits for the broken lane to go away.
 
+The cooldown alone is not enough: it expires on a timer (120s), but a confirmation timeout can leave the lane stuck in `starting` — and holding its id — long after that. The failure therefore also sets a persistent per-lane marker that follows the lane, not the clock: the lane does not count as an active copy of the model, the cold-load gate keeps skipping the model, and the cycle reconciliation (`_reconcile_load_failures`) re-arms the cooldown every cycle while the lane sits in `starting` with a marker. The marker drops only when the lane reaches a serving state (the load finished after all) or leaves the worker, so the backoff ends exactly when the model is servable again.
+
 The operator "Load lane" path (`load_lane_manually`) adds one lane of the next free replica id with no count to enforce — the plannability/capacity checks and the worker's own VRAM are the gate — so a second click for an already-loaded model is no longer rejected as "lane already exists".
 
 ---

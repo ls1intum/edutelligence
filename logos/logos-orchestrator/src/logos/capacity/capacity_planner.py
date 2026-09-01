@@ -414,6 +414,14 @@ class CapacityPlanner:
         # subset). Suppresses new load actions on the lane until expiry.
         self._lane_load_failure_until: dict[tuple[int, str], float] = {}
 
+        # Persistent load-failure markers: lanes whose load the worker
+        # accepted but that never reached a serving state (timed out in
+        # ``starting``, landed in ``error``). Unlike the cooldown above these
+        # do not expire on a timer — a stuck lane keeps holding its id, so it
+        # must keep blocking allocation until the lane serves or leaves the
+        # worker. Reconciled every cycle in _reconcile_load_failures.
+        self._load_failed_lane_ids: set[tuple[int, str]] = set()
+
         # Workers the cycle is currently skipping, and when the skipping began.
         # Backs the stuck-worker warning in _note_unplannable: a worker no
         # lane can be placed on is otherwise invisible in the logs.
@@ -694,6 +702,11 @@ class CapacityPlanner:
         # providers, so two providers don't independently agree to load the
         # same model in the same cycle.
         cycle_planned_models: set[str] = set()
+        # The subset of that which was a *speculative additional lane* — not
+        # a first lane serving demand. A first lane planned elsewhere must
+        # suppress a second first lane, but an extra copy must not suppress
+        # the demand-driven one on a worker without the model.
+        cycle_planned_additional_models: set[str] = set()
         # Balance-wake tracking: at most one balance-wake per model per cycle,
         # so a saturated winner doesn't fan out wakes to every sleeping
         # replica at once (one extra replica per cycle is the escalation step;
@@ -733,7 +746,10 @@ class CapacityPlanner:
         # cycle. Consumed by:
         #   - replicas-first eviction (Pass 1 in the eviction picker),
         #   - speculative replication (skip models already at MAX_REPLICAS).
-        # Only built when at least one consumer is enabled.
+        # Only built when at least one consumer is enabled. The demand and
+        # replication passes increment it as they plan loads, so a worker
+        # later in the cycle sees copies planned earlier in the same one and
+        # the cluster cap holds even with the cross-provider dedup off.
         cluster_lanes_by_model = (
             self._count_loaded_lanes_per_model()
             if (self._replica_first_eviction or self._replicate_on_free_vram)
@@ -754,7 +770,7 @@ class CapacityPlanner:
             except Exception:
                 continue
 
-            self._mark_errored_lanes(provider_id, lanes)
+            self._reconcile_load_failures(provider_id, lanes)
             self._update_idle_tracking(provider_id, lanes)
             self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
@@ -763,6 +779,7 @@ class CapacityPlanner:
                     provider_id,
                     lanes,
                     cycle_planned_models=cycle_planned_models,
+                    cycle_planned_additional_models=cycle_planned_additional_models,
                     best_provider_for_model=best_provider_for_model,
                     cluster_lanes_by_model=cluster_lanes_by_model,
                     cycle_balance_wake_models=cycle_balance_wake_models,
@@ -788,6 +805,7 @@ class CapacityPlanner:
                     self._demand.get_ranked_models(),
                     cluster_lanes_by_model,
                     cycle_planned_models,
+                    cycle_planned_additional_models,
                 )
             )
 
@@ -1499,9 +1517,26 @@ class CapacityPlanner:
             self.LOAD_FAILURE_COOLDOWN_SECONDS,
             f": {details}" if details else "",
         )
+        # The cooldown expires on a timer; the marker does not. A lane that
+        # was just marked may still be sitting in ``starting`` long after the
+        # cooldown runs out, and it keeps holding its id meanwhile.
+        self._load_failed_ids().add(key)
 
     def _clear_load_failure(self, provider_id: int, lane_id: str) -> None:
         self._lane_load_failure_until.pop(self._lane_key(provider_id, lane_id), None)
+
+    def _load_failed_ids(self) -> set[tuple[int, str]]:
+        """Lanes with a load failure that has not been reconciled away yet.
+
+        Lazily initialised so planner instances built in tests without the
+        full ``__init__`` keep working: the markers only matter to the cycle
+        reconciliation and the cold-load gate.
+        """
+        ids = self.__dict__.get("_load_failed_lane_ids")
+        if ids is None:
+            ids = set()
+            self._load_failed_lane_ids = ids
+        return ids
 
     def _lane_is_in_load_failure_cooldown(
         self,
@@ -1520,24 +1555,39 @@ class CapacityPlanner:
             return False
         return True
 
-    def _mark_errored_lanes(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
-        """Feed the load-failure cooldown from lanes that landed in error.
+    def _reconcile_load_failures(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
+        """Keep the load-failure state in step with the lanes a worker reports.
 
-        The synchronous ``add_lane`` rejection is the only load failure the
-        execution path sees; a load the worker accepted can still fail on the
-        worker afterwards (the lane lands in ``error``) and raises nothing.
-        Re-marking the per-lane cooldown here keeps every cooldown reader in
-        sync — the cold-load gate, the ranker, the ``_validate_vram_budget``
-        pre-pass — and gives the failure a log line. A lane that is already
-        cooling down is left alone, so a persistently errored lane logs once
-        per cooldown window rather than once per planner cycle.
+        The load-failure cooldown expires on a timer, but the lane it marks
+        does not: a load that timed out leaves its lane stuck in ``starting``
+        and holding its id long after the cooldown ran out, at which point the
+        allocator would hand out a fresh suffix for the model. The persistent
+        marker therefore follows the lane, not the clock — it is dropped only
+        when the lane reaches a serving state (the load finished after all) or
+        leaves the worker. Lanes still ``starting`` with a marker are the
+        timed-out ones; they keep the per-lane cooldown alive as well, so every
+        cooldown reader (cold-load gate, ranker, pre-pass) sees the failure.
+        Marking is throttled to the cooldown window, so a persistently broken
+        lane logs once per window rather than once per planner cycle.
         """
+        failed = self._load_failed_ids()
+        present = {lane.lane_id for lane in lanes}
+        for key in [k for k in failed if k[0] == provider_id and k[1] not in present]:
+            failed.discard(key)
         for lane in lanes:
-            if lane.runtime_state != "error":
-                continue
-            if self._lane_is_in_load_failure_cooldown(provider_id, lane.lane_id):
-                continue
-            self._mark_load_failure(provider_id, lane.lane_id, details="lane in error state")
+            key = (provider_id, lane.lane_id)
+            if lane.runtime_state in ("loaded", "running"):
+                # A marked lane is serving again — the load finished, healthy.
+                failed.discard(key)
+                self._clear_load_failure(provider_id, lane.lane_id)
+            elif lane.runtime_state == "error":
+                failed.add(key)
+                if not self._lane_is_in_load_failure_cooldown(provider_id, lane.lane_id):
+                    self._mark_load_failure(provider_id, lane.lane_id, details="lane in error state")
+            elif lane.runtime_state == "starting" and key in failed:
+                # Timed out in starting — the worker never confirmed the load.
+                if not self._lane_is_in_load_failure_cooldown(provider_id, lane.lane_id):
+                    self._mark_load_failure(provider_id, lane.lane_id, details="still starting after load failure")
 
     def _record_confirmed_action_state(self, action: CapacityPlanAction, confirmed_at: float) -> None:
         key = self._lane_key(action.provider_id, action.lane_id)
@@ -1561,6 +1611,9 @@ class CapacityPlanner:
         if action.action in {"wake", "load"}:
             self._clear_wake_failure(action.provider_id, action.lane_id)
             self._clear_load_failure(action.provider_id, action.lane_id)
+            # The lane confirmed healthy — any earlier failure mark on it is
+            # stale, whatever the cycle reconciliation would do later.
+            self._load_failed_ids().discard(key)
             self._lane_sleep_since.pop(key, None)
             self._lane_sleep_level.pop(key, None)
             self._lane_idle_since[key] = confirmed_at
@@ -3111,6 +3164,7 @@ class CapacityPlanner:
         lanes: List[LaneSchedulerSignals],
         *,
         cycle_planned_models: Optional[set[str]] = None,
+        cycle_planned_additional_models: Optional[set[str]] = None,
         best_provider_for_model: Optional[dict[str, int]] = None,
         cluster_lanes_by_model: Optional[dict[str, int]] = None,
         cycle_balance_wake_models: Optional[set[str]] = None,
@@ -3191,6 +3245,10 @@ class CapacityPlanner:
             lanes_by_model.setdefault(lane.model_name, []).append(lane)
 
         planned_models: set[str] = set()
+        # Which of those were speculative additional lanes — lifted into the
+        # cycle-wide set at the end so the dedup check and the replication
+        # pass can tell an extra copy apart from a demand-driven first lane.
+        planned_additional_models: set[str] = set()
         # Track which lanes have already been claimed as eviction victims this
         # cycle so we don't evict the same lane twice for two different loads.
         claimed_victims: set[str] = set()
@@ -3211,13 +3269,31 @@ class CapacityPlanner:
             # Phase 1.3: skip a model that another provider already planned a
             # wake/load for in this same cycle. Prevents two providers from
             # racing to cold-load the same model when both have capability.
+            #
+            # Exception: what was planned elsewhere was only a speculative
+            # *additional* lane. A first lane on this worker is demand-driven
+            # — it is the difference between serving and queueing — while the
+            # extra copy is opportunistic, so the necessary action must not
+            # be displaced by the optional one.
             if self._cross_provider_dedup and cycle_planned_models is not None and model_name in cycle_planned_models:
-                logger.info(
-                    "Skipping demand action for worker=%s model=%s: already planned" " for another worker this cycle",
-                    self._facade.get_provider_name(provider_id) or provider_id,
-                    model_name,
+                first_lane_here = not any(
+                    lane.model_name == model_name
+                    and lane.runtime_state in ("loaded", "running")
+                    and lane.sleep_state != "sleeping"
+                    for lane in lanes_by_model.get(model_name, [])
                 )
-                continue
+                if not (
+                    first_lane_here
+                    and cycle_planned_additional_models is not None
+                    and model_name in cycle_planned_additional_models
+                ):
+                    logger.info(
+                        "Skipping demand action for worker=%s model=%s: already planned"
+                        " for another worker this cycle",
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        model_name,
+                    )
+                    continue
             # Cross-provider best-first: if a pre-cycle ranking picked a
             # different worker as the cheapest for this model, skip here so
             # the winner can serve it (wake on a sleeping lane beats a cold
@@ -3300,11 +3376,16 @@ class CapacityPlanner:
             # worker. The cold-load path reads it to tell a first lane (full
             # load semantics) apart from an additional one (replication
             # semantics: sustained demand, no eviction, replication flag).
+            # A lane whose load failed is not "active" even while it sits in
+            # ``starting``: it does not serve, and counting it would let the
+            # model look already-covered after the cooldown expires.
+            failed = self._load_failed_ids()
             active_lanes = [
                 lane
                 for lane in model_lanes
                 if lane.runtime_state not in {"stopped", "error"}
                 and lane.sleep_state != "sleeping"  # sleeping handled in the wake branch
+                and (provider_id, lane.lane_id) not in failed
             ]
 
             # ── WAKE: sleeping lane exists ────────────────────────────────────
@@ -3753,6 +3834,10 @@ class CapacityPlanner:
                     )
                 )
                 planned_models.add(model_name)
+                if is_additional_lane:
+                    planned_additional_models.add(model_name)
+                    if cluster_lanes_by_model is not None:
+                        cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
             else:
                 # Contention. Same two-regime logic as the wake path:
                 # real queued requests bypass the ratio (victims are
@@ -3825,6 +3910,10 @@ class CapacityPlanner:
                         )
                     )
                     planned_models.add(model_name)
+                    if is_additional_lane:
+                        planned_additional_models.add(model_name)
+                        if cluster_lanes_by_model is not None:
+                            cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
                 else:
                     logger.info(
                         "Skipping load of %s on worker=%s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f, no queued demand",  # noqa: E501
@@ -3841,6 +3930,18 @@ class CapacityPlanner:
         if not lanes:
             for model_name in capabilities:
                 if model_name in planned_models:
+                    continue
+                # Same cycle-wide dedup as the main loop: an empty worker's
+                # seed is a first lane, so only a first lane planned elsewhere
+                # suppresses it (a speculative additional lane does not).
+                if (
+                    self._cross_provider_dedup
+                    and cycle_planned_models is not None
+                    and model_name in cycle_planned_models
+                    and not (
+                        cycle_planned_additional_models is not None and model_name in cycle_planned_additional_models
+                    )
+                ):
                     continue
                 eff = self._effective_demand(model_name, provider_id, lanes)
                 if eff < self.DEMAND_LOAD_FLOOR:
@@ -3867,6 +3968,8 @@ class CapacityPlanner:
         # set so subsequent providers in the iteration order skip them.
         if cycle_planned_models is not None:
             cycle_planned_models |= planned_models
+        if cycle_planned_additional_models is not None:
+            cycle_planned_additional_models |= planned_additional_models
 
         return actions
 
@@ -3880,6 +3983,7 @@ class CapacityPlanner:
         ranked_models: list[tuple[str, float]],
         cluster_lanes_by_model: dict[str, int],
         cycle_planned_models: set[str],
+        cycle_planned_additional_models: Optional[set[str]] = None,
     ) -> list[CapacityPlanAction]:
         """Cross-provider replication pass — runs once per cycle.
 
@@ -3902,9 +4006,11 @@ class CapacityPlanner:
         so it would take the VRAM a calibration session reserved for its
         probes just as readily.
 
-        Models that already had an action emitted this cycle (in
-        ``cycle_planned_models``) are skipped — the main demand pass
-        already handles them.
+        Models for which the main demand pass already emitted a *first*
+        lane this cycle are skipped. A speculative *additional* lane
+        (tracked in ``cycle_planned_additional_models``) does not
+        suppress this pass — a first lane on a worker without the model
+        is the cross-worker distribution this pass exists to provide.
         """
         if not self._replicate_on_free_vram:
             return []
@@ -3914,8 +4020,13 @@ class CapacityPlanner:
         for model_name, score in ranked_models:
             if score < self.DEMAND_REPLICATION_FLOOR:
                 continue
-            if model_name in cycle_planned_models:
-                continue  # main demand pass already planned something for this model
+            # A demand-driven first lane planned this cycle means the model is
+            # being served; skip. But a *speculative additional* lane planned
+            # on a worker that already hosts the model must NOT suppress a
+            # first lane on a worker without it — that is exactly the
+            # cross-worker distribution this pass exists to provide.
+            if model_name in cycle_planned_models and model_name not in (cycle_planned_additional_models or set()):
+                continue  # main demand pass already planned a first lane for it
             current_replicas = cluster_lanes_by_model.get(model_name, 0)
             if current_replicas == 0:
                 continue  # not loaded anywhere yet → main demand pass owns first load
@@ -3995,6 +4106,8 @@ class CapacityPlanner:
                     )
                 )
                 cycle_planned_models.add(model_name)
+                if cluster_lanes_by_model is not None:
+                    cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
                 logger.info(
                     "Speculative replica for model=%s onto worker=%s "
                     "(current replicas=%d, free_vram=%.0fMB, needed=%.0fMB)",
@@ -5766,9 +5879,17 @@ class CapacityPlanner:
         """
         if self._lane_is_in_load_failure_cooldown(provider_id, self._planner_lane_id(model_name)):
             return "replica lane in load-failure cooldown"
+        failed = self._load_failed_ids()
         for lane in lanes:
-            if lane.model_name == model_name and lane.runtime_state == "error":
+            if lane.model_name != model_name:
+                continue
+            if lane.runtime_state == "error":
                 return f"lane {lane.lane_id} is in error state"
+            if (provider_id, lane.lane_id) in failed:
+                # Follows the lane, not the cooldown timer: a load that timed
+                # out in starting keeps its id and must keep blocking until it
+                # serves again or leaves the worker.
+                return f"lane {lane.lane_id} failed to load and is not serving"
         for lane in lanes:
             if lane.model_name == model_name and self._lane_is_in_load_failure_cooldown(provider_id, lane.lane_id):
                 return f"lane {lane.lane_id} is in load-failure cooldown"

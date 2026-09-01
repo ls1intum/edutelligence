@@ -111,6 +111,31 @@ export function filterLoadableModels(
   return models.filter((m) => m.model_name && m.model_name.trim().toLowerCase() !== key);
 }
 
+/**
+ * Whether the "load accepted" note can go.
+ *
+ * The note is keyed to the lane ids the provider reported when the load was
+ * accepted, not to the model name: a model that already ran lanes keeps them
+ * reporting while the accepted copy is still minutes away, and those siblings
+ * must not end the note — that would re-offer the model before the lane it
+ * just asked for has shown up. The note drops only when a lane of the model
+ * appears under an id that was not among them: that lane is the accepted
+ * replica itself, in whatever state it reports (one that arrived is served
+ * by its own row now, one that landed in error is gone and may be offered
+ * again).
+ */
+export function acceptedModelIsResolved(
+  acceptedModel: string,
+  acceptedLaneIds: Iterable<string>,
+  lanes: Record<string, LaneSignalData>,
+): boolean {
+  const wanted = acceptedModel.trim().toLowerCase();
+  const snapshot = new Set(acceptedLaneIds);
+  return Object.entries(lanes).some(
+    ([laneId, lane]) => !snapshot.has(laneId) && (lane.model ?? '').trim().toLowerCase() === wanted,
+  );
+}
+
 export interface LaneRow {
   laneId: string;
   lane: LaneSignalData;
@@ -192,6 +217,9 @@ export class LaneHealthPanel implements OnChanges {
   addError = signal<string | null>(null);
   /** Model whose background load was accepted and has not shown up as a lane yet. */
   acceptedModel = signal<string | null>(null);
+  /** Lane ids the provider reported when the load was accepted — the baseline
+   *  acceptedModelIsResolved() checks the stream against. */
+  private acceptedLaneIds: Set<string> | null = null;
   /** Fetched model lists, keyed by provider id — never shared across providers. */
   private readonly modelsByProvider = new Map<number, ProviderModel[]>();
   private readonly modelsInFlight = new Set<number>();
@@ -443,20 +471,24 @@ export class LaneHealthPanel implements OnChanges {
       this.loadModels.set([]);
       this.modelsLoading.set(false);
       this.acceptedModel.set(null);
+      this.acceptedLaneIds = null;
     }
     // The lane the operator asked for has arrived in the status stream — the
-    // row itself now reports its state, so the pending note has nothing to add.
+    // row itself now reports its state, so the pending note has nothing to
+    // add. Sibling lanes of the model do not count: the note is keyed to the
+    // lane ids present when the load was accepted, so it stays up until the
+    // accepted replica shows up under a fresh id of its own.
     const accepted = this.acceptedModel();
-    if (accepted !== null && changes['lanesByProvider'] && this.hasLaneFor(accepted)) {
-      this.acceptedModel.set(null);
+    const baseline = this.acceptedLaneIds;
+    if (accepted !== null && baseline !== null && changes['lanesByProvider']) {
+      const name = this.providerName;
+      if (
+        acceptedModelIsResolved(accepted, baseline, name ? (this.lanesByProvider[name] ?? {}) : {})
+      ) {
+        this.acceptedModel.set(null);
+        this.acceptedLaneIds = null;
+      }
     }
-  }
-
-  private hasLaneFor(model: string): boolean {
-    const name = this.providerName;
-    const lanes = name ? (this.lanesByProvider[name] ?? {}) : {};
-    const wanted = model.trim().toLowerCase();
-    return Object.values(lanes).some((l) => (l.model ?? '').trim().toLowerCase() === wanted);
   }
 
   selectModel(event: Event): void {
@@ -490,6 +522,10 @@ export class LaneHealthPanel implements OnChanges {
       // background, which for a large model is minutes. Without a word here the
       // picker just closes and the operator cannot tell the request from a no-op.
       this.acceptedModel.set(model);
+      // Baseline for acceptedModelIsResolved(): the lanes the accepted
+      // replica is not among yet.
+      const name = this.providerName;
+      this.acceptedLaneIds = new Set(Object.keys(name ? (this.lanesByProvider[name] ?? {}) : {}));
     } catch (err: unknown) {
       this.addingLane.set(false);
       const e = err as { status?: number };
