@@ -194,7 +194,6 @@ jobs:
       sign: false
       build-args: |
         BASE_IMAGE=ubuntu:24.04
-        INSTALL_OLLAMA=0
       meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm
       meta-tags: |
         type=ref,event=pr

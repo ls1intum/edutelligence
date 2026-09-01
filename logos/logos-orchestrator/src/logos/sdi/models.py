@@ -119,9 +119,9 @@ class ModelStatus:
 
 
 @dataclass
-class OllamaCapacity:
+class WorkerCapacity:
     """
-    Capacity information for Ollama providers.
+    Capacity information for worker node providers.
 
     Schedulers can determine if new models can be loaded based on available_vram_mb.
     """

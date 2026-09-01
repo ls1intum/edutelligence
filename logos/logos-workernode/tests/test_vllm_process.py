@@ -1898,7 +1898,7 @@ def test_has_poisoned_compile_cache_detects_cache_dir_in_stack(tmp_path: Path) -
     handle._recent_logs.extend(
         [
             "(EngineCore) ERROR core.py:1140   File "
-            '"/usr/share/ollama/.ollama/models/.cache/vllm/torch_compile_cache/'
+            '"/usr/share/logos/models/.cache/vllm/torch_compile_cache/'
             'deadbeef/inductor_cache/ol/frag.py", line 664, in call',
             "(EngineCore) ERROR core.py:1140 RuntimeError: Expected result >= 0",
         ]

@@ -181,8 +181,8 @@ def _check_gpu() -> SensorResult:
 # the one we validate; missing paths are skipped (a worker without an HF
 # cache is just one without that sensor — not unhealthy).
 _STORAGE_PATHS_TO_PROBE: tuple[Path, ...] = (
-    Path("/usr/share/ollama/.ollama/models/.hf_cache/hub"),  # production container path
-    Path("/usr/share/ollama/.ollama/models/.hf_cache"),
+    Path("/usr/share/logos/models/.hf_cache/hub"),  # production container path
+    Path("/usr/share/logos/models/.hf_cache"),
     Path(os.environ.get("HF_HOME", "")) if os.environ.get("HF_HOME") else Path(),
     (Path(os.environ.get("HF_HUB_CACHE", "")) if os.environ.get("HF_HUB_CACHE") else Path()),
 )

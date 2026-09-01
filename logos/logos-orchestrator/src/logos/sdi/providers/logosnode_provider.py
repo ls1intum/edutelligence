@@ -24,7 +24,7 @@ from ..models import (
     ModelProfile,
     ModelSchedulerView,
     ModelStatus,
-    OllamaCapacity,
+    WorkerCapacity,
 )
 
 try:
@@ -419,7 +419,7 @@ class LogosNodeDataProvider:
                 provider_type="logosnode",
             )
 
-    def get_capacity_info(self) -> OllamaCapacity:
+    def get_capacity_info(self) -> WorkerCapacity:
         self.refresh_data()
         runtime_free_mb = None
         runtime_total_mb = None
@@ -437,7 +437,7 @@ class LogosNodeDataProvider:
                 runtime_total_mb if runtime_total_mb is not None and runtime_total_mb > 0 else self.total_vram_mb
             )
             available_vram_mb = runtime_free_mb if runtime_free_mb is not None else max(0, total_vram_mb - used_vram_mb)
-            return OllamaCapacity(
+            return WorkerCapacity(
                 available_vram_mb=available_vram_mb,
                 total_vram_mb=total_vram_mb,
                 loaded_models=list(self._loaded_models.keys()),

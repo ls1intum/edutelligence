@@ -66,7 +66,7 @@ The dev compose file builds from source. vLLM is always included in the
 image — the worker only runs vLLM lanes:
 
 ```bash
-INSTALL_OLLAMA=0 docker compose -f docker-compose.dev.yml up --build
+docker compose -f docker-compose.dev.yml up --build
 ```
 
 ### GPU mode (production)

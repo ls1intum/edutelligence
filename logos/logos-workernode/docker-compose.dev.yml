@@ -2,15 +2,13 @@
 # Usage: docker compose -f docker-compose.dev.yml up --build
 #
 # vLLM is always installed (CUDA toolkit comes from vLLM's pip wheels —
-# plain Ubuntu base, default BASE_IMAGE=ubuntu:24.04). The Ollama binary
-# is bundled unless INSTALL_OLLAMA=0.
+# plain Ubuntu base, default BASE_IMAGE=ubuntu:24.04).
 services:
   logos-workernode:
     build:
       context: .
       args:
         BASE_IMAGE: ${BASE_IMAGE:-ubuntu:24.04}
-        INSTALL_OLLAMA: ${INSTALL_OLLAMA:-1}
         VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}
         NCCL_PIP_SPEC: ${NCCL_PIP_SPEC:-}
     container_name: logos-workernode
@@ -28,7 +26,7 @@ services:
       WORKER_PORT: ${WORKER_PORT:-80}
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
-      HF_HOME: /usr/share/ollama/.ollama/models/.hf_cache
+      HF_HOME: /usr/share/logos/models/.hf_cache
       # ── GPU / CUDA ───────────────────────────────────────────────────────
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
@@ -59,7 +57,7 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ./data:/app/data
-      - ${OLLAMA_MODELS_MOUNT:-ollama-models}:/usr/share/ollama/.ollama/models
+      - ${LOGOS_MODELS_MOUNT:-logos-models}:/usr/share/logos/models
       - ./certs:/app/certs:ro
       - ./logos_worker_node:/app/logos_worker_node:ro
       # Same custom chat-template directory as production — see docker-compose.yml.
@@ -78,4 +76,4 @@ services:
       start_period: 15s
 
 volumes:
-  ollama-models:
+  logos-models:

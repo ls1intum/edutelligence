@@ -57,11 +57,10 @@ worker:
   # container at this path so a host-side watchdog can detect it.
   reboot_sentinel_path: /host/reboot-requested
 
-  # Persistent model store directory (the deployment's model volume). The
-  # container path keeps its historical name; the directory now holds the
-  # HuggingFace model store that vLLM lanes load from. Also the default
+  # Persistent model store directory (the deployment's model volume). Holds
+  # the HuggingFace model store that vLLM lanes load from. Also the default
   # root for the worker's caches when cache_path below is empty.
-  models_path: /usr/share/ollama/.ollama/models
+  models_path: /usr/share/logos/models
 
   # Worker-wide default GPU placement: "all" | "none" | "0,1" (comma-separated
   # GPU indices). A lane's own gpu_devices overrides this when set.

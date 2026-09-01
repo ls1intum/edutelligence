@@ -348,11 +348,10 @@ class WorkerConfig(BaseModel):
         ),
     )
     models_path: str = Field(
-        default="/usr/share/ollama/.ollama/models",
+        default="/usr/share/logos/models",
         description=(
             "Persistent model store directory (the deployment's model volume). "
-            "The container path keeps its historical name; the directory now "
-            "holds the HuggingFace model store that vLLM lanes load from. "
+            "Holds the HuggingFace model store that vLLM lanes load from. "
             "Also the default for cache_path when that field is empty."
         ),
     )

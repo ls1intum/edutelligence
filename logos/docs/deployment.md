@@ -46,7 +46,7 @@ Variables:
 
 - `VM_HOST`, `VM_USERNAME` — target GPU node and SSH user
 - `LOGOS_URL` — URL of the core node's orchestrator this worker registers with
-- `LOGOS_TMPFS_CACHE_PATH`, `TMPFS_SIZE`, `OLLAMA_MODELS_MOUNT`
+- `LOGOS_TMPFS_CACHE_PATH`, `TMPFS_SIZE`, `LOGOS_MODELS_MOUNT`
 
 Secrets:
 

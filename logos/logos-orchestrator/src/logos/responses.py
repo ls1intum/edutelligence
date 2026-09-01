@@ -250,7 +250,8 @@ _USAGE_DETAILS_PREFIXES = (
 def extract_token_usage(usage: dict) -> dict:
     """
     Extract detailed token usage from provider response, filtering out meta fields.
-    Handles OpenAI Chat Completions, OpenAI Responses API, and Ollama formats.
+    Handles OpenAI Chat Completions and OpenAI Responses API shapes, plus the
+    provider-specific meta fields (duration / rate counters) some APIs add.
     """
     usage_tokens = {}
 
