@@ -156,12 +156,18 @@ def _propagate_cache_path_to_env(cfg: AppConfig) -> None:
     operators set ``worker.cache_path`` in ``config.yml``; the env var
     continues to win when set explicitly, so per-host overrides via ``.env``
     still work.
+
+    ``~`` is expanded here, at the single point where the config value
+    becomes an env var: the lane processes expand the same root themselves
+    (vllm_process), and startup validation plus the model prefetch read the
+    lifted var — an unexpanded tilde would make those address a literal
+    ``~`` directory the lanes never see.
     """
     if not cfg.worker.cache_path:
         return
     if os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip():
         return  # explicit env var wins
-    os.environ["LOGOS_WORKER_CACHE_ROOT"] = cfg.worker.cache_path
+    os.environ["LOGOS_WORKER_CACHE_ROOT"] = os.path.expanduser(cfg.worker.cache_path)
 
 
 def load_config() -> AppConfig:

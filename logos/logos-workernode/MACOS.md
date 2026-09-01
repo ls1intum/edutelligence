@@ -105,6 +105,83 @@ launchctl kickstart -k "gui/$(id -u)/de.tum.logos.workernode"
 
 ---
 
+## Worked example: serving Qwen3.8-27B
+
+The reference model for this document is
+[Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) in its MLX builds —
+`mlx-community/Qwen3.8-27B-4bit` (15.1 GB) and
+`mlx-community/Qwen3.8-27B-8bit` (27.5 GB). It is the model the *Sizing*
+table measures, and the reason the *Requirements* table pins
+vllm-metal ≥ 0.3.0.dev20260826.
+
+The seeded `config.yml` advertises the **4bit** build by default — the only
+one that fits the 36 GB reference machine. On a 64 GB+ Mac, point
+`logos.capabilities_models` at the 8bit id instead. Whatever you advertise
+must have two things or the lane cannot start: a hand-written profile under
+`model_profile_overrides` (the measured figures from *Calibration*), and a
+`model_overrides` entry capping `max_model_len` at 32768 — Qwen3.8's hybrid
+KV cache would otherwise be sized against the model's full 262144 window,
+which does not fit.
+
+After the *Install* steps, start the node and follow the log:
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/de.tum.logos.workernode"
+tail -f ~/logos-workernode-mlx/logs/worker.log
+```
+
+Expected at startup:
+
+```
+══ STORAGE LAYOUT ══
+  cache root: /Users/<you>/logos-workernode-mlx/cache  (LOGOS_WORKER_CACHE_ROOT env var)
+    HF_HOME                  → /Users/<you>/logos-workernode-mlx/cache/.hf_cache
+    VLLM_CACHE_ROOT          → /Users/<you>/logos-workernode-mlx/cache/.cache/vllm
+    TORCHINDUCTOR_CACHE_DIR  → /Users/<you>/logos-workernode-mlx/cache/.cache/torch_inductor
+    FLASHINFER_WORKSPACE_BASE→ /Users/<you>/logos-workernode-mlx/cache
+```
+
+`worker.cache_path` may use `~`; the layout line shows the expanded absolute
+path, because the lanes resolve the same root themselves and a literal `~`
+would be an empty directory to them.
+
+On the first start the weights are not cached yet, so the download runs in
+the background while the worker keeps registering:
+
+```
+Prefetching 1 missing capability model(s): ['mlx-community/Qwen3.8-27B-4bit']
+Prefetch: downloading mlx-community/Qwen3.8-27B-4bit …
+```
+
+`Prefetch: … download complete` arrives when the weights are in. Then the
+capability profile and the registration:
+
+```
+  ● mlx-community/Qwen3.8-27B-4bit [OVERRIDE]: base_residency=16680 MB | disk=15.0 GB | kv_per_token=138344 B | max_ctx=262144 | engine=vllm
+══ BRIDGE CONNECTED ══ worker_id=<uuid> capabilities=['mlx-community/Qwen3.8-27B-4bit'] url=<websocket URL>
+```
+
+The profile dot is cyan for a hand-measured `override`. A red `UNCALIBRATED`
+dot and `Excluding 1 uncalibrated model(s) from capabilities` instead means
+the model is advertised to no one — the profile is missing or has no
+`base_residency_mb` (*Troubleshooting*).
+
+On the orchestrator, add this Mac as a provider with the privacy level
+**`THIRD_PARTY_HARDWARE`** (*Privacy* below). When a request routed there
+arrives, the worker spawns the lane — a native
+`vllm serve mlx-community/Qwen3.8-27B-4bit` subprocess with the Metal
+plugin, which prints the memory breakdown at startup (the measured block in
+*Sizing*) and reports ready. Afterwards `GET /runtime` shows the node and
+its lane: `devices.mode` must be `metal`, and `total_memory_mb` the Metal
+working set, not `hw.memsize`.
+
+The example config sets `max_lanes: 1`: one model at a time. A second lane
+only starts once the orchestrator stops the first — stop/start is how this
+backend reclaims memory, since vLLM cannot unload weights and Metal has no
+sleep mode (*What differs from a CUDA node*).
+
+---
+
 ## Operating
 
 ```bash
@@ -238,12 +315,16 @@ level. It orders below every cloud tier, so it is eligible only for requests
 whose policy threshold explicitly allows third-party hardware — a Mac lane is
 opt-in, and datacentre-only traffic never touches it.
 
-The longer-term direction for exactly this shape of deployment is hardware
-attestation (keys generated in the Secure Enclave, requests decryptable only
-on the attested machine, debugger attachment blocked — the approach
-[Darkbloom](https://www.darkbloom.dev/) uses for idle Apple Silicon). That
-is a separate project; the distinct trust tier above closes the acute gap
-without any cryptography.
+This is the shape of deployment that [Darkbloom](https://www.darkbloom.dev/)
+runs at scale — idle Apple Silicon serving production traffic as ordinary
+fleet nodes. The *Worked example* above is that deployment on a single
+machine, and it is what this PR ships: the worker, the lanes, the telemetry,
+and the `THIRD_PARTY_HARDWARE` tier that makes routing onto hardware outside
+operator control opt-in. Darkbloom additionally layers hardware attestation
+on top (keys generated in the Secure Enclave, requests decryptable only on
+the attested machine, debugger attachment blocked); that cryptography is
+orthogonal to the worker and out of scope here — the trust tier above closes
+the routing gap without it.
 
 ---
 

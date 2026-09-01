@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from os import environ
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 
 import logos_worker_node.main as worker_main
+from logos_worker_node import config as worker_config
 from logos_worker_node.models import AppConfig, DeviceSummary, LaneConfig, OllamaConfig, VllmConfig
 
 
@@ -114,3 +116,31 @@ class TestResolveWorkerCacheRoot:
         monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
         root = worker_main._resolve_worker_cache_root(self._cfg("/usr/share/ollama/.ollama/models"))
         assert root == "/usr/share/ollama/.ollama/models"
+
+
+class TestPropagateCachePathToEnv:
+    """worker.cache_path is lifted into LOGOS_WORKER_CACHE_ROOT as an
+    absolute path.
+
+    The example config ships ``~/logos-workernode-mlx/cache``; the lanes
+    expand the same root themselves (vllm_process), so validation and the
+    prefetch — which read the lifted env var — must address the identical
+    directory. A literal ``~`` would make every model look missing and
+    prefetch into a stray ``~`` directory the lanes never read.
+    """
+
+    def test_tilde_is_expanded_on_lift(self, monkeypatch) -> None:
+        # Pre-seed with the empty string (which the lift treats as unset) so
+        # the teardown reliably restores the variable to absent — delenv of an
+        # already-absent variable registers no undo, and the lift's write
+        # would leak into later tests.
+        monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", "")
+        cfg = SimpleNamespace(worker=SimpleNamespace(cache_path="~/logos-workernode-mlx/cache"))
+        worker_config._propagate_cache_path_to_env(cfg)
+        assert environ["LOGOS_WORKER_CACHE_ROOT"] == str(Path.home() / "logos-workernode-mlx" / "cache")
+
+    def test_explicit_env_var_still_wins(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path / "custom"))
+        cfg = SimpleNamespace(worker=SimpleNamespace(cache_path="~/ignored"))
+        worker_config._propagate_cache_path_to_env(cfg)
+        assert environ["LOGOS_WORKER_CACHE_ROOT"] == str(tmp_path / "custom")
