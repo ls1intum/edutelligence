@@ -49,7 +49,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.context_budget import CHARS_PER_TOKEN, estimate_prompt_tokens, required_context_tokens
+from logos.context_budget import estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
@@ -1423,31 +1423,23 @@ class _StreamingLogAccumulator:
                 return usage
         return {}
 
-    def emitted_completion_tokens(self) -> int:
-        """Tokens this stream has actually emitted, as precisely as is knowable.
+    def settled_completion_tokens(self) -> Optional[int]:
+        """The engine's own completion count, or None until it has settled.
 
-        ``streamed_tokens`` substitutes the delta count because it feeds a live
-        view and must never wait on the terminal usage event. The resume path
-        has no such constraint — it is sizing the continuation's budget — and it
-        must subtract what the prefix really cost, not the number of SSE frames
-        it arrived in. A speculative lane packs several accepted tokens into one
-        delta, so the delta count undercounts and the takeover would come away
-        with a completion budget that lets the combined answer overshoot the
-        caller's cap.
-
-        The settled usage is authoritative the moment it has arrived; otherwise
-        the accumulated text is estimated with the same character ratio the
-        prompt budget uses. Everything emitted — every delta and any final
-        answer pieces — lives in ``full_text``, and the estimate rounds up, so
-        the figure stands in for the true count in the safe direction.
+        This is the only figure that can hold an explicit completion limit
+        exactly: it is what the serving model's tokenizer actually counted,
+        delivered in the terminal usage event. That event never arrives on a
+        failed stream — precisely the mid-flight resume case — so this is None
+        exactly when a takeover would otherwise have to guess. ``streamed_tokens``
+        and the live view keep their delta-count approximation, which is the
+        right number for a running indicator and the wrong one for enforcing a
+        limit a caller set.
         """
         usage = self.usage()
         completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         if isinstance(completion, int) and completion > 0:
             return completion
-        if not self.full_text:
-            return 0
-        return int(len(self.full_text) / CHARS_PER_TOKEN) + 1
+        return None
 
     def response_payload(self) -> Dict[str, Any]:
         # Responses-API stream: the terminal event already carries the complete
@@ -3569,7 +3561,7 @@ async def _close_quietly(chunk_iter) -> None:
 def _build_resume_payload(
     base_payload: Dict[str, Any],
     prefix_text: str,
-    streamed_completion_tokens: int = 0,
+    streamed_completion_tokens: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Build the payload that continues a chat completion after ``prefix_text``.
 
@@ -3592,6 +3584,15 @@ def _build_resume_payload(
     caller falls back to the error frame. Streams that were emitting tool
     calls are already excluded by the ``saw_structured_delta`` guard at the
     call site.
+
+    ``streamed_completion_tokens`` is the prefix's exact completion count —
+    the serving model's own figure, never an estimate. It is the only number
+    that can hold a caller's explicit completion cap: the terminal usage event
+    never arrives on a failed stream, the serving model's tokenizer is not on
+    hand to count the prefix, and a character estimate can undercount
+    token-dense output. So when an explicit limit is set and no exact figure is
+    available, the continuation is refused rather than left to overshoot the
+    cap.
     """
     messages = base_payload.get("messages")
     if not isinstance(messages, list) or not messages:
@@ -3604,23 +3605,26 @@ def _build_resume_payload(
         return None
 
     # The prefix already consumed part of the requested completion budget:
-    # hand the takeover only the remainder, or it may overshoot the answer
-    # the caller asked for. A request whose budget the prefix already filled
-    # has nothing left to generate — no continuation to build.
+    # hand the takeover only the remainder, or it may overshoot the answer the
+    # caller asked for. That remainder is computable only from the engine's own
+    # count, so an explicitly capped request with no settled figure is refused
+    # outright. A request whose budget the prefix already filled has nothing
+    # left to generate — no continuation to build.
     payload = {
         **base_payload,
         "messages": [*messages, {"role": "assistant", "content": prefix_text}],
         "continue_final_message": True,
         "add_generation_prompt": False,
     }
-    if streamed_completion_tokens > 0:
-        for key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
-            limit = payload.get(key)
-            if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
-                remaining = limit - int(streamed_completion_tokens)
-                if remaining <= 0:
-                    return None
-                payload[key] = remaining
+    for key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+        limit = payload.get(key)
+        if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+            if streamed_completion_tokens is None:
+                return None
+            remaining = limit - int(streamed_completion_tokens)
+            if remaining <= 0:
+                return None
+            payload[key] = remaining
     return payload
 
 
@@ -4002,16 +4006,17 @@ async def _streaming_response(
                         if not resumed and _RESUME_ENABLED and retry_budget is not None and deployments:
                             prefix = stream_log.full_text
                             if prefix and not stream_log.saw_structured_delta:
-                                # The continuation's budget must shrink by the
-                                # tokens the prefix already consumed. The
-                                # terminal usage event never arrives on a failed
-                                # stream, so that figure is derived from the
-                                # emitted text rather than the undercounting
-                                # delta count — see emitted_completion_tokens.
+                                # The continuation's budget is only shrinkable
+                                # by the prefix's exact completion count — the
+                                # engine's own figure, which never arrives on a
+                                # failed stream. A request that capped its
+                                # completion is therefore refused in that case
+                                # rather than held under its cap by an estimate
+                                # — see settled_completion_tokens.
                                 resume_payload = _build_resume_payload(
                                     prepared_payload,
                                     prefix,
-                                    streamed_completion_tokens=stream_log.emitted_completion_tokens(),
+                                    streamed_completion_tokens=stream_log.settled_completion_tokens(),
                                 )
                                 if resume_payload is not None:
                                     if not is_audio_upload_path(request_path or ""):

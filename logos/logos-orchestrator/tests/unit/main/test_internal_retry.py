@@ -556,7 +556,7 @@ async def test_failover_into_exhausted_bucket_is_rejected(retry_env):
 
 
 def test_build_resume_payload_appends_partial_answer_as_assistant_message():
-    base = {"messages": [{"role": "user", "content": "hi"}], "temperature": 0.2, "max_tokens": 50}
+    base = {"messages": [{"role": "user", "content": "hi"}], "temperature": 0.2}
     out = main._build_resume_payload(base, "partial answer")
 
     assert out is not None
@@ -565,7 +565,6 @@ def test_build_resume_payload_appends_partial_answer_as_assistant_message():
         {"role": "assistant", "content": "partial answer"},
     ]
     assert out["temperature"] == 0.2
-    assert out["max_tokens"] == 50
     # The vLLM continuation contract keeps the trailing assistant message
     # open so the engine continues the prefix instead of opening a fresh
     # turn to answer it.
@@ -573,6 +572,18 @@ def test_build_resume_payload_appends_partial_answer_as_assistant_message():
     assert out["add_generation_prompt"] is False
     # The original payload is not mutated.
     assert len(base["messages"]) == 1
+
+
+def test_build_resume_payload_refuses_an_explicit_limit_without_an_exact_figure():
+    # A caller that capped its completion cannot be held under that cap by a
+    # character estimate: the failed stream never reports its final usage and
+    # the serving model's tokenizer is not on hand to count the prefix. Refuse
+    # rather than let the combined answer overshoot the cap — but resume once
+    # the engine's own count is known.
+    base = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+    assert main._build_resume_payload(base, "partial answer") is None
+    out = main._build_resume_payload(base, "partial answer", streamed_completion_tokens=40)
+    assert out is not None and out["max_tokens"] == 60
 
 
 @pytest.mark.parametrize(
