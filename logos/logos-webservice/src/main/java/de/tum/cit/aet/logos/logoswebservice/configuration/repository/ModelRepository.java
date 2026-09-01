@@ -12,6 +12,8 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
 
     boolean existsByNameIgnoreCase(String name);
 
+    List<Model> findByNameIgnoreCase(String name);
+
     @Query(value = """
         SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
                m.weight_quality, m.tags, m.description,

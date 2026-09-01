@@ -120,6 +120,7 @@ public class ModelService {
         model.setWeightCost(0);
         model.setWeightQuality(0);
         ensureNameDoesNotCollideWithAlias(req.name());
+        ensureNameIsUniqueAcrossModels(req.name(), null);
         model = modelRepository.save(model);
         saveAliases(model.getId(), req.aliases());
         weightService.rebalanceAfterAdd(
@@ -144,6 +145,7 @@ public class ModelService {
         if (req.weightCost() != null) model.setWeightCost(req.weightCost());
         if (req.weightQuality() != null) model.setWeightQuality(req.weightQuality());
         ensureNameDoesNotCollideWithAlias(req.name());
+        ensureNameIsUniqueAcrossModels(req.name(), req.modelId());
         modelRepository.save(model);
         saveAliases(model.getId(), req.aliases());
         orchestratorNotificationService.notifyRefresh(true);
@@ -232,6 +234,29 @@ public class ModelService {
         if (modelAliasRepository.existsByAliasIgnoreCase(name)) {
             throw new IllegalArgumentException(
                 "Model name '" + name + "' collides with an existing model alias");
+        }
+    }
+
+    /**
+     * Rejects a model name that equals the name of a different model,
+     * case-insensitively. Name matching at the request boundary is
+     * case-insensitive, so two models that differ only in capitalization
+     * spell the same identifier; the resolver treats such rows as ambiguous
+     * and 404s every request for either spelling, so the duplicate must be
+     * refused at write time. ``selfId`` exempts the model being updated from
+     * matching its own (possibly re-cased) name. Runs under the namespace
+     * lock held by {@link #addModel}/{@link #updateModelInfo}, so the check
+     * and the insert are serialized.
+     */
+    private void ensureNameIsUniqueAcrossModels(String name, Integer selfId) {
+        if (name == null || name.trim().isEmpty()) {
+            return;
+        }
+        for (Model model : modelRepository.findByNameIgnoreCase(name)) {
+            if (!model.getId().equals(selfId)) {
+                throw new IllegalArgumentException(
+                    "A model named '" + model.getName() + "' already exists");
+            }
         }
     }
 

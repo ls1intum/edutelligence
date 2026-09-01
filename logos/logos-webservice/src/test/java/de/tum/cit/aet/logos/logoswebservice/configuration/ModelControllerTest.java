@@ -429,4 +429,42 @@ class ModelControllerTest {
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error").exists());
     }
+
+    @Test
+    void addModel_nameCollidingWithExistingModelNameIsRejected() throws Exception {
+        // Model 5001 is named 'gpt-4'. Creating a model whose name differs only
+        // in case would leave two rows for one identifier; the resolver treats
+        // such rows as ambiguous and 404s every request for either spelling, so
+        // the create path must reject the duplicate.
+        mvc.perform(post("/logosdb/add_model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"GPT-4\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").exists());
+    }
+
+    @Test
+    void updateModelInfo_renameToExistingModelNameIsRejected() throws Exception {
+        // Model 5001 is named 'gpt-4'. Renaming model 5002 to 'GPT-4' would
+        // create the same duplicate — the rename path is covered explicitly,
+        // mirroring the alias-collision tests above.
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5002,\"name\":\"GPT-4\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").exists());
+    }
+
+    @Test
+    void updateModelInfo_ownNameInDifferentCaseIsAllowed() throws Exception {
+        // The uniqueness check exempts the model being updated: submitting the
+        // model's own name — even re-cased — must not read as a self-collision.
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"name\":\"GPT-4\"}"))
+           .andExpect(status().isOk());
+    }
 }
