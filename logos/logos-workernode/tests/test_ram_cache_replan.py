@@ -121,9 +121,15 @@ class _FakeHandle:
 
 
 class _FakeLaneManager:
-    def __init__(self, handles: dict[str, _FakeHandle], sleeping: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        handles: dict[str, _FakeHandle],
+        sleeping: set[str] | None = None,
+        starting: set[str] | None = None,
+    ) -> None:
         self._handles = handles
         self.sleeping = set(sleeping or set())
+        self._starting = set(starting or set())
 
     def lane_ids(self) -> list[str]:
         return list(self._handles)
@@ -133,6 +139,9 @@ class _FakeLaneManager:
 
     async def sleeping_models(self) -> set[str]:
         return set(self.sleeping)
+
+    def starting_models(self) -> frozenset[str]:
+        return frozenset(self._starting)
 
 
 def _host_memory(available_mb: float) -> HostMemorySummary:
@@ -274,6 +283,22 @@ def test_live_processes_cover_running_and_starting_lanes_only() -> None:
     assert worker_main._lane_models_with_live_processes(lanes) == {"org/a", "org/b"}
 
 
+def test_live_processes_include_models_in_lane_startup() -> None:
+    """A model whose lane is mid-spawn has no registered handle yet, but its
+    startup reservation must still protect it — and once the reservation is
+    released (handle registered, or failed startup cleaned up), a model with
+    no live process is unprotected again."""
+    lanes = _FakeLaneManager(
+        {"a": _FakeHandle("a", "org/a", ProcessState.RUNNING)},
+        starting={"org/b"},
+    )
+
+    assert worker_main._lane_models_with_live_processes(lanes) == {"org/a", "org/b"}
+
+    lanes._starting.discard("org/b")  # noqa: SLF001
+    assert worker_main._lane_models_with_live_processes(lanes) == {"org/a"}
+
+
 # ── _replan_ram_cache_once ───────────────────────────────────────────────────
 
 
@@ -343,6 +368,33 @@ def test_replan_never_evicts_a_model_a_live_lane_reads(monkeypatch) -> None:
     # The big model's lane is awake and serving — its weights directory must
     # survive even though the plan skipped the model.
     lanes = _FakeLaneManager({"big": _FakeHandle("big", "org/big", ProcessState.RUNNING)})
+    app = _app(cache, registry, lanes, ["org/small", "org/big"])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    assert cache.reclaimed[-1] == []
+    assert cache.is_cached("org/big") is True
+
+
+def test_replan_does_not_evict_a_model_whose_lane_is_starting(monkeypatch) -> None:
+    """The big model's lane is mid-startup: its spawn is reading weights from
+    the tmpfs cache directory, but the handle is only registered once the
+    spawn succeeds. With tight host RAM the plan skips the model, so without
+    the startup reservation this very re-plan would rmtree the directory out
+    from under the running spawn."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
+
+    registry = _FakeRegistry(
+        {
+            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            "org/big": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
+        }
+    )
+    sizes = {"org/small": _mb(8_000), "org/big": _mb(48_000)}
+    cache = _FakeCache(cached=["org/small", "org/big"], sizes=sizes)
+    # No handles at all — the only protection org/big has is the startup
+    # reservation held by its in-flight lane add.
+    lanes = _FakeLaneManager({}, starting={"org/big"})
     app = _app(cache, registry, lanes, ["org/small", "org/big"])
 
     asyncio.run(worker_main._replan_ram_cache_once(app))
