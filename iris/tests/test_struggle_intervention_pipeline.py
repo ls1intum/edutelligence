@@ -809,11 +809,35 @@ def test_post_agent_hook_help_request_fails_run_on_unusable_output():
     assert state.callback.status.rationale == "unparseable model output"
 
 
-def test_post_agent_hook_help_request_honours_a_deliberate_silent():
-    """The counter-case: valid JSON asking for silence is a decision, not a failure."""
+def test_post_agent_hook_help_request_rejects_a_contract_violating_silent():
+    """
+    Well-formed JSON does not make "silent" admissible here: the help_request template answers
+    only in ambient/active. Honouring it finished with result=None, which Artemis delivers as
+    silentDecide - the same empty completion the parse-failure guard above exists to prevent,
+    on the one path where the student explicitly asked. Artemis tolerating an incoming silent
+    (helpRequest_silentFromPyris_staysSilent builds that DTO by hand) is a defensive net on
+    that side, not a licence for this one to emit it.
+    """
     pipeline, state = _hook_state(
         '{"action":"silent","message":null,"confidence":0.4,"rationale":"already said"}',
         "help_request",
+    )
+    out = pipeline.post_agent_hook(state)
+
+    assert out == ""
+    state.callback.finish.assert_not_called()
+    args, kwargs = state.callback.fail.call_args
+    assert "this intent forbids" in args[0]
+    assert kwargs["tokens"] == ["tok"]
+    # the model's own reason still reaches the log
+    assert state.callback.status.rationale == "already said"
+
+
+def test_post_agent_hook_decide_still_honours_a_deliberate_silent():
+    """The counter-case: on the unsolicited intent, silence is a legitimate decision."""
+    pipeline, state = _hook_state(
+        '{"action":"silent","message":null,"confidence":0.4,"rationale":"already said"}',
+        "decide",
     )
     pipeline.post_agent_hook(state)
 

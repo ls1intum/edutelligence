@@ -355,20 +355,26 @@ class StruggleInterventionPipeline(
             cb.finish(tokens=state.tokens)
             return cc.closing_sentence or ""
         gate = parse_gate_result(state.result)
-        if intent == "help_request" and gate.parse_failed:
-            # The student explicitly asked for this hint, and the help_request template forbids
-            # "silent" outright. Finishing with an empty result here would reach Artemis as
-            # `result == null` and be delivered as silentDecide, i.e. the ask would vanish with
-            # no hint and no error. Fail the run instead: Artemis already completes the client's
-            # in-flight request on a terminal FAILED frame, so nothing hangs, and the failure
-            # stays distinguishable from a silence the model actually chose.
+        if intent == "help_request" and (gate.parse_failed or gate.action == "silent"):
+            # The student explicitly asked for this hint, and the help_request template answers
+            # only in "ambient" or "active" - NEVER SILENT is part of that intent's contract.
+            # Both an unparseable answer and a contract-violating "silent" finish with an empty
+            # result, which reaches Artemis as `result == null` and is delivered as silentDecide:
+            # the ask vanishes with no hint and no error. Fail the run for both instead. Artemis
+            # completes the client's in-flight request on a terminal FAILED frame, so nothing
+            # hangs, and its own tolerance for an incoming "silent" stays what it is, a defensive
+            # net rather than a path this side is entitled to use.
+            reason = (
+                "unusable model output"
+                if gate.parse_failed
+                else "silent, which this intent forbids"
+            )
             logger.warning(
-                "help_request produced unusable model output (%s); failing the run",
-                gate.rationale,
+                "help_request produced %s (%s); failing the run", reason, gate.rationale
             )
             status.rationale = gate.rationale
             cb.fail(
-                "Struggle-intervention help request produced unusable model output.",
+                f"Struggle-intervention help request produced {reason}.",
                 tokens=state.tokens,
             )
             return ""
