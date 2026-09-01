@@ -87,9 +87,11 @@ COPY --chown=agent:agent logos/logos-agent/workspace/screenshot.js /usr/local/li
 USER agent
 WORKDIR /workspace
 
-# HOME lives on the workspace volume: the root filesystem is read-only, and
-# keeping agent state (git config, CLI caches) with the working copy means a
-# follow-up session in the same workspace resumes with it intact.
+# HOME lives on the workspace volume because the root filesystem is
+# read-only. The harness replaces it at the start of every session — a
+# previous session is untrusted, and a credential-bearing session must not
+# read the hooks, dotfiles, or poisoned caches it left — so nothing stored
+# here is meant to survive a session.
 ENV HOME=/workspace/.home \
     NODE_PATH=/usr/local/lib/node_modules
 

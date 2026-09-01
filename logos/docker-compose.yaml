@@ -370,6 +370,10 @@ services:
       KEYCLOAK_JWKS_URI: "${KEYCLOAK_JWKS_URI:-${KEYCLOAK_ISSUER_URI}/protocol/openid-connect/certs}"
       KEYCLOAK_AUDIENCE: "${KEYCLOAK_AUDIENCE:-}"
       KEYCLOAK_CLIENT_ID: "${KEYCLOAK_CLIENT_ID:-logos}"
+      # External Keycloak role(s) that grant the required internal role — the
+      # same variable (and default) the webservice reads, so one .env names
+      # the deployment's admin role for both services.
+      KEYCLOAK_ROLES_LOGOS_ADMIN: "${KEYCLOAK_ROLES_LOGOS_ADMIN:-itg-admin}"
       LOGOS_AGENT_REQUIRED_ROLE: "${LOGOS_AGENT_REQUIRED_ROLE:-logos_admin}"
 
       # The Logos key sessions call models with. Give it LOW priority so agent

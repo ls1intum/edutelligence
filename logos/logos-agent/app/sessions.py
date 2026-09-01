@@ -294,7 +294,14 @@ class SessionManager:
                         break
             return  # resume before admitting anything new
 
-        # 3. Admit queued work into whatever room is left.
+        # 3. Admit queued work — at most one session per fresh capacity
+        #    reading. A single below-threshold sample must not claim every
+        #    open slot: admitted as a batch, four agents would move a small
+        #    fleet from zero load to occupying (or queueing for) every
+        #    loaded slot before the next observation can notice. The next
+        #    pass re-reads the platform before admitting the next session,
+        #    and a session creation schedules a pass of its own, so a
+        #    backlog drains at one fresh observation per admission.
         async with self._admission_lock:
             # Re-read inside the lock: every session creation schedules a
             # pass, so overlapping passes must not admit against a snapshot
@@ -305,8 +312,7 @@ class SessionManager:
             may_start, why = capacity.start_decision(reading, running=len(running), paused=len(paused))
             if not may_start:
                 return
-            room = settings.max_parallel_sessions - len(running) - len(paused)
-            for session in await db.claim_queued_sessions(room):
+            for session in await db.claim_queued_sessions(1):
                 await db.add_event(session["id"], EventKind.CAPACITY, {"decision": "start", "reason": why})
                 await self._launch(session)
 

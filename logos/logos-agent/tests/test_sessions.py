@@ -469,6 +469,59 @@ class TestOverlappingAdmission:
         # launches and find no room, not admit another full batch.
         assert sorted(launched) == [1, 2]
 
+    async def test_one_fresh_reading_admits_at_most_one_session(self, monkeypatch, tmp_path):
+        # A single below-threshold reading must not claim every open slot:
+        # a whole batch admitted at once would move a small fleet from zero
+        # load to occupying (or queueing for) every loaded slot before the
+        # next observation can notice. One fresh reading admits one
+        # session; the rest wait for the next pass's own observation.
+        from app import capacity, sessions
+
+        monkeypatch.setattr(
+            sessions,
+            "settings",
+            replace(sessions.settings, artifact_root=str(tmp_path), max_parallel_sessions=4),
+        )
+        reading = capacity.Reading(load=0.0, busy_slots=0, total_slots=1, queue_total=0, ok=True)
+        states = {sid: "queued" for sid in (1, 2, 3, 4)}
+        queue = [{"id": sid, "workspace_id": sid} for sid in states]
+        launched: list = []
+
+        async def fake_in_status(status):
+            return [{"id": sid, "workspace_id": sid} for sid, state in states.items() if state == status.value]
+
+        async def fake_claim(limit):
+            claimed = []
+            while limit > 0 and queue:
+                session = queue.pop(0)
+                states[session["id"]] = "starting"
+                claimed.append(session)
+                limit -= 1
+            return claimed
+
+        async def fake_launch(_self, session):
+            # Like the real launch, the row becomes running while the
+            # admission lock is still held.
+            await asyncio.sleep(0)
+            states[session["id"]] = "running"
+            launched.append(session["id"])
+
+        async def fake_event(_sid, _kind, _payload):
+            return None
+
+        monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
+        monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
+
+        await sessions.manager.scheduler_pass()
+
+        # One fresh reading, one admission: the other three stay queued for
+        # the next pass's own capacity observation.
+        assert launched == [1]
+        assert [sid for sid, state in states.items() if state == "queued"] == [2, 3, 4]
+
 
 class TestScreenshotOrchestration:
     """Where and when the requested dev pages get photographed.

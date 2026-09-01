@@ -128,8 +128,24 @@ async def get_workspace(workspace_id: int) -> dict[str, Any] | None:
 
 
 async def delete_workspace(workspace_id: int) -> bool:
-    """Delete a workspace. Refuses while it still has non-terminal sessions."""
+    """Delete a workspace. Refuses while it still has non-terminal sessions.
+
+    The workspace row is locked before the active count is taken, and
+    :func:`create_session` takes the same lock before it inserts: the two
+    are serialized on that row, so a session accepted after the count ran
+    can never be cascade-deleted by it, and a delete that runs first makes
+    the create fail cleanly instead.
+    """
     async with sessionmaker()() as db:
+        existing = (
+            await db.execute(
+                text("SELECT id FROM agent_workspaces WHERE id = :id FOR UPDATE"),
+                {"id": workspace_id},
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            await db.rollback()
+            return False
         active = (
             await db.execute(
                 text(
@@ -162,6 +178,22 @@ async def create_session(
     screenshot_paths: Sequence[str],
 ) -> int:
     async with sessionmaker()() as db:
+        # Lock the workspace row before inserting. delete_workspace takes
+        # the same lock before it counts active sessions and deletes, so
+        # the two transactions are serialized on the row: either the delete
+        # runs first (the lock select finds no row and this fails cleanly)
+        # or this commit runs first (the delete's count sees the queued
+        # session and refuses). A session that is accepted can never be
+        # cascade-deleted by a count that ran before it existed.
+        workspace = (
+            await db.execute(
+                text("SELECT id FROM agent_workspaces WHERE id = :workspace_id FOR UPDATE"),
+                {"workspace_id": workspace_id},
+            )
+        ).scalar_one_or_none()
+        if workspace is None:
+            await db.rollback()
+            raise ValueError(f"workspace {workspace_id} does not exist")
         session_id = (
             await db.execute(
                 text(

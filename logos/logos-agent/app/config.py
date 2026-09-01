@@ -55,9 +55,24 @@ class Settings:
     keycloak_jwks_uri: str = os.getenv("KEYCLOAK_JWKS_URI", "")
     keycloak_issuer_uri: str = os.getenv("KEYCLOAK_ISSUER_URI", "")
     keycloak_audience: str = os.getenv("KEYCLOAK_AUDIENCE", "") or os.getenv("KEYCLOAK_CLIENT_ID", "logos")
-    # Realm role that may drive agents. Sessions act on the dev environment and
-    # can open pull requests, so this is deliberately the admin role.
+    # The Logos Keycloak client. Client roles are read only from this client
+    # in the token — the same scoping the webservice applies
+    # (logos.auth.client-id) — never from other clients in the realm.
+    keycloak_client_id: str = os.getenv("KEYCLOAK_CLIENT_ID", "logos")
+    # The internal role name that may drive agents. Sessions act on the dev
+    # environment and can open pull requests, so this is deliberately the
+    # admin role. Tokens carry the deployment's *external* role name, which
+    # is mapped onto this one by `keycloak_roles_logos_admin`.
     required_role: str = os.getenv("LOGOS_AGENT_REQUIRED_ROLE", "logos_admin")
+    # The external Keycloak role name(s) that grant `required_role`. The
+    # browser JWT carries the name the deployment configured for its
+    # administrators (itg-admin by default), not the internal value — so the
+    # check maps first, exactly like the webservice does
+    # (logos.auth.roles.logos-admin / KeycloakRoleMapper). Same environment
+    # variable name, so one .env configures both services.
+    keycloak_roles_logos_admin: tuple[str, ...] = field(
+        default_factory=lambda: _csv("KEYCLOAK_ROLES_LOGOS_ADMIN", ("itg-admin",))
+    )
     # Set to skip token verification. Only ever for local development; the
     # service refuses to start with this on unless LOGOS_AGENT_DEV_MODE is set.
     auth_disabled: bool = _bool("LOGOS_AGENT_AUTH_DISABLED", False)

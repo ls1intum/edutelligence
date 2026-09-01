@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -130,16 +131,82 @@ def _install_git_askpass(token: str) -> None:
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
 
 
+def _reset_agent_home() -> None:
+    """Replace the agent's home with a fresh, empty directory.
+
+    HOME lives on the workspace volume, so everything a previous session
+    wrote there survives its container: a ``.gitconfig`` with
+    ``core.hooksPath`` or an alias, a ``.claude/settings.json`` whose hooks
+    run at the next session's first tool call, a ``CLAUDE.md`` the CLI
+    injects as global memory, shell rc files, and tool caches (maven, npm,
+    pip) a session could have poisoned to steer the next build. Every one of
+    those is agent-writable while the agent holds a push token, and the next
+    session is credential-bearing — so none of it is safe to reuse. The
+    re-download cost is the price of a clean start; the only state worth
+    keeping across sessions is the working copy itself, and even its
+    repository metadata is rebuilt, not reused.
+    """
+    home = Path(os.environ.get("HOME") or "/workspace/.home")
+    if home.is_symlink() or not home.is_dir():
+        if home.exists():
+            home.unlink()
+    else:
+        shutil.rmtree(home)
+    home.mkdir(parents=True, exist_ok=True)
+
+
+def _rebuild_git_metadata(repo_url: str) -> None:
+    """Recreate the checkout's ``.git`` from scratch, keeping only objects.
+
+    Everything except ``objects/`` is agent-writable, and parts of it are
+    agent-executable: git runs hook scripts from ``.git/hooks`` — or
+    wherever ``core.hooksPath`` in the repository (or global) config points
+    — on fetch, commit, and push. A bypass-permissions session can install
+    such a hook in minutes, and ``reset``/``clean`` never remove it, so it
+    would run from this harness with the *next* session's credentials.
+    Deleting the metadata and re-initialising leaves the standard config,
+    sample hooks only, and the object store — content-addressed data git
+    reads, never executes, and the one part worth keeping. The agent's home
+    is reset before this is called, because git reads the global
+    configuration (including the initialisation template) from there.
+    """
+    git_dir = CHECKOUT / ".git"
+    keep_objects = (git_dir / "objects").is_dir()
+    for entry in git_dir.iterdir():
+        if keep_objects and entry.name == "objects":
+            continue
+        if entry.is_symlink() or not entry.is_dir():
+            entry.unlink()
+        else:
+            shutil.rmtree(entry)
+    run(["git", "init", "--quiet"], cwd=CHECKOUT, quiet=True)
+    run(["git", "remote", "add", "origin", repo_url], cwd=CHECKOUT, quiet=True)
+
+
 def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -> None:
-    """Get a clean working copy of `base_branch` on a fresh `branch`."""
+    """Get a clean working copy of `base_branch` on a fresh `branch`.
+
+    A session runs unprivileged but with permission prompts disabled and a
+    push token in its environment, so the *next* session must not trust
+    anything the previous one wrote: the home directory is replaced and the
+    repository metadata rebuilt before any git command runs.
+    """
     _install_git_askpass(token)
+    _reset_agent_home()
     if not (CHECKOUT / ".git").is_dir():
         log(f"cloning {repo_url} at {base_branch}")
         CHECKOUT.parent.mkdir(parents=True, exist_ok=True)
+        if CHECKOUT.exists():
+            # A previous session left a tree without a usable .git (or one
+            # it replaced): nothing in it is trusted, so start from nothing.
+            if CHECKOUT.is_dir() and not CHECKOUT.is_symlink():
+                shutil.rmtree(CHECKOUT)
+            else:
+                CHECKOUT.unlink()
         run(["git", "clone", "--depth", "50", "--branch", base_branch, repo_url, str(CHECKOUT)])
     else:
-        log("reusing existing checkout")
-        run(["git", "remote", "set-url", "origin", repo_url], cwd=CHECKOUT, quiet=True)
+        log("reusing existing checkout; rebuilding trusted git metadata")
+        _rebuild_git_metadata(repo_url)
         run(["git", "fetch", "--depth", "50", "origin", base_branch], cwd=CHECKOUT)
         # Discard whatever a previous session left behind: a session starts
         # from the base branch, never from another session's leftovers.

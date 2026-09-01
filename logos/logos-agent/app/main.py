@@ -188,15 +188,21 @@ async def create_session(body: SessionCreate, principal: Principal = Depends(req
             detail="LOGOS_AGENT_API_KEY is not configured; sessions have no way to reach a model",
         )
 
-    session_id = await db.create_session(
-        workspace_id=body.workspace_id,
-        task=body.task,
-        model=body.model,
-        created_by=principal.username,
-        open_pull_request=body.open_pull_request,
-        deploy_to_dev=body.deploy_to_dev,
-        screenshot_paths=body.screenshot_paths,
-    )
+    try:
+        session_id = await db.create_session(
+            workspace_id=body.workspace_id,
+            task=body.task,
+            model=body.model,
+            created_by=principal.username,
+            open_pull_request=body.open_pull_request,
+            deploy_to_dev=body.deploy_to_dev,
+            screenshot_paths=body.screenshot_paths,
+        )
+    except ValueError as exc:
+        # The workspace was deleted between the 404 check above and the
+        # insert: fail the create instead of accepting a session whose
+        # workspace no longer exists.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     # Admission is the scheduler's job, but running a pass now means a session
     # created while the platform is idle starts in a second rather than at the
     # next tick.

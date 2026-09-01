@@ -4,7 +4,9 @@ The rest of the stack validates browser tokens in the Spring webservice and
 forwards internally with a shared secret. This service is reached directly from
 the UI through Traefik, so it verifies the token itself: fetch the realm's
 JWKS, cache it, check signature, issuer, audience, and expiry, then require the
-configured realm role.
+internal operator role — granted by whichever external Keycloak role the
+deployment configured for its administrators, the same mapping the webservice
+applies.
 
 Driving an agent means opening pull requests and touching the dev environment,
 so an authenticated-but-unprivileged token is not enough — the role check is
@@ -60,19 +62,40 @@ def _client() -> PyJWKClient:
 
 
 def _roles_from_claims(claims: dict[str, Any]) -> frozenset[str]:
-    """Collect realm and client roles into one set.
+    """The external role names a token carries for this deployment.
 
-    Keycloak splits them: realm roles live under ``realm_access.roles`` and
-    per-client roles under ``resource_access.<client>.roles``. The deployment
-    may grant the admin role either way, so both are read.
+    Same sources as the webservice's claim extraction: realm roles, the roles
+    of the configured Logos client, and the (normalized) groups. Keycloak
+    splits client roles per client under ``resource_access.<client>.roles``;
+    only the configured Logos client is read — a role granted by an unrelated
+    client in the same realm must not open the agent endpoints.
     """
     roles: set[str] = set()
     realm_access = claims.get("realm_access") or {}
     roles.update(realm_access.get("roles") or [])
-    for client in (claims.get("resource_access") or {}).values():
-        if isinstance(client, dict):
-            roles.update(client.get("roles") or [])
+    client_access = (claims.get("resource_access") or {}).get(settings.keycloak_client_id)
+    if isinstance(client_access, dict):
+        roles.update(client_access.get("roles") or [])
+    for group in claims.get("groups") or []:
+        if isinstance(group, str):
+            # Groups arrive with a leading "/", role names never have one.
+            roles.add(group[1:] if group.startswith("/") else group)
     return frozenset(roles)
+
+
+def _internal_roles(external_roles: frozenset[str]) -> frozenset[str]:
+    """Map external Keycloak role names onto the internal role this service
+    authorizes on.
+
+    The browser JWT carries the deployment's role name (itg-admin by
+    default), not the internal value — comparing it against
+    ``settings.required_role`` would 403 every administrator. This is the
+    webservice's mapping (KeycloakRoleMapper / logos.auth.roles.logos-admin):
+    any configured external name grants the required role, nothing else does.
+    """
+    if external_roles & frozenset(settings.keycloak_roles_logos_admin):
+        return frozenset({settings.required_role})
+    return frozenset()
 
 
 def _bearer(request: Request) -> str:
@@ -122,7 +145,7 @@ async def current_principal(request: Request) -> Principal:
     return Principal(
         subject=str(claims.get("sub", "")),
         username=str(claims.get("preferred_username") or claims.get("email") or claims.get("sub", "")),
-        roles=_roles_from_claims(claims),
+        roles=_internal_roles(_roles_from_claims(claims)),
     )
 
 
@@ -130,8 +153,13 @@ async def require_agent_operator(
     principal: Principal = Depends(current_principal),
 ) -> Principal:
     if not principal.has_role(settings.required_role):
+        # Name the external role(s) that grant it: that is what an operator
+        # can actually set in Keycloak.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Role '{settings.required_role}' is required to drive agents",
+            detail=(
+                f"Role '{settings.required_role}' is required to drive agents "
+                f"(grant one of: {', '.join(settings.keycloak_roles_logos_admin)})"
+            ),
         )
     return principal
