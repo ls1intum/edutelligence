@@ -27,7 +27,8 @@ from types import SimpleNamespace
 import pytest
 
 import logos_worker_node.main as worker_main
-from logos_worker_node.models import AppConfig, HostMemorySummary, LogosConfig, ProcessState
+from logos_worker_node.lane_manager import LaneManager
+from logos_worker_node.models import AppConfig, HostMemorySummary, LogosConfig, OllamaConfig, ProcessState
 
 
 def _mb(mb: float) -> int:
@@ -342,6 +343,59 @@ def test_replan_reaches_plan_when_lane_ids_is_property(monkeypatch) -> None:
 
     assert cache.floor_calls == 1  # _apply_ram_cache_plan ran — no TypeError
     assert cache.is_cached("org/big") is True  # the live-lane protection held
+
+
+def test_startup_sleep_triggers_reclaim_with_production_state_order(monkeypatch) -> None:
+    """Regression for the startup ordering: the on_lane_slept hook is installed
+    on the LaneManager, and a staggered sleep during a startup apply_lanes call
+    (static lanes, then restored dynamic lanes) fires it via _notify_lane_slept
+    — which swallows any error the hook raises. Before the fix the re-plan's
+    app.state fields were only assigned after those apply_lanes calls, so
+    _replan_ram_cache_once ran against missing state and was silently swallowed:
+    no reclaim between startup sleeps (unsafe for static models outside the
+    capabilities reserve).
+
+    This builds a FRESH app.state exactly as production initialises it (via
+    _init_ram_cache_replan_state — the same call main.py's startup now makes
+    before its first apply_lanes), wires the real hook onto a real LaneManager,
+    and drives the real _notify_lane_slept path — the method apply_lanes uses
+    for each staggered sleep — asserting the reclaim actually runs.
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
+
+    registry = _FakeRegistry(
+        {
+            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            "org/big": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
+        }
+    )
+    sizes = {"org/small": _mb(8_000), "org/big": _mb(48_000)}
+    cache = _FakeCache(cached=["org/small", "org/big"], sizes=sizes)
+    cfg = AppConfig(logos=LogosConfig(capabilities_models=["org/small", "org/big"]))
+
+    # Fresh app.state, populated by the SAME helper production's startup calls
+    # before its first apply_lanes — so this mirrors the production order.
+    app = SimpleNamespace(state=SimpleNamespace())
+
+    async def _startup_apply_lanes() -> None:
+        lane_manager = LaneManager(
+            global_config=OllamaConfig(),
+            on_lane_slept=lambda: worker_main._replan_ram_cache_once(app),
+        )
+        worker_main._init_ram_cache_replan_state(app, cfg, lane_manager, registry, cache)
+        # Two staggered sleeps in the apply_lanes pass: each must run the
+        # reactive re-plan on the spot (this is what the bug silently skipped).
+        await lane_manager._notify_lane_slept()
+        await lane_manager._notify_lane_slept()
+
+    asyncio.run(_startup_apply_lanes())
+
+    # Both startup sleeps reached _apply_ram_cache_plan (floor set on each) —
+    # the hook did not raise on missing app.state and get swallowed.
+    assert cache.floor_calls == 2
+    # The first startup sleep actually reclaimed the model that no longer fit.
+    assert cache.reclaimed[0] == ["org/big"]
+    assert cache.is_cached("org/big") is False
 
 
 # ── _replan_ram_cache_once ───────────────────────────────────────────────────

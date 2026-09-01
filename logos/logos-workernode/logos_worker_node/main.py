@@ -446,6 +446,35 @@ def _lane_models_with_live_processes(lane_manager: LaneManager) -> set[str]:
     return protected
 
 
+def _init_ram_cache_replan_state(
+    app: FastAPI,
+    cfg: AppConfig,
+    lane_manager: LaneManager,
+    model_profiles: ModelProfileRegistry,
+    model_cache: ModelRamCache | _DisabledModelRamCache,
+) -> None:
+    """Populate the app.state fields the RAM-cache re-plan reads at call time.
+
+    This MUST run before any startup apply_lanes call, not after it: a staggered
+    sleep during apply_lanes (static lanes, then restored dynamic lanes) fires
+    the on_lane_slept hook -> _replan_ram_cache_once, and _notify_lane_slept
+    swallows a missing-field error — silently skipping the reclaim. Setting the
+    state up here keeps the reactive hook active for the whole startup sequence.
+    (gpu_collector and the bridge are wired separately, right before the bridge
+    starts — nothing the re-plan reads from them.)
+    """
+    app.state.config = cfg
+    app.state.lane_manager = lane_manager
+    app.state.model_profiles = model_profiles
+    app.state.model_cache = model_cache
+    # Serialises the two re-plan triggers (tick + post-sleep hook) — see
+    # _replan_ram_cache_once.
+    app.state.ram_cache_replan_lock = asyncio.Lock()
+    # model -> consecutive ticks it has been admitted by the plan; drives the
+    # re-cache hold-down (see _run_ram_cache_replan).
+    app.state.ram_cache_in_plan_ticks: dict[str, int] = {}
+
+
 async def _replan_ram_cache_once(app: FastAPI) -> None:
     """Re-derive and apply the host-RAM-aware cache plan from live data.
 
@@ -803,12 +832,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         reboot_sentinel_path=cfg.worker.reboot_sentinel_path,
         # The reactive half of the RAM-cache re-plan: the moment a lane's
         # weights land in host RAM, the cache re-plans against the new
-        # MemAvailable instead of waiting for the next tick. The closure only
-        # dereferences app.state at call time — long after startup has
-        # populated it (sleep commands cannot arrive before the bridge
-        # starts).
+        # MemAvailable instead of waiting for the next tick. The closure
+        # dereferences app.state at call time — so the fields it reads must
+        # already exist. They are initialised right below, before the first
+        # startup apply_lanes, because a staggered sleep during apply_lanes
+        # fires this hook BEFORE the bridge starts, and _notify_lane_slept
+        # swallows a missing-state error (silently skipping the reclaim).
         on_lane_slept=lambda: _replan_ram_cache_once(app),
     )
+
+    # Initialise the re-plan's app.state dependencies NOW, before the startup
+    # apply_lanes calls below (static lanes, then restored dynamic lanes) can
+    # trigger a staggered sleep -> on_lane_slept. See _init_ram_cache_replan_state
+    # for why this must precede apply_lanes — a sleep during startup would
+    # otherwise invoke the re-plan against missing state and be swallowed.
+    _init_ram_cache_replan_state(app, cfg, lane_manager, model_profiles, model_cache)
 
     # Validate capabilities models at startup (warnings only)
     if cfg.logos and cfg.logos.capabilities_models:
@@ -921,18 +959,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 )
                 cfg.logos.capabilities_models = ready_caps
 
-    app.state.config = cfg
     app.state.gpu_collector = gpu_collector
-    app.state.lane_manager = lane_manager
-    app.state.model_profiles = model_profiles
-    app.state.model_cache = model_cache
-    # Serialises the two re-plan triggers (tick + post-sleep hook) — see
-    # _replan_ram_cache_once. Created before the bridge starts so it exists
-    # before the first sleep command can arrive.
-    app.state.ram_cache_replan_lock = asyncio.Lock()
-    # model -> consecutive ticks it has been admitted by the plan; drives the
-    # re-cache hold-down (see _run_ram_cache_replan).
-    app.state.ram_cache_in_plan_ticks: dict[str, int] = {}
     logos_bridge = LogosBridgeClient(app, cfg.logos)
     app.state.logos_bridge = logos_bridge
     await logos_bridge.start()
