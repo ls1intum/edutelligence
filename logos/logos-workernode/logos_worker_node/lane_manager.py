@@ -415,7 +415,25 @@ class LaneManager:
             checked = [os.path.join(models_path, model_name)]
             if cache_root:
                 checked.append(os.path.join(cache_root, model_name))
-            if not os.path.isdir(hf_cache_dir) and not any(os.path.isdir(p) for p in checked):
+            if gguf.is_remote_gguf_ref(model_name) or gguf.is_remote_gguf_file_ref(model_name):
+                # A repository directory is not proof the model can load: Hugging
+                # Face snapshots can be partial (the prefetch stores only the
+                # quants its models selected), so the reference must resolve to
+                # its concrete quant or file and find THAT in the active
+                # snapshot. A cache holding only a different quant of the same
+                # repo must stay missing, or the prefetch never downloads the
+                # quant the lane serves and the lane fails offline.
+                if gguf.is_gguf_ref_cached(hf_home, model_name) is not True:
+                    missing.append(model_name)
+                    logger.warning(
+                        "Capability model '%s' not available locally: its selected "
+                        "quant or file is not present in the cache (checked %s and %s). "
+                        "Ensure the model is downloaded before it can be loaded.",
+                        model_name,
+                        hf_cache_dir,
+                        ", ".join(checked),
+                    )
+            elif not os.path.isdir(hf_cache_dir) and not any(os.path.isdir(p) for p in checked):
                 missing.append(model_name)
                 logger.warning(
                     "Capability model '%s' not found locally (checked %s and %s). "

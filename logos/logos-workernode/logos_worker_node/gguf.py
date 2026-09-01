@@ -216,6 +216,13 @@ def is_gguf_file_ref(model: str) -> bool:
     return (model or "").strip().lower().endswith(".gguf")
 
 
+def is_remote_gguf_file_ref(model: str) -> bool:
+    """Whether *model* is a ``repo/file.gguf`` reference (not a local
+    ``/path/to/file.gguf``, whose presence is a plain filesystem check)."""
+    model = (model or "").strip()
+    return is_gguf_file_ref(model) and not model.startswith("/") and "/" in repo_id_of(model)
+
+
 def is_gguf_repo_name(model: str) -> bool:
     """Whether a bare repo id follows the ``…-GGUF`` / ``…_GGUF`` naming convention.
 
@@ -429,6 +436,62 @@ def list_cached_gguf_files(hf_home: str | None, model: str) -> list[tuple[str, i
     except OSError:
         return None
     return sorted(sizes.items())
+
+
+def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
+    """Whether an explicit GGUF reference's concrete weights are cached.
+
+    ``repo:quant`` and ``repo/file.gguf`` references name a specific quant or
+    file, and Hugging Face snapshots can be partial — the startup prefetch
+    stores only the quants its models selected, so a repository directory
+    holding ``Q4_K_M`` does not satisfy ``repo:Q8_0`` of the same repo. This
+    checks the active snapshot for the concrete target instead of the
+    repository directory:
+
+    - ``repo:quant`` — the cached files carry the quant, complete: a
+      single-file quant needs its file, a sharded quant needs every shard of
+      its ``-N-of-M`` family (a partial download still counts as missing so
+      the idempotent prefetch completes it).
+    - ``repo/file.gguf`` — the named file is cached; for a sharded name the
+      whole family, which the plugin's loader expands the first shard to.
+
+    Returns True when the snapshot proves the reference loadable, False when
+    the active snapshot is present but lacks the quant or file (a partial
+    cache of a different quant), and None when the local listing is
+    unavailable (repo not cached, active revision unresolvable) or the model
+    is not a remote explicit reference — callers treat False and None alike
+    (missing), since only a prefetch can then (re)build the cache.
+    """
+    model = (model or "").strip()
+    if not (is_remote_gguf_ref(model) or is_remote_gguf_file_ref(model)):
+        return None
+    listing = list_cached_gguf_files(hf_home, model)
+    if listing is None:
+        return None
+    if is_remote_gguf_ref(model):
+        quant = model.rsplit(":", 1)[1].upper()
+        shard_total: int | None = None
+        shard_count = 0
+        for name, _ in listing:
+            base = name.rsplit("/", 1)[-1]
+            if "mmproj" in base.lower() or quant_from_filename(base) != quant:
+                continue
+            shard = _SHARD_INDEX_RE.search(base)
+            if shard is None:
+                # A non-sharded file of the quant is a complete model.
+                return True
+            shard_count += 1
+            shard_total = int(shard.group(0).rsplit("-of-", 1)[1])
+        return shard_total is not None and shard_count == shard_total
+    requested = model.rsplit("/", 1)[1].lower()
+    names = [name.rsplit("/", 1)[-1].lower() for name, _ in listing]
+    shard = _SHARD_INDEX_RE.search(requested)
+    if shard is None:
+        return requested in names
+    total = int(shard.group(0).rsplit("-of-", 1)[1])
+    key = _SHARD_INDEX_RE.sub("-of-", requested)
+    siblings = [name for name in names if _SHARD_INDEX_RE.sub("-of-", name) == key]
+    return len(siblings) >= total
 
 
 def effective_hf_home(explicit: str | None, default: str = "") -> str:

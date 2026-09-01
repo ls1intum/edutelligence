@@ -99,6 +99,39 @@ def test_validate_capabilities_checks_hf_cache_dir(tmp_path: Path, monkeypatch) 
     assert stale.validate_capabilities([model]) == [model]
 
 
+def test_validate_capabilities_partial_snapshot_reports_missing_quant(tmp_path: Path, monkeypatch) -> None:
+    # The partial-cache regression: Hugging Face snapshots can be partial —
+    # the prefetch cached Q4_K_M of the repository, and the capability now
+    # pins Q8_0 of the SAME repo. The repository directory exists, so the
+    # directory-only check excluded the model from `missing` and the prefetch
+    # never downloaded Q8_0. The concrete quant must be resolved and checked
+    # inside the active snapshot instead.
+    monkeypatch.delenv("HF_HOME", raising=False)
+    cache_root = tmp_path / "root"
+    (cache_root / "models").mkdir(parents=True)
+    manager = LaneManager(
+        OllamaConfig(models_path=str(cache_root / "models")),
+        lane_port_start=16041,
+        lane_port_end=16050,
+    )
+    _write_cached(cache_root / "models" / ".hf_cache", "org/model-GGUF", ["model-GGUF-Q4_K_M.gguf"])
+
+    # A quant the snapshot does not hold is missing (prefetch triggered) …
+    assert manager.validate_capabilities(["org/model-GGUF:Q8_0"]) == ["org/model-GGUF:Q8_0"]
+    # … while the fully cached quant stays excluded from missing.
+    assert manager.validate_capabilities(["org/model-GGUF:Q4_K_M"]) == []
+    # An explicit file reference is checked the same way.
+    assert manager.validate_capabilities(["org/model-GGUF/model-GGUF-Q5_K_M.gguf"]) == [
+        "org/model-GGUF/model-GGUF-Q5_K_M.gguf"
+    ]
+    assert manager.validate_capabilities(["org/model-GGUF/model-GGUF-Q4_K_M.gguf"]) == []
+    # A reference to a repository that is not cached at all is missing too.
+    assert manager.validate_capabilities(["org/other-GGUF:Q4_K_M"]) == ["org/other-GGUF:Q4_K_M"]
+    # A bare repository selects its quant from whatever the cache holds, so
+    # the repository directory still satisfies it (unchanged behaviour).
+    assert manager.validate_capabilities(["org/model-GGUF"]) == []
+
+
 # ---------------------------------------------------------------------------
 # calibration resolver — inherited HF_HOME + authoritative empty listing
 # ---------------------------------------------------------------------------

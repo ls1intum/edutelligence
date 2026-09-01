@@ -92,6 +92,15 @@ def test_is_gguf_file_ref() -> None:
     assert gguf.is_gguf_file_ref("unsloth/Qwen3-8B-GGUF") is False
 
 
+def test_is_remote_gguf_file_ref() -> None:
+    assert gguf.is_remote_gguf_file_ref("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf") is True
+    # A local path is a plain filesystem check, not a Hub reference.
+    assert gguf.is_remote_gguf_file_ref("/models/Qwen3-8B-Q4_K_M.gguf") is False
+    # No repository component (or not a file at all) → not remote.
+    assert gguf.is_remote_gguf_file_ref("Qwen3-8B.gguf") is False
+    assert gguf.is_remote_gguf_file_ref("unsloth/Qwen3-8B-GGUF") is False
+
+
 def test_is_gguf_repo_name() -> None:
     assert gguf.is_gguf_repo_name("unsloth/Qwen3-8B-GGUF") is True
     assert gguf.is_gguf_repo_name("huihui_ai/gemma-3-4b-it-GGUF") is True
@@ -333,6 +342,81 @@ def test_list_cached_gguf_files_unresolvable_ref_is_unavailable(tmp_path: Path) 
     (repo_dir / "refs" / "main").unlink()
     (repo_dir / "refs" / "other-tag").write_text("rev-a")
     assert gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF") is None
+
+
+# ---------------------------------------------------------------------------
+# is_gguf_ref_cached — concrete quant/file presence in a (possibly partial) snapshot
+# ---------------------------------------------------------------------------
+
+
+def test_is_gguf_ref_cached_partial_snapshot_flags_other_quant(tmp_path: Path) -> None:
+    # The regression case: the prefetch cached Q4_K_M, the capability now
+    # pins Q8_0 of the SAME repository. The repository directory exists, but
+    # the pinned quant does not — it must NOT count as cached.
+    _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M.gguf"])
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q8_0") is False
+    # The cached quant satisfies its own reference (case-insensitively).
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:q4_k_m") is True
+
+
+def test_is_gguf_ref_cached_lowercase_cached_file_satisfies_quant(tmp_path: Path) -> None:
+    # The download patterns match both cases, so a cache built from a
+    # lowercase file name satisfies the canonical (uppercase) reference.
+    _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-q4_k_m.gguf"])
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
+
+
+def test_is_gguf_ref_cached_repo_not_cached_is_unavailable(tmp_path: Path) -> None:
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is None
+
+
+def test_is_gguf_ref_cached_non_explicit_refs_are_not_checked(tmp_path: Path) -> None:
+    # A bare repo picks its quant from whatever is cached, a local path is a
+    # filesystem check — neither has a concrete snapshot target to verify.
+    _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M.gguf"])
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF") is None
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "/data/models/Qwen3-8B.gguf") is None
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "Qwen/Qwen3-8B") is None
+
+
+def test_is_gguf_ref_cached_file_ref(tmp_path: Path) -> None:
+    _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M.gguf", "quants/Qwen3-8B-Q8_0.gguf"])
+    # The named file is found — also when the repository keeps it in a
+    # subdirectory (the reference names the file, the snapshot walk finds it) …
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf") is True
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf") is True
+    # … but a sibling file that was never cached is not.
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q5_K_M.gguf") is False
+
+
+def test_is_gguf_ref_cached_sharded_file_ref_needs_whole_family(tmp_path: Path) -> None:
+    # A reference to one shard of a multi-file quant must find the whole
+    # -N-of-M family — the plugin's loader expands the first shard to it, so
+    # a lone shard is not loadable and the prefetch (which downloads the
+    # family) must still run.
+    _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf"])
+    ref = "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M-00001-of-00002.gguf"
+    assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is False
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "Qwen3-8B-Q4_K_M-00002-of-00002.gguf"],
+    )
+    assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is True
+    # Referring to the second shard gives the same answer.
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M-00002-of-00002.gguf") is True
+
+
+def test_is_gguf_ref_cached_sharded_quant_needs_all_shards(tmp_path: Path) -> None:
+    _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf"])
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is False
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "Qwen3-8B-Q4_K_M-00002-of-00002.gguf"],
+    )
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
 
 
 # ---------------------------------------------------------------------------
