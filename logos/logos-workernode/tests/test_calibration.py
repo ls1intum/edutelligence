@@ -2457,8 +2457,11 @@ def test_gguf_calibration_spec_resolves_from_local_cache_offline(monkeypatch, tm
     from logos_worker_node.calibration import _resolve_gguf_calibration_spec
 
     # A bare -GGUF repo present in the local HF cache (Q4_K_M and a larger Q8_0).
-    snapshot = tmp_path / "hub" / "models--unsloth--Qwen3-8B-GGUF" / "snapshots" / "rev"
+    repo_dir = tmp_path / "hub" / "models--unsloth--Qwen3-8B-GGUF"
+    snapshot = repo_dir / "snapshots" / "rev"
     snapshot.mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs" / "main").write_text("rev")
     (snapshot / "Qwen3-8B-Q4_K_M.gguf").write_bytes(b"\x00" * 1024)
     (snapshot / "Qwen3-8B-Q8_0.gguf").write_bytes(b"\x00" * 4096)
 
@@ -2701,8 +2704,11 @@ def test_build_vllm_cmd_resolves_plain_named_cached_gguf_repo(tmp_path: Path) ->
     """
     from logos_worker_node.calibration import _build_vllm_cmd
 
-    snapshot = tmp_path / "hub" / "models--org--plain-llm" / "snapshots" / "rev"
+    repo_dir = tmp_path / "hub" / "models--org--plain-llm"
+    snapshot = repo_dir / "snapshots" / "rev"
     snapshot.mkdir(parents=True)
+    (repo_dir / "refs").mkdir(parents=True)
+    (repo_dir / "refs" / "main").write_text("rev")
     (snapshot / "plain-llm-Q4_K_M.gguf").write_bytes(b"\x00" * 1024)
 
     cmd = _build_vllm_cmd({"model": "org/plain-llm"}, "vllm", "127.0.0.1", 9000, "4G", hf_home=str(tmp_path))
@@ -2717,8 +2723,11 @@ def test_build_vllm_cmd_ordinary_model_keeps_the_bare_repo(tmp_path: Path) -> No
     """
     from logos_worker_node.calibration import _build_vllm_cmd
 
-    snapshot = tmp_path / "hub" / "models--org--sft-model" / "snapshots" / "rev"
+    repo_dir = tmp_path / "hub" / "models--org--sft-model"
+    snapshot = repo_dir / "snapshots" / "rev"
     snapshot.mkdir(parents=True)
+    (repo_dir / "refs").mkdir(parents=True)
+    (repo_dir / "refs" / "main").write_text("rev")
     (snapshot / "model-00001-of-00002.safetensors").write_bytes(b"\x00" * 16)
 
     cmd = _build_vllm_cmd({"model": "org/sft-model"}, "vllm", "127.0.0.1", 9000, "4G", hf_home=str(tmp_path))
@@ -2755,8 +2764,11 @@ def test_calibrate_disk_fallback_passes_persistent_hf_home_to_spawn(monkeypatch,
 
     persistent_root = tmp_path / "persistent"
     # Plain-named repo whose GGUF weights live in the persistent cache.
-    snapshot = persistent_root / "hub" / "models--org--plain-llm" / "snapshots" / "rev"
+    repo_dir = persistent_root / "hub" / "models--org--plain-llm"
+    snapshot = repo_dir / "snapshots" / "rev"
     snapshot.mkdir(parents=True)
+    (repo_dir / "refs").mkdir(parents=True)
+    (repo_dir / "refs" / "main").write_text("rev")
     (snapshot / "plain-llm-Q4_K_M.gguf").write_bytes(b"\x00" * 1024)
 
     class DiskOnlyCache:

@@ -19,8 +19,12 @@ from logos_worker_node.models import OllamaConfig
 
 def _write_cached(hf_home: Path, model: str, files: list[str] | None = None) -> None:
     """Create a snapshot dir under *hf_home* holding *files* (names only)."""
-    snapshot = hf_home / "hub" / gguf.hf_cache_dir_name(model) / "snapshots" / "abc123"
+    repo_dir = hf_home / "hub" / gguf.hf_cache_dir_name(model)
+    snapshot = repo_dir / "snapshots" / "abc123"
     snapshot.mkdir(parents=True, exist_ok=True)
+    # refs/main points at the active revision — the snapshot the listing walks.
+    (repo_dir / "refs").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs" / "main").write_text("abc123")
     for name in files or []:
         (snapshot / name).write_bytes(b"\x00")
 
@@ -137,3 +141,42 @@ def test_calibration_spec_empty_listing_no_hub(tmp_path: Path, monkeypatch) -> N
     spec = _resolve_gguf_calibration_spec({"model": "unsloth/Qwen3-8B-GGUF"}, None)
     assert spec is None  # the empty listing disproves GGUF
     assert hub_calls == []  # no redundant Hub download
+
+
+# ---------------------------------------------------------------------------
+# spawn_vllm — the child receives the resolved HF cache root
+# ---------------------------------------------------------------------------
+
+
+def test_spawn_vllm_passes_resolved_default_hf_home(tmp_path: Path, monkeypatch) -> None:
+    # With hf_home and HF_HOME unset, spawn_vllm must still point the child at
+    # the resolved default cache root — the same root
+    # _resolve_gguf_calibration_spec resolved the weights from — otherwise vLLM
+    # misses locally-cached GGUF weights during offline calibration.
+    import subprocess
+
+    from logos_worker_node import calibration
+
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
+
+    captured = {}
+
+    class _FakePopen:
+        pid = 4242
+
+        def __init__(self, cmd, env=None, **kwargs):  # noqa: ARG002
+            captured["env"] = env
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    log_path = tmp_path / "logs" / "probe.log"
+
+    # Unset hf_home / HF_HOME → the resolved default root reaches the child.
+    calibration.spawn_vllm({"model": "org/plain-llm"}, "vllm", "127.0.0.1", 12999, log_path, "4G", hf_home=None)
+    assert captured["env"]["HF_HOME"] == calibration._default_hf_home()
+
+    # An explicit hf_home (tmpfs RAM cache) still wins over the default.
+    captured.clear()
+    ram = tmp_path / "ram"
+    calibration.spawn_vllm({"model": "org/plain-llm"}, "vllm", "127.0.0.1", 12999, log_path, "4G", hf_home=str(ram))
+    assert captured["env"]["HF_HOME"] == str(ram)

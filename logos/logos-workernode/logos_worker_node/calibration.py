@@ -1010,10 +1010,16 @@ def spawn_vllm(
     vllm_dir = str(Path(vllm_binary).resolve().parent)
     env["PATH"] = f"{vllm_dir}{os.pathsep}{env.get('PATH', '')}"
 
-    # Override HF_HOME to load from tmpfs RAM cache if provided.
-    if hf_home:
-        env["HF_HOME"] = hf_home
-        logger.info("  HF_HOME=%s (tmpfs RAM cache)", hf_home)
+    # Point the child at the cache the resolver consulted: an explicit hf_home
+    # (tmpfs RAM cache / operator override) wins, else the inherited HF_HOME,
+    # else the resolved default cache root — the same root
+    # _resolve_gguf_calibration_spec resolved the weights from. Without this, a
+    # GGUF repo resolved from the default cache root spawns a vLLM that never
+    # looks there and misses the weights offline.
+    resolved_hf_home = effective_hf_home(hf_home) or _default_hf_home()
+    if resolved_hf_home:
+        env["HF_HOME"] = resolved_hf_home
+        logger.info("  HF_HOME=%s", resolved_hf_home)
 
     # NCCL P2P: disabled by default (PCIe-only assumed).
     # Set nccl_p2p_available=True for NVLink setups.

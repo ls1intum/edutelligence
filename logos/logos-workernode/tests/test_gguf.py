@@ -77,6 +77,15 @@ def test_is_remote_gguf_ref() -> None:
     assert gguf.is_remote_gguf_ref("") is False
 
 
+def test_is_remote_gguf_ref_is_case_insensitive_in_quant() -> None:
+    # The quant token's canonical form is uppercase; a lowercase reference is
+    # recognized the same as its uppercase form.
+    assert gguf.is_remote_gguf_ref("unsloth/Qwen3-8B-GGUF:q4_k_m") is True
+    assert gguf.is_remote_gguf_ref("unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
+    # Unknown quant, in any case, is still rejected.
+    assert gguf.is_remote_gguf_ref("unsloth/Qwen3-8B-GGUF:q9_x") is False
+
+
 def test_is_gguf_file_ref() -> None:
     assert gguf.is_gguf_file_ref("/models/Qwen3-8B-Q4_K_M.gguf") is True
     assert gguf.is_gguf_file_ref("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf") is True
@@ -216,6 +225,9 @@ def _write_gguf(hf_home: Path, model: str, filenames: list[str], sizes: list[int
     repo_dir = hf_home / "hub" / ("models--" + model.replace("/", "--"))
     snapshot = repo_dir / "snapshots" / "abc123"
     snapshot.mkdir(parents=True, exist_ok=True)
+    # refs/main points at the active revision — the snapshot the listing walks.
+    (repo_dir / "refs").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs" / "main").write_text("abc123")
     for i, name in enumerate(filenames):
         target = snapshot / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -281,6 +293,46 @@ def test_list_cached_gguf_files_finds_nested_subdirectory_files(tmp_path: Path) 
     # The snapshot-relative name is harmless downstream: the quant helpers
     # basename their input, so a nested file still resolves its quant.
     assert [quant for quant, _ in gguf.candidate_quants(files)] == ["Q4_K_S", "Q8_0", "Q4_K_M"]
+
+
+def test_list_cached_gguf_files_ignores_stale_older_snapshot(tmp_path: Path) -> None:
+    # refs/main points at the active revision. An older cached snapshot that
+    # still holds a formerly preferred quant must not leak into the listing —
+    # otherwise select_quant would offer a quant the active branch removed,
+    # and calibration/lane startup would build a repo:quant the current
+    # repository cannot serve.
+    repo_dir = tmp_path / "hub" / "models--unsloth--Qwen3-8B-GGUF"
+    (repo_dir / "snapshots" / "old-rev").mkdir(parents=True)
+    (repo_dir / "snapshots" / "new-rev").mkdir(parents=True)
+    (repo_dir / "snapshots" / "old-rev" / "Qwen3-8B-Q4_K_M.gguf").write_bytes(b"\x00" * 16)
+    (repo_dir / "snapshots" / "new-rev" / "Qwen3-8B-Q4_K_S.gguf").write_bytes(b"\x00" * 16)
+    (repo_dir / "refs").mkdir()
+    (repo_dir / "refs" / "main").write_text("new-rev")
+
+    files = gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF")
+    # Only the active (new-rev) snapshot is listed; the stale Q4_K_M is gone.
+    assert files == [("Qwen3-8B-Q4_K_S.gguf", 16)]
+    # …so it is not a selectable candidate.
+    assert gguf.select_quant(gguf.candidate_quants(files)) == "Q4_K_S"
+
+
+def test_list_cached_gguf_files_unresolvable_ref_is_unavailable(tmp_path: Path) -> None:
+    # Cached but no single active revision resolvable (multiple refs, no
+    # refs/main) → the local listing is treated as unavailable (None), not
+    # guessed across ambiguous revisions.
+    repo_dir = tmp_path / "hub" / "models--unsloth--Qwen3-8B-GGUF"
+    (repo_dir / "snapshots" / "rev-a").mkdir(parents=True)
+    (repo_dir / "snapshots" / "rev-a" / "Qwen3-8B-Q4_K_M.gguf").write_bytes(b"\x00" * 16)
+    (repo_dir / "refs").mkdir()
+    (repo_dir / "refs" / "main").write_text("rev-a")
+    (repo_dir / "refs" / "some-tag").write_text("rev-a")
+
+    # A single refs/main resolves fine even with an extra snapshot present.
+    assert gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF") == [("Qwen3-8B-Q4_K_M.gguf", 16)]
+    # Remove refs/main: now two refs remain → ambiguous → unavailable.
+    (repo_dir / "refs" / "main").unlink()
+    (repo_dir / "refs" / "other-tag").write_text("rev-a")
+    assert gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF") is None
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +408,16 @@ def test_resolve_gguf_spec_remote_ref_passthrough() -> None:
     assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
     assert spec.quant == "Q4_K_M"
     assert spec.tokenizer is None
+
+
+def test_resolve_gguf_spec_remote_ref_lowercase_canonicalized() -> None:
+    # A lowercase repo:quant reference is served under its canonical uppercase
+    # quant, so vllm/the plugin receive the same reference as the uppercase
+    # form (the download patterns already match both cases).
+    spec = gguf.resolve_gguf_spec("unsloth/Qwen3-8B-GGUF:q4_k_m")
+    assert spec is not None
+    assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    assert spec.quant == "Q4_K_M"
 
 
 def test_resolve_gguf_spec_remote_ref_with_tokenizer() -> None:
