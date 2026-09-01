@@ -22,7 +22,7 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -61,8 +61,13 @@ _DTYPE_BYTES = {
 @dataclass(frozen=True)
 class HfModelMetadata:
     weight_bytes: int | None = None  # sum of *.safetensors sibling sizes
-    kv_per_token_bytes: int | None = None  # whole model, every KV head — see min_feasible_tp
+    kv_per_token_bytes: int | None = None  # whole model, every KV head, config's own dtype — see min_feasible_tp
     num_key_value_heads: int | None = None  # for per-TP-rank KV sharding/replication
+    # Dtype-independent KV geometry — lets kv_bytes_for_dtype recompute
+    # kv_per_token_bytes for a plan's --kv-cache-dtype override instead of
+    # the config's own torch_dtype baked into kv_per_token_bytes above.
+    num_hidden_layers: int | None = None
+    kv_head_dim: float | None = None
     max_context_length: int | None = None
     # config.json's quantization_config.quant_method (e.g. "awq", "gptq").
     # This module just extracts the raw string; logos_bridge.py checks it
@@ -108,7 +113,10 @@ def _effective_max_context_length(config: dict[str, Any], base: int | None) -> i
     return int(base * factor)
 
 
-def _derive_kv_per_token_bytes(config: dict[str, Any], kv_cache_dtype_override: str | None) -> int | None:
+def _kv_geometry(config: dict[str, Any]) -> tuple[int, int, float] | None:
+    """(num_hidden_layers, num_key_value_heads, head_dim) — the
+    dtype-independent shape of one token's KV cache slot. None if the
+    config doesn't expose enough of it to derive a value at all."""
     num_hidden_layers = _get_config_field(config, "num_hidden_layers")
     hidden_size = _get_config_field(config, "hidden_size")
     num_attention_heads = _get_config_field(config, "num_attention_heads")
@@ -116,13 +124,29 @@ def _derive_kv_per_token_bytes(config: dict[str, Any], kv_cache_dtype_override: 
     head_dim = _get_config_field(config, "head_dim")
     if head_dim is None and hidden_size and num_attention_heads:
         head_dim = hidden_size / num_attention_heads
-
     if not (num_hidden_layers and num_key_value_heads and head_dim):
         return None
+    return num_hidden_layers, num_key_value_heads, head_dim
 
-    dtype_name = str(kv_cache_dtype_override or _get_config_field(config, "torch_dtype") or "").lower()
-    dtype_bytes = _DTYPE_BYTES.get(dtype_name, 2)
+
+def kv_bytes_for_dtype(
+    num_hidden_layers: int, num_key_value_heads: int, head_dim: float, dtype_name: str | None
+) -> int:
+    """Whole-model KV footprint (every layer, every KV head) for a given
+    dtype name — the same geometry _derive_kv_per_token_bytes uses,
+    computed on demand for a plan's --kv-cache-dtype override instead of
+    the value cached under the config's own (possibly different) dtype."""
+    dtype_bytes = _DTYPE_BYTES.get((dtype_name or "").lower(), 2)
     return int(2 * num_hidden_layers * num_key_value_heads * head_dim * dtype_bytes)
+
+
+def _derive_kv_per_token_bytes(config: dict[str, Any], kv_cache_dtype_override: str | None) -> int | None:
+    geometry = _kv_geometry(config)
+    if geometry is None:
+        return None
+    num_hidden_layers, num_key_value_heads, head_dim = geometry
+    dtype_name = str(kv_cache_dtype_override or _get_config_field(config, "torch_dtype") or "")
+    return kv_bytes_for_dtype(num_hidden_layers, num_key_value_heads, head_dim, dtype_name)
 
 
 def _resolve_checkpoint_weight_bytes(siblings: list[Any], index_json: dict[str, Any] | None) -> int | None:
@@ -188,6 +212,8 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
 
     kv_per_token_bytes: int | None = None
     num_key_value_heads: int | None = None
+    num_hidden_layers: int | None = None
+    kv_head_dim: float | None = None
     max_context_length: int | None = None
     quantization_method: str | None = None
     try:
@@ -197,9 +223,9 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
         with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
         kv_per_token_bytes = _derive_kv_per_token_bytes(config, None)
-        num_key_value_heads = _get_config_field(config, "num_key_value_heads") or _get_config_field(
-            config, "num_attention_heads"
-        )
+        kv_geometry = _kv_geometry(config)
+        if kv_geometry is not None:
+            num_hidden_layers, num_key_value_heads, kv_head_dim = kv_geometry
         max_context_length = _effective_max_context_length(config, _get_config_field(config, "max_position_embeddings"))
         quant_cfg = _get_config_field(config, "quantization_config")
         if isinstance(quant_cfg, dict):
@@ -228,6 +254,8 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
         weight_bytes=weight_bytes,
         kv_per_token_bytes=kv_per_token_bytes,
         num_key_value_heads=num_key_value_heads,
+        num_hidden_layers=num_hidden_layers,
+        kv_head_dim=kv_head_dim,
         max_context_length=max_context_length,
         quantization_method=quantization_method,
         fetched_at=time.time(),
@@ -297,16 +325,12 @@ class HfModelInfoCache:
             # future put() sweep too.
             for name in [n for n, e in self._entries.items() if not self._is_valid_entry(e) or self._is_expired(e)]:
                 del self._entries[name]
-            self._entries[model_name] = {
-                "weight_bytes": meta.weight_bytes,
-                "kv_per_token_bytes": meta.kv_per_token_bytes,
-                "num_key_value_heads": meta.num_key_value_heads,
-                "max_context_length": meta.max_context_length,
-                "quantization_method": meta.quantization_method,
-                "fetched_at": meta.fetched_at or time.time(),
-                "source": meta.source,
-                "error": meta.error,
-            }
+            # asdict(), not a hand-picked field list — a manually maintained
+            # list has twice now silently dropped a newly added field,
+            # making every cached (non-cold) precheck quietly regress.
+            entry = asdict(meta)
+            entry["fetched_at"] = meta.fetched_at or time.time()
+            self._entries[model_name] = entry
             if self._path is None:
                 return
             try:

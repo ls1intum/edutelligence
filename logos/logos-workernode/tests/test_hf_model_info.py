@@ -16,6 +16,7 @@ from logos_worker_node.hf_model_info import (
     _effective_max_context_length,
     _resolve_checkpoint_weight_bytes,
     fetch_hf_model_metadata,
+    kv_bytes_for_dtype,
     min_feasible_tp,
 )
 
@@ -58,6 +59,15 @@ def test_derive_kv_per_token_bytes():
     # Missing required fields → None, never a guess.
     assert _derive_kv_per_token_bytes({}, None) is None
     assert _derive_kv_per_token_bytes({"num_hidden_layers": 10}, None) is None
+
+
+def test_kv_bytes_for_dtype():
+    # Same geometry, a plan's --kv-cache-dtype override recomputed on
+    # demand instead of the value cached under the config's own dtype.
+    assert kv_bytes_for_dtype(32, 8, 128, "bfloat16") == 2 * 32 * 8 * 128 * 2
+    assert kv_bytes_for_dtype(32, 8, 128, "fp8") == 2 * 32 * 8 * 128 * 1
+    assert kv_bytes_for_dtype(32, 8, 128, "unknown-future-dtype") == 2 * 32 * 8 * 128 * 2
+    assert kv_bytes_for_dtype(32, 8, 128, None) == 2 * 32 * 8 * 128 * 2
 
 
 def test_effective_max_context_length():

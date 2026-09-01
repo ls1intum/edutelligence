@@ -1829,10 +1829,11 @@ async def test_run_compatibility_precheck_session_scopes_to_plans_explicit_gpu_d
 
 @pytest.mark.asyncio
 async def test_run_compatibility_precheck_rpc_uses_configured_gpu_devices(tmp_path, monkeypatch):
-    """The standalone RPC has no session plan to read gpu_devices from —
-    it must look the model up in config.yml itself. Without that, a
-    pinned model is evaluated against the wrong (default) slice and can
-    be falsely blacklisted from a leftover GPU its pin was meant to avoid."""
+    """The standalone RPC has no session plan to read gpu_devices or
+    kv_cache_dtype from — it must look the model up in config.yml itself.
+    Without that, a pinned model is evaluated against the wrong (default)
+    slice and can be falsely blacklisted from a leftover GPU its pin was
+    meant to avoid, and a configured fp8 KV cache looks twice its size."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.hf_model_info import HfModelMetadata
 
@@ -1846,11 +1847,18 @@ async def test_run_compatibility_precheck_rpc_uses_configured_gpu_devices(tmp_pa
     monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
     monkeypatch.setattr(
         "logos_worker_node.calibration.plans_from_config",
-        lambda _p: [{"model": "org/model", "gpu_devices": "1,2,3"}],
+        lambda _p: [{"model": "org/model", "gpu_devices": "1,2,3", "kv_cache_dtype": "fp8"}],
     )
     monkeypatch.setattr(
         "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
-        lambda *a, **k: HfModelMetadata(weight_bytes=10 * 1024 * 1024 * 1024, source="hf"),
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=10 * 1024 * 1024 * 1024,
+            kv_per_token_bytes=2 * 32 * 8 * 128 * 2,  # bf16 (2 bytes/element)
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            kv_head_dim=128,
+            source="hf",
+        ),
     )
     monkeypatch.setattr(
         "logos_worker_node.calibration.query_gpu_vram",
@@ -1861,11 +1869,63 @@ async def test_run_compatibility_precheck_rpc_uses_configured_gpu_devices(tmp_pa
             3: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
         },
     )
+    calls: list[dict] = []
+    real_precheck = client._run_hf_compatibility_precheck  # noqa: SLF001
+
+    async def _spy(*args, **kwargs):
+        calls.append(kwargs)
+        return await real_precheck(*args, **kwargs)
+
+    monkeypatch.setattr(client, "_run_hf_compatibility_precheck", _spy)
 
     response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
 
     assert response["unsupported_reason"] is None
     assert response["per_gpu_total_mb"] == 24000.0
+    assert calls[0]["gpu_devices"] == "1,2,3"
+    assert calls[0]["kv_cache_dtype"] == "fp8"
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_applies_kv_cache_dtype_override(tmp_path, monkeypatch):
+    """kv_per_token_bytes is derived from the model's own torch_dtype
+    (bf16 here) — a plan's --kv-cache-dtype override (e.g. fp8) must be
+    applied before the min-KV check, or a configured fp8 KV cache looks
+    twice its real size and can falsely fail near the VRAM boundary."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_MIN_KV, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=900 * 1024 * 1024,
+            kv_per_token_bytes=2 * 32 * 8 * 128 * 2,  # bf16 (2 bytes/element)
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            kv_head_dim=128,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 1200.0, "used_mb": 0.0, "free_mb": 1200.0}},
+    )
+
+    # No override: the bf16-derived KV footprint pushes it over the edge.
+    response = await client._run_hf_compatibility_precheck("org/model", persist=False)  # noqa: SLF001
+    assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
+
+    # The plan's fp8 override halves the KV footprint — now it fits.
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, kv_cache_dtype="fp8"
+    )
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
 
 
 # ── Streaming: defer stream_start until first token byte (wake-readiness fix) ──

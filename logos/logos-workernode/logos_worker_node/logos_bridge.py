@@ -832,7 +832,7 @@ class LogosBridgeClient:
         )
 
     async def _run_hf_compatibility_precheck(
-        self, model_name: str, *, persist: bool = True, gpu_devices: str = ""
+        self, model_name: str, *, persist: bool = True, gpu_devices: str = "", kv_cache_dtype: str = ""
     ) -> dict[str, Any]:
         """Best-effort HF compatibility check for one model on this node.
 
@@ -854,6 +854,11 @@ class LogosBridgeClient:
         heterogeneous node, an irrelevant GPU outside that selection must
         never sink the estimate — see calibration_gpu_slice.
 
+        ``kv_cache_dtype`` is the plan's ``--kv-cache-dtype`` override, if
+        any — the HF-derived KV estimate otherwise uses the model's own
+        torch_dtype, which can be double a configured fp8 KV cache's real
+        footprint and falsely fail the min-KV check near the VRAM edge.
+
         ``persist=False`` skips the model_profiles write. Never raises.
         """
         from logos_worker_node.calibration import (  # noqa: PLC0415
@@ -869,6 +874,7 @@ class LogosBridgeClient:
             REASON_MODEL_GATED,
             REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
             fetch_hf_model_metadata,
+            kv_bytes_for_dtype,
             min_feasible_tp,
         )
 
@@ -984,9 +990,19 @@ class LogosBridgeClient:
         per_gpu_free_mb = min(v["free_mb"] for v in relevant_snap.values())
         hardware_max_tp = _max_tp_for_plan({"model": model_name, "gpu_devices": gpu_devices}, len(gpu_snap))
 
+        # kv_per_token_bytes is cached under the model's own torch_dtype —
+        # an operator's --kv-cache-dtype override (e.g. fp8 on a bf16
+        # model) must be applied here, not left baked into a stale value,
+        # or the min-KV check can fail on a footprint twice the real one.
+        kv_per_token_bytes = hf_meta.kv_per_token_bytes
+        if kv_cache_dtype and hf_meta.num_hidden_layers and hf_meta.num_key_value_heads and hf_meta.kv_head_dim:
+            kv_per_token_bytes = kv_bytes_for_dtype(
+                hf_meta.num_hidden_layers, hf_meta.num_key_value_heads, hf_meta.kv_head_dim, kv_cache_dtype
+            )
+
         min_kv_mb = 0.0
-        if hf_meta.kv_per_token_bytes:
-            min_kv_mb = (hf_meta.kv_per_token_bytes * MIN_VIABLE_CONTEXT_TOKENS) / (1024 * 1024)
+        if kv_per_token_bytes:
+            min_kv_mb = (kv_per_token_bytes * MIN_VIABLE_CONTEXT_TOKENS) / (1024 * 1024)
 
         unsupported_reason: str | None = None
         weights_only_tp_idle = min_feasible_tp(hf_meta.weight_bytes, per_gpu_total_mb, hardware_max_tp)
@@ -1052,22 +1068,22 @@ class LogosBridgeClient:
                 return candidate
         return Path("config.yml")
 
-    def _resolve_configured_gpu_devices(self, model_name: str) -> str:
-        """The model's explicit gpu_devices pin from config.yml, if any —
-        "" (auto slice) otherwise. The standalone RPC has no session plan
-        to read this from, unlike the session loop — without this it
-        always evaluated the default slice, even for a pinned model."""
+    def _resolve_configured_plan(self, model_name: str) -> dict[str, Any]:
+        """The model's plan from config.yml (gpu_devices, kv_cache_dtype,
+        ...), or {} if unconfigured/unreadable. The standalone RPC has no
+        session plan to read these from, unlike the session loop — without
+        it, a model pinned or given a --kv-cache-dtype gets the defaults."""
         try:
             from logos_worker_node.calibration import plans_from_config  # noqa: PLC0415
 
             config_path = self._resolve_config_path()
             if not config_path.exists():
-                return ""
+                return {}
             plan = next((p for p in plans_from_config(config_path) if p.get("model") == model_name), None)
-            return str((plan or {}).get("gpu_devices") or "")
+            return plan or {}
         except Exception:  # noqa: BLE001
-            logger.debug("[Precheck] gpu_devices lookup failed for %s", model_name, exc_info=True)
-            return ""
+            logger.debug("[Precheck] config.yml plan lookup failed for %s", model_name, exc_info=True)
+            return {}
 
     async def _handle_run_compatibility_precheck(self, params: dict[str, Any]) -> dict[str, Any]:
         """RPC handler for an on-demand compatibility check, callable any
@@ -1076,8 +1092,12 @@ class LogosBridgeClient:
         model_name = str(params.get("model", "")).strip()
         if not model_name:
             return {"ok": False, "error": "'model' is required"}
-        gpu_devices = self._resolve_configured_gpu_devices(model_name)
-        result = await self._run_hf_compatibility_precheck(model_name, gpu_devices=gpu_devices)
+        plan = self._resolve_configured_plan(model_name)
+        result = await self._run_hf_compatibility_precheck(
+            model_name,
+            gpu_devices=str(plan.get("gpu_devices") or ""),
+            kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
+        )
         return {"ok": True, **result}
 
     async def _handle_start_calibration_session(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -1505,7 +1525,9 @@ class LogosBridgeClient:
                 # Pre-flight: HF compatibility precheck (see
                 # _run_hf_compatibility_precheck's docstring for the rules).
                 precheck = await self._run_hf_compatibility_precheck(
-                    model_name, gpu_devices=str(plan.get("gpu_devices") or "")
+                    model_name,
+                    gpu_devices=str(plan.get("gpu_devices") or ""),
+                    kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
                 )
                 if precheck["unsupported_reason"] is not None:
                     logger.warning(
