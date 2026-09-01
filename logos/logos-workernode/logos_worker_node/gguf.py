@@ -496,7 +496,12 @@ def resolve_gguf_spec(
     # positive. An unavailable listing (None) does not disprove the name.
     if gguf_file_names is not None and not gguf_file_names:
         return None
-    has_gguf_files = bool(gguf_file_names)
+    # Consistent with candidate_quants() below: auxiliary artifacts
+    # (tokenizer.gguf, mmproj projectors) are not backbone weights, so a
+    # listing that holds only those is not proof of GGUF weights. Counting
+    # any non-empty listing instead would misread an ordinary repo with just
+    # a cached tokenizer as GGUF and fail at spawn time on quant resolution.
+    has_gguf_files = bool(candidate_quants(gguf_file_names))
     if not looks_like_gguf_repo and not has_gguf_files:
         return None
 

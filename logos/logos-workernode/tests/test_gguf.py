@@ -405,3 +405,21 @@ def test_resolve_gguf_spec_plain_name_with_gguf_cache_is_gguf() -> None:
     )
     assert spec is not None
     assert spec.serve_ref == "org/some-quantized-model:Q4_K_M"
+
+
+def test_resolve_gguf_spec_auxiliary_only_listing_is_not_gguf() -> None:
+    # Second-stage detection must rest on quant-bearing backbone files, not on
+    # any non-empty listing: a plain repository whose cached .gguf artifacts
+    # are only auxiliary (a tokenizer, an mmproj projector) is an ordinary
+    # model, not a GGUF one. Counting the listing as proof of GGUF weights
+    # drove select_quant([]) to None and made resolution raise.
+    assert (
+        gguf.resolve_gguf_spec(
+            "org/some-model",
+            gguf_file_names=[("tokenizer.gguf", 1), ("model.safetensors", 1)],
+        )
+        is None
+    )
+    # An mmproj projector is a different model part, not the backbone —
+    # excluded the same way even though its name carries a quant.
+    assert gguf.resolve_gguf_spec("org/some-model", gguf_file_names=[("mmproj-Q4_K_M.gguf", 1)]) is None
