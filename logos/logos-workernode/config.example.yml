@@ -241,16 +241,19 @@ engines:
     #   dtype: str                 — compute dtype: "auto" | "float16" | "bfloat16".
     #     "auto" picks bfloat16 on Ampere+ and float16 on older cards.
     #
-    #   gpu_memory_utilization: float  — fraction of GPU VRAM vLLM may use for
-    #     its own KV cache (0.1–1.0). Only relevant when kv_cache_memory_bytes
-    #     is NOT set. Default when kv_cache_memory_bytes is set: 0.1 (passthrough).
+    #   gpu_memory_utilization: float  — fraction of per-GPU VRAM vLLM may use
+    #     (0.1–1.0). vLLM enforces it as a startup gate — free_per_gpu >=
+    #     gmu * total_per_gpu or the engine refuses to start — and uses it to
+    #     size the KV cache unless kv_cache_memory_bytes is set.
     #
     #   kv_cache_memory_bytes: str — exact KV-cache allocation passed to vLLM at
     #     launch (e.g. "4G", "2048M"). This is a vLLM invocation flag — it controls
     #     how much GPU memory vLLM actually reserves for KV cache at runtime.
     #     If you also set base_residency_mb manually in capabilities_models, set
     #     this to the same value so the scheduler's VRAM estimate matches reality.
-    #     When set, gpu_memory_utilization is ignored by vLLM (overridden to 0.1).
+    #     When set, the KV cache is sized from this value instead of
+    #     gpu_memory_utilization, but the startup gate above still applies, so
+    #     keep gpu_memory_utilization at a value the node's GPUs can satisfy.
     #     Preferred over gpu_memory_utilization for predictable, reproducible budgets.
     #
     #   disable_custom_all_reduce: bool  — disable vLLM's custom all-reduce kernel.
@@ -386,6 +389,8 @@ engines:
 #     quantization: str          — "awq" | "gptq" | "fp8" | etc.
 #     enforce_eager: bool        — disable CUDA graph capture.
 #     enable_prefix_caching: bool
+#     enable_prompt_tokens_details: bool — report usage.prompt_tokens_details
+#                                          (cached_tokens); on by default.
 #     disable_custom_all_reduce: bool
 #     disable_nccl_p2p: bool
 #     attention_backend: str

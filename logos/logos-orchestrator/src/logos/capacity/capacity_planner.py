@@ -728,6 +728,7 @@ class CapacityPlanner:
 
             provider_ids.sort(key=_provider_pressure, reverse=True)
         self._log_cluster_summary(provider_ids)
+        self._refresh_engine_cache_metrics(provider_ids)
 
         # Cross-provider best-first ranking: pre-score every (provider,
         # model) candidate so the cheapest worker for each model wins,
@@ -845,6 +846,51 @@ class CapacityPlanner:
                 )
 
         prom.CAPACITY_PLANNER_CYCLE_DURATION_SECONDS.observe(time.time() - cycle_start)
+
+    def _refresh_engine_cache_metrics(self, provider_ids: List[int]) -> None:
+        """Publish per-(provider, model) prefix-cache and MTP-acceptance rates.
+
+        Feeds the ``logos_prefix_cache_hit_rate`` / ``logos_mtp_acceptance_rate``
+        gauges from the workers' lane backend metrics. Aggregation mirrors the
+        live-statistics payload: the prefix hit rate is the plain mean across
+        the model's lanes, while the MTP acceptance rate is token-weighted
+        (sum of accepted / sum of draft tokens), because an unweighted mean of
+        per-lane rates misstates the model rate when lanes see different
+        draft volumes. Pairs with no lanes this cycle are retired by the
+        publish helper.
+        """
+        entries: list[tuple[str, str, float | None, float | None]] = []
+        for pid in provider_ids:
+            snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
+            if snap is None:
+                continue
+            provider_name = self._facade.get_provider_name(pid) or str(pid)
+            runtime = snap.get("runtime") or {}
+            lanes = runtime.get("lanes")
+            per_model: dict[str, dict[str, float]] = {}
+            for lane in lanes if isinstance(lanes, list) else []:
+                if not isinstance(lane, dict):
+                    continue
+                model = str(lane.get("model") or "").strip()
+                if not model:
+                    continue
+                backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+                agg = per_model.setdefault(
+                    model, {"prefix_sum": 0.0, "prefix_count": 0.0, "mtp_draft": 0.0, "mtp_accepted": 0.0}
+                )
+                prefix_rate = lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
+                if prefix_rate is not None:
+                    agg["prefix_sum"] += prefix_rate
+                    agg["prefix_count"] += 1
+                mtp_draft = lane_metric_float(backend_metrics.get("mtp_draft_tokens_total")) or 0.0
+                mtp_accepted = lane_metric_float(backend_metrics.get("mtp_accepted_tokens_total")) or 0.0
+                agg["mtp_draft"] += mtp_draft
+                agg["mtp_accepted"] += mtp_accepted
+            for model, agg in per_model.items():
+                prefix_rate = agg["prefix_sum"] / agg["prefix_count"] if agg["prefix_count"] > 0 else None
+                mtp_rate = agg["mtp_accepted"] / agg["mtp_draft"] if agg["mtp_draft"] > 0 else None
+                entries.append((model, provider_name, prefix_rate, mtp_rate))
+        prom.update_engine_cache_metrics(entries)
 
     def _log_cluster_summary(self, provider_ids: List[int]) -> None:
         """Print a colored cluster overview for the current planner cycle."""
@@ -1067,12 +1113,99 @@ class CapacityPlanner:
         self.hint_capacity_needed(model_name, provider_id=provider_id)
         return None
 
+    async def prepare_benchmark_lane(
+        self,
+        provider_id: int,
+        model_name: str,
+        timeout_seconds: float = 600.0,
+    ) -> bool:
+        """Prepare an idle benchmark lane without reclaiming production capacity."""
+        if self._registry and not self._registry.has_received_first_status(provider_id):
+            return False
+
+        target = self._pick_request_target_lane(provider_id, model_name)
+        if target is not None and target.runtime_state in {"loaded", "running"}:
+            return self.benchmark_lane_is_safe(provider_id, target)
+        if not self._benchmark_provider_is_idle(provider_id, model_name):
+            return False
+        if target is not None and target.runtime_state == "starting":
+            if not await self._wait_for_benchmark_lane_ready(provider_id, model_name, timeout_seconds):
+                return False
+        elif target is not None and target.runtime_state in {"sleeping", "cold"}:
+            if (
+                await self._prepare_existing_lane(
+                    provider_id,
+                    model_name,
+                    target,
+                    timeout_seconds,
+                    allow_reclaim=False,
+                )
+                is None
+            ):
+                return False
+        elif (
+            await self._cold_load_for_request(
+                provider_id,
+                model_name,
+                timeout_seconds,
+                allow_reclaim=False,
+            )
+            is None
+        ):
+            return False
+
+        target = self._pick_request_target_lane(provider_id, model_name)
+        return target is not None and self.benchmark_lane_is_safe(provider_id, target)
+
+    def _benchmark_provider_is_idle(self, provider_id: int, model_name: str) -> bool:
+        """Reject preparation as soon as production work exists on the provider."""
+        lanes = self._safe_get_lanes(provider_id)
+        for lane in lanes:
+            if lane.active_requests > 0 or lane.requests_running > 0 or lane.queue_waiting > 0:
+                return False
+        queued_models = {model_name, *(lane.model_name for lane in lanes), *self._safe_get_profiles(provider_id)}
+        for queued_model in queued_models:
+            if self._facade.get_scheduler_queue_depth_by_model_name(queued_model, provider_id) > 0:
+                return False
+        return True
+
+    def benchmark_lane_is_safe(self, provider_id: int, target: LaneSchedulerSignals) -> bool:
+        """Return whether a benchmark can run without competing with production."""
+        if target.runtime_state not in {"loaded", "running"} or target.sleep_state == "sleeping":
+            return False
+        return self._benchmark_provider_is_idle(provider_id, target.model_name)
+
+    async def _wait_for_benchmark_lane_ready(
+        self,
+        provider_id: int,
+        model_name: str,
+        timeout_seconds: float,
+    ) -> bool:
+        """Wait for an already-starting lane instead of issuing a duplicate load."""
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            matching_lanes = [lane for lane in self._safe_get_lanes(provider_id) if lane.model_name == model_name]
+            target = best_lane([lane for lane in matching_lanes if lane.runtime_state not in {"stopped", "error"}])
+            if target is not None:
+                if target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping":
+                    return True
+                if target.runtime_state in {"cold", "sleeping"}:
+                    return False
+            elif any(lane.runtime_state in {"stopped", "error"} for lane in matching_lanes):
+                return False
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(1.0, remaining))
+
     async def _prepare_existing_lane(
         self,
         provider_id: int,
         model_name: str,
         target: LaneSchedulerSignals,
         timeout_seconds: float,
+        allow_reclaim: bool = True,
     ) -> dict[str, Any] | None:
         """Wake or prepare an existing lane for a request."""
         profile = self._safe_get_profiles(provider_id).get(model_name)
@@ -1089,9 +1222,11 @@ class CapacityPlanner:
                 target=target,
                 profile=profile,
                 timeout_seconds=timeout_seconds,
+                allow_reclaim=allow_reclaim,
             )
             if not ok:
-                self._pending_capacity[model_name] = (provider_id, time.time())
+                if allow_reclaim:
+                    self._pending_capacity[model_name] = (provider_id, time.time())
                 return None
 
         if target.runtime_state == "sleeping":
@@ -1277,6 +1412,7 @@ class CapacityPlanner:
         provider_id: int,
         model_name: str,
         timeout_seconds: float,
+        allow_reclaim: bool = True,
     ) -> dict[str, Any] | None:
         """Load a model that has no lane at all (request-time cold load)."""
         profile = self._safe_get_profiles(provider_id).get(model_name)
@@ -1375,7 +1511,8 @@ class CapacityPlanner:
                 # the operator (or another planner cycle) frees enough host
                 # RAM — e.g. by stopping an unused lane — the retry will
                 # pass the gate naturally. We do NOT stop lanes here.
-                self._pending_capacity[model_name] = (provider_id, time.time())
+                if allow_reclaim:
+                    self._pending_capacity[model_name] = (provider_id, time.time())
                 return None
 
         # Use the same reclaim engine as wake — it checks aggregate + per-GPU
@@ -1402,6 +1539,7 @@ class CapacityPlanner:
             target=synthetic_target,
             profile=profile,
             timeout_seconds=timeout_seconds,
+            allow_reclaim=allow_reclaim,
         )
         if not ok:
             logger.info(
@@ -1409,7 +1547,8 @@ class CapacityPlanner:
                 model_name,
                 self._facade.get_provider_name(provider_id) or provider_id,
             )
-            self._pending_capacity[model_name] = (provider_id, time.time())
+            if allow_reclaim:
+                self._pending_capacity[model_name] = (provider_id, time.time())
             return None
 
         logger.info(
@@ -3561,6 +3700,17 @@ class CapacityPlanner:
                     #     be popular doesn't preempt a recently-warm one
                     #     on speculation alone.
                     #
+                    # has_queued alone is the real-demand signal in branch (a) —
+                    # do NOT stack an eff >= FLOOR requirement on top of it.
+                    # A single queued request contributes QUEUE_WEIGHT to eff
+                    # and its base score decays (DECAY_FACTOR per cycle) within
+                    # a couple of cycles, so a lone waiting request can never
+                    # clear the floor and the bypass deadlocked the sequential
+                    # switchover: model A's benchmark ends, model B is requested
+                    # one at a time, B's request waits until it times out, and
+                    # A's lane sticks (#827). Victims are idle by construction,
+                    # so reclaiming them preempts no real work.
+                    #
                     # Phase 3.2: under v2, branch (a) only fires when the
                     # victim is genuinely idle (eff < floor). Otherwise
                     # both target and victim have queue and we must use
@@ -3579,12 +3729,12 @@ class CapacityPlanner:
                         victim_below_floor = max_non_self < self.DEMAND_WAKE_FLOOR
                         proceed = (
                             self_only
-                            or (has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR)
+                            or (has_queued and victim_below_floor)
                             or eff > max_non_self * self.WAKE_COMPETITIVE_RATIO
                         )
                         if self_only:
                             gate_reason = "self-eviction (same model as target)"
-                        elif has_queued and victim_below_floor and eff >= self.DEMAND_WAKE_FLOOR:
+                        elif has_queued and victim_below_floor:
                             gate_reason = (
                                 f"queued_demand & victims_idle → bypass ratio "
                                 f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
@@ -3594,9 +3744,7 @@ class CapacityPlanner:
                                 f"target_eff={eff:.2f} > victim={max_non_self:.2f}" f"×{self.WAKE_COMPETITIVE_RATIO}"
                             )
                     else:
-                        proceed = (
-                            has_queued and eff >= self.DEMAND_WAKE_FLOOR
-                        ) or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
+                        proceed = has_queued or eff > max_victim_score * self.WAKE_COMPETITIVE_RATIO
                         gate_reason = (
                             f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                             if has_queued and eff <= max_victim_score * self.WAKE_COMPETITIVE_RATIO
@@ -3849,11 +3997,12 @@ class CapacityPlanner:
                 if is_additional_lane:
                     planned_additional_models.add(model_name)
             else:
-                # Contention. Same two-regime logic as the wake path:
-                # real queued requests bypass the ratio (victims are
-                # already idle by construction); speculative score is
-                # gated by LOAD_COMPETITIVE_RATIO to avoid thrashing on
-                # a model that *might* become popular.
+                # Contention. Same two-regime logic as the wake path (see the
+                # regime comment there, including why has_queued alone is the
+                # real-demand signal — #827): real queued requests bypass the
+                # ratio (victims are already idle by construction); speculative
+                # score is gated by LOAD_COMPETITIVE_RATIO to avoid thrashing
+                # on a model that *might* become popular.
                 # Phase 3.2/3.3: under v2, branch (a) requires victim_below_floor
                 # and self-eviction is degenerate.
                 non_self_victims = [s for vlane, _, s in eviction_set if vlane.model_name != model_name]
@@ -3864,12 +4013,12 @@ class CapacityPlanner:
                     victim_below_floor = max_non_self < self.DEMAND_LOAD_FLOOR
                     proceed = (
                         self_only
-                        or (has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR)
+                        or (has_queued and victim_below_floor)
                         or eff > max_non_self * self.LOAD_COMPETITIVE_RATIO
                     )
                     if self_only:
                         gate_reason = "self-eviction (same model as target)"
-                    elif has_queued and victim_below_floor and eff >= self.DEMAND_LOAD_FLOOR:
+                    elif has_queued and victim_below_floor:
                         gate_reason = (
                             f"queued_demand & victims_idle → bypass ratio "
                             f"(eff={eff:.2f}, victim_max={max_non_self:.2f})"
@@ -3877,9 +4026,7 @@ class CapacityPlanner:
                     else:
                         gate_reason = f"target_eff={eff:.2f} > victim={max_non_self:.2f}×{self.LOAD_COMPETITIVE_RATIO}"
                 else:
-                    proceed = (
-                        has_queued and eff >= self.DEMAND_LOAD_FLOOR
-                    ) or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
+                    proceed = has_queued or eff > max_victim_score * self.LOAD_COMPETITIVE_RATIO
                     gate_reason = (
                         f"queued_demand → bypass ratio (eff={eff:.2f}, victim_max={max_victim_score:.2f})"
                         if has_queued and eff <= max_victim_score * self.LOAD_COMPETITIVE_RATIO
@@ -4362,6 +4509,7 @@ class CapacityPlanner:
         target: LaneSchedulerSignals,
         profile: Optional[ModelProfile],
         timeout_seconds: float,
+        allow_reclaim: bool = True,
     ) -> bool:
         # Convert to an absolute deadline once so accumulated sleeps reduce the
         # remaining budget correctly on every subsequent loop iteration.
@@ -4597,6 +4745,14 @@ class CapacityPlanner:
                         target.model_name,
                     )
                     return True
+
+                if not allow_reclaim:
+                    logger.info(
+                        "Cannot prepare benchmark lane for worker=%s model=%s " "without reclaiming existing capacity",
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name,
+                    )
+                    return False
 
                 lanes = self._safe_get_lanes(provider_id)
                 profiles = self._safe_get_profiles(provider_id)

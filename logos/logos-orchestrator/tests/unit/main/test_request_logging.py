@@ -191,9 +191,136 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
             "result_status": "success",
             "error_message": None,
             "cold_start": False,
+            "usage_tokens": {
+                "prompt_tokens": 3,
+                "completion_tokens": 5,
+                "total_tokens": 8,
+            },
         }
     ]
     assert release_calls == [(27, 12, "logosnode", "req-stream")]
+
+
+@pytest.mark.asyncio
+async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
+    # vLLM lanes report usage.prompt_tokens_details.cached_tokens (the worker
+    # starts them with --enable-prompt-tokens-details); the orchestrator must
+    # relay it to the application and log it the same way as the cloud
+    # provider's cached count (#813).
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def fake_send_stream_command(**kwargs):  # noqa: ARG001
+        chunks = [
+            b'data: {"id":"chunk-1","choices":[{"delta":{"content":"hi"}}]}\n\n',
+            b'data: {"id":"chunk-1","choices":[],"usage":{"prompt_tokens":10,'
+            b'"completion_tokens":4,"total_tokens":14,'
+            b'"prompt_tokens_details":{"cached_tokens":6}}}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+        for chunk in chunks:
+            yield chunk
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=fake_send_stream_command),
+        raising=False,
+    )
+
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        43,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-cached",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    body = await _read_stream_response(response)
+
+    # The client sees the provider's usage verbatim, details included.
+    assert '"prompt_tokens_details":{"cached_tokens":6}' in body
+    assert dummy_db.payload_calls[0]["usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+        "prompt_cached_tokens": 6,
+    }
+
+
+@pytest.mark.asyncio
+async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
+    # The lane's usage.prompt_tokens_details must reach the application in
+    # the response and land in the request log as prompt_cached_tokens,
+    # mirroring the cloud path (#813).
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def send_command(**kwargs):  # noqa: ARG001
+        return {
+            "status_code": 200,
+            "body": {
+                "id": "cmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "total_tokens": 14,
+                    "prompt_tokens_details": {"cached_tokens": 6},
+                },
+            },
+            "headers": {"content-type": "application/json"},
+        }
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_command=send_command),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="local-model"),
+        {"model": "local-model", "messages": [{"role": "user", "content": "hi"}]},
+        44,
+        12,
+        27,
+        -1,
+        {"classified": True},
+        scheduling_stats={
+            "request_id": "req-sync-cached",
+            "provider_type": "logosnode",
+        },
+    )
+
+    content = json.loads(response.body)
+    assert content["usage"]["prompt_tokens_details"]["cached_tokens"] == 6
+    assert dummy_db.payload_calls[0]["usage"]["prompt_cached_tokens"] == 6
 
 
 @pytest.mark.asyncio
@@ -474,6 +601,8 @@ async def test_http_streaming_terminal_error_is_recorded(monkeypatch, terminal_e
             "result_status": "error",
             "error_message": terminal_error,
             "cold_start": False,
+            # The stream carried no usage chunk, so nothing was extracted.
+            "usage_tokens": {},
         }
     ]
     assert completion_logs[0]["status"] == "error"
@@ -671,6 +800,8 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
             "result_status": "error",
             "error_message": "bad request",
             "cold_start": False,
+            # An error body carries no usage, so nothing was extracted.
+            "usage_tokens": {},
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-sync-error")]
@@ -738,6 +869,11 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
             "result_status": "success",
             "error_message": None,
             "cold_start": True,
+            "usage_tokens": {
+                "prompt_tokens": 11,
+                "completion_tokens": 13,
+                "total_tokens": 24,
+            },
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-job")]

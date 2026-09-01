@@ -26,6 +26,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 import urllib.parse
 from collections import deque
 from datetime import datetime
@@ -45,6 +46,29 @@ from logos_worker_node.models import (
 )
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
+
+# Bounds of the auto-derived gpu_memory_utilization (see _resolve_gmu below).
+# The placement planner (lane_manager) gates on the reservation these values
+# produce — via effective_gmu() — so both sides share these constants and the
+# explicit/floor branches instead of re-declaring them.
+GMU_AUTO_FLOOR = 0.5
+GMU_AUTO_CEILING = 0.95
+
+
+def effective_gmu(vllm_config: VllmConfig) -> float:
+    """The gpu_memory_utilization vLLM is started with when the calibrated
+    auto-derivation is not the binding branch.
+
+    An explicit operator ``gpu_memory_utilization`` wins verbatim (vLLM
+    receives it unclamped); otherwise the auto-derivation floor applies — it
+    is the minimum the clamped derivation can reach. The spawner
+    (``_resolve_gmu``) and the placement planner both gate on the reservation
+    this value describes (gmu × per-card total at vLLM startup), so they
+    share this definition instead of each re-implementing the branches.
+    """
+    if vllm_config.gpu_memory_utilization is not None:
+        return float(vllm_config.gpu_memory_utilization)
+    return GMU_AUTO_FLOOR
 
 
 def _env_ready_timeout() -> int:
@@ -80,6 +104,27 @@ _SCRUBBED_ENV_VARS = (
 
 # Cache for _discover_pip_cuda_lib_dirs() — computed once per process.
 _pip_cuda_lib_dirs: list[str] | None = None
+
+# Wall-clock (time.monotonic) of the last reactive cache recovery per model.
+# Capped at one per (model, hour) so a model whose startup is broken for a
+# non-cache reason (which can still leave a cache path in its traceback)
+# cannot loop purge → retry → fail forever across lane-manager restarts.
+# Module-level because the lane manager recreates handles on restart.
+_last_reactive_cache_recovery: dict[str, float] = {}
+_CACHE_RECOVERY_COOLDOWN_S: float = 3600.0
+
+
+def _reactive_cache_recovery_allowed(model: str, now: float | None = None) -> bool:
+    """True when no reactive cache recovery for this model ran within the cooldown window."""
+    last = _last_reactive_cache_recovery.get(model)
+    if last is None:
+        return True
+    return ((now if now is not None else time.monotonic()) - last) >= _CACHE_RECOVERY_COOLDOWN_S
+
+
+def _note_reactive_cache_recovery(model: str, now: float | None = None) -> None:
+    """Record that a reactive cache recovery ran for this model now."""
+    _last_reactive_cache_recovery[model] = now if now is not None else time.monotonic()
 
 
 def _discover_pip_cuda_lib_dirs() -> list[str]:
@@ -395,13 +440,21 @@ class VllmProcessHandle:
     async def spawn(self, lane_config: LaneConfig) -> ProcessStatus:
         """Spawn the vLLM process for this lane.
 
-        Cache safety: before spawning, the on-disk torch.compile and inductor
-        caches are purged if the recorded (vLLM, torch) versions don't match
-        the venv's current versions — a version bump is the most common cause
-        of cache poisoning. If the spawn still fails with a stack trace
-        pointing inside the compile cache directory (e.g. an AOT-compiled
-        graph that was specialized on a stale shape profile), the caches are
-        purged again and the spawn is retried once.
+        Cache safety: before spawning, two pre-flight checks purge poisoned
+        on-disk torch.compile / inductor caches — the worker-wide version
+        stamp (a vLLM/torch bump is the most common poisoning cause) and the
+        per-lane ``cache_meta.json`` (vLLM + torch + CUDA versions, image
+        version, model and compilation-config hash recorded after the last
+        healthy start of this exact cache dir). If the spawn still fails with
+        a stack trace pointing inside the compile cache directory or a known
+        cache-poisoning error fingerprint (e.g. an AOT-compiled graph that
+        was specialized on a stale shape profile), the caches are purged
+        again and the spawn is retried once. Reactive recovery is capped at
+        one per (model, hour) so a genuinely broken model cannot loop
+        purge → retry → fail forever.
+
+        Every purge-and-retry event logs a greppable
+        ``[lane] cache_auto_recovered=true model=… fingerprint=…`` line.
 
         The same shape of recovery covers a sharded checkpoint the loader
         rejects: the cached conversion is discarded and the lane retried once
@@ -416,7 +469,12 @@ class VllmProcessHandle:
             )
             await self._kill_process()
 
-        self._purge_compile_caches_if_versions_changed()
+        purged = self._purge_compile_caches_if_versions_changed()
+        if purged:
+            self._log_cache_auto_recovered(lane_config.model, "version_stamp_mismatch", purged)
+        purged = self._purge_lane_cache_if_meta_changed(lane_config)
+        if purged:
+            self._log_cache_auto_recovered(lane_config.model, "cache_meta_mismatch", purged)
 
         purged_once = False
         unsharded_once = False
@@ -425,6 +483,7 @@ class VllmProcessHandle:
             try:
                 status = await self._spawn_once(lane_config)
                 self._write_compile_cache_stamp()
+                self._write_lane_cache_meta(lane_config)
                 return status
             except RuntimeError:
                 # Checked before the compile cache: a sharded-loader failure
@@ -445,15 +504,49 @@ class VllmProcessHandle:
                     continue
                 if purged_once or not self.has_poisoned_compile_cache:
                     raise
-                purged = self._purge_compile_caches()
+                fingerprint = self._matched_cache_poisoning_fingerprint() or "stack_trace_in_cache"
+                if not _reactive_cache_recovery_allowed(lane_config.model):
+                    logger.warning(
+                        "[%s] Cache poisoning detected (fingerprint=%s) but a recovery already "
+                        "ran for %s within the last hour — not purging again",
+                        self.lane_id,
+                        fingerprint,
+                        lane_config.model,
+                    )
+                    raise
+                purged = self._purge_compile_caches(lane_config.model)
+                if not purged:
+                    # The per-lane purge removed nothing, so the poisoned
+                    # artifact (if any) lives in the shared location. Widening
+                    # to the worker-wide set forces every other model on the
+                    # node to recompile, so it is only justified when the
+                    # traceback actually names a file under the compile cache
+                    # (the strong signal). A fingerprint-only match on an
+                    # empty per-lane dir is not: a brand-new lane has no cache
+                    # to be poisoned by, and the fingerprint is a heuristic,
+                    # so widening would risk wiping every model's cache on an
+                    # unrelated startup failure (a mistyped repo id, a gated
+                    # repo). Propagate instead.
+                    if self._logs_reference_compile_cache():
+                        purged = self._purge_compile_caches()
+                    else:
+                        logger.warning(
+                            "[%s] Cache poisoning detected (fingerprint=%s) but the traceback "
+                            "names no compile-cache file and this lane has no per-lane cache — "
+                            "not widening to the worker-wide cache; propagating",
+                            self.lane_id,
+                            fingerprint,
+                        )
                 purged_once = True
                 if not purged:
                     raise
+                _note_reactive_cache_recovery(lane_config.model)
                 logger.warning(
                     "[%s] vLLM startup failed inside the on-disk compile cache; " "purged %s and retrying once",
                     self.lane_id,
                     purged,
                 )
+                self._log_cache_auto_recovered(lane_config.model, fingerprint, purged)
 
     async def _spawn_once(self, lane_config: LaneConfig) -> ProcessStatus:
         """A single vLLM spawn attempt; raises on startup failure."""
@@ -567,16 +660,51 @@ class VllmProcessHandle:
         "/inductor_cache/",
     )
 
-    # Subdirectories under <cache_root>/.cache that are safe to wipe when a
-    # compile-cache poisoning is detected. FlashInfer JIT artifacts and the
-    # HuggingFace weights cache are intentionally excluded — they are not
-    # implicated in compile-cache poisoning and are expensive to rebuild.
-    _PURGEABLE_COMPILE_CACHE_SUBDIRS: ClassVar[tuple[str, ...]] = (
-        "vllm",
-        "torch_inductor",
-    )
+    # Subdirectories of a vLLM compile cache dir that hold torch.compile
+    # artifacts and are safe to wipe when a compile-cache poisoning is
+    # detected. rank_* holds the per-rank backbone cache and is matched by
+    # prefix because the rank indices are layout-dependent (rank_0_0,
+    # rank_0_1, …). Everything else — in particular modelinfos/ — is
+    # intentionally excluded, along with the FlashInfer JIT artifacts and
+    # the HuggingFace weights: none of it is implicated in compile-cache
+    # poisoning and it is expensive to rebuild.
+    _VLLM_COMPILE_ARTIFACT_SUBDIRS: ClassVar[tuple[str, ...]] = ("torch_compile_cache",)
+    _RANK_DIR_PREFIX: ClassVar[str] = "rank_"
 
     _COMPILE_CACHE_STAMP_FILENAME: ClassVar[str] = ".logos_compile_cache_stamp.json"
+
+    # Per-lane environment fingerprint written next to the lane's compile
+    # cache after a healthy start; validated before every subsequent start.
+    _CACHE_META_FILENAME: ClassVar[str] = "cache_meta.json"
+
+    # Known cache-poisoning failure fingerprints, matched against the captured
+    # startup logs. Each fingerprint is a tuple of fragments that must ALL
+    # appear in the recent log buffer; each is specific enough that an
+    # unrelated startup failure (a missing HF file, a bad module import) does
+    # not match it. Where a fragment is generic (FileNotFoundError,
+    # AssertionError), the tuple pairs it with a compile-cache path marker so
+    # the match only fires when the failure actually involves the cache. They
+    # complement the stack-trace path-fragment detector above: a cached AOT
+    # artifact can also die deep inside torch/vllm library code, where no
+    # frame of the traceback points into the cache directory (the GLM-OCR
+    # incident: the artifact asserts in copy_misaligned_inputs on a stale
+    # input signature).
+    _CACHE_POISONING_FINGERPRINTS: ClassVar[tuple[tuple[str, tuple[str, ...]], ...]] = (
+        # Stale AOT graph: a Python int arrives where the cached artifact
+        # expects a torch.Tensor.
+        ("copy_misaligned_inputs", ("copy_misaligned_inputs", "Expected tensors only")),
+        # A cached AOT artifact raises on load/invocation.
+        ("aot_artifact_assertion", ("CacheCompiledArtifact", "AssertionError")),
+        # A previous startup was killed mid-AOT-write, leaving a truncated
+        # artifact the next startup cannot read. The compile-cache path is
+        # required alongside FileNotFoundError so this only matches a file
+        # that is actually under the cache — not an unrelated missing-file
+        # error (a mistyped model id, a gated repo) that merely co-occurs
+        # with ordinary torch/_inductor compilation output in the same log.
+        ("inductor_artifact_missing", ("FileNotFoundError", "torch_compile_cache")),
+        # Cache-key lookup hits an entry that no longer matches.
+        ("compilation_cache_key_error", ("vllm/compilation/caching.py", "KeyError")),
+    )
 
     # Log fragments that mean the pre-sharded checkpoint is the thing vLLM
     # could not load. Matched only while this lane is actually serving one, so
@@ -628,21 +756,52 @@ class VllmProcessHandle:
             )
         return removed
 
-    @property
-    def has_poisoned_compile_cache(self) -> bool:
-        """True if recent logs implicate the on-disk torch.compile cache.
+    def _logs_reference_compile_cache(self) -> bool:
+        """True if the recent logs name a file under the torch.compile cache.
 
-        Triggered when a stack-trace line references a file under
-        ``VLLM_CACHE_ROOT`` or ``TORCHINDUCTOR_CACHE_DIR``. The originating
-        exception can be anything (``RuntimeError`` on a shape assert,
-        ``ImportError`` on a stale symbol, ``UnpicklingError`` on a stale
-        FX graph) — if execution is reaching into a cached compile artifact
-        and crashing there, the artifact is bad.
+        This is the strong signal of poisoning: the traceback actually reached
+        into a cached artifact, so whatever the originating exception is, the
+        artifact is implicated. Weaker than that is a fingerprint match (a
+        known error signature that may co-occur with an unrelated failure),
+        which ``has_poisoned_compile_cache`` accepts on its own but the
+        worker-wide purge must not be widened on (see ``spawn``).
         """
         if not self._recent_logs:
             return False
         log_blob = "\n".join(self._recent_logs)
         return any(frag in log_blob for frag in self._POISONED_COMPILE_CACHE_PATH_FRAGMENTS)
+
+    @property
+    def has_poisoned_compile_cache(self) -> bool:
+        """True if recent logs implicate the on-disk torch.compile cache.
+
+        Triggered either when a stack-trace line references a file under
+        ``VLLM_CACHE_ROOT`` or ``TORCHINDUCTOR_CACHE_DIR`` (the originating
+        exception can be anything — if execution is reaching into a cached
+        compile artifact and crashing there, the artifact is bad), or when a
+        known cache-poisoning error fingerprint matches (a cached artifact
+        dying inside torch/vllm library code, where no frame of the
+        traceback names the cache directory).
+        """
+        if not self._recent_logs:
+            return False
+        if self._logs_reference_compile_cache():
+            return True
+        return self._matched_cache_poisoning_fingerprint() is not None
+
+    def _matched_cache_poisoning_fingerprint(self) -> str | None:
+        """Name of the first known cache-poisoning fingerprint in the recent logs.
+
+        Returns ``None`` when no fingerprint matches. The returned name is
+        the ``fingerprint=…`` value of the structured auto-recovery log line.
+        """
+        if not self._recent_logs:
+            return None
+        log_blob = "\n".join(self._recent_logs)
+        for name, fragments in self._CACHE_POISONING_FINGERPRINTS:
+            if all(frag in log_blob for frag in fragments):
+                return name
+        return None
 
     def _compile_cache_root(self) -> str | None:
         """Return ``<persistent_root>/.cache`` or ``None`` if unresolvable."""
@@ -655,24 +814,74 @@ class VllmProcessHandle:
             return None
         return os.path.join(cache_root_dir, ".cache")
 
-    def _purge_compile_caches(self) -> list[str]:
-        """Remove the torch.compile and inductor caches for this worker.
+    @classmethod
+    def _lane_artifact_paths(cls, lane_dir: str) -> list[str]:
+        """Existing compile-artifact subdirectories of one vLLM cache dir.
 
-        Returns the paths actually removed. HuggingFace weights and the
-        FlashInfer JIT cache are left in place — they are not implicated
-        in compile-cache poisoning and are expensive to rebuild. Paths
-        resolve to the persistent cache root which, in the standard
-        docker-compose deployment, is bind-mounted onto host storage
-        (e.g. ``/mnt/ceph``), so the wipe affects the host volume too.
+        Matches ``torch_compile_cache/`` and ``rank_*/`` only — ``modelinfos/``
+        and anything else in the dir survives a purge.
+        """
+        if not os.path.isdir(lane_dir):
+            return []
+        try:
+            entries = sorted(os.listdir(lane_dir))
+        except OSError:
+            return []
+        paths: list[str] = []
+        for entry in entries:
+            if entry in cls._VLLM_COMPILE_ARTIFACT_SUBDIRS or entry.startswith(cls._RANK_DIR_PREFIX):
+                path = os.path.join(lane_dir, entry)
+                if os.path.isdir(path):
+                    paths.append(path)
+        return paths
+
+    def _compile_artifact_paths(self, model: str | None) -> list[str]:
+        """Compile-artifact directories that would be removed on cache poisoning.
+
+        ``model=None`` returns the worker-wide set (top-level artifacts, every
+        per-lane dir, and the shared inductor cache) — used by the proactive
+        version-stamp check. ``model=<id>`` returns that lane's own per-lane
+        dir only, so a poisoned model does not force every other model on the
+        node to recompile. Never returns anything outside the compile
+        artifacts — in particular not ``modelinfos/``.
         """
         cache_root = self._compile_cache_root()
         if cache_root is None:
             return []
+        vllm_root = os.path.join(cache_root, "vllm")
+        if model is not None:
+            lanes = [os.path.join(vllm_root, "lanes", model.replace("/", "__"))]
+        else:
+            lanes = [vllm_root]
+            lanes_root = os.path.join(vllm_root, "lanes")
+            if os.path.isdir(lanes_root):
+                try:
+                    lanes += [os.path.join(lanes_root, entry) for entry in sorted(os.listdir(lanes_root))]
+                except OSError:
+                    pass
+        paths: list[str] = []
+        for lane_dir in lanes:
+            paths.extend(self._lane_artifact_paths(lane_dir))
+        if model is None:
+            inductor = os.path.join(cache_root, "torch_inductor")
+            if os.path.isdir(inductor):
+                paths.append(inductor)
+        return paths
+
+    def _purge_compile_caches(self, model: str | None = None) -> list[str]:
+        """Remove the torch.compile artifacts for this worker.
+
+        ``model=None`` purges the worker-wide set; ``model=<id>`` purges that
+        lane's per-lane dir only. Returns the paths actually removed.
+        ``modelinfos/``, HuggingFace weights, the FlashInfer JIT cache and
+        sharded checkpoints are left in place — they are not implicated in
+        compile-cache poisoning and are expensive to rebuild. Paths resolve
+        to the persistent cache root which, in the standard docker-compose
+        deployment, is bind-mounted onto host storage (e.g. ``/mnt/ceph``),
+        so the wipe affects the host volume too.
+        """
         removed: list[str] = []
-        for sub in self._PURGEABLE_COMPILE_CACHE_SUBDIRS:
-            path = os.path.join(cache_root, sub)
-            if not os.path.isdir(path):
-                continue
+        for path in self._compile_artifact_paths(model):
             try:
                 shutil.rmtree(path)
                 removed.append(path)
@@ -705,9 +914,10 @@ class VllmProcessHandle:
             return None
         return os.path.join(cache_root, self._COMPILE_CACHE_STAMP_FILENAME)
 
-    def _read_compile_cache_stamp(self) -> dict[str, str] | None:
-        path = self._compile_cache_stamp_path()
-        if not path or not os.path.isfile(path):
+    @staticmethod
+    def _read_json_dict(path: str) -> dict[str, str] | None:
+        """Read a JSON object of string values, or ``None`` if missing/unreadable."""
+        if not os.path.isfile(path):
             return None
         import json as _json
 
@@ -715,16 +925,24 @@ class VllmProcessHandle:
             with open(path, encoding="utf-8") as fh:
                 data = _json.load(fh)
         except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        return {str(k): str(v) for k, v in data.items()}
+
+    def _read_compile_cache_stamp(self) -> dict[str, str] | None:
+        path = self._compile_cache_stamp_path()
+        if not path or not os.path.isfile(path):
+            return None
+        stamp = self._read_json_dict(path)
+        if stamp is None:
             logger.debug(
                 "[%s] Could not read compile cache stamp at %s",
                 self.lane_id,
                 path,
                 exc_info=True,
             )
-            return None
-        if not isinstance(data, dict):
-            return None
-        return {str(k): str(v) for k, v in data.items()}
+        return stamp
 
     def _write_compile_cache_stamp(self) -> None:
         """Record the current (vllm, torch) versions next to the compile cache."""
@@ -748,6 +966,133 @@ class VllmProcessHandle:
                 exc_info=True,
             )
 
+    # ------------------------------------------------------------------
+    # Per-lane compile cache meta (cache_meta.json)
+    # ------------------------------------------------------------------
+
+    def _lane_compile_cache_dir(self, lane_config: LaneConfig) -> str | None:
+        """The per-lane ``--compilation-config`` cache_dir for this lane.
+
+        ``None`` when the lane overrides the compilation config itself
+        (extra_args) — that directory is not one we manage and cannot be
+        resolved from here.
+        """
+        vc = lane_config.vllm_config
+        if vc is None or self._has_compilation_config_override(vc.extra_args or []):
+            return None
+        root = self._resolve_persistent_cache_root(self._global_config)
+        if not root:
+            return None
+        return os.path.join(root, ".cache", "vllm", "lanes", lane_config.model.replace("/", "__"))
+
+    def _current_cache_meta(self, lane_config: LaneConfig) -> dict[str, str]:
+        """Environment fingerprint to record in the lane's cache_meta.json.
+
+        Any field changing between two healthy starts (image upgrade, vLLM or
+        torch bump, CUDA bump, or a different compilation config) means the
+        cached AOT/inductor artifacts were produced for a different
+        environment and must be rebuilt before reuse. Unreadable fields are
+        omitted — the comparison then only sees fields we actually recorded.
+        """
+        lane_cache_dir = self._lane_compile_cache_dir(lane_config)
+        if lane_cache_dir is None:
+            return {}
+        meta: dict[str, str] = dict(self._current_compile_versions())
+        try:
+            import torch  # noqa: PLC0415
+
+            cuda = getattr(torch.version, "cuda", None)
+            if cuda:
+                meta["cuda"] = str(cuda)
+        except Exception:  # noqa: BLE001
+            pass
+        image = (os.environ.get("LOGOS_IMAGE_VERSION") or "").strip()
+        if image:
+            meta["image"] = image
+        meta["model"] = lane_config.model
+        import hashlib
+        import json as _json
+
+        meta["compilation_config"] = hashlib.sha256(
+            _json.dumps({"cache_dir": lane_cache_dir}, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return meta
+
+    def _purge_lane_cache_if_meta_changed(self, lane_config: LaneConfig) -> list[str]:
+        """Pre-flight validation of this lane's cache_meta.json.
+
+        After the first healthy start we wrote ``cache_meta.json`` into the
+        lane's compile cache dir. Before every subsequent start we compare it
+        against the current environment; on any mismatch (or a cache without
+        a meta file, produced by a worker that predates this check) the
+        lane's ``torch_compile_cache/`` and ``rank_*/`` are wiped and vLLM
+        recompiles from scratch. Returns the paths actually removed.
+        """
+        lane_cache_dir = self._lane_compile_cache_dir(lane_config)
+        if lane_cache_dir is None:
+            return []
+        if not self._lane_artifact_paths(lane_cache_dir):
+            return []
+        current = self._current_cache_meta(lane_config)
+        if not current:
+            return []
+        meta_path = os.path.join(lane_cache_dir, self._CACHE_META_FILENAME)
+        stored = self._read_json_dict(meta_path)
+        if stored is not None:
+            mismatched = {k: (stored.get(k), current[k]) for k in current if stored.get(k) != current[k]}
+            if not mismatched:
+                return []
+            logger.warning(
+                "[%s] Compile cache meta mismatch for %s (%s); wiping this lane's compile cache",
+                self.lane_id,
+                lane_config.model,
+                ", ".join(f"{k}: {old}→{new}" for k, (old, new) in mismatched.items()),
+            )
+        else:
+            # Cache exists but no meta — produced by a worker version that
+            # predates the per-lane meta check. Treat as unknown and wipe so
+            # we start from a known-good baseline.
+            logger.warning(
+                "[%s] Compile cache present for %s but no %s; wiping to avoid poisoning",
+                self.lane_id,
+                lane_config.model,
+                self._CACHE_META_FILENAME,
+            )
+        return self._purge_compile_caches(lane_config.model)
+
+    def _write_lane_cache_meta(self, lane_config: LaneConfig) -> None:
+        """Record the current environment fingerprint in the lane's compile cache dir."""
+        lane_cache_dir = self._lane_compile_cache_dir(lane_config)
+        if lane_cache_dir is None:
+            return
+        meta = self._current_cache_meta(lane_config)
+        if not meta:
+            return
+        path = os.path.join(lane_cache_dir, self._CACHE_META_FILENAME)
+        import json as _json
+
+        try:
+            os.makedirs(lane_cache_dir, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                _json.dump(meta, fh, sort_keys=True)
+        except OSError:
+            logger.debug(
+                "[%s] Could not write compile cache meta at %s",
+                self.lane_id,
+                path,
+                exc_info=True,
+            )
+
+    def _log_cache_auto_recovered(self, model: str, fingerprint: str, purged: list[str]) -> None:
+        """Emit the structured auto-recovery log line (greppable in metrics)."""
+        logger.warning(
+            "[%s] cache_auto_recovered=true model=%s fingerprint=%s purged=%s",
+            self.lane_id,
+            model,
+            fingerprint,
+            ",".join(purged) or "none",
+        )
+
     def _purge_compile_caches_if_versions_changed(self) -> list[str]:
         """Purge compile caches when the recorded versions no longer match.
 
@@ -765,7 +1110,7 @@ class VllmProcessHandle:
         # No cache on disk yet → nothing to do, and writing a stamp ahead of
         # time would be misleading. The stamp gets written after the next
         # successful spawn produces real artifacts.
-        if not any(os.path.isdir(os.path.join(cache_root, sub)) for sub in self._PURGEABLE_COMPILE_CACHE_SUBDIRS):
+        if not self._compile_artifact_paths(None):
             return []
         current = self._current_compile_versions()
         if not current:
@@ -1162,8 +1507,11 @@ class VllmProcessHandle:
         if self._http is None:
             raise RuntimeError(f"[{self.lane_id}] HTTP client is not initialized")
 
-    _GMU_AUTO_FLOOR: ClassVar[float] = 0.5
-    _GMU_AUTO_CEILING: ClassVar[float] = 0.95
+    # Aliases of the module-level constants so the explicit/floor branches and
+    # the clamp bounds have a single definition shared with the placement
+    # planner (see effective_gmu / GMU_AUTO_FLOOR above).
+    _GMU_AUTO_FLOOR: ClassVar[float] = GMU_AUTO_FLOOR
+    _GMU_AUTO_CEILING: ClassVar[float] = GMU_AUTO_CEILING
 
     def _resolve_gmu(
         self,
@@ -1184,7 +1532,8 @@ class VllmProcessHandle:
              apply its own default (0.9 in current versions).
         """
         if vc.gpu_memory_utilization is not None:
-            return float(vc.gpu_memory_utilization)
+            # Same definition the placement planner gates on (shared helper).
+            return effective_gmu(vc)
         if self._model_profiles is None:
             return None
         profile = self._model_profiles.get_profile(lane_config.model)
@@ -1450,6 +1799,13 @@ class VllmProcessHandle:
             cmd.extend(["--attention-config.backend", attn_backend])
         if vc.enable_prefix_caching:
             cmd.append("--enable-prefix-caching")
+        # vLLM only reports usage.prompt_tokens_details (cached_tokens) when
+        # this server flag is set — its default is off, so without it local
+        # lanes omit the prefix-cache hit count that cloud providers include
+        # in usage natively, and consumers can't optimise cached-token usage
+        # per request (#813).
+        if vc.enable_prompt_tokens_details:
+            cmd.append("--enable-prompt-tokens-details")
         if vc.disable_custom_all_reduce:
             cmd.append("--disable-custom-all-reduce")
         if vc.enable_sleep_mode:
@@ -1488,16 +1844,11 @@ class VllmProcessHandle:
         # first (crashing in inductor with "Expected tensors only" /
         # IndexError in copy_misaligned_inputs).
         if not self._has_compilation_config_override(vc.extra_args):
-            import json as _json
+            lane_cache_dir = self._lane_compile_cache_dir(lane_config)
+            if lane_cache_dir is not None:
+                import json as _json
 
-            cache_root = os.path.join(
-                self._resolve_persistent_cache_root(self._global_config),
-                ".cache",
-                "vllm",
-                "lanes",
-                lane_config.model.replace("/", "__"),
-            )
-            cmd.extend(["--compilation-config", _json.dumps({"cache_dir": cache_root})])
+                cmd.extend(["--compilation-config", _json.dumps({"cache_dir": lane_cache_dir})])
         # Custom chat template: resolved against the persistent, operator-managed
         # template directory. Passing the resolved absolute path (rather than the
         # configured name) keeps the vLLM command line self-documenting in logs.

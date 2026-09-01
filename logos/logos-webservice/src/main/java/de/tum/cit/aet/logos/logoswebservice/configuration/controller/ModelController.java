@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
@@ -22,6 +23,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterSe
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorCalibrationLogsClient;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/logosdb")
@@ -47,20 +50,57 @@ public class ModelController {
         return ResponseEntity.ok(modelService.getModels(auth));
     }
 
+    /**
+     * Model-level health for applications, authenticated with a Logos API key
+     * (logos_key / logos-key header or Authorization: Bearer) — not a JWT —
+     * because the callers are the applications that send inference traffic,
+     * which hold API keys. Only models the key may access are reported.
+     */
+    @PostMapping("/get_model_health")
+    public ResponseEntity<?> getModelHealth(HttpServletRequest request) {
+        String apiKey = extractApiKey(request);
+        if (apiKey == null) {
+            return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
+        }
+        return modelService.getModelHealth(apiKey)
+            .map(ResponseEntity::ok)
+            .orElseGet(() -> ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key")));
+    }
+
+    static String extractApiKey(HttpServletRequest request) {
+        String key = request.getHeader("logos_key");
+        if (key == null || key.isBlank()) {
+            key = request.getHeader("logos-key");
+        }
+        if (key == null || key.isBlank()) {
+            String authorization = request.getHeader("Authorization");
+            if (authorization != null && authorization.toLowerCase(Locale.ROOT).startsWith("bearer ")) {
+                key = authorization.substring("bearer ".length());
+            }
+        }
+        if (key == null) return null;
+        key = key.strip();
+        return key.isEmpty() ? null : key;
+    }
+
     @PostMapping("/add_model")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addModel(
             @RequestBody AddModelRequestDTO req) {
-        Map<String, Object> serviceResult = modelService.addModel(req);
-        Integer newModelId = (Integer) serviceResult.get("model_id");
-        if (newModelId != null && req.name() != null) {
-            priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
-            modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
-                newModelId,
-                req.name()
-            );
+        try {
+            Map<String, Object> serviceResult = modelService.addModel(req);
+            Integer newModelId = (Integer) serviceResult.get("model_id");
+            if (newModelId != null && req.name() != null) {
+                priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
+                    newModelId,
+                    req.name()
+                );
+            }
+            return ResponseEntity.ok(serviceResult);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
-        return ResponseEntity.ok(serviceResult);
     }
 
     @PostMapping("/update_model_info")
@@ -75,7 +115,12 @@ public class ModelController {
             }
             return response;
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+            // "Model not found: ..." is a lookup miss; alias validation
+            // failures are bad input.
+            int status = e.getMessage() != null && e.getMessage().startsWith("Model not found")
+                ? 404
+                : 400;
+            return ResponseEntity.status(status).body(Map.of("error", e.getMessage()));
         }
     }
 

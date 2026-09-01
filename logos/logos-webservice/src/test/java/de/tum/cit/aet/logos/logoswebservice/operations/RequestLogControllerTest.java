@@ -10,6 +10,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -110,6 +111,74 @@ class RequestLogControllerTest {
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"user_id\": 1002}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests").isEmpty())
+           .andExpect(jsonPath("$.total").value(0));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = {"/sql/seed-operations-status.sql"}, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void latestRequests_filtersByStatus() throws Exception {
+        // One seeded row per lifecycle bucket, merged over the shared seed (whose
+        // two "success" rows are themselves "finished"). Each bucket is the newest
+        // row of its kind, so it leads its filtered page.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"queued\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-state-queued"))
+           .andExpect(jsonPath("$.total").value(1))
+           .andExpect(jsonPath("$.has_more").value(false));
+
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"running\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-state-running"))
+           .andExpect(jsonPath("$.total").value(1));
+
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"error\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-state-error"))
+           .andExpect(jsonPath("$.total").value(1));
+
+        // "finished" is the settled-but-not-failed bucket: the seeded success row
+        // plus the shared seed's two success rows.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"finished\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(3))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-state-finished"))
+           .andExpect(jsonPath("$.total").value(3));
+
+        // The filters compose: team 2001 sits only on the shared req-aaa-111, so
+        // intersecting it with "finished" narrows to that one row.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"finished\", \"team_id\": 2001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-aaa-111"))
+           .andExpect(jsonPath("$.total").value(1));
+
+        // An unknown state matches no bucket — fail closed, like an unknown
+        // user_id, rather than quietly returning the unfiltered feed.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"bogus\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.requests").isEmpty())
            .andExpect(jsonPath("$.total").value(0));
