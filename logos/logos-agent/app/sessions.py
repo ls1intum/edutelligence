@@ -116,7 +116,12 @@ class SessionManager:
 
         Sessions the database believes are running may have exited while the
         service was down, and containers may exist for sessions that were
-        cancelled. Both leave the UI lying, so both are fixed here.
+        cancelled. Both leave the UI lying, so both are fixed here. A
+        container that outran its row — the runner restarted between the
+        container start and the RUNNING transition — is re-adopted: its id
+        and derived branch are persisted into the row before supervision or
+        settlement, so a later cancel or cleanup can still reach the
+        credential-bearing agent.
         """
         live: dict[int, dict[str, Any]] = {}
         try:
@@ -135,14 +140,43 @@ class SessionManager:
                 if container is None:
                     await self._settle(sid, exit_code=None, error="container vanished during restart")
                     continue
+                container_id = container.get("Id", "")
+                # Re-adopt the container's identity into the row. The runner
+                # can restart after the container is created and started but
+                # before the RUNNING transition stored the id: a row without
+                # it cannot be stopped or removed by a later cancel or
+                # cleanup, and the credential-bearing agent would keep
+                # running unmanaged. The branch is derived exactly the way
+                # the launch derived it.
+                fields: dict[str, Any] = {}
+                if session.get("container_id") != container_id:
+                    fields["container_id"] = container_id
+                if not session.get("branch_name"):
+                    fields["branch_name"] = branch_for(sid, session["workspace_name"])
+                if fields:
+                    await db.update_session(sid, **fields)
                 state = (container.get("State") or "").lower()
                 if state in ("running", "paused"):
                     target = SessionStatus.PAUSED if state == "paused" else SessionStatus.RUNNING
+                    if status is SessionStatus.STARTING and target is SessionStatus.PAUSED:
+                        # starting -> paused is not an edge: a container the
+                        # platform paused inside the start window normalizes
+                        # through running first.
+                        await db.transition_session(sid, SessionStatus.RUNNING)
                     if status != target:
-                        await db.update_session(sid, status=target.value)
-                    self._supervise(sid, container.get("Id", ""))
+                        # A validated transition, not a raw update: a cancel
+                        # that landed inside the restart window must not be
+                        # overwritten with running/paused.
+                        await db.transition_session(sid, target)
+                    self._supervise(sid, container_id)
                 else:
-                    _, exit_code = await docker_engine.container_state(container.get("Id", ""))
+                    if status is SessionStatus.STARTING:
+                        # An exited container found while the row is still
+                        # 'starting' has no direct edge to a terminal state;
+                        # normalize through running so settlement's
+                        # transition is valid and can record the outcome.
+                        await db.transition_session(sid, SessionStatus.RUNNING)
+                    _, exit_code = await docker_engine.container_state(container_id)
                     await self._settle(sid, exit_code=exit_code, error=None)
 
         # Containers with no live session row: leftovers, remove them.
@@ -552,13 +586,23 @@ class SessionManager:
         The build workflow only runs when the session's pull request opens,
         and PR builds publish ``pr-<number>`` images, never ``latest``. A
         deploy of the session's own code therefore waits for that run and
-        uses the exact tag it published. Without a pull request no session
-        images exist at all; the previous ``latest`` behaviour is kept so a
-        session that skipped the PR degrades to the old, stale deploy.
+        uses the exact tag it published. Without a pull request no image of
+        the branch exists at all, so the deploy is refused with a visible
+        reason instead of falling back to main's stale ``latest`` images —
+        which would report the session's work deployed while serving the
+        old revision.
         """
         pr_number = github.pr_number_from_url(result.get("pr_url") or "")
         if pr_number is None:
-            return "latest"
+            await db.add_event(
+                session_id,
+                EventKind.DEPLOY,
+                {
+                    "status": "failed",
+                    "error": "session opened no pull request, so no image of its branch exists to deploy",
+                },
+            )
+            return None
         status, detail = await github.wait_for_pr_builds(branch)
         if status != "success":
             await db.add_event(

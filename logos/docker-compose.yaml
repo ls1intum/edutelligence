@@ -444,7 +444,7 @@ services:
     # system, the check failed forever, the gateway stayed unhealthy, and
     # logos-agent's service_healthy dependency never released.
     healthcheck:
-      test: ["CMD-SHELL", "nginx -t && wget -q -s http://127.0.0.1/healthz"]
+      test: ["CMD-SHELL", "nginx -t && wget -q --spider http://127.0.0.1/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5

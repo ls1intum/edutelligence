@@ -421,8 +421,16 @@ class TestScreenshotOrchestration:
 
         self._patch_base(monkeypatch, tmp_path, deploy_enabled=True)
         row = {**self.SESSION_ROW, "deploy_to_dev": True, "screenshot_paths": ["/dashboard"]}
+        result = tmp_path / "7"
+        result.mkdir(parents=True, exist_ok=True)
+        (result / "result.json").write_text(
+            json.dumps({"pr_url": "https://github.com/ls1intum/edutelligence/pull/772"})
+        )
         order: list = []
         created: list = []
+
+        async def fake_build_wait(_branch, **_kwargs):
+            return "success", "build ended: success"
 
         async def fake_dispatch(**_kwargs):
             order.append("dispatch")
@@ -444,6 +452,7 @@ class TestScreenshotOrchestration:
         async def noop(*args, **kwargs):
             return None
 
+        monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
         monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
         monkeypatch.setattr(sessions.github, "wait_for_dev_deploy", fake_wait)
         monkeypatch.setattr(sessions.SessionManager, "_wait_dev_ready", fake_ready)
@@ -467,8 +476,16 @@ class TestScreenshotOrchestration:
 
         self._patch_base(monkeypatch, tmp_path, deploy_enabled=True)
         row = {**self.SESSION_ROW, "deploy_to_dev": True}
+        result = tmp_path / "7"
+        result.mkdir(parents=True, exist_ok=True)
+        (result / "result.json").write_text(
+            json.dumps({"pr_url": "https://github.com/ls1intum/edutelligence/pull/772"})
+        )
         events: list = []
         created: list = []
+
+        async def fake_build_wait(_branch, **_kwargs):
+            return "success", "build ended: success"
 
         async def fake_dispatch(**_kwargs):
             return "https://github.com/ls1intum/edutelligence/actions/runs/1"
@@ -486,6 +503,7 @@ class TestScreenshotOrchestration:
         async def noop(*args, **kwargs):
             return None
 
+        monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
         monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
         monkeypatch.setattr(sessions.github, "wait_for_dev_deploy", fake_wait)
         monkeypatch.setattr(sessions.docker_engine, "create_screenshot_container", fake_create)
@@ -675,3 +693,219 @@ class TestSettlementRaceAndDeployTag:
         failed = [p for k, p in events if k == EventKind.DEPLOY and p.get("status") == "failed"]
         assert len(failed) == 1
         assert "image builds did not succeed" in failed[0]["error"]
+
+    async def test_deploy_is_refused_when_the_session_opened_no_pull_request(self, monkeypatch, tmp_path):
+        # The API allows deploy_to_dev without open_pull_request. Without a
+        # pull request no image of the branch exists — the build workflow
+        # only runs for PRs — and the only tags the registry carries are
+        # main's. The deploy must be refused with a visible reason, never
+        # silently dispatched against the stale latest images.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        # No result file: the session opened no pull request.
+        events: list = []
+        dispatched: list = []
+        build_waits: list = []
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def fake_dispatch(**kwargs):
+            dispatched.append(kwargs)
+            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+
+        async def fake_build_wait(branch, **_kwargs):
+            build_waits.append(branch)
+            return "success", "build ended: success"
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.SESSION_ROW))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+        monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert dispatched == []
+        assert build_waits == []
+        failed = [p for k, p in events if k == EventKind.DEPLOY and p.get("status") == "failed"]
+        assert len(failed) == 1
+        assert "no pull request" in failed[0]["error"]
+
+
+class TestRestartReconciliation:
+    """Re-attaching to containers that outran the database after a restart.
+
+    The runner can restart after a container is created and started but
+    before the RUNNING transition stores its id. Such a row must be
+    re-adopted — container id and derived branch persisted into the row —
+    and moved only through valid state transitions, so a cancel that landed
+    in the restart window is never overwritten and the credential-bearing
+    container is never left unmanaged.
+    """
+
+    STARTING_ROW = {
+        "id": 7,
+        "workspace_name": "feature-work",
+        "container_id": None,
+        "branch_name": None,
+    }
+    CONTAINER = {
+        "Id": "cid-x",
+        "Labels": {"logos.agent.session": "7", "logos.agent.managed": "true"},
+        "State": "running",
+    }
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    def _patch_base(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        return sessions
+
+    def _patch_rows(self, monkeypatch, sessions, rows_by_status):
+        async def fake_in_status(status):
+            return rows_by_status.get(status, [])
+
+        monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+
+    async def test_running_container_is_readopted_into_a_starting_row(self, monkeypatch, tmp_path):
+        # The row still says 'starting' and knows no container id: the runner
+        # restarted between the container start and the RUNNING transition.
+        # Reconciliation must persist the id and the derived branch, move the
+        # row to running, and hand the container to a supervisor.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        updated: list = []
+        transitions: list = []
+        supervised: list = []
+        removed: list = []
+
+        async def fake_update(sid, **fields):
+            updated.append((sid, fields))
+
+        async def fake_transition(sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        def fake_supervise(_self, sid, cid):
+            supervised.append((sid, cid))
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", self._async_value([self.CONTAINER]))
+        self._patch_rows(monkeypatch, sessions, {SessionStatus.STARTING: [self.STARTING_ROW]})
+        monkeypatch.setattr(sessions.db, "update_session", fake_update)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", fake_supervise)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+
+        await sessions.manager._reconcile()
+
+        assert updated == [(7, {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")})]
+        assert transitions == [SessionStatus.RUNNING]
+        assert supervised == [(7, "cid-x")]
+        # The matched container is not an orphan: it is supervised, not removed.
+        assert removed == []
+
+    async def test_exited_container_from_a_starting_row_settles_through_running(self, monkeypatch, tmp_path):
+        # The container exited while the runner was down, but the row never
+        # left 'starting' — a state with no direct edge to a terminal state.
+        # Reconciliation must normalize it through running so settlement's
+        # transition is valid, then settle it as succeeded and remove the
+        # container by the id it just re-adopted.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        container = {**self.CONTAINER, "State": "exited"}
+        updated: list = []
+        transitions: list = []
+        events: list = []
+        removed: list = []
+
+        async def fake_update(sid, **fields):
+            updated.append((sid, fields))
+
+        async def fake_transition(sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def fake_state(_cid):
+            return "exited", 0
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", self._async_value([container]))
+        self._patch_rows(monkeypatch, sessions, {SessionStatus.STARTING: [self.STARTING_ROW]})
+        monkeypatch.setattr(sessions.db, "update_session", fake_update)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(
+            sessions.db,
+            "get_session",
+            # The row as it stands after the re-adoption above: the cleanup
+            # below can only find the container because the id is in there.
+            self._async_value(
+                {**self.STARTING_ROW, "container_id": "cid-x", "deploy_to_dev": False, "screenshot_paths": []}
+            ),
+        )
+        monkeypatch.setattr(sessions.docker_engine, "container_state", fake_state)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+
+        await sessions.manager._reconcile()
+
+        assert updated == [(7, {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")})]
+        # starting has no edge to succeeded: the row is normalized through
+        # running first, and settlement's terminal transition is the second.
+        assert transitions == [SessionStatus.RUNNING, SessionStatus.SUCCEEDED]
+        assert removed == ["cid-x"]
+        assert events == [(EventKind.STATUS, {"status": "succeeded", "exit_code": 0, "error": None})]
+
+    async def test_paused_container_from_a_starting_row_normalizes_through_running(self, monkeypatch, tmp_path):
+        # The platform paused the container inside the start window, before
+        # the row ever reached 'running'. starting -> paused is not an edge,
+        # so the row takes the only path that is: a later resume still has a
+        # valid edge to leave from.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        container = {**self.CONTAINER, "State": "paused"}
+        updated: list = []
+        transitions: list = []
+        supervised: list = []
+
+        async def fake_update(sid, **fields):
+            updated.append((sid, fields))
+
+        async def fake_transition(sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        def fake_supervise(_self, sid, cid):
+            supervised.append((sid, cid))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", self._async_value([container]))
+        self._patch_rows(monkeypatch, sessions, {SessionStatus.STARTING: [self.STARTING_ROW]})
+        monkeypatch.setattr(sessions.db, "update_session", fake_update)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", fake_supervise)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+
+        await sessions.manager._reconcile()
+
+        assert updated == [(7, {"container_id": "cid-x", "branch_name": branch_for(7, "feature-work")})]
+        assert transitions == [SessionStatus.RUNNING, SessionStatus.PAUSED]
+        assert supervised == [(7, "cid-x")]
