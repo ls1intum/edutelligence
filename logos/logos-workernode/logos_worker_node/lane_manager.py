@@ -385,13 +385,20 @@ class LaneManager:
         capabilities_models: list[str],
         hf_home: str,
         cache_root: str = "",
+        gguf_quants: dict[str, str] | None = None,
     ) -> list[str]:
         """Check which capabilities_models are available locally.
 
         For each model, checks the HF hub cache, the direct model path under
         the models path, and (when given) the direct model path under the
-        cache root. Returns a list of models that could NOT be found (warnings
-        only, doesn't block startup).
+        cache root. A GGUF model whose serve target is concrete — an explicit
+        ``repo:quant`` / ``repo/file.gguf`` reference, or a bare GGUF
+        repository with an operator-pinned ``gguf_quant`` from *gguf_quants*
+        (the same model_overrides the lane's spec resolution applies) — is
+        checked for that quant or file in the active snapshot, because a
+        partial snapshot of the same repository does not prove it loadable.
+        Returns a list of models that could NOT be found (warnings only,
+        doesn't block startup).
 
         ``hf_home``/``cache_root`` come from the caller's resolved storage
         layout — the same directory the lane processes download into — rather
@@ -415,7 +422,21 @@ class LaneManager:
             checked = [os.path.join(models_path, model_name)]
             if cache_root:
                 checked.append(os.path.join(cache_root, model_name))
+            # The concrete reference the lane serves with, when one is pinned
+            # down: an explicit reference names it itself, a bare GGUF
+            # repository takes its operator gguf_quant (the spec resolver
+            # serves exactly that quant). Without a pin, the quant is chosen
+            # from the cached listing at spawn, so the directory check stands.
+            served_ref = ""
             if gguf.is_remote_gguf_ref(model_name) or gguf.is_remote_gguf_file_ref(model_name):
+                served_ref = model_name
+            elif gguf.is_gguf_repo_name(model_name):
+                pinned = (gguf_quants or {}).get(model_name, "").strip()
+                # A quant the plugin would reject cannot load either way, so
+                # it changes nothing the cache check can prove.
+                if pinned and gguf.is_remote_gguf_ref(f"{model_name}:{pinned}"):
+                    served_ref = f"{model_name}:{pinned}"
+            if served_ref:
                 # A repository directory is not proof the model can load: Hugging
                 # Face snapshots can be partial (the prefetch stores only the
                 # quants its models selected), so the reference must resolve to
@@ -423,7 +444,7 @@ class LaneManager:
                 # snapshot. A cache holding only a different quant of the same
                 # repo must stay missing, or the prefetch never downloads the
                 # quant the lane serves and the lane fails offline.
-                if gguf.is_gguf_ref_cached(hf_home, model_name) is not True:
+                if gguf.is_gguf_ref_cached(hf_home, served_ref) is not True:
                     missing.append(model_name)
                     logger.warning(
                         "Capability model '%s' not available locally: its selected "

@@ -132,6 +132,43 @@ def test_validate_capabilities_partial_snapshot_reports_missing_quant(tmp_path: 
     assert manager.validate_capabilities(["org/model-GGUF"]) == []
 
 
+def test_validate_capabilities_bare_repo_pinned_quant(tmp_path: Path, monkeypatch) -> None:
+    # A bare GGUF repository with a pinned gguf_quant serves THAT quant (the
+    # spec resolver applies the operator pin), so the check must verify it in
+    # the active snapshot: a cache holding only a different quant must stay
+    # missing so the prefetch downloads the pinned one.
+    monkeypatch.delenv("HF_HOME", raising=False)
+    cache_root = tmp_path / "root"
+    (cache_root / "models").mkdir(parents=True)
+    manager = LaneManager(
+        OllamaConfig(models_path=str(cache_root / "models")),
+        lane_port_start=16061,
+        lane_port_end=16070,
+    )
+    _write_cached(cache_root / "models" / ".hf_cache", "org/model-GGUF", ["model-GGUF-Q4_K_M.gguf"])
+
+    # Pinned Q8_0 is absent from the snapshot → missing (prefetch triggered) …
+    assert manager.validate_capabilities(["org/model-GGUF"], gguf_quants={"org/model-GGUF": "Q8_0"}) == [
+        "org/model-GGUF"
+    ]
+    # … an invalid pin changes nothing the cache can prove (the lane would
+    # fail on it at spawn) — the directory check stands …
+    assert manager.validate_capabilities(["org/model-GGUF"], gguf_quants={"org/model-GGUF": "Q9_X"}) == []
+    # … and an explicit reference stays authoritative over the pin.
+    assert manager.validate_capabilities(["org/model-GGUF:Q4_K_M"], gguf_quants={"org/model-GGUF:Q4_K_M": "Q8_0"}) == []
+
+    # A snapshot holding the pinned quant stays available.
+    other_root = tmp_path / "root2"
+    (other_root / "models").mkdir(parents=True)
+    other = LaneManager(
+        OllamaConfig(models_path=str(other_root / "models")),
+        lane_port_start=16071,
+        lane_port_end=16080,
+    )
+    _write_cached(other_root / "models" / ".hf_cache", "org/model-GGUF", ["model-GGUF-Q8_0.gguf"])
+    assert other.validate_capabilities(["org/model-GGUF"], gguf_quants={"org/model-GGUF": "Q8_0"}) == []
+
+
 # ---------------------------------------------------------------------------
 # calibration resolver — inherited HF_HOME + authoritative empty listing
 # ---------------------------------------------------------------------------
