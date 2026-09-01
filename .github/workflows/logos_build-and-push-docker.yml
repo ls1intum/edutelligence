@@ -24,6 +24,115 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-workernode-build:
+    name: Check whether the vLLM worker must be built
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      build: ${{ steps.decision.outputs.build }}
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # A pull request keeps the same pr-<number> image tag for its lifetime.
+      # Use the commit of the last successful worker job as the baseline. This
+      # still reuses a worker that succeeded in an otherwise failed workflow,
+      # while a failed worker build is retried on the next run.
+      - name: Find previous successful worker build
+        if: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
+        id: previous-build
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: "logos_build-and-push-docker.yml",
+              branch: context.payload.pull_request.head.ref,
+              event: "pull_request",
+              per_page: 30,
+            });
+
+            const previousRuns = response.data.workflow_runs.filter(run =>
+              run.id !== context.runId &&
+              run.pull_requests?.some(pull => pull.number === pullNumber)
+            );
+
+            for (const run of previousRuns) {
+              const jobs = await github.paginate(
+                github.rest.actions.listJobsForWorkflowRun,
+                { owner, repo, run_id: run.id, filter: "latest", per_page: 100 },
+              );
+              const successfulWorker = jobs.some(job =>
+                job.name.startsWith("Build Logos Worker Node (vLLM) / build (") &&
+                job.conclusion === "success"
+              );
+
+              if (successfulWorker) {
+                core.setOutput("head-sha", run.head_sha);
+                return;
+              }
+            }
+
+            core.setOutput("head-sha", "");
+
+      - name: Decide whether to build the vLLM worker
+        id: decision
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          CURRENT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PREVIOUS_SUCCESSFUL_SHA: ${{ steps.previous-build.outputs.head-sha }}
+        run: |
+          set -euo pipefail
+
+          # Main and release images must always be refreshed. A newly opened or
+          # reopened PR must also build once because its pr-<number> tag may not
+          # exist (the close workflow removes it from Harbor).
+          if [ "$EVENT_NAME" != "pull_request" ] || [ "$EVENT_ACTION" != "synchronize" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Building worker: initial PR, reopened PR, main push, or release."
+            exit 0
+          fi
+
+          # No successful worker job means there is no trustworthy PR image to reuse.
+          if [ -z "$PREVIOUS_SUCCESSFUL_SHA" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Building worker: no previous successful worker build was found."
+            exit 0
+          fi
+
+          if ! git cat-file -e "${PREVIOUS_SUCCESSFUL_SHA}^{commit}" 2>/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Building worker: previous worker commit is unavailable locally."
+            exit 0
+          fi
+
+          # Compare only inputs that can change the worker image. Documentation,
+          # tests, research results, Compose files, and host configuration are
+          # excluded because Dockerfile/.dockerignore keep them out of the image.
+          if git diff --quiet "$PREVIOUS_SUCCESSFUL_SHA" "$CURRENT_SHA" -- \
+            logos/logos-workernode/Dockerfile \
+            logos/logos-workernode/.dockerignore \
+            logos/logos-workernode/requirements.txt \
+            logos/logos-workernode/logos_worker_node \
+            logos/logos-workernode/tools \
+            ':(exclude,glob)logos/logos-workernode/tools/**/*.md' \
+            .github/workflows/logos_build-and-push-docker.yml; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping worker: build inputs are unchanged since $PREVIOUS_SUCCESSFUL_SHA."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Building worker: build inputs changed since $PREVIOUS_SUCCESSFUL_SHA."
+          fi
+
   build-server:
     name: Build Logos Server
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
@@ -172,7 +281,8 @@ jobs:
 
   build-workernode-vllm:
     name: Build Logos Worker Node (vLLM)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    needs: check-workernode-build
+    if: ${{ needs.check-workernode-build.outputs.build == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence') }}
     uses: docker/github-builder/.github/workflows/build.yml@v1
     permissions:
       contents: read

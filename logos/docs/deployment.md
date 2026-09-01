@@ -4,6 +4,15 @@ Logos images are built by the `Logos - Build` workflow and pushed to the Harbor
 registry (`${LOGOS_HARBOR_REGISTRY}/logos`). PR builds are tagged `pr-<number>`,
 builds on `main` are tagged `latest`.
 
+The vLLM worker image is always built on the first run of a PR (and when a PR is
+reopened), which guarantees that its `pr-<number>` tag exists before a dev
+deployment. On later PR updates, the workflow reuses that tag unless files in
+the worker runtime (`logos_worker_node`), its copied tools, dependency list,
+Dockerfile/build-context rules, or its build workflow changed since the last
+successful worker build in that PR. Worker documentation, tests, research
+results, Compose files, and host configuration do not trigger an image rebuild.
+Pushes to `main` and releases continue to rebuild the worker image.
+
 | Environment | Workflow | Trigger | Nodes (GitHub environments) |
 |---|---|---|---|
 | Prod | `Logos - Deploy to Prod` | auto after `Logos - Build` on `main`, or manual | `Logos - Prod`, `Logos Worker - Prod - deioma` |
