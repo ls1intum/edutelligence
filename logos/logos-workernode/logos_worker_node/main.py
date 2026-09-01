@@ -329,16 +329,80 @@ async def _auto_calibrate_if_needed(
         model_profiles._load_persisted()
 
 
+def _sleepable_lane_models(cfg: AppConfig, lane_manager: LaneManager | None = None) -> set[str]:
+    """Configured and live lane models that can sleep.
+
+    ``static_lanes`` may enable sleep mode for models outside
+    ``capabilities_models``, and ``_add_lane_unlocked`` caches any vLLM model on
+    demand (a lane added by the server, not just one from config) — so the
+    re-plan reserve must cover their sleeping residency too, not just the
+    capability models. Capability models are passed to
+    ``_build_ram_cache_candidates`` separately; they keep the "uncalibrated ⇒
+    not served" rule, but a configured/live lane model is served regardless of
+    calibration, so it is reserved here even without a profile.
+    """
+    models: set[str] = set()
+    for sl in cfg.static_lanes:
+        if model_can_sleep(cfg, sl.model):
+            models.add(sl.model)
+    if lane_manager is not None:
+        for lane_id in lane_manager.lane_ids:
+            handle = lane_manager.get_handle(lane_id)
+            if handle is None or handle.lane_config is None:
+                continue
+            if model_can_sleep(cfg, handle.lane_config.model):
+                models.add(handle.lane_config.model)
+    return models
+
+
+def _cache_candidate(
+    cfg: AppConfig,
+    model_cache: ModelRamCache | _DisabledModelRamCache,
+    model_profiles: ModelProfileRegistry,
+    name: str,
+) -> CacheCandidate:
+    """A single cache-plan candidate.
+
+    Prefers the model's calibrated/measured sleeping footprint; when that is
+    unavailable (a static/live lane model outside ``capabilities_models`` is
+    often uncalibrated) falls back to the on-disk size — the same conservative
+    estimate used for a measured-but-never-slept capability model. A model not
+    yet cached has size 0 and so reserves nothing: it holds no host RAM the
+    floor must bound until it is copied.
+    """
+    profile = model_profiles.get_profile(name)
+    sleeping_host_ram_mb = 0.0
+    if profile is not None and (profile.base_residency_mb or 0) > 0:
+        sleeping_host_ram_mb = profile.estimate_sleeping_host_ram_mb()
+    if sleeping_host_ram_mb <= 0.0:
+        # No measured/calibrated sleeping footprint. On-disk size underestimates
+        # by ~tokenizer + compile cache overhead but is the right ballpark.
+        sleeping_host_ram_mb = model_cache.model_size_bytes(name) / (1024 * 1024)
+    return CacheCandidate(
+        name=name,
+        can_sleep=model_can_sleep(cfg, name),
+        sleeping_host_ram_mb=sleeping_host_ram_mb,
+        size_bytes=model_cache.model_size_bytes(name),
+    )
+
+
 def _build_ram_cache_candidates(
     cfg: AppConfig,
     model_cache: ModelRamCache | _DisabledModelRamCache,
     model_profiles: ModelProfileRegistry,
     caps: list[str],
+    reserve_models: set[str] | None = None,
 ) -> tuple[list[CacheCandidate], list[str]]:
     """Cache-plan candidates for the capability models that have profile data.
 
-    Returns ``(candidates, uncalibrated)`` — the uncalibrated models are not
-    served at all, so they never enter the plan.
+    ``reserve_models`` are sleep-capable configured/live lane models that MUST
+    enter the sleep reserve even without a profile (see
+    ``_sleepable_lane_models``); they are included with the conservative
+    on-disk footprint when uncalibrated instead of being skipped.
+
+    Returns ``(candidates, uncalibrated)`` — the uncalibrated capability models
+    are not served at all, so they never enter the plan (``reserve_models`` are
+    the exception: they are served regardless of calibration).
 
     Each candidate carries the two numbers the planner balances:
 
@@ -350,27 +414,20 @@ def _build_ram_cache_candidates(
         that balances the two consumers of host RAM.
       * ``size_bytes`` — the tmpfs cost (the weights on disk).
     """
+    reserve_models = set(reserve_models or set())
     candidates: list[CacheCandidate] = []
     uncalibrated: list[str] = []
+    seen: set[str] = set()
     for m in caps:
         profile = model_profiles.get_profile(m)
         if profile is None or (profile.base_residency_mb or 0) <= 0:
             uncalibrated.append(m)
             continue
-        sleeping_host_ram_mb = profile.estimate_sleeping_host_ram_mb()
-        if sleeping_host_ram_mb <= 0.0:
-            # Never measured asleep and no awake figure to fall back on
-            # either. On-disk size underestimates by ~tokenizer + compile
-            # cache overhead but is the right ballpark.
-            sleeping_host_ram_mb = model_cache.model_size_bytes(m) / (1024 * 1024)
-        candidates.append(
-            CacheCandidate(
-                name=m,
-                can_sleep=model_can_sleep(cfg, m),
-                sleeping_host_ram_mb=sleeping_host_ram_mb,
-                size_bytes=model_cache.model_size_bytes(m),
-            )
-        )
+        seen.add(m)
+        candidates.append(_cache_candidate(cfg, model_cache, model_profiles, m))
+    for m in sorted(reserve_models - seen):
+        seen.add(m)
+        candidates.append(_cache_candidate(cfg, model_cache, model_profiles, m))
     return candidates, uncalibrated
 
 
@@ -519,12 +576,17 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     lane_manager = app.state.lane_manager
 
     caps = list(cfg.logos.capabilities_models) if cfg.logos else []
-    if not caps:
-        return
-    candidates, _uncalibrated = _build_ram_cache_candidates(cfg, model_cache, model_profiles, caps)
+    # Static/live lane models can sleep too: static_lanes may enable sleep mode
+    # for models outside capabilities_models, and _add_lane_unlocked caches any
+    # vLLM model on demand. Their sleeping residency must enter the reserve, so
+    # a static-only worker (empty capabilities_models) still reserves host RAM
+    # instead of returning here and leaving the floor unset.
+    reserve_models = _sleepable_lane_models(cfg, lane_manager)
+    candidates, _uncalibrated = _build_ram_cache_candidates(cfg, model_cache, model_profiles, caps, reserve_models)
     if not candidates:
-        # Nothing calibrated means an empty reserve and a plan that keeps
-        # exactly what it keeps — there is no arithmetic to re-run.
+        # No calibrated capability models and no sleep-capable static/live lane
+        # models means an empty reserve and a plan that keeps exactly what it
+        # keeps — there is no arithmetic to re-run.
         return
 
     host_memory = _build_host_memory_summary()

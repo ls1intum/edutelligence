@@ -28,7 +28,7 @@ import pytest
 
 import logos_worker_node.main as worker_main
 from logos_worker_node.lane_manager import LaneManager
-from logos_worker_node.models import AppConfig, HostMemorySummary, LogosConfig, OllamaConfig, ProcessState
+from logos_worker_node.models import AppConfig, HostMemorySummary, LaneConfig, LogosConfig, OllamaConfig, ProcessState
 
 
 def _mb(mb: float) -> int:
@@ -161,9 +161,13 @@ def _host_memory(available_mb: float) -> HostMemorySummary:
 
 
 def _app(
-    cache: _FakeCache, registry: _FakeRegistry, lane_manager: _FakeLaneManager, caps: list[str]
+    cache: _FakeCache,
+    registry: _FakeRegistry,
+    lane_manager: _FakeLaneManager,
+    caps: list[str],
+    static_lanes: list[LaneConfig] | None = None,
 ) -> SimpleNamespace:
-    cfg = AppConfig(logos=LogosConfig(capabilities_models=caps))
+    cfg = AppConfig(logos=LogosConfig(capabilities_models=caps), static_lanes=static_lanes or [])
     return SimpleNamespace(
         state=SimpleNamespace(
             config=cfg,
@@ -396,6 +400,64 @@ def test_startup_sleep_triggers_reclaim_with_production_state_order(monkeypatch)
     # The first startup sleep actually reclaimed the model that no longer fit.
     assert cache.reclaimed[0] == ["org/big"]
     assert cache.is_cached("org/big") is False
+
+
+def test_replan_reserves_static_lane_model_outside_capabilities(monkeypatch) -> None:
+    """Regression: the reserve must cover sleep-capable lane models that are NOT
+    in capabilities_models. A static-only worker (empty capabilities_models)
+    with a sleepable static lane model used to hit the ``if not caps: return``
+    early exit, so the model's sleeping residency never entered the cache floor
+    and its first sleep could push host RAM past the floor. The model has no
+    calibrated profile here, so it enters the reserve via the conservative
+    on-disk footprint (it is cached)."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    model = "org/static-only"
+    lanes = _FakeLaneManager({})
+    # No profile for the static model; it is cached, so its on-disk size is the
+    # conservative sleeping footprint.
+    registry = _FakeRegistry({})
+    sizes = {model: _mb(20_000)}
+    cache = _FakeCache(cached=[model], sizes=sizes)
+    # Static-only worker: no capabilities, one sleepable static lane model.
+    app = _app(cache, registry, lanes, [], static_lanes=[LaneConfig(model=model, vllm=True)])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # The static model's sleeping residency entered the reserve: the floor is
+    # its footprint (on-disk size) plus the host-scaled safety margin — not 0.
+    assert cache.floor_mb == pytest.approx(20_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
+def test_replan_reserves_live_lane_model_outside_capabilities(monkeypatch) -> None:
+    """Regression: a model served by a live lane outside capabilities_models must
+    enter the reserve even when capability models are present (so it is not merely
+    masked by the empty-caps early return) — _add_lane_unlocked caches any vLLM
+    model on demand, so its sleeping residency has to bound the floor. The model
+    has a calibrated profile, so its measured sleeping footprint (not the on-disk
+    size) is reserved alongside the capability model's."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    cap_model = "org/cap"
+    live_model = "org/live-only"
+    # A live RUNNING lane for a model that is NOT in capabilities_models.
+    lanes = _FakeLaneManager({live_model: _FakeHandle(live_model, live_model, ProcessState.RUNNING)})
+    registry = _FakeRegistry(
+        {
+            cap_model: _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            live_model: _FakeProfile(base_residency_mb=30_000.0, sleeping_mb=25_000.0),
+        }
+    )
+    sizes = {cap_model: _mb(8_000), live_model: _mb(20_000)}
+    cache = _FakeCache(cached=[cap_model, live_model], sizes=sizes)
+    # caps holds only the capability model — the live model is outside it.
+    app = _app(cache, registry, lanes, [cap_model])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # The reserve covers BOTH sleepable models: the capability model (10_000)
+    # and the live model outside caps (25_000), plus the safety margin.
+    assert cache.floor_mb == pytest.approx(35_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
 # ── _replan_ram_cache_once ───────────────────────────────────────────────────
