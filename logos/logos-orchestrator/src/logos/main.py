@@ -2441,10 +2441,7 @@ async def _execute_proxy_mode(
         with DBManager() as db:
             models_info = db.get_models_info(auth.key_value)
 
-        model_name = _resolve_requested_model_name(
-            requested_model_name,
-            [str(row["name"]) for row in models_info if row.get("name")],
-        )
+        model_name = _resolve_requested_model_name(requested_model_name, models_info)
         if model_name is None:
             raise HTTPException(
                 status_code=404,
