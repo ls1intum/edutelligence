@@ -211,7 +211,9 @@ def _write_gguf(hf_home: Path, model: str, filenames: list[str], sizes: list[int
     snapshot = repo_dir / "snapshots" / "abc123"
     snapshot.mkdir(parents=True, exist_ok=True)
     for i, name in enumerate(filenames):
-        (snapshot / name).write_bytes(b"\x00" * (sizes[i] if sizes else 1))
+        target = snapshot / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\x00" * (sizes[i] if sizes else 1))
 
 
 def test_list_cached_gguf_files_finds_cached_model(tmp_path: Path) -> None:
@@ -252,6 +254,27 @@ def test_list_cached_gguf_files_empty_authoritative(tmp_path: Path) -> None:
     # Cached repo without GGUF weights → empty list, not None.
     _write_gguf(tmp_path, "org/some-model", ["config.json", "model.safetensors"])
     assert gguf.list_cached_gguf_files(str(tmp_path), "org/some-model") == []
+
+
+def test_list_cached_gguf_files_finds_nested_subdirectory_files(tmp_path: Path) -> None:
+    # GGUF repositories often keep their weights in subdirectories (quants/,
+    # …); the walk must reach them — bounded to the snapshot — and surface
+    # snapshot-relative names.
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_S.gguf", "quants/Qwen3-8B-Q8_0.gguf", "quants/deep/Qwen3-8B-Q4_K_M.gguf"],
+        sizes=[16, 32, 64],
+    )
+    files = gguf.list_cached_gguf_files(str(tmp_path), "unsloth/Qwen3-8B-GGUF")
+    assert files == [
+        ("Qwen3-8B-Q4_K_S.gguf", 16),
+        ("quants/Qwen3-8B-Q8_0.gguf", 32),
+        ("quants/deep/Qwen3-8B-Q4_K_M.gguf", 64),
+    ]
+    # The snapshot-relative name is harmless downstream: the quant helpers
+    # basename their input, so a nested file still resolves its quant.
+    assert [quant for quant, _ in gguf.candidate_quants(files)] == ["Q4_K_S", "Q8_0", "Q4_K_M"]
 
 
 # ---------------------------------------------------------------------------
