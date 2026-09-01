@@ -583,16 +583,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Validate capabilities models at startup (warnings only)
     if cfg.logos and cfg.logos.capabilities_models:
-        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models)
+        # Operator-pinned GGUF quants per model (from
+        # engines.vllm.model_overrides): a bare GGUF repository's lane serves
+        # the pinned quant, so capability validation must check that quant in
+        # the cache and the prefetch must download only it.
+        gguf_quants: dict[str, str] = {}
+        if cfg.engines and cfg.engines.vllm:
+            for model_name in cfg.logos.capabilities_models:
+                pinned = str((cfg.engines.vllm.model_overrides.get(model_name) or {}).get("gguf_quant") or "")
+                if pinned:
+                    gguf_quants[model_name] = pinned
+        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models, gguf_quants)
         if missing and cfg.worker.prefetch_missing_models:
-            # Operator-pinned GGUF quants per model, so a GGUF repo downloads
-            # only the one quantization its lane will serve.
-            gguf_quants: dict[str, str] = {}
-            if cfg.engines and cfg.engines.vllm:
-                for model_name in missing:
-                    pinned = str((cfg.engines.vllm.model_overrides.get(model_name) or {}).get("gguf_quant") or "")
-                    if pinned:
-                        gguf_quants[model_name] = pinned
             # Fire-and-forget: download missing weights in the background so the
             # worker boots into zero-lane mode immediately and serves the models
             # it already has while the rest stream in.
