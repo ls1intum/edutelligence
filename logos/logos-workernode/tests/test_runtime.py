@@ -69,6 +69,36 @@ class _MetalCollector:
         )
 
 
+class _DegradedMetalCollector:
+    """Metal with the mlx probe unavailable: sysctl-fallback working-set
+    budget. The estimate is marked by telemetry_available=False and
+    degraded_reason, but it is still a device-level budget — and a
+    conservative one at that."""
+
+    async def get_snapshot(self):
+        return DeviceSummary(
+            timestamp=datetime(2026, 9, 1, 10, 0, 0, tzinfo=timezone.utc),
+            mode="metal",
+            nvidia_smi_available=False,
+            telemetry_available=False,
+            degraded_reason="mlx device_info unavailable — GPU budget estimated from hw.memsize heuristic",
+            devices=[
+                DeviceInfo(
+                    device_id="0",
+                    kind="metal",
+                    name="Apple Silicon GPU",
+                    memory_used_mb=9000.0,
+                    memory_total_mb=28000.0,
+                    memory_free_mb=19000.0,
+                    extra={"source": "sysctl-fallback", "unified_memory": True},
+                )
+            ],
+            total_memory_mb=28000.0,
+            used_memory_mb=9000.0,
+            free_memory_mb=19000.0,
+        )
+
+
 class _NvidiaCollector:
     async def get_snapshot(self):
         return DeviceSummary(
@@ -172,6 +202,33 @@ async def test_build_runtime_status_preserves_measured_metal_telemetry(monkeypat
     assert runtime.devices.used_memory_mb == 12000.0
     assert runtime.devices.free_memory_mb == 12000.0
     assert runtime.capacity.free_memory_mb == 12000.0
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_preserves_degraded_metal_telemetry(monkeypatch):
+    """A degraded Metal snapshot (sysctl-fallback budget, telemetry_available
+    False) is still device-level data: the conservative working-set estimate
+    plus real wired-page usage. Replacing it with the derived summary would
+    report the full host hw.memsize as the device budget on macOS —
+    overstating the Metal working set by ~22% and letting the orchestrator
+    over-schedule the node. The snapshot's telemetry_available=False already
+    tells the flag-gating consumers to keep their conservative values."""
+    monkeypatch.setattr(
+        "logos_worker_node.runtime._read_proc_meminfo_mb",
+        # Host RAM, deliberately larger than the working-set estimate:
+        # leaking this number into the device budget is the regression.
+        lambda: (36864.0, 8192.0, 28672.0),
+    )
+
+    runtime = await build_runtime_status(_make_app([], _DegradedMetalCollector()))
+
+    assert runtime.devices.mode == "metal"
+    assert runtime.devices.telemetry_available is False
+    assert runtime.devices.degraded_reason.startswith("mlx device_info unavailable")
+    assert runtime.devices.total_memory_mb == 28000.0
+    assert runtime.devices.free_memory_mb == 19000.0
+    assert runtime.devices.devices[0].extra["source"] == "sysctl-fallback"
+    assert runtime.capacity.free_memory_mb == 19000.0
 
 
 @pytest.mark.asyncio

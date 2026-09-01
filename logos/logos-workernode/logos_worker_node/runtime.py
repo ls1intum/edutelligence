@@ -184,12 +184,19 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
 
     lanes = await lane_manager.get_all_statuses()
     devices = await gpu_collector.get_snapshot()
-    # Either flag means "measured device telemetry": nvidia_smi_available for
-    # the CUDA collector, telemetry_available for the Metal collector, which
-    # leaves the NVIDIA-specific flag false by design (its snapshot is the
-    # measured Metal working set, not nvidia-smi data). Only the derived
-    # summary sets neither, so that — and only that — is replaced below.
-    if not (devices.nvidia_smi_available or devices.telemetry_available):
+    # The derived summary is the last resort: it is built only when the
+    # collector has no device data at all (mode "none"). Both collectors
+    # leave mode "none" exclusively for that state, so this also covers the
+    # cases the availability flags describe — and keeps the degraded Metal
+    # snapshot (mode "metal", telemetry_available False), which must not be
+    # discarded: on macOS the derived summary would report the full host
+    # hw.memsize as the device budget, overstating the Metal working set by
+    # ~22% (see the metal.py design notes). A degraded snapshot still carries
+    # the conservative sysctl working-set estimate plus the real wired-page
+    # usage, and its telemetry_available=False already tells the flag-gating
+    # consumers (main.py reporting, logosnode_provider) to keep their
+    # conservative values until a real mlx probe succeeds.
+    if devices.mode == "none":
         devices = _build_derived_device_summary(lanes)
 
     capacity = CapacitySummary(
