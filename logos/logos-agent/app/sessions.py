@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from . import capacity, db, docker_engine, github
+from . import capacity, db, docker_engine, github, model_policy
 from .config import settings
 from .schemas import EventKind, SessionStatus
 
@@ -45,6 +45,11 @@ _CONTAINER_PREFIX = "logos-agent-session-"
 # of the prefix. The API sanitises names on the way in as well; this is the
 # check that has to hold even if that one is changed.
 _BRANCH_SAFE = re.compile(r"[^a-zA-Z0-9_-]")
+
+# How long a cancel waits for an in-flight launch to settle. Long enough for
+# a stopped helper container to be reaped, short enough that a wedged Docker
+# call cannot hold the cancel API open.
+_CANCEL_LAUNCH_WAIT_S = 60.0
 
 
 def container_name(session_id: int) -> str:
@@ -102,6 +107,29 @@ class _Helper:
         self.started = asyncio.Event()
 
 
+class _Launch:
+    """One session's launch, from before its first await until it settles.
+
+    The helper record above covers a container that is being created; this
+    one covers the stretch *before* any container exists — resolving the
+    workspace, ensuring its volume, resolving the artefact mountpoint. A
+    cancel landing in there used to find nothing tracked at all, report a
+    clean cancellation, and leave the resumed launch to run the
+    credential-bearing prepare helper and start the agent anyway.
+
+    So the launch registers itself synchronously before its first await.
+    A cancel marks ``cancelled`` and waits for ``settled``; the launch
+    checks the flag at every phase boundary — before the prepare helper,
+    before creating the agent container, before starting it — and gives
+    back whatever it had created. Cancellation is therefore observed by
+    the launch itself rather than raced against its final transition.
+    """
+
+    def __init__(self) -> None:
+        self.cancelled = False
+        self.settled = asyncio.Event()
+
+
 class SessionManager:
     def __init__(self) -> None:
         self._supervisors: dict[int, asyncio.Task] = {}
@@ -111,6 +139,9 @@ class SessionManager:
         # all — and a cancel must be able to reach the credential-bearing
         # helper on that path too, not just the one the supervisor is in.
         self._helpers: dict[int, _Helper] = {}
+        # The launch in flight per session, from before its first await. A
+        # cancel that lands before any container exists is observed here.
+        self._launches: dict[int, _Launch] = {}
         self._scheduler_task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
         # Serialises admission so two scheduler passes cannot both decide there
@@ -363,6 +394,13 @@ class SessionManager:
         async with self._admission_lock:
             reading = await capacity.read_load()
             self._last_reading = reading
+            # Permissions are data: the agent key can be granted a cloud
+            # provider long after this service started, so the local-only
+            # policy is re-established on the pass that would spend it, not
+            # once at startup.
+            policy = await model_policy.refresh()
+            if not policy.ok:
+                return
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
             may_start, why = capacity.start_decision(reading, running=len(running), paused=len(paused))
@@ -394,6 +432,22 @@ class SessionManager:
 
     async def _launch(self, session: dict[str, Any]) -> None:
         sid = session["id"]
+        # Registered before the first await, so a cancel arriving during the
+        # workspace and volume lookups below is seen by this launch rather
+        # than by nothing at all. The assignment is synchronous: no other
+        # coroutine runs between it and the first await that follows.
+        launch = _Launch()
+        self._launches[sid] = launch
+        try:
+            await self._launch_tracked(session, launch)
+        finally:
+            # Whatever happened — success, failure, or an observed cancel —
+            # the launch is over, and a cancel waiting on it may proceed.
+            self._launches.pop(sid, None)
+            launch.settled.set()
+
+    async def _launch_tracked(self, session: dict[str, Any], launch: _Launch) -> None:
+        sid = session["id"]
         workspace = await db.get_workspace(session["workspace_id"])
         if workspace is None:
             await self._settle(sid, exit_code=None, error="workspace disappeared")
@@ -404,6 +458,15 @@ class SessionManager:
             # Cannot happen with the derivation above, but the check is cheap
             # and this is the one place where a bug would push to main.
             await self._settle(sid, exit_code=None, error=f"refusing branch '{branch}'")
+            return
+
+        # The model is checked again here, against the policy this pass
+        # established: a session queued while its model was local must not
+        # start after that model gained a cloud deployment. This is the last
+        # point before a container is given the gateway's address.
+        policy = model_policy.current()
+        if not policy.allows(session.get("model")):
+            await self._settle(sid, exit_code=None, error=policy.refusal(session.get("model")))
             return
 
         container_id: str | None = None
@@ -419,11 +482,26 @@ class SessionManager:
             _give_to_session_user(directory)
             artifact_host_path = str(Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(sid))
 
+            # Boundary: the next step hands a GitHub token to a container.
+            # A cancel that arrived during the awaits above has already
+            # reported the session cancelled, so nothing credential-bearing
+            # may start for it.
+            if launch.cancelled:
+                logger.info("session %s was cancelled before its checkout helper; not starting it", sid)
+                return
+
             # Phase one, trusted: the working copy is prepared by a helper
             # container with egress and the scoped push token. The agent
             # phase that follows has neither — it runs on the internal
             # network with no credentials at all.
             await self._prepare_checkout(session, workspace, branch, artifact_host_path)
+
+            # Boundary: the agent container is next. A cancel during the
+            # prepare helper stops that helper; the launch must not go on to
+            # start the agent for a session the API reported cancelled.
+            if launch.cancelled:
+                logger.info("session %s was cancelled during checkout preparation; not starting the agent", sid)
+                return
 
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
@@ -433,8 +511,22 @@ class SessionManager:
                 artifact_host_path=artifact_host_path,
                 session_id=sid,
             )
+            # Boundary: the container exists but has not run. Give it back
+            # rather than starting an agent for a cancelled session.
+            if launch.cancelled:
+                logger.info("session %s was cancelled before its agent started; removing its container", sid)
+                await self._relinquish_container(container_id)
+                return
             await docker_engine.start_container(container_id)
         except Exception as exc:
+            if launch.cancelled:
+                # The failure is the cancellation working: the helper was
+                # stopped under the launch. The row is already terminal, so
+                # settling it again would only record a spurious error.
+                logger.info("launch of cancelled session %s ended: %s", sid, exc)
+                if container_id:
+                    await self._relinquish_container(container_id)
+                return
             logger.exception("failed to launch session %s", sid)
             # Settlement removes the container by the id stored in the
             # database, which is still null on a failed start — remove the
@@ -445,6 +537,14 @@ class SessionManager:
                 except Exception:
                     logger.warning("could not remove container for session %s after failed launch", sid)
             await self._settle(sid, exit_code=None, error=f"launch failed: {exc}")
+            return
+
+        if launch.cancelled:
+            # The cancel landed between the start and the transition below.
+            # The transition would lose anyway, but stopping here keeps the
+            # started container from living until that check.
+            logger.info("session %s was cancelled as its agent started; removing its container", sid)
+            await self._relinquish_container(container_id)
             return
 
         if not await db.transition_session(
@@ -477,7 +577,10 @@ class SessionManager:
         the placeholder only keeps the CLI from refusing to start without a
         token). No workflow scope, no production URL, no internal secret.
         """
-        model = session.get("model") or settings.default_model
+        # The policy resolves what "no model named" means — the configured
+        # default, or the single local model of a one-model deployment — and
+        # it has already refused anything that is not served locally.
+        model = model_policy.current().resolve(session.get("model"))
         env = {
             "LOGOS_SESSION_PHASE": "agent",
             # The agent's model traffic goes to Logos itself, so it is
@@ -592,6 +695,10 @@ class SessionManager:
             "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
             "LOGOS_REPO_URL": settings.repo_url,
             "LOGOS_ARTIFACT_DIR": "/artifacts",
+            # The account the session's commits belong to. The helper
+            # configures git with it, and the finalizer refuses to push if
+            # the token turns out to be somebody else's.
+            "LOGOS_AGENT_GITHUB_LOGIN": settings.github_login,
         }
         if settings.session_github_token:
             env["GITHUB_TOKEN"] = settings.session_github_token
@@ -632,6 +739,7 @@ class SessionManager:
             "LOGOS_REPO_URL": settings.repo_url,
             "LOGOS_REPO_SLUG": settings.repo_slug,
             "LOGOS_ARTIFACT_DIR": "/artifacts",
+            "LOGOS_AGENT_GITHUB_LOGIN": settings.github_login,
         }
         if settings.session_github_token:
             env["GITHUB_TOKEN"] = settings.session_github_token
@@ -1128,6 +1236,13 @@ class SessionManager:
             return False
 
         await db.add_event(session_id, EventKind.STATUS, {"status": "cancelled"})
+        # Mark an in-flight launch before touching any container: from here
+        # on the launch observes the cancellation at its next phase boundary
+        # and starts nothing further. Marking is synchronous, so a launch
+        # that is between awaits cannot slip past it.
+        launch = self._launches.pop(session_id, None)
+        if launch is not None:
+            launch.cancelled = True
         # The credential-bearing helper first: a finalizer mid-push would
         # otherwise keep committing, pushing, or opening a pull request after
         # the API has already reported the session cancelled. It is tracked
@@ -1161,6 +1276,23 @@ class SessionManager:
                     await docker_engine.remove_container(helper.container_id)
                 except Exception:
                     logger.warning("could not remove the helper of cancelled session %s", session_id)
+        if launch is not None:
+            # The helper (if any) has been stopped, so the launch reaches its
+            # next boundary promptly. Waiting for it is what makes the
+            # cancellation true rather than merely reported: when this
+            # returns, no phase of the launch is still on its way to starting
+            # something for this session. The wait is bounded so a wedged
+            # Docker call cannot hang the API — the flag is checked at every
+            # boundary regardless, so a launch that outlives the wait still
+            # starts nothing and gives back what it created.
+            try:
+                await asyncio.wait_for(launch.settled.wait(), timeout=_CANCEL_LAUNCH_WAIT_S)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "launch of cancelled session %s did not settle within %ss; " "it will stop at its next boundary",
+                    session_id,
+                    _CANCEL_LAUNCH_WAIT_S,
+                )
         task = self._supervisors.pop(session_id, None)
         if task:
             task.cancel()

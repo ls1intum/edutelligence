@@ -1198,6 +1198,103 @@ class TestAgentPhaseIsolation:
         assert 7 not in manager._supervisors
         assert created and created[0]["labels"] == {"logos.agent.helper": "prepare"}
 
+    async def test_a_cancel_before_the_prepare_helper_starts_nothing(self, monkeypatch, tmp_path):
+        # One step earlier again: the launch has not reached any container
+        # yet — it is resolving the workspace volume and the artefact
+        # mountpoint. Nothing is tracked in _helpers or _supervisors there,
+        # so a cancel used to report success and leave the resumed launch to
+        # run the credential-bearing prepare helper and start the agent
+        # anyway. The launch is now tracked from before its first await and
+        # observes the cancellation at its next boundary.
+        from app import sessions
+        from app.schemas import can_transition
+
+        self._patch_base(monkeypatch, tmp_path)
+        manager = sessions.SessionManager()
+
+        states = {7: "starting"}
+        row = {**self.ROW, "status": "starting", "container_id": None}
+        created: list = []
+        events: list = []
+        mountpoint_entered = asyncio.Event()
+        mountpoint_go = asyncio.Event()
+
+        async def slow_mountpoint(_volume):
+            # The pre-container stretch of the launch: no helper, no
+            # supervisor, no container id anywhere.
+            mountpoint_entered.set()
+            await mountpoint_go.wait()
+            return "/vol/data"
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return f"cid-{len(created)}"
+
+        async def fake_transition(sid, target, **_fields):
+            if not can_transition(SessionStatus(states[sid]), target):
+                return False
+            states[sid] = target.value
+            return True
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(row))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.db, "update_session", noop)
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", slow_mountpoint)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(
+            sessions.model_policy,
+            "current",
+            lambda: sessions.model_policy.ModelPolicy(
+                local_models=frozenset({"local-model"}),
+                offered=("local-model",),
+                ok=True,
+                unknown=False,
+            ),
+        )
+
+        launch = asyncio.create_task(manager._launch(self.SESSION))
+        try:
+            await mountpoint_entered.wait()
+            # Nothing a cancel could previously have found — but the launch
+            # itself is tracked.
+            assert 7 not in manager._helpers
+            assert 7 not in manager._supervisors
+            assert 7 in manager._launches
+
+            cancel_task = asyncio.create_task(manager.cancel(7))
+            # Let the cancel claim the row and mark the launch.
+            for _ in range(100):
+                if 7 not in manager._launches:
+                    break
+                await asyncio.sleep(0.01)
+            # The launch resumes into a cancelled session.
+            mountpoint_go.set()
+            assert await asyncio.wait_for(cancel_task, timeout=2) is True
+        finally:
+            mountpoint_go.set()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(launch, timeout=2)
+
+        # The point of the fix: no prepare helper ran, so the push token
+        # never entered a container, and no agent was started for a session
+        # the API reported cancelled.
+        assert created == []
+        assert states[7] == "cancelled"
+        assert [p["status"] for k, p in events if k == EventKind.STATUS] == ["cancelled"]
+        assert 7 not in manager._supervisors
+
 
 class TestOverlappingAdmission:
     """Admission under overlapping scheduler passes.
