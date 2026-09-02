@@ -239,6 +239,37 @@ jobs:
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
 
+  build-agent-gateway:
+    name: Build Logos Agent Gateway
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      output: image
+      push: true
+      # The gateway's own directory is the context: it needs nothing but its
+      # nginx configuration, and a root context would put the whole
+      # repository through the .dockerignore whitelist for one small file.
+      context: ./logos/agent-gateway
+      file: logos/agent-gateway/Dockerfile
+      platforms: linux/amd64
+      runner: ubuntu-latest
+      sign: false
+      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-gateway
+      meta-tags: |
+        type=ref,event=pr
+        type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+        type=semver,pattern={{version}}
+      meta-flavor: |
+        latest=false
+    secrets:
+      registry-auths: |
+        - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+          username: ${{ vars.LOGOS_HARBOR_USER }}
+          password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+
   build-agent-workspace:
     name: Build Logos Agent Workspace
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}

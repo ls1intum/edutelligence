@@ -106,6 +106,13 @@ session's behaviour drift between builds.
 > *whitelist*. Anything a Dockerfile copies must be listed there, or the build
 > fails with `failed to compute cache key: … not found`.
 
+> **Adding a file the gateway or the runner reads at runtime?** Put it in an
+> image. A deployment copies exactly one file to its VM — the compose file —
+> so a bind mount of anything else resolves to a path that does not exist
+> there, and Docker creates an empty *directory* in its place rather than
+> failing. That is how the gateway once came up with nginx's stock
+> configuration and failed its health check forever.
+
 ## What a session may and may not do
 
 **May:** read and change the working copy, run tests and linters, push a branch
