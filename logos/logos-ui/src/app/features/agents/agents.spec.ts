@@ -37,7 +37,7 @@ const makeSession = (overrides: Partial<AgentSession> = {}): AgentSession => ({
   error: null,
   tokens_in: 0,
   tokens_out: 0,
-  cost_eur: 0,
+  cost_usd: 0,
   screenshot_count: 0,
   trigger_kind: null,
   trigger_ref: null,

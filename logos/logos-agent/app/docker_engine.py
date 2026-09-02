@@ -99,19 +99,34 @@ async def remove_volume(name: str, *, force: bool = False) -> None:
 
 
 async def ensure_network(name: str, *, internal: bool = False) -> None:
-    """Create a network if it does not exist. Idempotent.
+    """Create a network if it does not exist, and verify what is there.
 
-    ``internal`` applies at creation time only: an existing network (for
-    example one an older deployment created as a plain bridge) is reused
-    as-is, so tightening the flag in a config change does not rewrite a
-    live deployment's network.
+    For the session network ``internal`` *is* the isolation boundary: an
+    internal bridge has no route out of the host, which is the only reason a
+    container running an agent with permission prompts disabled may hold no
+    reusable credential and still be safe. So an existing network is not
+    taken on trust — one created as a plain bridge by an older deployment,
+    or by hand, would silently give every session external egress. A
+    mismatch raises rather than being corrected, because rewriting a live
+    network would disconnect whatever is attached to it; the fix is an
+    operator removing it while nothing runs.
     """
     try:
-        await _request("GET", f"/networks/{name}")
-        return
+        existing = await _request("GET", f"/networks/{name}")
     except DockerError as exc:
         if exc.status != 404:
             raise
+    else:
+        actual = bool(existing.get("Internal", False))
+        if actual != internal:
+            raise DockerError(
+                409,
+                f"network '{name}' exists with Internal={actual}, but this runner "
+                f"requires Internal={internal}. Sessions on a non-internal session "
+                f"network would have external egress. Remove the network while no "
+                f"session is running and let the runner recreate it.",
+            )
+        return
     await _request(
         "POST",
         "/networks/create",
@@ -275,26 +290,85 @@ async def stop_container(container_id: str, *, timeout_s: int = 10) -> None:
             raise
 
 
-async def pause_container(container_id: str) -> None:
+async def pause_container(container_id: str) -> bool:
     """Freeze a session so its CPU and GPU-adjacent work stops immediately.
 
     Pausing (SIGSTOP via the freezer cgroup) keeps the process tree and the
     workspace intact, which is what lets a paused session resume mid-task when
     load drops again.
+
+    Returns whether the container is actually frozen now. Docker answers 409
+    for a container that is not running and 404 for one that is gone: both
+    mean there is nothing to freeze, and the caller must not record the
+    session as paused on the strength of them — a row moved to 'paused'
+    around an exited container can never be settled.
     """
     try:
         await _request("POST", f"/containers/{container_id}/pause")
     except DockerError as exc:
-        if exc.status not in (304, 404, 409):
-            raise
+        if exc.status == 304:
+            # Already paused: the desired state, just not by this call.
+            return True
+        if exc.status in (404, 409):
+            return False
+        raise
+    return True
 
 
-async def unpause_container(container_id: str) -> None:
+async def unpause_container(container_id: str) -> bool:
+    """Thaw a paused session. Returns whether it is running again.
+
+    304 means it was not frozen in the first place, which is the desired
+    end state; 404 and 409 mean there is no running container to thaw, and
+    the caller must not record the session as running again.
+    """
     try:
         await _request("POST", f"/containers/{container_id}/unpause")
     except DockerError as exc:
-        if exc.status not in (304, 404, 409):
-            raise
+        if exc.status == 304:
+            return True
+        if exc.status in (404, 409):
+            return False
+        raise
+    return True
+
+
+async def disconnect_network(network: str, container_id: str) -> bool:
+    """Detach a container from a network, ending its open connections.
+
+    Freezing a session stops its process tree, but not the generation it
+    already started: the request is running upstream, and a frozen client
+    neither cancels it nor closes its socket — it simply stops reading, and
+    the serving slot stays occupied for as long as the pause lasts. Cutting
+    the container off the network tears that connection down, so the
+    orchestrator sees the client go away and can release the slot, which is
+    the entire point of pausing.
+
+    Best effort: a container that is already detached, or gone, is the
+    desired state.
+    """
+    try:
+        await _request("POST", f"/networks/{network}/disconnect", json={"Container": container_id, "Force": True})
+    except DockerError as exc:
+        if exc.status in (403, 404):
+            return False
+        raise
+    return True
+
+
+async def connect_network(network: str, container_id: str) -> bool:
+    """Attach a container to a network again. Idempotent."""
+    try:
+        await _request("POST", f"/networks/{network}/connect", json={"Container": container_id})
+    except DockerError as exc:
+        # 403 is Docker's answer for an endpoint that already exists on this
+        # network — which is what the caller wanted.
+        if exc.status == 403:
+            return True
+        if exc.status == 404:
+            return False
+        raise
+    return True
 
 
 async def remove_container(container_id: str, *, force: bool = True) -> None:

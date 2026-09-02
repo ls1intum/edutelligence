@@ -61,7 +61,7 @@ class Result:
             "files_changed": 0,
             "tokens_in": 0,
             "tokens_out": 0,
-            "cost_eur": 0.0,
+            "cost_usd": 0.0,
             "error": None,
         }
 
@@ -500,11 +500,44 @@ def _ref_sha(*refs: str) -> str | None:
     return None
 
 
+# Paths whose contents GitHub executes with the repository's own CI
+# permissions and secrets.
+_WORKFLOW_PREFIX = ".github/workflows/"
+
+
+def _refuse_workflow_changes(files: list[str]) -> None:
+    """Stop a push that would edit CI, unless the token may do it anyway.
+
+    A push token without `workflow` scope is refused by GitHub the moment a
+    commit touches `.github/workflows/`, which is exactly the boundary the
+    two-token setup buys: the agent phase may change any part of the
+    repository except the part that runs with the repository's secrets. When
+    a deployment configures only one token, that token has the scope — and
+    then this check is the boundary instead. Failing here is deliberate: the
+    session loses its work, which is recoverable, rather than opening a pull
+    request whose workflow file runs with CI credentials, which is not.
+    """
+    if os.environ.get("LOGOS_AGENT_WORKFLOW_CHANGES") == "allow":
+        return
+    offending = sorted(path for path in files if path.startswith(_WORKFLOW_PREFIX))
+    if not offending:
+        return
+    raise RuntimeError(
+        "the session changed CI workflow files ("
+        + ", ".join(offending[:5])
+        + "), which this runner's push token is not allowed to carry into the "
+        "repository. Configure a separate LOGOS_AGENT_SESSION_GITHUB_TOKEN "
+        "without 'workflow' scope so GitHub enforces this, or an explicitly "
+        "workflow-enabled session token if agent sessions are meant to edit CI."
+    )
+
+
 def commit_and_push(branch: str, task: str) -> int:
     files = changed_files()
     if not files:
         log("agent produced no changes; nothing to commit")
         return 0
+    _refuse_workflow_changes(files)
 
     log(f"committing {len(files)} changed file(s)")
     run(["git", "add", "-A"], cwd=CHECKOUT)
@@ -627,7 +660,7 @@ def run_agent_phase(result: Result) -> None:
     usage = run_agent(task)
 
     tokens_in, tokens_out, cost = usage_totals(usage)
-    result.data.update(tokens_in=tokens_in, tokens_out=tokens_out, cost_eur=cost)
+    result.data.update(tokens_in=tokens_in, tokens_out=tokens_out, cost_usd=cost)
     # Screenshots are the runner's job, taken after settlement: a
     # session's own view of the dev environment is stale the moment its
     # deploy is queued, and the runner is the one that knows when the

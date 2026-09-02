@@ -64,6 +64,19 @@ LABEL = "logos-agent"
 CREATED_BY = "logos-agent (trigger)"
 
 
+def _next_auto_name(existing: set[str]) -> str:
+    """The lowest ``auto-N`` no workspace carries.
+
+    Counting workspaces would repeat a name after a deletion — with `auto-1`
+    and `auto-3` left, the count says `auto-3` — and every later poll would
+    hit the same conflict and defer work while the ceiling still had room.
+    """
+    index = 1
+    while f"auto-{index}" in existing:
+        index += 1
+    return f"auto-{index}"
+
+
 def max_active_sessions() -> int:
     """How many self-queued sessions may be active at once.
 
@@ -100,17 +113,43 @@ def issue_task(issue: dict[str, Any]) -> str:
     )
 
 
-def review_task(number: int, title: str, review: dict[str, Any]) -> str:
+def _inline_block(comments: list[dict[str, Any]]) -> str:
+    """The review's inline comments, as the agent needs to read them.
+
+    Each one carries where it is: most changes-requested reviews say almost
+    nothing in the body and everything in the inline comments, so a task
+    built from the body alone would ask an agent to fix nothing in
+    particular.
+    """
+    rendered: list[str] = []
+    for comment in comments:
+        path = str(comment.get("path") or "?")
+        line = comment.get("line") or comment.get("original_line") or "?"
+        body = str(comment.get("body") or "").strip()
+        if not body:
+            continue
+        if len(body) > 3000:
+            body = body[:3000] + " […]"
+        rendered.append(f"- {path}:{line}\n  {body}")
+    if not rendered:
+        return ""
+    return "Inline comments:\n\n" + "\n\n".join(rendered[:30]) + "\n\n"
+
+
+def review_task(number: int, title: str, review: dict[str, Any], comments: list[dict[str, Any]] | None = None) -> str:
     """The task text for a review that asked a pull request for changes."""
     reviewer = str((review.get("user") or {}).get("login") or "a reviewer")
     body = str(review.get("body") or "").strip()
     if len(body) > 6000:
         body = body[:6000] + "\n\n[review body truncated]"
+    inline = _inline_block(comments or [])
     return (
-        f"A review on pull request #{number} ('{title}') asked for changes. Address it on "
-        f"the same branch.\n\n"
+        f"A review on pull request #{number} ('{title}') asked for changes. You are working "
+        f"in a checkout of that pull request's own branch, and your commit updates it — "
+        f"there is no new pull request to open.\n\n"
         f"Review by {reviewer}:\n\n"
-        f"{body}\n\n"
+        f"{body or '(no review body; the requested changes are the inline comments below)'}\n\n"
+        f"{inline}"
         f"Check each point against the current code before you change anything — lines "
         f"move, and some of it may already be addressed. Fix what is still valid, add "
         f"regression coverage for it, and run the tests and linters of the part you "
@@ -263,24 +302,68 @@ class TriggerPoller:
             if not isinstance(number, int):
                 continue
             title = str(entry.get("title") or "")
-            for review in await github.reviews_since(number, since):
+            fresh = [
+                review
+                for review in await github.reviews_since(number, since)
                 # Only a review that asks for changes is work. An approval
                 # or a comment is a conversation, and answering it is a
                 # person's call.
-                if str(review.get("state") or "").upper() != "CHANGES_REQUESTED":
-                    continue
-                review_id = review.get("id")
-                if not isinstance(review_id, int):
-                    continue
+                if str(review.get("state") or "").upper() == "CHANGES_REQUESTED" and isinstance(review.get("id"), int)
+            ]
+            if not fresh:
+                continue
+            branch = await self._writable_head(number)
+            if branch is None:
+                continue
+            for review in fresh:
+                review_id = int(review["id"])
+                comments = await github.review_comments(number, review_id)
                 found.append(
                     {
                         "ref": f"pr-{number}-review-{review_id}",
                         "kind": "review",
-                        "task": review_task(number, title, review),
+                        "task": review_task(number, title, review, comments),
                         "title": title,
+                        # The branch the work belongs on. A review session
+                        # updates the pull request it answers; it does not
+                        # open a second one.
+                        "branch": branch,
+                        "workspace": f"pr-{number}",
                     }
                 )
         return found
+
+    async def _writable_head(self, number: int) -> str | None:
+        """The branch a review session may push, or None if there is none.
+
+        Two conditions, both about not writing where the runner has no
+        business writing. The head must live in this repository — a fork's
+        branch is not ours to push, and the token could not do it anyway —
+        and it must be under the agent branch prefix, which means the pull
+        request is one the runner opened. A human's branch is exactly what
+        `branch_for()` and the protected-branch rules exist to keep agent
+        pushes away from, and a review on it stays a person's job.
+        """
+        try:
+            pull = await github.pull_request(number)
+        except Exception as exc:
+            logger.warning("could not read pull request %s: %s", number, exc)
+            return None
+        ref, repo = github.head_of(pull)
+        if not ref:
+            logger.info("pull request %s has no usable head branch; skipping its review", number)
+            return None
+        if repo != settings.repo_slug:
+            logger.info("pull request %s comes from '%s'; the runner does not push to forks", number, repo or "?")
+            return None
+        if not ref.startswith(settings.branch_prefix):
+            logger.info(
+                "pull request %s is on '%s', which is not an agent branch; its review is a person's to answer",
+                number,
+                ref,
+            )
+            return None
+        return ref
 
     async def _queue(self, candidate: dict[str, Any]) -> int | None:
         """Queue one session, making a workspace for it if none is free."""
@@ -288,7 +371,11 @@ class TriggerPoller:
         if not policy.ok:
             logger.info("not queueing %s: %s", candidate["ref"], policy.detail)
             return None
-        workspace_id = await self._free_workspace()
+        branch = candidate.get("branch")
+        workspace_id = await self._free_workspace(
+            base_branch=branch or "main",
+            preferred_name=candidate.get("workspace"),
+        )
         if workspace_id is None:
             # Every workspace is busy and the ceiling is reached. The
             # candidate is not recorded as handled, so the next pass — after
@@ -301,7 +388,12 @@ class TriggerPoller:
                 task=candidate["task"],
                 model=None,
                 created_by=CREATED_BY,
-                open_pull_request=True,
+                # A review session pushes to the pull request's own branch,
+                # so the work lands where the review was written. Opening a
+                # second pull request for it would answer a review with a
+                # different pull request.
+                branch=branch,
+                open_pull_request=branch is None,
                 # A session the runner queued by itself does not touch a
                 # shared environment: deploying is an operator's decision,
                 # made per session in the UI.
@@ -317,29 +409,44 @@ class TriggerPoller:
         logger.info("queued session %s for %s", session_id, candidate["ref"])
         return session_id
 
-    async def _free_workspace(self) -> int | None:
-        """A workspace no active session occupies, creating one if allowed.
+    async def _free_workspace(self, *, base_branch: str, preferred_name: str | None = None) -> int | None:
+        """A free workspace whose checkout starts from ``base_branch``.
 
         Sessions the runner queues have nobody to prepare a working copy for
         them, so it makes its own — up to the parallel ceiling, since a
         workspace beyond that could never be used anyway. Each is one Docker
         volume holding one shallow clone.
+
+        A free workspace already on the wanted branch is the cheapest answer;
+        otherwise a new one is created, and only when the ceiling forbids
+        that is a free workspace re-pointed at the branch. Re-pointing is
+        safe: the base branch is what the preparation phase resets the
+        checkout to, and a workspace with no active session holds nothing
+        worth keeping.
         """
         workspaces = await db.list_workspaces()
-        for workspace in workspaces:
-            if int(workspace.get("active_sessions") or 0) == 0:
+        free = [w for w in workspaces if int(w.get("active_sessions") or 0) == 0]
+        for workspace in free:
+            if str(workspace.get("base_branch") or "") == base_branch:
                 return int(workspace["id"])
-        if len(workspaces) >= settings.max_parallel_sessions:
-            return None
-        name = f"auto-{len(workspaces) + 1}"
-        try:
-            created = await db.create_workspace(name=name, base_branch="main", created_by=CREATED_BY)
-        except ValueError:
-            # The name is taken by a workspace that is currently occupied:
-            # leave it to the next pass rather than inventing another name.
-            return None
-        logger.info("created workspace '%s' for triggered work", name)
-        return int(created["id"])
+        if len(workspaces) < settings.max_parallel_sessions:
+            name = preferred_name or _next_auto_name({str(w.get("name") or "") for w in workspaces})
+            try:
+                created = await db.create_workspace(name=name, base_branch=base_branch, created_by=CREATED_BY)
+            except ValueError:
+                # The name belongs to a workspace that is currently
+                # occupied — most often the one for this very pull request,
+                # already working on an earlier review.
+                logger.info("workspace '%s' is taken; deferring", name)
+                return None
+            logger.info("created workspace '%s' on '%s' for triggered work", name, base_branch)
+            return int(created["id"])
+        if free:
+            workspace = free[0]
+            await db.set_workspace_base_branch(int(workspace["id"]), base_branch)
+            logger.info("repointed workspace '%s' at '%s'", workspace.get("name"), base_branch)
+            return int(workspace["id"])
+        return None
 
     # --- what the UI shows ------------------------------------------------
 

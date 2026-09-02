@@ -149,7 +149,9 @@ class SessionSummary(BaseModel):
     error: str | None
     tokens_in: int
     tokens_out: int
-    cost_eur: float
+    # What the agent reported spending, in US dollars — the currency
+    # Claude Code reports. Authoritative accounting stays in the request log.
+    cost_usd: float
     screenshot_count: int = 0
     # Set when the runner queued this session itself in response to the
     # repository: what kind of event it was ('issue', 'review') and which one

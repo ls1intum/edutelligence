@@ -225,6 +225,22 @@ async def workspace_capacity() -> tuple[int, int]:
     return int(row["total"] or 0), int(row["free"] or 0)
 
 
+async def set_workspace_base_branch(workspace_id: int, base_branch: str) -> None:
+    """Point a workspace at another branch.
+
+    The base branch is what the preparation phase resets the checkout to, so
+    changing it on a workspace with no active session costs nothing but the
+    next fetch. It is how a full pool can still serve a review session on a
+    pull request's own branch.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text("UPDATE agent_workspaces SET base_branch = :base WHERE id = :id"),
+            {"id": workspace_id, "base": base_branch},
+        )
+        await db.commit()
+
+
 async def get_workspace(workspace_id: int) -> dict[str, Any] | None:
     async with sessionmaker()() as db:
         row = (
@@ -291,6 +307,7 @@ async def create_session(
     screenshot_paths: Sequence[str],
     trigger_kind: str | None = None,
     trigger_ref: str | None = None,
+    branch: str | None = None,
 ) -> int:
     async with sessionmaker()() as db:
         # Lock the workspace row before inserting. delete_workspace takes
@@ -316,11 +333,11 @@ async def create_session(
                     INSERT INTO agent_sessions
                         (workspace_id, task, model, status, created_by,
                          open_pull_request, deploy_to_dev, screenshot_paths,
-                         trigger_kind, trigger_ref)
+                         trigger_kind, trigger_ref, branch_name)
                     VALUES
                         (:workspace_id, :task, :model, 'queued', :created_by,
                          :open_pr, :deploy, CAST(:paths AS jsonb),
-                         :trigger_kind, :trigger_ref)
+                         :trigger_kind, :trigger_ref, :branch)
                     RETURNING id
                     """
                 ),
@@ -334,6 +351,11 @@ async def create_session(
                     "paths": json.dumps(list(screenshot_paths)),
                     "trigger_kind": trigger_kind,
                     "trigger_ref": trigger_ref,
+                    # Set only when the work belongs on a branch that already
+                    # exists — a review session updating the pull request it
+                    # answers. Otherwise the launch derives the branch from
+                    # the session id.
+                    "branch": branch,
                 },
             )
         ).scalar_one()
@@ -369,6 +391,20 @@ async def handled_trigger_refs(refs: Sequence[str], since: datetime) -> set[str]
     return {row[0] for row in rows}
 
 
+async def session_is_starting(session_id: int) -> bool:
+    """Whether the row is still the 'starting' one a launch claimed.
+
+    Narrower than reading the whole session: this is asked on the launch's
+    hot path, immediately before a container is given a credential, and the
+    only thing that matters there is whether the row is still ours.
+    """
+    async with sessionmaker()() as db:
+        status = (
+            await db.execute(text("SELECT status FROM agent_sessions WHERE id = :id"), {"id": session_id})
+        ).scalar_one_or_none()
+    return status == SessionStatus.STARTING.value
+
+
 async def count_active_trigger_sessions() -> int:
     """Active sessions the runner queued by itself.
 
@@ -399,7 +435,7 @@ _SESSION_SELECT = """
            s.screenshot_paths, s.trigger_kind, s.trigger_ref,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
-           COALESCE(s.cost_eur, 0) AS cost_eur,
+           COALESCE(s.cost_usd, 0) AS cost_usd,
            (SELECT COUNT(*) FROM agent_events e
              WHERE e.session_id = s.id AND e.kind = 'screenshot') AS screenshot_count
       FROM agent_sessions s
@@ -523,7 +559,7 @@ async def update_session(session_id: int, **fields: Any) -> None:
         "error",
         "tokens_in",
         "tokens_out",
-        "cost_eur",
+        "cost_usd",
         "deployed_at",
     }
     unknown = set(fields) - allowed

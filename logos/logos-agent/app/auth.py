@@ -153,7 +153,11 @@ async def current_principal(request: Request) -> Principal:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
     except jwt.InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {exc}")
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, jwt.PyJWKClientError) as exc:
+        # PyJWKClient fetches the key set with urllib, not httpx, and wraps a
+        # connectivity failure in PyJWKClientConnectionError — which is not an
+        # InvalidTokenError either. Without it an identity-provider outage
+        # leaves this handler as an unhandled 500 rather than the 503 it is.
         logger.warning("JWKS fetch failed: %s", exc)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Identity provider unreachable")
 

@@ -38,7 +38,8 @@ export interface AgentSession {
   error: string | null;
   tokens_in: number;
   tokens_out: number;
-  cost_eur: number;
+  /** What the agent reported spending, in US dollars. */
+  cost_usd: number;
   screenshot_count: number;
   /** Set when the runner queued this session itself: 'issue' or 'review'. */
   trigger_kind: string | null;

@@ -398,6 +398,32 @@ async def reviews_since(number: int, since: datetime) -> list[dict[str, Any]]:
     return fresh
 
 
+async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
+    """The inline comments belonging to one submitted review.
+
+    A review's body and its inline comments are separate objects, and most
+    reviews put the substance in the inline ones — a changes-requested
+    review with an empty body and six inline comments is the normal shape.
+    Queueing work from the body alone would hand the agent a task with none
+    of the requested changes in it.
+    """
+    payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews/{review_id}/comments")
+    return [comment for comment in payload if isinstance(comment, dict)]
+
+
+def head_of(pull: dict[str, Any]) -> tuple[str, str]:
+    """A pull request's head branch and the repository it lives in.
+
+    Returns ``("", "")`` when the payload does not carry a usable head — a
+    deleted branch, or a shape this code does not know. Callers treat that
+    as "not something to work on" rather than guessing.
+    """
+    head = pull.get("head") or {}
+    ref = str(head.get("ref") or "")
+    repo = ((head.get("repo") or {}).get("full_name")) or ""
+    return ref, str(repo)
+
+
 def _parse_time(raw: object) -> datetime | None:
     if not isinstance(raw, str) or not raw:
         return None

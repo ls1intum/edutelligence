@@ -33,6 +33,12 @@ socket, no root, no capabilities, a read-only root filesystem, and memory, CPU,
 and PID ceilings. That asymmetry is the isolation boundary, and it is set in
 one place — `app/docker_engine.py:create_session_container`.
 
+The session network carries the other half of it: an *internal* bridge, with
+no route off the host, so the only thing an agent container can reach is the
+model gateway. The runner verifies that rather than assuming it — a network
+that already exists as a plain bridge stops the service instead of silently
+giving every session external egress.
+
 Agent model traffic goes to the orchestrator like any other caller's, with a
 Logos key. It is authenticated, policy-checked, logged, and billed. Give that
 key **LOW** priority so agent work can never outrank a user at the scheduler.
@@ -52,6 +58,15 @@ number: the busy share of loaded serving slots.
 Pausing freezes the process tree through the cgroup freezer, so a resumed
 session picks up where it was rather than starting over. Yielding always takes
 precedence over admitting: a pass that pauses does not also start something.
+
+Freezing alone would not return the slot: the generation the agent already
+started runs upstream, and a frozen client neither cancels it nor closes its
+socket — it just stops reading, and the slot stays occupied for as long as the
+pause lasts. So a paused session is also detached from the session network,
+which ends the connection and lets the orchestrator release the slot. The
+agent meets a network error when it resumes and retries, which is the
+cheapest possible way to lose an in-flight answer. A session that cannot be
+reattached stays paused rather than being thawed without a way to work.
 
 Two thresholds rather than one, because a single threshold makes sessions flap:
 a session resumed at exactly the load that paused it pauses again next tick.
@@ -155,8 +170,14 @@ checks again inside the container, immediately before it pushes.
 
 **Two tokens if you can.** A second token of the same account *without*
 `workflow` scope, given to session containers, means a session cannot dispatch
-a deploy or edit a workflow file even if the agent tries. With one token the
-service still runs — it says at startup that the boundary is gone.
+a deploy or edit a workflow file even if the agent tries — GitHub refuses such
+a push outright.
+
+With one token that scope is present, so the finalizer enforces the part that
+matters itself: a session whose diff touches `.github/workflows/` fails
+instead of pushing. A workflow file an agent wrote would otherwise run with
+the repository's own secrets as soon as its pull request opened, and losing a
+session's work is recoverable in a way that is not.
 
 ## Never a cloud model
 
@@ -191,7 +212,7 @@ With `LOGOS_AGENT_TRIGGERS_ENABLED`, the runner queues sessions of its own:
 | What happens on GitHub | What the runner does |
 |---|---|
 | an issue labelled `logos-agent` is opened or updated | queues a session to work on it and open a draft pull request |
-| a review asks a labelled pull request for changes | queues a session to address it on the same branch |
+| a review asks a labelled pull request for changes | queues a session that updates that pull request's own branch |
 
 **Opt-in by label**, because the repository is shared with people who did not
 ask for an agent to answer their issue. **Polling, not webhooks** — every two
@@ -201,6 +222,16 @@ by reference:** each session records what it reacted to (`issue-812`,
 `pr-772-review-5085681761`), and a poll that sees the same event again queues
 nothing. A pass that cannot take on everything it saw leaves its window where
 it was, so deferred work is picked up rather than lost.
+
+A review session works **on the pull request it answers**: the workspace is
+prepared from that branch, the session pushes to it, and no second pull
+request is opened. That only applies to pull requests the runner itself
+opened — a head in this repository, under the `agent/` prefix. A fork's branch
+is not ours to push, and a human's branch is exactly what the branch rules
+exist to keep agent pushes away from; a review on either is a person's to
+answer, and the runner says so in its log rather than quietly doing something
+else. The task carries the review's inline comments as well as its body, since
+most changes-requested reviews put everything in the former.
 
 The automation is bounded: at most half the parallel ceiling may be its own
 sessions, so an operator queueing work by hand always finds room. Workspaces

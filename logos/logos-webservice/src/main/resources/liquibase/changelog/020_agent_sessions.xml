@@ -124,6 +124,27 @@
         </rollback>
     </changeSet>
 
+    <!-- The agent reports its spend in US dollars (Claude Code's
+         `total_cost_usd`), and it was stored in a column named for euros.
+         Nothing converted it, so the number was right and its label was
+         wrong — which is worse than either, because an accounting figure
+         that names the wrong currency is believed. The authoritative
+         accounting stays in the request log; this column is the session's
+         own report of what it spent. -->
+    <changeSet id="020-agent-session-cost-usd" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="agent_sessions" columnName="cost_eur"/>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_sessions RENAME COLUMN cost_eur TO cost_usd;
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+                ALTER TABLE agent_sessions RENAME COLUMN cost_usd TO cost_eur;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
     <!-- Where a session came from, when the runner queued it by itself in
          response to something on GitHub (an opened issue, a review asking
          for changes). The reference is the thing reacted to — 'issue-812',

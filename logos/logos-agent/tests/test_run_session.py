@@ -542,3 +542,41 @@ class TestPushIdentity:
         self._stub_gh(monkeypatch, login="LogosOSSAgent")
 
         run_session.verify_token_identity("ghp-token")
+
+
+class TestWorkflowFileGuard:
+    """CI files are the one thing a one-token deployment may not push.
+
+    A workflow file the agent wrote runs with the repository's secrets as
+    soon as its pull request opens. With a separate session token GitHub
+    refuses such a push outright; when the runner's own token is used
+    instead, that scope is present and the finalizer is the boundary.
+    """
+
+    def test_ordinary_changes_pass(self, monkeypatch):
+        import run_session
+
+        monkeypatch.setenv("LOGOS_AGENT_WORKFLOW_CHANGES", "deny")
+        run_session._refuse_workflow_changes(["logos/logos-agent/app/main.py", "README.md"])
+
+    def test_a_workflow_file_is_refused(self, monkeypatch):
+        import run_session
+
+        monkeypatch.setenv("LOGOS_AGENT_WORKFLOW_CHANGES", "deny")
+        with pytest.raises(RuntimeError, match="CI workflow files"):
+            run_session._refuse_workflow_changes([".github/workflows/logos_test.yml"])
+
+    def test_a_scoped_session_token_may_change_them(self, monkeypatch):
+        import run_session
+
+        monkeypatch.setenv("LOGOS_AGENT_WORKFLOW_CHANGES", "allow")
+        run_session._refuse_workflow_changes([".github/workflows/logos_test.yml"])
+
+    def test_the_default_is_to_refuse(self, monkeypatch):
+        # An unset variable means an older runner, or one that could not
+        # decide: the safe answer is the restrictive one.
+        import run_session
+
+        monkeypatch.delenv("LOGOS_AGENT_WORKFLOW_CHANGES", raising=False)
+        with pytest.raises(RuntimeError):
+            run_session._refuse_workflow_changes([".github/workflows/x.yml"])

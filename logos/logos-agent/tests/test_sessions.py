@@ -790,7 +790,10 @@ class TestAgentPhaseIsolation:
             return True
 
         async def fake_pause(cid, **_kwargs):
+            # Docker really froze it: the race this test is about is the one
+            # the database then decides, not a pause Docker refused.
             paused.append(cid)
+            return True
 
         async def fake_event(_sid, kind, payload):
             events.append((kind, payload))
@@ -1294,6 +1297,246 @@ class TestAgentPhaseIsolation:
         assert states[7] == "cancelled"
         assert [p["status"] for k, p in events if k == EventKind.STATUS] == ["cancelled"]
         assert 7 not in manager._supervisors
+
+
+class TestYieldingReallyYields:
+    """Pausing has to return the serving slot, not just stop the client.
+
+    A frozen process does not cancel the generation it already started and
+    does not close its socket, so the slot stays occupied for the length of
+    the pause unless the connection is taken down.
+    """
+
+    ROW = {"id": 7, "container_id": "cid-7"}
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_a_paused_session_is_cut_off_from_the_model_gateway(self, monkeypatch):
+        from app import sessions
+
+        order: list = []
+
+        async def fake_pause(cid, **_kwargs):
+            order.append(("pause", cid))
+            return True
+
+        async def fake_disconnect(network, cid):
+            order.append(("disconnect", network, cid))
+            return True
+
+        async def fake_transition(_sid, _target, **_fields):
+            order.append(("transition", _target))
+            return True
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", fake_disconnect)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.SessionManager()._pause(self.ROW, "users are queueing")
+
+        # Frozen first, then cut off: a container that can still run would
+        # notice the network error and retry into the load we are yielding.
+        assert order[0] == ("pause", "cid-7")
+        assert order[1] == ("disconnect", sessions.settings.session_network, "cid-7")
+        assert ("transition", SessionStatus.PAUSED) in order
+
+    async def test_a_pause_docker_refused_does_not_move_the_row(self, monkeypatch):
+        from app import sessions
+
+        transitions: list = []
+
+        async def refused(_cid, **_kwargs):
+            return False
+
+        async def fake_transition(_sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", refused)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", noop)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.SessionManager()._pause(self.ROW, "users are queueing")
+
+        # The agent exited in the window between the scheduler's reading and
+        # the pause. A row moved to 'paused' around a gone container could
+        # never be settled; leaving it alone lets its supervisor finish it.
+        assert transitions == []
+
+    async def test_a_resumed_session_is_reattached_before_it_is_thawed(self, monkeypatch):
+        from app import sessions
+
+        order: list = []
+
+        async def fake_connect(network, cid):
+            order.append(("connect", network, cid))
+            return True
+
+        async def fake_unpause(cid, **_kwargs):
+            order.append(("unpause", cid))
+            return True
+
+        async def fake_transition(_sid, target, **_fields):
+            order.append(("transition", target))
+            return True
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "connect_network", fake_connect)
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", fake_unpause)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.SessionManager()._resume(self.ROW, "load dropped")
+
+        assert order[0] == ("connect", sessions.settings.session_network, "cid-7")
+        assert order[1] == ("unpause", "cid-7")
+        assert ("transition", SessionStatus.RUNNING) in order
+
+    async def test_a_session_that_cannot_be_reattached_stays_paused(self, monkeypatch):
+        from app import sessions
+
+        unpaused: list = []
+        transitions: list = []
+
+        async def failing_connect(_network, _cid):
+            return False
+
+        async def fake_unpause(cid, **_kwargs):
+            unpaused.append(cid)
+            return True
+
+        async def fake_transition(_sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "connect_network", failing_connect)
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", fake_unpause)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.SessionManager()._resume(self.ROW, "load dropped")
+
+        # Thawing a session that cannot reach the gateway would only fail its
+        # next model call; one more paused tick costs nothing.
+        assert unpaused == []
+        assert transitions == []
+
+
+class TestClaimToLaunchWindow:
+    """The stretch between claiming a queued row and launching it.
+
+    `scheduler_pass` claims the row, writes a capacity event, and only then
+    launches. That event write is an await: a cancel landing in it must not
+    be overtaken by a launch that never learned of it.
+    """
+
+    async def test_a_cancel_between_the_claim_and_the_launch_starts_nothing(self, monkeypatch, tmp_path):
+        from app import capacity, sessions
+        from app.schemas import can_transition
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        manager = sessions.SessionManager()
+
+        states = {5: "queued"}
+        session_row = {"id": 5, "workspace_id": 1, "task": "a long enough task", "model": None}
+        created: list = []
+        event_entered = asyncio.Event()
+        event_go = asyncio.Event()
+
+        reading = capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)
+
+        async def fake_claim(_limit):
+            states[5] = "starting"
+            return [session_row]
+
+        async def slow_event(_sid, _kind, _payload):
+            # The window: the row is claimed, the launch has not begun.
+            event_entered.set()
+            await event_go.wait()
+
+        async def fake_transition(sid, target, **_fields):
+            if not can_transition(SessionStatus(states[sid]), target):
+                return False
+            states[sid] = target.value
+            return True
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-should-not-exist"
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
+        monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([]))
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "add_event", slow_event)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({**session_row, "status": "starting"}))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", self._async_value("/vol/data"))
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+
+        pass_task = asyncio.create_task(manager.scheduler_pass())
+        try:
+            await event_entered.wait()
+            # The claim already registered the launch, which is what the
+            # cancel needs to find.
+            assert 5 in manager._launches
+
+            cancel_task = asyncio.create_task(manager.cancel(5))
+            for _ in range(100):
+                if manager._launches.get(5) is not None and manager._launches[5].cancelled:
+                    break
+                await asyncio.sleep(0.01)
+            event_go.set()
+            assert await asyncio.wait_for(cancel_task, timeout=2) is True
+        finally:
+            event_go.set()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(pass_task, timeout=2)
+
+        # No container of any kind: not the prepare helper that would have
+        # held the push token, not the agent.
+        assert created == []
+        assert states[5] == "cancelled"
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    WORKSPACE = {
+        "id": 1,
+        "name": "feature-work",
+        "base_branch": "main",
+        "volume_name": "logos-agent-ws-1",
+    }
 
 
 class TestOverlappingAdmission:

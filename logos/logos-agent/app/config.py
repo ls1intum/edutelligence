@@ -210,6 +210,17 @@ class Settings:
     artifact_volume: str = os.getenv("LOGOS_AGENT_ARTIFACT_VOLUME", "logos_agent_artifacts")
 
     @property
+    def session_token_is_runner_token(self) -> bool:
+        """Whether session containers hold the runner's own token.
+
+        True when no separate session token was configured. The token then
+        carries `workflow` scope, so the scope boundary between the agent
+        phase and the runner is gone and the finalizer enforces the part
+        that matters — CI files — by itself.
+        """
+        return bool(self.session_github_token) and self.session_github_token == self.github_token
+
+    @property
     def database_url(self) -> str:
         return (
             f"postgresql+asyncpg://{self.db_user}:{self.db_password}" f"@{self.db_host}:{self.db_port}/{self.db_name}"

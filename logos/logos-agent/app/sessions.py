@@ -406,7 +406,16 @@ class SessionManager:
             may_start, why = capacity.start_decision(reading, running=len(running), paused=len(paused))
             if not may_start:
                 return
-            for session in await db.claim_queued_sessions(1):
+            claimed = await db.claim_queued_sessions(1)
+            # The claim is what makes these rows this pass's to launch, so
+            # the launch record is taken here rather than inside _launch:
+            # the event write below is an await, and a cancel landing in it
+            # would otherwise find nothing tracked, report success, and be
+            # overtaken by a launch that never learned of it. Registration
+            # is synchronous, so nothing runs between the claim and it.
+            for session in claimed:
+                self._register_launch(session["id"])
+            for session in claimed:
                 await db.add_event(session["id"], EventKind.CAPACITY, {"decision": "start", "reason": why})
                 await self._launch(session)
 
@@ -416,29 +425,83 @@ class SessionManager:
         sid, container_id = session["id"], session.get("container_id")
         if not container_id:
             return
-        await docker_engine.pause_container(container_id)
+        if not await docker_engine.pause_container(container_id):
+            # Docker had nothing to freeze: the agent exited between the
+            # scheduler's reading and this call. Leaving the row alone is
+            # what lets its supervisor settle the exit — a row moved to
+            # 'paused' around a container that is gone can never reach a
+            # terminal state and would sit there until someone cancels it.
+            logger.info("session %s could not be paused; its container is not running", sid)
+            return
+        # Freezing stops the agent, not the generation it already started:
+        # that request runs on upstream capacity, and a frozen client neither
+        # cancels it nor closes its socket. Cutting the container off the
+        # session network ends the connection, so the slot this pause is
+        # meant to return is actually returned. The agent sees a network
+        # error on resume and retries, which is the cheapest possible way to
+        # lose an in-flight answer.
+        await self._detach_from_model_gateway(sid, container_id)
         if await db.transition_session(sid, SessionStatus.PAUSED):
             await db.add_event(sid, EventKind.CAPACITY, {"decision": "pause", "reason": reason})
             logger.info("paused session %s: %s", sid, reason)
+
+    async def _detach_from_model_gateway(self, session_id: int, container_id: str) -> None:
+        try:
+            await docker_engine.disconnect_network(settings.session_network, container_id)
+        except Exception as exc:
+            # Not fatal: the session is frozen either way, and the slot is
+            # released when the upstream request finishes on its own.
+            logger.warning("could not detach paused session %s from the session network: %s", session_id, exc)
 
     async def _resume(self, session: dict[str, Any], reason: str) -> None:
         sid, container_id = session["id"], session.get("container_id")
         if not container_id:
             return
-        await docker_engine.unpause_container(container_id)
+        # Attach first: a session thawed without its network would fail on
+        # its next model call, which is worse than staying paused one more
+        # tick.
+        try:
+            attached = await docker_engine.connect_network(settings.session_network, container_id)
+        except Exception as exc:
+            logger.error("could not reattach session %s to the session network: %s", sid, exc)
+            return
+        if not attached:
+            logger.error("session %s could not be reattached to the session network; leaving it paused", sid)
+            return
+        if not await docker_engine.unpause_container(container_id):
+            logger.info("session %s could not be resumed; its container is not running", sid)
+            return
         if await db.transition_session(sid, SessionStatus.RUNNING):
             await db.add_event(sid, EventKind.CAPACITY, {"decision": "resume", "reason": reason})
             logger.info("resumed session %s: %s", sid, reason)
+
+    def _register_launch(self, session_id: int) -> _Launch:
+        """Take (or find) the launch record for a session.
+
+        Idempotent, and deliberately never replaces an existing record: a
+        cancel that already marked one must not be forgotten by a launch
+        that starts afterwards. Synchronous, so a caller can claim a row and
+        register its launch with no await in between.
+        """
+        launch = self._launches.get(session_id)
+        if launch is None:
+            launch = _Launch()
+            self._launches[session_id] = launch
+        return launch
 
     async def _launch(self, session: dict[str, Any]) -> None:
         sid = session["id"]
         # Registered before the first await, so a cancel arriving during the
         # workspace and volume lookups below is seen by this launch rather
-        # than by nothing at all. The assignment is synchronous: no other
-        # coroutine runs between it and the first await that follows.
-        launch = _Launch()
-        self._launches[sid] = launch
+        # than by nothing at all. The scheduler registers it earlier still,
+        # at the moment it claims the row.
+        launch = self._register_launch(sid)
         try:
+            if launch.cancelled:
+                # Cancelled between the claim and here: the row is already
+                # terminal and nothing of this session may start.
+                logger.info("session %s was cancelled before its launch began", sid)
+                return
             await self._launch_tracked(session, launch)
         finally:
             # Whatever happened — success, failure, or an observed cancel —
@@ -453,7 +516,13 @@ class SessionManager:
             await self._settle(sid, exit_code=None, error="workspace disappeared")
             return
 
-        branch = branch_for(sid, workspace["name"])
+        # A session queued against an existing branch — a review session
+        # updating the pull request it answers — carries it on the row. Every
+        # other session gets the branch derived from its id. Both go through
+        # the same check below: a preset branch is no more trusted than a
+        # derived one, and it is the only place a bug could aim a push at a
+        # protected branch.
+        branch = str(session.get("branch_name") or "") or branch_for(sid, workspace["name"])
         if branch.rsplit("/", 1)[-1] in settings.protected_branches or not branch.startswith(settings.branch_prefix):
             # Cannot happen with the derivation above, but the check is cheap
             # and this is the one place where a bug would push to main.
@@ -485,9 +554,13 @@ class SessionManager:
             # Boundary: the next step hands a GitHub token to a container.
             # A cancel that arrived during the awaits above has already
             # reported the session cancelled, so nothing credential-bearing
-            # may start for it.
-            if launch.cancelled:
-                logger.info("session %s was cancelled before its checkout helper; not starting it", sid)
+            # may start for it. The row is re-read as well as the flag
+            # checked: the flag covers a cancel this process saw, the row
+            # covers everything else — another replica, a manual database
+            # change, or any await added between the claim and here in the
+            # future.
+            if launch.cancelled or not await self._still_ours(sid):
+                logger.info("session %s is no longer ours to launch; not starting its checkout helper", sid)
                 return
 
             # Phase one, trusted: the working copy is prepared by a helper
@@ -568,6 +641,10 @@ class SessionManager:
 
         await db.add_event(sid, EventKind.STATUS, {"status": "running", "branch": branch})
         self._supervise(sid, container_id)
+
+    async def _still_ours(self, session_id: int) -> bool:
+        """Whether the row is still the 'starting' one this launch claimed."""
+        return await db.session_is_starting(session_id)
 
     def _session_env(self, session: dict[str, Any], branch: str) -> dict[str, str]:
         """The environment the untrusted agent phase runs with.
@@ -740,6 +817,13 @@ class SessionManager:
             "LOGOS_REPO_SLUG": settings.repo_slug,
             "LOGOS_ARTIFACT_DIR": "/artifacts",
             "LOGOS_AGENT_GITHUB_LOGIN": settings.github_login,
+            # Whether this session's work may include CI workflow files. With
+            # a separate session token GitHub decides — a token without
+            # `workflow` scope simply cannot push them. With the fallback the
+            # token *does* have the scope, so the finalizer refuses instead:
+            # a workflow file the agent wrote would otherwise run with the
+            # repository's secrets as soon as its pull request opened.
+            "LOGOS_AGENT_WORKFLOW_CHANGES": ("deny" if settings.session_token_is_runner_token else "allow"),
         }
         if settings.session_github_token:
             env["GITHUB_TOKEN"] = settings.session_github_token
@@ -891,8 +975,8 @@ class SessionManager:
         for key in ("tokens_in", "tokens_out"):
             if isinstance(result.get(key), int):
                 fields[key] = result[key]
-        if isinstance(result.get("cost_eur"), (int, float)):
-            fields["cost_eur"] = float(result["cost_eur"])
+        if isinstance(result.get("cost_usd"), (int, float)):
+            fields["cost_usd"] = float(result["cost_usd"])
         if result.get("pr_url"):
             fields["pr_url"] = str(result["pr_url"])
 
@@ -1235,14 +1319,19 @@ class SessionManager:
         if not moved:
             return False
 
-        await db.add_event(session_id, EventKind.STATUS, {"status": "cancelled"})
-        # Mark an in-flight launch before touching any container: from here
-        # on the launch observes the cancellation at its next phase boundary
-        # and starts nothing further. Marking is synchronous, so a launch
-        # that is between awaits cannot slip past it.
-        launch = self._launches.pop(session_id, None)
+        # Mark an in-flight launch in the same step as the transition, before
+        # any further await: from here on the launch observes the
+        # cancellation at its next phase boundary and starts nothing. Every
+        # await between the transition and this line would be another
+        # scheduling point in which a racing launch could still reach a
+        # container. Marked, not removed, because a launch that has not
+        # started yet has to find this record rather than take a fresh,
+        # uncancelled one — its own cleanup removes it, and so does the wait
+        # below.
+        launch = self._launches.get(session_id)
         if launch is not None:
             launch.cancelled = True
+        await db.add_event(session_id, EventKind.STATUS, {"status": "cancelled"})
         # The credential-bearing helper first: a finalizer mid-push would
         # otherwise keep committing, pushing, or opening a pull request after
         # the API has already reported the session cancelled. It is tracked
@@ -1293,6 +1382,10 @@ class SessionManager:
                     session_id,
                     _CANCEL_LAUNCH_WAIT_S,
                 )
+            finally:
+                # The row is terminal, so no launch can legitimately follow:
+                # the record has done its work either way.
+                self._launches.pop(session_id, None)
         task = self._supervisors.pop(session_id, None)
         if task:
             task.cancel()

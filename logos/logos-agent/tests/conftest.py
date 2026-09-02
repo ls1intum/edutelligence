@@ -10,7 +10,22 @@ the policy build their own.
 from __future__ import annotations
 
 import pytest
-from app import model_policy
+from app import db, model_policy
+
+
+@pytest.fixture(autouse=True)
+def owned_session_rows(monkeypatch):
+    """The launch re-reads its row before handing out a credential.
+
+    Without a database that read cannot answer, and every launch test would
+    abort at the boundary instead of exercising what it is about. Tests
+    about losing the row set their own answer.
+    """
+
+    async def still_starting(_session_id: int) -> bool:
+        return True
+
+    monkeypatch.setattr(db, "session_is_starting", still_starting)
 
 
 @pytest.fixture(autouse=True)
