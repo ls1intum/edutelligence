@@ -415,6 +415,9 @@ class VllmProcessHandle:
         # None until at least one spawn has completed. Included in the lane
         # status dict so the orchestrator can feed it into its LatencyStore.
         self._last_cold_load_s: float | None = None
+        # Duration of the most recent successful wake-from-sleep (/wake_up
+        # call). None until at least one successful wake has been observed.
+        self._last_wake_from_sleep_s: float | None = None
         # Set by _maybe_prepare_sharded_checkpoint when a pre-sharded checkpoint
         # is used for a TP>1 lane; _build_cmd then serves this directory with
         # --load-format sharded_state instead of the full checkpoint.
@@ -645,6 +648,16 @@ class VllmProcessHandle:
         into its LatencyStore.
         """
         return self._last_cold_load_s
+
+    @property
+    def last_wake_from_sleep_s(self) -> float | None:
+        """Wall-clock seconds of the most recent /wake_up HTTP call.
+
+        None until at least one wake has completed successfully.
+        Included in the runtime status dict so the orchestrator can feed it
+        into its LatencyStore as a SLEEPING-tier overhead observation.
+        """
+        return self._last_wake_from_sleep_s
 
     @property
     def has_stuck_vram(self) -> bool:
@@ -1417,6 +1430,7 @@ class VllmProcessHandle:
         """Wake up a sleeping vLLM lane."""
         self._ensure_sleep_mode_ready()
         url = f"{self._base_url()}/wake_up"
+        _wake_t0 = asyncio.get_event_loop().time()
         try:
             resp = await self._http.post(url, timeout=120.0)
         except httpx.HTTPError as exc:
@@ -1430,6 +1444,9 @@ class VllmProcessHandle:
 
         if resp.status_code not in (200, 202):
             raise RuntimeError(f"[{self.lane_id}] vLLM /wake_up failed with HTTP {resp.status_code}: {payload}")
+
+        self._last_wake_from_sleep_s = asyncio.get_event_loop().time() - _wake_t0
+        logger.info("[%s] Wake from sleep completed in %.1f s", self.lane_id, self._last_wake_from_sleep_s)
 
         # Workaround for upstream vLLM bug: /sleep clears only the
         # EngineCore-side (P1) mm receiver cache via EngineCore.reset_mm_cache,

@@ -408,6 +408,11 @@ class LogosNodeRuntimeRegistry:
             if isinstance(cold_s, (int, float)) and cold_s > 0:
                 self._latency_store.record_overhead(model_name, provider_id, ReadinessTier.COLD, float(cold_s))
 
+            # Wake-from-sleep timing reported by the worker process.
+            wake_s = lane.get("last_wake_from_sleep_s")
+            if isinstance(wake_s, (int, float)) and wake_s > 0:
+                self._latency_store.record_overhead(model_name, provider_id, ReadinessTier.SLEEPING, float(wake_s))
+
             # TTFT and e2e latency from vLLM Prometheus histograms.
             bm = lane.get("backend_metrics")
             if isinstance(bm, dict):

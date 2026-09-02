@@ -671,6 +671,10 @@ class LaneStatus(BaseModel):
     # None until the first successful cold load has been observed.
     # Consumed by the orchestrator LatencyStore to learn per-model load times.
     last_cold_load_s: float | None = None
+    # Wall-clock seconds of the most recent /wake_up call (sleep → awake).
+    # None until at least one wake has completed. Consumed by the orchestrator
+    # LatencyStore to learn per-model wake-from-sleep times (SLEEPING tier).
+    last_wake_from_sleep_s: float | None = None
 
 
 class WorkerRuntimeStatus(BaseModel):

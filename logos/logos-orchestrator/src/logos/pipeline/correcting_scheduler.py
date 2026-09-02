@@ -487,6 +487,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
             model_vram_mb = 0.0
             kv_budget_mb = 0.0
+            tp_size = 1
             try:
                 model_name = self._logosnode.get_model_name(model_id, provider_id)
                 if model_name:
@@ -495,6 +496,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                         profile = profiles[model_name]
                         model_vram_mb = profile.estimate_vram_mb()
                         kv_budget_mb = float(profile.kv_budget_mb or 0)
+                        tp_size = int(profile.tensor_parallel_size or 1)
             except (KeyError, Exception):
                 pass
 
@@ -514,32 +516,29 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 pass
 
             # Build per-tier overhead overrides from the latency store when
-            # available. The store returns a prior (size-derived or static)
-            # for tiers with no learned data yet, so the dict is always
-            # populated and estimate_ettft_local always uses a meaningful value.
+            # available. COLD and SLEEPING always get an override (prior or
+            # learned). COLD_RECLAIM and SLEEPING_RECLAIM are only included
+            # when real observations exist: without learned data the estimator's
+            # context-aware _estimate_reclaim_overhead_s() is more accurate than
+            # a static prior.
             overhead_overrides: dict[ReadinessTier, float] | None = None
             if self._latency_store is not None:
                 model_name_for_store = view.model_name or ""
-                tp_size = 1
-                try:
-                    _, tp_size = self._logosnode.get_parallel_capacity(model_id, provider_id)
-                except Exception:
-                    pass
+                _store_kwargs = dict(
+                    model_vram_mb=model_vram_mb,
+                    tp_size=tp_size,
+                )
                 overhead_overrides = {
                     tier: self._latency_store.get_overhead_s(
-                        model_name_for_store,
-                        provider_id,
-                        tier,
-                        model_vram_mb=model_vram_mb,
-                        tp_size=tp_size,
+                        model_name_for_store, provider_id, tier, **_store_kwargs
                     )
-                    for tier in (
-                        ReadinessTier.COLD,
-                        ReadinessTier.COLD_RECLAIM,
-                        ReadinessTier.SLEEPING,
-                        ReadinessTier.SLEEPING_RECLAIM,
-                    )
+                    for tier in (ReadinessTier.COLD, ReadinessTier.SLEEPING)
                 }
+                for tier in (ReadinessTier.COLD_RECLAIM, ReadinessTier.SLEEPING_RECLAIM):
+                    if self._latency_store.get_observation_count(model_name_for_store, provider_id, tier) > 0:
+                        overhead_overrides[tier] = self._latency_store.get_overhead_s(
+                            model_name_for_store, provider_id, tier, **_store_kwargs
+                        )
                 # Replace the live e2e p50 with the learned value when the
                 # store has sufficient history (learned value is more stable
                 # across the session than a single-lane histogram p50).
