@@ -335,3 +335,47 @@ def test_azure_chat_client_is_reused():
         api_version="2024-02-01",
     )
     assert model.get_client() is model.get_client()
+
+
+def _spent(name: str) -> TokenUsageDTO:
+    return TokenUsageDTO(model=name, numInputTokens=10, numOutputTokens=5)
+
+
+def test_a_failure_in_the_post_agent_hook_still_reports_the_runs_usage():
+    """
+    fail() is terminal, so nothing after it can report what the run spent. The pipeline hands
+    over its cumulative list; dropping what Artemis already received is the callback's job.
+    """
+    call_log: list[str] = []
+    pipeline = _make_pipeline(IrisChatMode.LECTURE, call_log)
+    callback = _RecordingCallback(call_log)
+    answer = _spent("answer")
+
+    def spend_then_break(state, _result):
+        state.tokens.append(answer)
+        raise RuntimeError("citations blew up")
+
+    pipeline._add_citations = spend_then_break
+
+    _run_pipeline(pipeline, callback)
+
+    assert callback.calls_named("fail")[0][1]["tokens"] == [answer]
+
+
+def test_a_run_that_dies_before_the_hook_reports_its_usage_too():
+    """The outer handler runs outside the execution state and reaches the list via self.tokens."""
+    call_log: list[str] = []
+    pipeline = _make_pipeline(IrisChatMode.LECTURE, call_log)
+    callback = _RecordingCallback(call_log)
+    pipeline.tokens = []
+    answer = _spent("answer")
+
+    def spend_then_break(state):
+        state.tokens.append(answer)
+        raise RuntimeError("agent blew up")
+
+    pipeline.execute_agent = spend_then_break
+
+    _run_pipeline(pipeline, callback)
+
+    assert callback.calls_named("fail")[0][1]["tokens"] == [answer]
