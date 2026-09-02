@@ -2,7 +2,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Callable, List, Optional, cast
+from typing import Callable, List, Mapping, Optional, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -85,6 +85,65 @@ def _clean_inline_hint(raw: str) -> Optional[str]:
     return f"{head[:cut].rstrip()}…" if cut > 0 else None
 
 
+def _safe_anchor_path(raw_file: object) -> Optional[str]:
+    """The anchor path if it is repo-relative and harmless, else None.
+
+    Mirrors the rule the client applies before it draws anything (isSafeAnchorPath): no absolute
+    path, no empty segment, no "." or ".." segment. Only the outer whitespace is forgiven; the
+    path is never rewritten, because turning a wrong path into a different valid one would point
+    the student at code the model never looked at.
+    """
+    if not isinstance(raw_file, str):
+        return None
+    path = raw_file.strip()
+    if not path or path.startswith("/"):
+        return None
+    if any(segment in ("", ".", "..") for segment in path.split("/")):
+        return None
+    return path
+
+
+def _valid_anchor(
+    raw_anchor: object, repository: Optional[Mapping[str, str]]
+) -> Optional[dict]:
+    """The anchor if it points at a real line of a file Iris actually saw, else None.
+
+    The model is asked for a location it verified in the code it was given, so the snapshot it
+    was given is what the location is checked against. That is not the same as the student's
+    working copy at the time the cue is drawn, which is why the client keeps its own end-of-file
+    guard; this one keeps a file that does not exist and a line that cannot exist off the wire.
+
+    Every refusal names its reason: a model that keeps anchoring into files it was never shown
+    is a prompt problem, and an anchor that vanishes without a word looks like a client bug.
+    """
+    if raw_anchor is None:
+        return None
+    reason = None
+    path = None
+    if not isinstance(raw_anchor, dict):
+        reason = "not an object"
+    elif repository is None:
+        # No submission means the run had no code tools either, so it cannot have confirmed a
+        # line. The prompt asks for both fields to be null in exactly that case.
+        reason = "no repository to check it against"
+    else:
+        path = _safe_anchor_path(raw_anchor.get("file"))
+        line = raw_anchor.get("line")
+        if path is None:
+            reason = "unusable path"
+        elif path not in repository:
+            reason = "file the run never saw"
+        # bool is a subclass of int in Python, so guard against `"line": true` masquerading as a line number.
+        elif not isinstance(line, int) or isinstance(line, bool) or line < 1:
+            reason = "line is not a positive integer"
+        elif line > len(repository[path].splitlines()):
+            reason = "line past the end of the file"
+        else:
+            return {"file": path, "line": line}
+    logger.warning("dropping the anchor %s: %s", raw_anchor, reason)
+    return None
+
+
 @dataclass
 class GateResult:
     action: StruggleAction
@@ -123,8 +182,15 @@ class ConfirmCloseResult:
     degraded: bool = False
 
 
-def parse_gate_result(raw: Optional[str]) -> GateResult:
-    """Parse the LLM's JSON gate decision. Fail safe to silent on any problem."""
+def parse_gate_result(
+    raw: Optional[str], repository: Optional[Mapping[str, str]] = None
+) -> GateResult:
+    """Parse the LLM's JSON gate decision. Fail safe to silent on any problem.
+
+    `repository` is the snapshot the run was given, and the anchor is checked against it. Without
+    one the model had no code tools either, so a location it names is unfounded and the gutter
+    pair is dropped rather than forwarded.
+    """
     if not raw:
         return GateResult("silent", None, 0.0, None, parse_failed=True)
     obj = _extract_json_object(raw)
@@ -170,22 +236,26 @@ def parse_gate_result(raw: Optional[str]) -> GateResult:
     # the file they are editing. A model that answers `silent` and fills them anyway contradicts
     # itself, so the decision wins and both are dropped here rather than put on the wire.
     if action != "silent":
-        raw_anchor = obj.get("anchor")
-        raw_line = raw_anchor.get("line") if isinstance(raw_anchor, dict) else None
-        # bool is a subclass of int in Python, so guard against `"line": true` masquerading as a line number.
-        if (
-            isinstance(raw_anchor, dict)
-            and isinstance(raw_anchor.get("file"), str)
-            and isinstance(raw_line, int)
-            and not isinstance(raw_line, bool)
-        ):
-            anchor = {"file": raw_anchor["file"], "line": raw_line}
+        anchor = _valid_anchor(obj.get("anchor"), repository)
         raw_inline_hint = obj.get("inlineHint")
         if isinstance(raw_inline_hint, str):
             # The gutter draws this as plain text, so a backtick reaches the student as a backtick
             # sitting next to their code. The prompt says so, but this field is rendered unfiltered
             # and the prompt has already been wrong about it once, so strip rather than trust.
             inline_hint = _clean_inline_hint(raw_inline_hint)
+        # The two travel together or not at all, which is what the prompt asks for and what the
+        # client enforces: it draws the cue only when it holds a path, a line and a text. Half a
+        # pair is payload nothing can render, and a lone anchor points somewhere without saying
+        # why. Dropping it leaves the decision itself untouched.
+        if anchor is None or inline_hint is None:
+            if anchor is not None or inline_hint is not None:
+                logger.warning(
+                    "dropping half a gutter pair (anchor=%s, cue=%s)",
+                    anchor,
+                    inline_hint,
+                )
+            anchor = None
+            inline_hint = None
     return GateResult(action, message, confidence, rationale, anchor, inline_hint)
 
 
@@ -383,7 +453,10 @@ class StruggleInterventionPipeline(
             status.rationale = cc.rationale
             cb.finish(tokens=state.tokens)
             return cc.closing_sentence or ""
-        gate = parse_gate_result(state.result)
+        submission = state.dto.programming_exercise_submission
+        gate = parse_gate_result(
+            state.result, submission.repository if submission else None
+        )
         if intent == "help_request" and (gate.parse_failed or gate.action == "silent"):
             # The student explicitly asked for this hint, and the help_request template answers
             # only in "ambient" or "active" - NEVER SILENT is part of that intent's contract.

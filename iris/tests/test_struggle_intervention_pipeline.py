@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +18,17 @@ from iris.pipeline.struggle_intervention_pipeline import (
 )
 from iris.web.routers.health.Pipelines.features import Features
 from iris.web.routers.health.Pipelines.registery import PIPELINE_BY_FEATURE
+
+# The snapshot the run was given; an anchor is only forwarded when it points into it.
+ANCHOR_REPOSITORY = {
+    "Sort.java": "\n".join(f"// line {i}" for i in range(1, 61)),
+    "src/A.java": "\n".join(f"// line {i}" for i in range(1, 61)),
+}
+
+
+def _gate(raw: str):
+    """parse_gate_result against a repository that contains the files these tests anchor into."""
+    return parse_gate_result(raw, ANCHOR_REPOSITORY)
 
 
 def test_parse_gate_result_active():
@@ -96,7 +108,7 @@ def test_parse_gate_result_extracts_anchor_and_inline_hint():
         '{"action":"ambient","message":"Look at the loop bound.","confidence":0.7,'
         '"anchor":{"file":"Sort.java","line":42},"inlineHint":"off-by-one at the last index?"}'
     )
-    g = parse_gate_result(raw)
+    g = _gate(raw)
     assert g.anchor == {"file": "Sort.java", "line": 42}
     assert g.inline_hint == "off-by-one at the last index?"
 
@@ -664,8 +676,9 @@ def test_inline_hint_is_specified_and_parsed_as_plain_text():
     assert "FORMAT of `inlineHint` is the opposite" in rendered
     assert "no markdown pass" in rendered
 
-    gate = parse_gate_result(
+    gate = _gate(
         '{"action": "ambient", "message": "look at `foo`", "confidence": 0.8,'
+        ' "anchor": {"file": "Sort.java", "line": 42},'
         ' "inlineHint": "Still returns `-1` unconditionally"}'
     )
     assert gate.inline_hint == "Still returns -1 unconditionally"
@@ -688,10 +701,11 @@ def test_inline_hint_is_clamped_to_the_gutter_budget():
     characters; this makes it true.
     """
     long_cue = "Still returns minus one unconditionally and blocks both of the DP methods below"
-    gate = parse_gate_result(
-        '{"action": "ambient", "message": "m", "confidence": 0.5, "inlineHint": "%s"}'
-        % long_cue
+    anchored = (
+        '{"action": "ambient", "message": "m", "confidence": 0.5,'
+        ' "anchor": {"file": "Sort.java", "line": 42}, "inlineHint": "%s"}'
     )
+    gate = _gate(anchored % long_cue)
     assert gate.inline_hint is not None
     assert len(gate.inline_hint) <= INLINE_HINT_MAX_CHARS
     assert gate.inline_hint.endswith("…")
@@ -701,23 +715,13 @@ def test_inline_hint_is_clamped_to_the_gutter_budget():
 
     # Exactly at the budget is untouched.
     exact = "x" * INLINE_HINT_MAX_CHARS
-    assert (
-        parse_gate_result(
-            '{"action": "ambient", "message": "m", "confidence": 0.5, "inlineHint": "%s"}'
-            % exact
-        ).inline_hint
-        == exact
-    )
+    assert _gate(anchored % exact).inline_hint == exact
 
-    # One long unbreakable token has no honest way to be shortened, so it is dropped rather
-    # than cut mid-word; the anchor still marks the line.
-    assert (
-        parse_gate_result(
-            '{"action": "ambient", "message": "m", "confidence": 0.5, "inlineHint": "%s"}'
-            % ("y" * 90)
-        ).inline_hint
-        is None
-    )
+    # One long unbreakable token has no honest way to be shortened, so it is dropped rather than
+    # cut mid-word, and the anchor goes with it: a marker without its cue renders nowhere.
+    dropped = _gate(anchored % ("y" * 90))
+    assert dropped.inline_hint is None
+    assert dropped.anchor is None
 
 
 def _hook_state(result, intent, tokens=None):
@@ -738,7 +742,13 @@ def _hook_state(result, intent, tokens=None):
         episode_label=None,
     )
     state = SimpleNamespace(
-        dto=SimpleNamespace(intent=intent),
+        dto=SimpleNamespace(
+            intent=intent,
+            # The hook hands the snapshot to the parser, which checks the anchor against it.
+            programming_exercise_submission=SimpleNamespace(
+                repository=ANCHOR_REPOSITORY
+            ),
+        ),
         result=result,
         tokens=tokens if tokens is not None else ["tok"],
         callback=callback,
@@ -867,8 +877,9 @@ def test_inline_hint_keeps_a_cue_whose_word_boundary_sits_at_the_limit():
     Searching only the first 59 characters found no space and dropped the cue entirely.
     """
     cue = "x" * 59 + " next"
-    out = parse_gate_result(
-        '{"action":"ambient","message":"m","confidence":0.5,"inlineHint":"' + cue + '"}'
+    out = _gate(
+        '{"action":"ambient","message":"m","confidence":0.5,'
+        '"anchor":{"file":"Sort.java","line":42},"inlineHint":"' + cue + '"}'
     ).inline_hint
     assert out == "x" * 59 + "…"
     assert len(out) == INLINE_HINT_MAX_CHARS
@@ -1093,3 +1104,108 @@ def test_an_invented_extra_field_still_closes():
 
     assert cc.resolved is True
     assert cc.closing_sentence == "Nice work."
+
+
+def _anchored(file: str, line, hint: str = "off-by-one?") -> str:
+    return (
+        '{"action":"ambient","message":"m","confidence":0.5,'
+        f'"anchor":{{"file":{json.dumps(file)},"line":{json.dumps(line)}}},'
+        f'"inlineHint":{json.dumps(hint)}}}'
+    )
+
+
+def test_an_anchor_that_points_nowhere_is_dropped_with_its_cue():
+    """
+    The client draws the cue at the anchor, so a location it cannot resolve turns the pair into
+    payload nothing renders. Worse, a line the model never saw is one it cannot have verified.
+    Each of these is checked against the snapshot the run was given.
+    """
+    for path, line, why in [
+        ("", 5, "empty path"),
+        ("   ", 5, "blank path"),
+        ("/etc/passwd", 5, "absolute path"),
+        ("../secrets.txt", 5, "escapes the repository"),
+        ("src/./A.java", 5, "dot segment"),
+        ("src//A.java", 5, "empty segment"),
+        ("Sort.java/", 5, "trailing separator"),
+        ("Missing.java", 5, "file the run never saw"),
+        ("Sort.java", 0, "line before the first"),
+        ("Sort.java", -3, "negative line"),
+        ("Sort.java", 61, "line past the end of the file"),
+        ("Sort.java", True, "boolean masquerading as a line"),
+    ]:
+        gate = _gate(_anchored(path, line))
+        assert gate.anchor is None, why
+        assert gate.inline_hint is None, why
+        # Only the gutter pair is refused; the decision itself stands.
+        assert gate.action == "ambient", why
+        assert gate.message == "m", why
+
+
+def test_the_last_line_of_a_file_is_a_valid_anchor():
+    gate = _gate(_anchored("Sort.java", 60))
+    assert gate.anchor == {"file": "Sort.java", "line": 60}
+    assert gate.inline_hint == "off-by-one?"
+
+
+def test_an_empty_file_has_no_line_to_anchor():
+    """`splitlines()` of an empty file is empty, so even line 1 is a line the run never saw."""
+    gate = parse_gate_result(_anchored("Empty.java", 1), {"Empty.java": ""})
+    assert gate.anchor is None
+    assert gate.inline_hint is None
+
+
+def test_outer_whitespace_around_the_path_is_forgiven():
+    """Forgiven, not rewritten: a path is never turned into a different one that happens to fit."""
+    gate = _gate(_anchored("  Sort.java  ", 42))
+    assert gate.anchor == {"file": "Sort.java", "line": 42}
+
+
+def test_without_a_repository_no_anchor_is_forwarded():
+    """
+    No submission means the run had no code tools either, so a location it names is one it could
+    not have confirmed. The prompt asks for both fields to be null in exactly that case.
+    """
+    gate = parse_gate_result(_anchored("Sort.java", 42))
+    assert gate.anchor is None
+    assert gate.inline_hint is None
+    assert gate.action == "ambient"
+
+
+def test_a_cue_without_an_anchor_is_dropped():
+    """Half a pair: the text has no place to be drawn."""
+    gate = _gate(
+        '{"action":"ambient","message":"m","confidence":0.5,"inlineHint":"off-by-one?"}'
+    )
+    assert gate.inline_hint is None
+
+
+def test_an_anchor_without_a_cue_is_dropped():
+    """The other half: a marker that points somewhere without saying why."""
+    for raw in (
+        '{"action":"ambient","message":"m","confidence":0.5,'
+        '"anchor":{"file":"Sort.java","line":42}}',
+        '{"action":"ambient","message":"m","confidence":0.5,'
+        '"anchor":{"file":"Sort.java","line":42},"inlineHint":7}',
+    ):
+        assert _gate(raw).anchor is None
+
+
+def test_the_hook_checks_the_anchor_against_the_runs_own_snapshot():
+    """
+    The hook is what hands the snapshot to the parser. Without that argument every anchor would
+    pass unchecked, and nothing else on this path would notice.
+    """
+    pipeline, state = _hook_state(
+        '{"action":"ambient","message":"m","confidence":0.5,'
+        '"anchor":{"file":"NeverSeen.java","line":5},"inlineHint":"off-by-one?"}',
+        "decide",
+    )
+    pipeline.post_agent_hook(state)
+
+    assert state.callback.status.anchor_file is None
+    assert state.callback.status.anchor_line is None
+    assert state.callback.status.inline_hint is None
+    # A refused anchor costs the gutter cue, not the hint itself.
+    assert state.callback.status.action == "ambient"
+    assert state.callback.finish.call_args.kwargs["result"] == "m"
