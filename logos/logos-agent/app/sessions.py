@@ -31,9 +31,8 @@ from typing import Any
 import httpx
 
 from . import capacity, db, docker_engine, github, model_policy
-from .config import settings
+from .config import REPLY_FILE, settings
 from .schemas import EventKind, SessionStatus
-from .triggers import REPLY_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +50,10 @@ _BRANCH_SAFE = re.compile(r"[^a-zA-Z0-9_-]")
 # a stopped helper container to be reaped, short enough that a wedged Docker
 # call cannot hold the cancel API open.
 _CANCEL_LAUNCH_WAIT_S = 60.0
+
+# GitHub rejects a comment body longer than 65536 characters; the margin
+# leaves room for the truncation note.
+_MAX_REPLY_CHARS = 60000
 
 
 def container_name(session_id: int) -> str:
@@ -517,12 +520,6 @@ class SessionManager:
             await self._settle(sid, exit_code=None, error="workspace disappeared")
             return
 
-        # A session queued against an existing branch — a review session
-        # updating the pull request it answers — carries it on the row. Every
-        # other session gets the branch derived from its id. Both go through
-        # the same check below: a preset branch is no more trusted than a
-        # derived one, and it is the only place a bug could aim a push at a
-        # protected branch.
         # A session queued against an existing branch — a review answered, or
         # a pull request handed over — carries it on the row and keeps that
         # name: renaming somebody's branch would abandon the pull request it
@@ -1068,6 +1065,12 @@ class SessionManager:
         if not body:
             logger.info("session %s wrote an empty answer; nothing to post", session_id)
             return
+        if len(body) > _MAX_REPLY_CHARS:
+            # GitHub refuses a comment above its length limit outright, and
+            # an answer nobody receives is worse than a shortened one on a
+            # thread where somebody is waiting.
+            body = body[:_MAX_REPLY_CHARS].rstrip() + "\n\n_[answer truncated]_"
+            logger.info("the answer of session %s was truncated to fit a GitHub comment", session_id)
         try:
             url = await self._send_reply(target, body)
         except Exception as exc:

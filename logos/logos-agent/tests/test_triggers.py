@@ -37,11 +37,22 @@ def review(review_id: int, state: str = "CHANGES_REQUESTED", body: str = "Please
     }
 
 
-def comment(comment_id: int, number: int, body: str, author: str = "wasnertobias", *, path: str | None = None) -> dict:
+def comment(
+    comment_id: int,
+    number: int,
+    body: str,
+    author: str = "wasnertobias",
+    *,
+    path: str | None = None,
+    root: int | None = None,
+    minutes_ago: int = 5,
+) -> dict:
     made = {
         "id": comment_id,
         "body": body,
         "user": {"login": author},
+        "created_at": (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat().replace("+00:00", "Z"),
+        "in_reply_to_id": root,
         "issue_url": f"https://api.github.com/repos/{REPO}/issues/{number}",
         "pull_request_url": f"https://api.github.com/repos/{REPO}/pulls/{number}",
     }
@@ -341,7 +352,7 @@ class TestConversation:
         await triggers.TriggerPoller().poll_once()
 
         created = fake_db.created[0]
-        assert created["trigger_ref"] == "thread-772-9001"
+        assert created["trigger_ref"] == "thread-772-issue-9001"
         assert created["trigger_kind"] == "comment"
         assert "Why does this need a lock?" in created["task"]
         assert created["reply_target"] == "issue:772"
@@ -359,7 +370,7 @@ class TestConversation:
         await triggers.TriggerPoller().poll_once()
 
         created = fake_db.created[0]
-        assert created["trigger_ref"] == "thread-864-9002"
+        assert created["trigger_ref"] == "thread-864-issue-9002"
         assert created["branch"] is None
         assert created["open_pull_request"] is False
         assert "Answer in words" in created["task"] or "answer in words" in created["task"].lower()
@@ -400,7 +411,7 @@ class TestConversation:
 
         assert len(queued) == 1
         created = fake_db.created[0]
-        assert created["trigger_ref"] == "thread-772-9003"
+        assert created["trigger_ref"] == "thread-772-issue-9003"
         for text in ("first thought", "and another", "and finally this"):
             assert text in created["task"]
 
@@ -543,3 +554,120 @@ class TestCommentWindow:
         # state; comments are a stream, and without a bound the first pass
         # after a restart would read years of them.
         assert timedelta(hours=12) <= triggers.COMMENT_LOOKBACK <= timedelta(days=2)
+
+
+class TestReviewRouting:
+    """What a review session is allowed to be queued as at all."""
+
+    async def test_a_review_without_a_writable_branch_is_left_to_a_person(self, monkeypatch):
+        # The fix belongs on that pull request's branch. Queued anyway, the
+        # session would start from the default branch on a branch of its own
+        # and could never update the pull request its task is about.
+        FakeRepo(
+            authored_pulls=[pull(900)],
+            reviews={900: review(1)},
+            heads={900: ("feature", "someone/edutelligence")},
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        assert fake_db.created == []
+
+    async def test_a_review_is_acknowledged_on_the_pull_request(self, monkeypatch):
+        # A submitted review is not a review *comment*: the two id sequences
+        # are independent, so reacting to the review id as though it were a
+        # comment id would fail silently.
+        repo = FakeRepo(authored_pulls=[pull(772)], reviews={772: review(5085681761)})
+        repo.install(monkeypatch)
+        FakeDb().install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert repo.reactions == [(f"/repos/{REPO}/issues/772", "eyes")]
+
+    async def test_the_reviews_own_comments_do_not_become_a_second_session(self, monkeypatch):
+        # The repository-wide comment scan sees the very comments the review
+        # task already carries.
+        inline = comment(7010, 772, "fix this", path="app/db.py")
+        FakeRepo(
+            authored_pulls=[pull(772)],
+            reviews={772: review(55)},
+            review_comments={(772, 55): [inline]},
+            inline_comments=[inline],
+        ).install(monkeypatch)
+        fake_db = FakeDb(
+            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in (1, 2)]
+        )
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        queued = await triggers.TriggerPoller().poll_once()
+
+        assert len(queued) == 1
+        assert fake_db.created[0]["trigger_ref"] == "pr-772-review-55"
+
+
+class TestInlineThreads:
+    async def test_each_inline_thread_is_answered_in_itself(self, monkeypatch):
+        # Two line-specific questions on one pull request are two
+        # conversations; merging them would answer one and leave the other
+        # without a reply.
+        FakeRepo(
+            authored_pulls=[pull(772)],
+            inline_comments=[
+                comment(7001, 772, f"@{AGENT} why the lock?", path="app/db.py", root=None),
+                comment(7002, 772, f"@{AGENT} and here?", path="app/github.py", root=None),
+            ],
+        ).install(monkeypatch)
+        fake_db = FakeDb(
+            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in (1, 2, 3)]
+        )
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        queued = await triggers.TriggerPoller().poll_once()
+
+        assert len(queued) == 2
+        targets = {c["reply_target"] for c in fake_db.created}
+        assert targets == {"review_comment:772:7001", "review_comment:772:7002"}
+
+    async def test_a_reply_joins_the_thread_it_answers(self, monkeypatch):
+        # A reply carries the root's id; both belong to one conversation.
+        FakeRepo(
+            authored_pulls=[pull(772)],
+            inline_comments=[
+                comment(7001, 772, "why the lock?", path="app/db.py", root=None, minutes_ago=20),
+                comment(7005, 772, "…and does it cover restarts?", path="app/db.py", root=7001, minutes_ago=5),
+            ],
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        queued = await triggers.TriggerPoller().poll_once()
+
+        assert len(queued) == 1
+        created = fake_db.created[0]
+        assert created["reply_target"] == "review_comment:772:7001"
+        assert created["trigger_ref"] == "thread-772-inline-7001-7005"
+
+    async def test_the_newest_comment_is_the_newest_by_time(self, monkeypatch):
+        # Issue and review comments have independent id sequences, so a
+        # newer comment can carry a smaller id.
+        FakeRepo(
+            authored_pulls=[pull(772)],
+            issue_comments=[
+                comment(9000, 772, "older, but a bigger number", minutes_ago=60),
+                comment(10, 772, "newer, with a smaller one", minutes_ago=1),
+            ],
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created[0]["trigger_ref"] == "thread-772-issue-10"

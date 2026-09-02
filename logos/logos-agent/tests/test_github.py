@@ -599,3 +599,78 @@ class TestReactionsAndReplies:
 
         assert sent[0]["url"].endswith("/pulls/772/comments/3910035243/replies")
         assert sent[0]["json"] == {"body": "the answer"}
+
+
+class TestReviewSupersession:
+    """A reviewer who approves has withdrawn their earlier objection."""
+
+    @staticmethod
+    def _reviews(monkeypatch, reviews):
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None, params=None):
+                page = int((params or {}).get("page", 1))
+                return FakeResponse(200, reviews if page == 1 else [])
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(github, "settings", replace(github.settings, github_token="tok"))
+
+    async def test_an_approval_after_a_change_request_withdraws_it(self, monkeypatch):
+        self._reviews(
+            monkeypatch,
+            [
+                {"id": 1, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-01T10:00:00Z"},
+                {"id": 2, "state": "APPROVED", "submitted_at": "2026-09-02T10:00:00Z"},
+            ],
+        )
+
+        assert await github.latest_changes_requested_review(772) is None
+
+    async def test_a_change_request_after_an_approval_is_work(self, monkeypatch):
+        self._reviews(
+            monkeypatch,
+            [
+                {"id": 1, "state": "APPROVED", "submitted_at": "2026-09-01T10:00:00Z"},
+                {"id": 2, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-02T10:00:00Z"},
+            ],
+        )
+
+        review = await github.latest_changes_requested_review(772)
+
+        assert review["id"] == 2
+
+    async def test_a_plain_comment_after_a_change_request_also_withdraws_it(self, monkeypatch):
+        # Reviews are submitted deliberately; the newest one is what the
+        # reviewer currently says.
+        self._reviews(
+            monkeypatch,
+            [
+                {"id": 1, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-01T10:00:00Z"},
+                {"id": 2, "state": "COMMENTED", "submitted_at": "2026-09-02T10:00:00Z"},
+            ],
+        )
+
+        assert await github.latest_changes_requested_review(772) is None
+
+
+class TestThreadIdentity:
+    def test_a_reply_belongs_to_the_thread_it_answers(self):
+        assert github.thread_root_of({"id": 5, "in_reply_to_id": 1}) == 1
+
+    def test_a_thread_starter_is_its_own_root(self):
+        assert github.thread_root_of({"id": 5}) == 5
+
+    def test_a_comment_carries_its_time(self):
+        moment = github.created_at_of({"created_at": "2026-09-02T10:00:00Z"})
+        assert moment is not None and moment.year == 2026
+
+    def test_a_comment_without_a_time_says_so(self):
+        assert github.created_at_of({}) is None

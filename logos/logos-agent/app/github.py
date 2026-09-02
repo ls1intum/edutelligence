@@ -389,8 +389,12 @@ async def latest_changes_requested_review(number: int) -> dict[str, Any] | None:
     Only the newest one is work: an older changes-requested review on the
     same pull request has been superseded by it, and answering both would
     mean two sessions writing to one branch about overlapping points.
-    Returns None when the newest review is an approval or a comment, or
-    when there are no reviews at all.
+
+    The newest review is chosen across *all* states and only then checked,
+    so an approval or a comment that came after a change request withdraws
+    it — which is what the reviewer meant by submitting it. Returns None
+    when the newest review is not a request for changes, and when there are
+    no reviews at all.
 
     Every page is read: the endpoint answers oldest-first and ignores a
     direction parameter, so on a long-running pull request the newest review
@@ -404,11 +408,11 @@ async def latest_changes_requested_review(number: int) -> dict[str, Any] | None:
     for review in payload:
         if not isinstance(review, dict) or not isinstance(review.get("id"), int):
             continue
-        if str(review.get("state") or "").upper() != "CHANGES_REQUESTED":
-            continue
         submitted = _parse_time(review.get("submitted_at"))
-        if newest_at is None or (submitted is not None and submitted >= newest_at):
+        if newest is None or (submitted is not None and (newest_at is None or submitted >= newest_at)):
             newest, newest_at = review, submitted
+    if newest is None or str(newest.get("state") or "").upper() != "CHANGES_REQUESTED":
+        return None
     return newest
 
 
@@ -468,6 +472,31 @@ def pull_number_of(comment: dict[str, Any]) -> int | None:
     """The pull request an inline review comment belongs to."""
     url = str(comment.get("pull_request_url") or "")
     return _trailing_number(url)
+
+
+def thread_root_of(comment: dict[str, Any]) -> int | None:
+    """The inline thread a review comment belongs to.
+
+    A reply carries the id of the comment that started the thread; the
+    starter carries its own. Answering a line-specific question means
+    answering *in that thread*, so the root is what identifies it — a whole
+    pull request's inline comments are several conversations, not one.
+    """
+    root = comment.get("in_reply_to_id")
+    if isinstance(root, int):
+        return root
+    own = comment.get("id")
+    return own if isinstance(own, int) else None
+
+
+def created_at_of(comment: dict[str, Any]) -> datetime | None:
+    """When a comment was written.
+
+    Issue comments and review comments have independent id sequences, so a
+    newer comment can carry a smaller id than an older one of the other
+    kind. Time is the only order the two share.
+    """
+    return _parse_time(comment.get("created_at"))
 
 
 def _trailing_number(url: str) -> int | None:

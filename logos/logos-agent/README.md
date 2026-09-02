@@ -215,15 +215,21 @@ use it the way you use a person's:
 |---|---|
 | assign it an issue | works on it and opens a draft pull request |
 | assign it a pull request | takes it over, on that pull request's own branch |
-| ask one of its pull requests for changes | addresses the review on that branch |
-| comment on a pull request it is responsible for | reads the thread and answers |
-| mention it anywhere by name | answers there; changes code only if that is what was asked |
+| request changes on one of its pull requests | addresses that review on its branch |
+| comment on a pull request it is responsible for | reads the thread and answers (within a day of writing) |
+| mention it anywhere by name | answers there (within a day); changes code only if that is what was asked |
 
 No labels and no separate vocabulary — the ordinary gestures. **Consent is
 per item:** nothing is picked up because it exists, only because somebody
 assigned it, reviewed its work, or asked it something by name. That is why
 this needs no service-wide opt-in to be safe; `LOGOS_AGENT_TRIGGERS_ENABLED`
 exists as a kill switch, not as a second consent.
+
+Only a **changes-requested** review is work — an approval or a plain comment
+is not, and an approval submitted after a change request withdraws it.
+Comments are read from the last 24 hours: assignments and reviews are read
+from the repository's current state, but comments are a stream, and without a
+bound the first pass after a restart would read years of them.
 
 **It says it heard you.** The moment a session is queued it reacts with 👀 on
 what triggered it, so a question does not sit there looking ignored while the

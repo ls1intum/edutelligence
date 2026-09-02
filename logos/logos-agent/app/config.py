@@ -42,6 +42,13 @@ def _csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+# The file a session writes an answer into, relative to its artefact
+# directory. Shared contract: the task text tells the agent to write it, the
+# runner reads it and posts what it finds. It lives here rather than in
+# either of those modules so neither has to import the other.
+REPLY_FILE = "reply.md"
+
+
 @dataclass(frozen=True)
 class Settings:
     # --- database ---------------------------------------------------------

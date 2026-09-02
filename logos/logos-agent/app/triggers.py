@@ -385,25 +385,35 @@ class TriggerPoller:
             )
 
         responsible = await self._responsible_pulls(login)
+        # Inline comments a review task already carries: the repository scan
+        # below sees the same objects, and a second candidate for them would
+        # be a second session writing to one branch about one request.
+        consumed: set[int] = set()
         for number, pull in responsible.items():
             branch = pull["branch"]
             review = await github.latest_changes_requested_review(number)
             if review is not None:
                 review_id = int(review["id"])
+                comments = await github.review_comments(number, review_id)
+                consumed.update(c["id"] for c in comments if isinstance(c.get("id"), int))
+                if branch is None:
+                    # Nowhere to put the fix: a fork's head, or a protected
+                    # branch. Queueing it anyway would start a session from
+                    # the default branch on a fresh branch of its own, which
+                    # cannot update the pull request its task is about.
+                    logger.info("review on pull request %s has no writable branch; leaving it to a person", number)
+                    continue
                 found.append(
                     {
                         "ref": f"pr-{number}-review-{review_id}",
                         "kind": "review",
-                        "task": review_task(
-                            number, pull["title"], review, await github.review_comments(number, review_id)
-                        ),
+                        "task": review_task(number, pull["title"], review, comments),
                         "branch": branch,
                         "workspace": f"pr-{number}",
-                        "reaction": (
-                            f"/repos/{settings.repo_slug}/pulls/comments/{review_id}"
-                            if review.get("body")
-                            else f"/repos/{settings.repo_slug}/issues/{number}"
-                        ),
+                        # A submitted review is not a review *comment*: the
+                        # two have independent id sequences, so the
+                        # acknowledgement goes on the pull request itself.
+                        "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
                         "reply_target": f"issue:{number}",
                     }
                 )
@@ -419,7 +429,7 @@ class TriggerPoller:
                     }
                 )
 
-        found.extend(await self._comment_candidates(now, responsible))
+        found.extend(await self._comment_candidates(now, responsible, consumed))
         return found
 
     async def _responsible_pulls(self, login: str) -> dict[int, dict[str, Any]]:
@@ -476,67 +486,92 @@ class TriggerPoller:
             return None
         return ref
 
-    async def _comment_candidates(self, now: datetime, responsible: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-        """Comments the agent should answer, one candidate per thread.
+    async def _comment_candidates(
+        self, now: datetime, responsible: dict[int, dict[str, Any]], consumed: set[int]
+    ) -> list[dict[str, Any]]:
+        """Comments the agent should answer, one candidate per conversation.
 
         Two kinds count: anything on a pull request it is responsible for,
         and anything anywhere that mentions it by name. Its own comments and
         those of bots are skipped — the first would be a conversation with
         itself, the second a stampede.
 
-        Fresh comments on one thread become *one* task, keyed on the newest
-        of them: a person writing three notes in a row is asking one thing,
-        and three sessions writing to one branch would not be an answer.
+        A *conversation* is the unit, not a pull request: an inline thread is
+        its own question, asked about one place in the diff and answered
+        there, while ordinary comments on a thread are one running
+        discussion. Grouping every inline thread of a pull request together
+        would answer one of them and leave the rest without a reply.
+
+        Comments already carried by a review task are skipped: they are being
+        worked on, and answering them twice is not answering them better.
         """
         since = now - COMMENT_LOOKBACK
-        threads: dict[int, dict[str, Any]] = {}
+        threads: dict[tuple[str, int], dict[str, Any]] = {}
 
-        def consider(comment: dict[str, Any], number: int, *, review_comment: bool) -> None:
+        def consider(comment: dict[str, Any], number: int, *, root: int | None) -> None:
             author = str((comment.get("user") or {}).get("login") or "")
             if not author or author.lower() == settings.github_login.lower() or is_bot(author):
+                return
+            comment_id = comment.get("id")
+            if not isinstance(comment_id, int) or comment_id in consumed:
                 return
             body = str(comment.get("body") or "")
             if number not in responsible and not mentions_agent(body):
                 return
-            comment_id = comment.get("id")
-            if not isinstance(comment_id, int):
-                return
-            thread = threads.setdefault(number, {"comments": [], "newest": 0, "review_comment": review_comment})
+            key = ("inline", root) if root is not None else ("issue", number)
+            thread = threads.setdefault(
+                key,
+                {"number": number, "comments": [], "newest_id": comment_id, "newest_at": None, "root": root},
+            )
             thread["comments"].append(comment)
-            if comment_id > thread["newest"]:
-                thread["newest"] = comment_id
-                thread["review_comment"] = review_comment
+            # Newest by time, not by id: issue comments and review comments
+            # have independent id sequences, so a newer one of either kind
+            # can carry a smaller number than an older one of the other. Ids
+            # decide only between two comments that carry no timestamp,
+            # which within one thread means one kind and one sequence.
+            written = github.created_at_of(comment)
+            best = thread["newest_at"]
+            if written is not None and (best is None or written >= best):
+                thread["newest_at"], thread["newest_id"] = written, comment_id
+            elif written is None and best is None and comment_id > thread["newest_id"]:
+                thread["newest_id"] = comment_id
 
         for comment in await github.recent_issue_comments(since):
             number = github.issue_number_of(comment)
             if number is not None:
-                consider(comment, number, review_comment=False)
+                consider(comment, number, root=None)
         for comment in await github.recent_review_comments(since):
             number = github.pull_number_of(comment)
             if number is not None:
-                consider(comment, number, review_comment=True)
+                consider(comment, number, root=github.thread_root_of(comment))
 
         candidates: list[dict[str, Any]] = []
-        for number, thread in threads.items():
+        for (kind, key), thread in threads.items():
+            number = thread["number"]
             pull = responsible.get(number)
             branch = pull["branch"] if pull else None
             title = pull["title"] if pull else f"#{number}"
-            newest = thread["newest"]
+            newest = thread["newest_id"]
+            inline = kind == "inline"
             candidates.append(
                 {
-                    "ref": f"thread-{number}-{newest}",
+                    # The reference names the conversation and its latest
+                    # word, so a later comment in it is new work and the same
+                    # one never is. An inline thread carries its root, since
+                    # one pull request has many of them.
+                    "ref": (f"thread-{number}-inline-{key}-{newest}" if inline else f"thread-{number}-issue-{newest}"),
                     "kind": "comment",
                     "task": thread_task(number, title, thread["comments"], branch=branch),
                     "branch": branch,
                     "workspace": f"pr-{number}" if branch else None,
                     "reaction": (
                         f"/repos/{settings.repo_slug}/pulls/comments/{newest}"
-                        if thread["review_comment"]
+                        if inline
                         else f"/repos/{settings.repo_slug}/issues/comments/{newest}"
                     ),
-                    "reply_target": (
-                        f"review_comment:{number}:{newest}" if thread["review_comment"] else f"issue:{number}"
-                    ),
+                    # An inline question is answered in its own thread, where
+                    # the person who asked it is looking.
+                    "reply_target": (f"review_comment:{number}:{key}" if inline else f"issue:{number}"),
                 }
             )
         return candidates
