@@ -104,6 +104,14 @@ public class ProviderService {
             // NULL and can never read an old-unit value as the new one. The
             // pairs are then re-derived (catalogue price refresh first) and
             // the fleet re-ranked, after the commit.
+            //
+            // The provider's advisory lock is taken before the invalidation:
+            // the in-flight derivations hold it across their type read, cost
+            // computation, and metrics write, so acquiring it first
+            // serializes the change with every such window - either the
+            // derivation committed before the invalidation (and is
+            // overwritten) or it will read the new type.
+            providerRepository.lockProviderDerivation(ModelMetricsService.providerDerivationLockKey(p.getId()));
             List<Integer> modelIds = modelProviderRepository.findByProviderId(p.getId()).stream()
                 .map(ModelProvider::getModelId).distinct().toList();
             modelProviderRepository.invalidateDerivedCostByProviderId(p.getId());

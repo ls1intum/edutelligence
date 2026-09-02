@@ -84,6 +84,14 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  * that run, so the fleet is never left half re-ranked (which would defeat the
  * full-population gating), and the orchestrator is notified only after the
  * transaction committed.
+ *
+ * The per-pair cost derivation (provider-type read, cost computation, metrics
+ * write) runs in a single transaction that first takes the provider's
+ * transaction-scoped advisory lock ({@code pg_advisory_xact_lock}), and a
+ * provider type change takes the same lock before invalidating the pairs'
+ * costs. The two operations serialize on it, so an in-flight old-type
+ * derivation can neither observe a half-applied type change nor resurrect an
+ * old-unit cost after the invalidation committed.
  */
 @Service
 public class ModelMetricsService {
@@ -101,6 +109,17 @@ public class ModelMetricsService {
 
     /** Same per-million conversion the model list uses for catalogue prices. */
     static final double PRICE_PER_K_TO_USD_PER_MILLION = 100000.0;
+
+    /**
+     * Advisory-lock key space that serializes provider type changes with the
+     * in-flight cost derivations (base + provider id), distinct from the
+     * model-alias namespace key. The value itself is meaningless.
+     */
+    static final long PROVIDER_DERIVATION_LOCK_KEY_BASE = 0x50524F564944L; // "PROVID"
+
+    static long providerDerivationLockKey(int providerId) {
+        return PROVIDER_DERIVATION_LOCK_KEY_BASE + providerId;
+    }
 
     private final ModelProviderRepository modelProviderRepository;
     private final ProviderRepository providerRepository;
@@ -220,13 +239,27 @@ public class ModelMetricsService {
         PairTpotStatsProjection tpot = modelProviderRepository.findTpotStats(modelId, providerId, since);
         Integer tpotMs = tpot != null ? roundMs(tpot.getTpotP50Ms()) : null;
 
-        BigDecimal cost = derivePairCost(modelId, providerId, totalMs, samples);
-        modelProviderRepository.updateDerivedMetrics(
-            modelId, providerId, ttftMs, totalMs, tpotMs, cost, samples, Instant.now());
+        // The provider-type read, the cost computation, and the metrics write
+        // run in one transaction that first takes the provider's advisory
+        // lock (held until the transaction ends). Provider updates that
+        // change the type take the same lock before invalidating the pairs'
+        // costs, so the two serialize: either the change commits before we
+        // read the type (the cost is derived in the new unit), or our write
+        // commits before the change's invalidation (which then overwrites
+        // the old-unit value). Without the lock, an in-flight old-type
+        // derivation could land its write after the invalidation and
+        // resurrect a cost the new unit never produced.
+        transactionTemplate.execute(status -> {
+            providerRepository.lockProviderDerivation(providerDerivationLockKey(providerId));
+            Provider provider = providerRepository.findById(providerId).orElse(null);
+            BigDecimal cost = derivePairCost(provider, modelId, providerId, totalMs, samples);
+            modelProviderRepository.updateDerivedMetrics(
+                modelId, providerId, ttftMs, totalMs, tpotMs, cost, samples, Instant.now());
+            return null;
+        });
     }
 
-    private BigDecimal derivePairCost(int modelId, int providerId, Integer totalLatencyMs, int samples) {
-        Provider provider = providerRepository.findById(providerId).orElse(null);
+    private BigDecimal derivePairCost(Provider provider, int modelId, int providerId, Integer totalLatencyMs, int samples) {
         if (provider == null) return null;
 
         if (provider.getCloudProviderType() != null) {

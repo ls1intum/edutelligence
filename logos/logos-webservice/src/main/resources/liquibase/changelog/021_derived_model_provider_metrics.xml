@@ -47,4 +47,29 @@
         </addColumn>
     </changeSet>
 
+    <changeSet id="021-backfill-legacy-manual-weights" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="models" columnName="weight_overrides"/>
+        </preConditions>
+        <comment>
+            Latency and cost weights were manually configurable before
+            weight_overrides existed, so on an upgrade install every existing
+            non-zero latency or cost weight is a manual value: backfill those
+            dimensions as overrides so the derivation's population-leave
+            fallback treats them as pins and never resets them to the default.
+            On a fresh install the models table is still empty here, so this
+            is a no-op.
+        </comment>
+        <sql>
+            UPDATE models
+            SET weight_overrides = jsonb_set(weight_overrides, '{latency}', 'true')
+            WHERE COALESCE(weight_latency, 0) &lt;&gt; 0;
+        </sql>
+        <sql>
+            UPDATE models
+            SET weight_overrides = jsonb_set(weight_overrides, '{cost}', 'true')
+            WHERE COALESCE(weight_cost, 0) &lt;&gt; 0;
+        </sql>
+    </changeSet>
+
 </databaseChangeLog>

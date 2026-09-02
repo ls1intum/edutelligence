@@ -12,6 +12,16 @@ public interface ProviderRepository extends JpaRepository<Provider, Integer> {
 
     List<Provider> findByCloudProviderTypeIsNotNull();
 
+    /**
+     * Acquires a transaction-scoped advisory lock on the given key, blocking
+     * until any other holder's transaction commits or rolls back. Provider
+     * type changes and the in-flight cost derivations of the same provider
+     * both take its lock, so the two serialize; released automatically with
+     * the surrounding transaction.
+     */
+    @Query(value = "SELECT pg_advisory_xact_lock(:key)", nativeQuery = true)
+    void lockProviderDerivation(@Param("key") long key);
+
     @Query(value = """
         SELECT id, name, base_url, api_key, provider_type::text, cloud_provider_type::text,
                privacy_level::text, auth_name, auth_format

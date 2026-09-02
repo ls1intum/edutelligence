@@ -1,26 +1,35 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+
+import javax.sql.DataSource;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +40,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.Trigger;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -39,11 +49,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelMetricsService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
@@ -73,10 +86,18 @@ class ModelMetricsControllerTest {
     ProviderService providerService;
     @Autowired
     JdbcTemplate jdbc;
+    @Autowired
+    DataSource dataSource;
     // Spied (not replaced) so one test can make a single guarded weight
     // update fail and prove the whole weight phase rolls back.
     @MockitoSpyBean
     ModelRepository modelRepository;
+    // Spied (not replaced) so the in-flight derivation test can park a
+    // single pair metrics write while the provider type change runs.
+    @MockitoSpyBean
+    ModelProviderRepository modelProviderRepository;
+    @MockitoSpyBean
+    ProviderRepository providerRepository;
     @MockitoBean
     JwtDecoder jwtDecoder;
     // Mocked so the price refresh the derivation waits for never reaches the
@@ -498,6 +519,122 @@ class ModelMetricsControllerTest {
         assertThat(weightLatency(5102)).isEqualTo(4);
     }
 
+    @Test
+    void migrationBackfill_marksLegacyNonZeroWeightsAsOverrides() {
+        // Simulate the pre-upgrade legacy state the 021 backfill changeSet
+        // sees on an upgrade install: a model whose latency and cost weights
+        // were manually configured (non-zero) while weight_overrides still
+        // carries no entry for them.
+        jdbc.update("INSERT INTO models "
+            + "(id, name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description, weight_overrides) "
+            + "VALUES (5103, 'legacy-model', 5, 0, -3, 0, 'metrics', 'Legacy model', '{}')");
+        // The same statements 021's backfill changeSet runs (the changeSet
+        // itself already applied at context startup, against an empty
+        // models table, on every test context of this class).
+        jdbc.update("UPDATE models SET weight_overrides = jsonb_set(weight_overrides, '{latency}', 'true') "
+            + "WHERE COALESCE(weight_latency, 0) <> 0");
+        jdbc.update("UPDATE models SET weight_overrides = jsonb_set(weight_overrides, '{cost}', 'true') "
+            + "WHERE COALESCE(weight_cost, 0) <> 0");
+
+        String overrides = jdbc.queryForObject("SELECT weight_overrides::text FROM models WHERE id = 5103", String.class);
+        assertThat(overrides).contains("latency").contains("cost");
+        // The backfilled dimensions now read as manual pins: the
+        // derivation's population-leave fallback leaves the legacy values
+        // untouched even though the model has no pair (and thus no derived
+        // data at all).
+        modelMetricsService.deriveAllMetrics();
+        assertThat(weightLatency(5103)).isEqualTo(5);
+        assertThat(weightCost(5103)).isEqualTo(-3);
+    }
+
+    @Test
+    void inFlightDerivation_cannotResurrectOldUnitCostAfterTypeChange() throws Exception {
+        modelMetricsService.deriveAllMetrics();
+        // Baseline: 5101's cloud cost is the catalogue blend in USD per
+        // million tokens. Give the provider local hardware so the new-unit
+        // (VRAM x latency) cost is derivable after the switch.
+        assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.015"));
+        jdbc.update("UPDATE providers SET total_vram_mb = 8000 WHERE id = 6101");
+
+        // D: an in-flight derivation of 5101's cloud pair, parked inside its
+        // metrics write - after it read the provider type, before the write
+        // commits. C: a type change (cloud -> local) started while D is
+        // parked, so in the absence of serialization its invalidation would
+        // land before D's write and D's write would resurrect the old-unit
+        // value.
+        // A previous test may have stubbed a guarded weight update to fail;
+        // the re-derivations under test must run against clean stubs.
+        reset(modelRepository);
+        CountDownLatch parkedAtWrite = new CountDownLatch(1);
+        CountDownLatch releaseWrite = new CountDownLatch(1);
+        AtomicBoolean parkNextPairWrite = new AtomicBoolean(true);
+        // The repository spies cannot invoke the real (abstract) methods, so
+        // the answers re-execute the same SQL on the caller's transaction
+        // connection: same transaction, same locks as the real methods.
+        doAnswer(inv -> {
+            if (Integer.valueOf(5101).equals(inv.getArgument(0))
+                    && Integer.valueOf(6101).equals(inv.getArgument(1))
+                    && parkNextPairWrite.compareAndSet(true, false)) {
+                parkedAtWrite.countDown();
+                releaseWrite.await(10, TimeUnit.SECONDS);
+            }
+            executeOnTransactionConnection(
+                "UPDATE model_provider "
+                    + "SET derived_ttft_ms = ?, derived_total_latency_ms = ?, derived_tpot_ms = ?, "
+                    + "derived_cost_usd = ?, derived_samples = ?, derived_updated_at = ? "
+                    + "WHERE model_id = ? AND provider_id = ?",
+                (Object) inv.getArgument(2), (Object) inv.getArgument(3),
+                (Object) inv.getArgument(4), (Object) inv.getArgument(5), (Object) inv.getArgument(6),
+                Timestamp.from((Instant) inv.getArgument(7)),
+                (Integer) inv.getArgument(0), (Integer) inv.getArgument(1));
+            return 1;
+        }).when(modelProviderRepository).updateDerivedMetrics(
+            anyInt(), anyInt(), any(), any(), any(), any(), anyInt(), any(Instant.class));
+        Thread d = new Thread(() -> modelMetricsService.deriveForModel(5101));
+        // D also takes the provider lock at the start of its derivation, so
+        // the latch must announce C's lock attempt, not D's.
+        CountDownLatch cAtLock = new CountDownLatch(1);
+        doAnswer(inv -> {
+            if (Thread.currentThread() != d) {
+                cAtLock.countDown();
+            }
+            // The (Object) cast pins the generic argument's type so the
+            // varargs helper does not infer it as the array type itself.
+            executeOnTransactionConnection("SELECT pg_advisory_xact_lock(?)", (Object) inv.getArgument(0));
+            return null;
+        }).when(providerRepository).lockProviderDerivation(anyLong());
+
+        d.start();
+        assertThat(parkedAtWrite.await(10, TimeUnit.SECONDS)).isTrue();
+
+        Thread c = new Thread(() -> providerService.updateProvider(
+            new UpdateProviderRequestDTO(6101, null, null, null, null, null, null, "none", null)));
+        c.start();
+        // C has reached the type-change branch and is now waiting on D's
+        // advisory lock - so its invalidation cannot commit before D's
+        // write.
+        assertThat(cAtLock.await(10, TimeUnit.SECONDS)).isTrue();
+
+        releaseWrite.countDown();
+        d.join(10_000);
+        c.join(10_000);
+
+        // The old-unit value D computed is gone: the change's invalidation
+        // (committed only after D released its lock) overwrote it, and the
+        // after-commit re-derivation stored the new-unit VRAM x latency
+        // proxy instead.
+        awaitUntil(() -> costOf(5101, 6101) != null && costOf(5102, 6101) != null
+            && costOf(5101, 6101).compareTo(new BigDecimal("0.001")) < 0
+            && costOf(5102, 6101).compareTo(new BigDecimal("0.001")) < 0);
+        assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.000111"));
+        assertThat(costOf(5102, 6101)).isEqualByComparingTo(new BigDecimal("0.000667"));
+        // With no cloud pair left, the stale cloud-derived cost weights fall
+        // back to the default.
+        awaitUntil(() -> weightCost(5101) == 0 && weightCost(5102) == 0);
+        assertThat(weightCost(5101)).isZero();
+        assertThat(weightCost(5102)).isZero();
+    }
+
     private BigDecimal costOf(int modelId, int providerId) {
         return jdbc.queryForObject(
             "SELECT derived_cost_usd FROM model_provider WHERE model_id = ? AND provider_id = ?",
@@ -510,6 +647,23 @@ class ModelMetricsControllerTest {
 
     private Integer weightCost(int modelId) {
         return jdbc.queryForObject("SELECT weight_cost FROM models WHERE id = ?", Integer.class, modelId);
+    }
+
+    /**
+     * Runs a statement on the caller's current transaction connection so a
+     * stubbed repository call keeps the real transaction/locking semantics
+     * (the repository proxy's abstract methods cannot be invoked through
+     * Mockito's callRealMethod). Only the statement is closed, never the
+     * transaction connection itself.
+     */
+    private void executeOnTransactionConnection(String sql, Object... args) throws SQLException {
+        ConnectionHolder holder = (ConnectionHolder) TransactionSynchronizationManager.getResource(dataSource);
+        try (PreparedStatement ps = holder.getConnection().prepareStatement(sql)) {
+            for (int i = 0; i < args.length; i++) {
+                ps.setObject(i + 1, args[i]);
+            }
+            ps.execute();
+        }
     }
 
     /** Poll a condition for up to 10 s: the re-derivation under test runs on the async executor. */
