@@ -1,8 +1,13 @@
-# The repo-root build context is used by logos/logos-orchestrator/Dockerfile
+# The repo-root build context is used by logos/logos-orchestrator/Dockerfile,
+# logos/logos-agent/Dockerfile, logos/logos-agent/workspace/Dockerfile,
 # AND iris/Dockerfile (docker-context: . in iris_build-and-push-docker.yml).
 # Whitelist exactly what those Dockerfiles COPY so the context stays small
 # and untracked local files (benchmarks, calibration data, .git, …) never
 # get uploaded to the builder.
+#
+# A Dockerfile added here without its inputs whitelisted fails with
+# "failed to compute cache key: … not found" — the path is simply absent from
+# the context.
 *
 # Shared dependency: only the files the orchestrator's dependency layer
 # installs from (metadata, declared readme, package source) — not the whole
@@ -14,6 +19,12 @@
 !logos/logos-orchestrator/pyproject.toml
 !logos/logos-orchestrator/src
 !logos/logos-orchestrator/tests
+# Agent runner: the service package and the session-image entrypoints.
+# Deliberately not the whole directory — no README, no tests in the image.
+!logos/logos-agent/pyproject.toml
+!logos/logos-agent/app
+!logos/logos-agent/workspace/run_session.py
+!logos/logos-agent/workspace/screenshot.js
 !iris/pyproject.toml
 !iris/poetry.lock
 !iris/src/iris
