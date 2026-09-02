@@ -462,12 +462,37 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
             if view is None:
                 # No lanes visible — treat as COLD (capacity planner can
-                # cold-load during context resolution)
+                # cold-load during context resolution).  Consult the latency
+                # store so that the provider-specific learned cold overhead
+                # (or size-derived prior) is used instead of the static
+                # constant, which matters for cold-provider selection when a
+                # lane has been removed but history is still persisted.
+                cold_s = OVERHEAD_COLD_S
+                if self._latency_store is not None:
+                    _no_lane_model_name = self._logosnode.get_model_name(model_id, provider_id)
+                    if _no_lane_model_name:
+                        _nl_vram_mb = 0.0
+                        _nl_tp_size = 1
+                        try:
+                            _profiles = self._logosnode.get_model_profiles(provider_id)
+                            if _no_lane_model_name in _profiles:
+                                _p = _profiles[_no_lane_model_name]
+                                _nl_vram_mb = _p.estimate_vram_mb()
+                                _nl_tp_size = int(_p.tensor_parallel_size or 1)
+                        except (KeyError, Exception):
+                            pass
+                        cold_s = self._latency_store.get_overhead_s(
+                            _no_lane_model_name,
+                            provider_id,
+                            ReadinessTier.COLD,
+                            model_vram_mb=_nl_vram_mb,
+                            tp_size=_nl_tp_size,
+                        )
                 return EttftEstimate(
-                    expected_wait_s=OVERHEAD_COLD_S,
+                    expected_wait_s=cold_s,
                     tier=ReadinessTier.COLD,
                     reasoning=f"No lanes for logosnode model {model_id}, cold-load required",
-                    state_overhead_s=OVERHEAD_COLD_S,
+                    state_overhead_s=cold_s,
                     warmth_state=-1,
                 )
 

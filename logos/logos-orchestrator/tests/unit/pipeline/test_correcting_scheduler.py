@@ -102,7 +102,14 @@ class MockLogosNodeFacade:
     def get_model_profiles(self, provider_id):
         return {}
 
+    def set_model_name(self, model_id, provider_id, name):
+        self._model_names = getattr(self, "_model_names", {})
+        self._model_names[(model_id, provider_id)] = name
+
     def get_model_name(self, model_id, provider_id):
+        explicit = getattr(self, "_model_names", {}).get((model_id, provider_id))
+        if explicit is not None:
+            return explicit
         view = self._views.get((model_id, provider_id))
         return view.model_name if view else None
 
@@ -325,6 +332,69 @@ def test_estimate_ettft_no_visible_lanes_sets_cold_warmth():
     est = scheduler._estimate_ettft(1, 10, "logosnode")
     assert est.tier == ReadinessTier.COLD
     assert est.warmth_state == -1
+
+
+def test_estimate_ettft_no_lane_uses_latency_store_cold_overhead():
+    """When no lane is visible, the learned cold overhead from the latency store
+    must replace the static OVERHEAD_COLD_S so that provider-specific history
+    still influences cold-provider selection after a lane is removed."""
+    from logos.pipeline.latency_store import LatencyStore
+    from logos.pipeline.ettft_estimator import ReadinessTier
+
+    store = LatencyStore()
+    store.record_overhead("model-x", 10, ReadinessTier.COLD, 120.0)
+
+    logosnode = MockLogosNodeFacade()
+    logosnode.set_model_name(1, 10, "model-x")
+
+    queue_mgr = __import__("logos.queue", fromlist=["PriorityQueueManager"]).PriorityQueueManager()
+    scheduler = ClassificationCorrectingScheduler(
+        queue_manager=queue_mgr,
+        logosnode_facade=logosnode,
+        azure_facade=MockAzureFacade(),
+        latency_store=store,
+    )
+
+    est = scheduler._estimate_ettft(1, 10, "logosnode")
+    assert est.tier == ReadinessTier.COLD
+    assert est.expected_wait_s == pytest.approx(120.0)
+    assert est.state_overhead_s == pytest.approx(120.0)
+
+
+def test_estimate_ettft_no_lane_uses_prior_when_no_learned_value():
+    """When no lane is visible and the store has no learned value, the
+    size-derived prior (or static constant) is used — not the hardcoded 45 s."""
+    from logos.pipeline.latency_store import LatencyStore
+
+    store = LatencyStore(io_bandwidth_mb_s=500.0)
+    # No observations — store will compute a prior.
+
+    logosnode = MockLogosNodeFacade()
+    logosnode.set_model_name(1, 10, "model-y")
+
+    class _MockFacadeWithProfile(MockLogosNodeFacade):
+        def get_model_profiles(self, provider_id):
+            profile = MagicMock()
+            profile.estimate_vram_mb.return_value = 50_000.0
+            profile.kv_budget_mb = 0
+            profile.tensor_parallel_size = 1
+            return {"model-y": profile}
+
+        def get_model_name(self, model_id, provider_id):
+            return "model-y"
+
+    queue_mgr = __import__("logos.queue", fromlist=["PriorityQueueManager"]).PriorityQueueManager()
+    scheduler = ClassificationCorrectingScheduler(
+        queue_manager=queue_mgr,
+        logosnode_facade=_MockFacadeWithProfile(),
+        azure_facade=MockAzureFacade(),
+        latency_store=store,
+    )
+
+    est = scheduler._estimate_ettft(1, 10, "logosnode")
+    assert est.tier == ReadinessTier.COLD
+    # 50 000 MB / 500 MB/s = 100 s prior (not the static 45 s constant)
+    assert est.expected_wait_s == pytest.approx(100.0)
 
 
 @pytest.mark.asyncio
