@@ -169,15 +169,23 @@ class TestLaunchAndSupervision:
         patched = replace(sessions.settings, artifact_root=str(tmp_path))
         monkeypatch.setattr(sessions, "settings", patched)
         monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
-        created: dict = {}
+        created: list = []
         removed: list = []
+        starts: list = []
+        container_ids = iter(["cid-prepare", "cid-7"])
 
         async def fake_create(**kwargs):
-            created.update(kwargs)
-            return "cid-7"
+            created.append(kwargs)
+            return next(container_ids)
 
-        async def fake_start(_cid):
-            raise RuntimeError("start failed")
+        async def fake_start(cid):
+            starts.append(cid)
+            if len(starts) == 2:
+                # The prepare helper ran; the agent container's start fails.
+                raise RuntimeError("start failed")
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
 
         async def fake_remove(cid, **_kwargs):
             removed.append(cid)
@@ -193,6 +201,7 @@ class TestLaunchAndSupervision:
         )
         monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
         monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
         monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
         monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
         monkeypatch.setattr(
@@ -203,16 +212,21 @@ class TestLaunchAndSupervision:
 
         await sessions.manager._launch(self.SESSION)
 
-        assert removed == ["cid-7"]
-        assert created["artifact_host_path"] == "/var/lib/docker/volumes/logos_agent_artifacts/_data/7"
+        # Neither container leaks: the helper removes its own, the launch
+        # removes the agent container it just failed to start.
+        assert removed == ["cid-prepare", "cid-7"]
+        # Two containers: the trusted prepare helper first, the agent second.
+        assert [c["env"]["LOGOS_SESSION_PHASE"] for c in created] == ["prepare", "agent"]
+        agent = created[-1]
+        assert agent["artifact_host_path"] == "/var/lib/docker/volumes/logos_agent_artifacts/_data/7"
         # Model traffic is pointed at the gateway, not at the orchestrator's
         # internal API: the session network must not reach the orchestrator.
-        assert created["env"]["ANTHROPIC_BASE_URL"] == patched.session_model_url
-        assert created["env"]["ANTHROPIC_BASE_URL"] != patched.orchestrator_url
+        assert agent["env"]["ANTHROPIC_BASE_URL"] == patched.session_model_url
+        assert agent["env"]["ANTHROPIC_BASE_URL"] != patched.orchestrator_url
         # The bind source *is* the session's output directory, so the session
         # writes into /artifacts itself — a per-session prefix here would put
         # its output one directory too deep.
-        assert created["env"]["LOGOS_ARTIFACT_DIR"] == "/artifacts"
+        assert agent["env"]["LOGOS_ARTIFACT_DIR"] == "/artifacts"
 
     async def test_paused_time_does_not_count_towards_the_session_timeout(self, monkeypatch, tmp_path):
         # A session that yields while the platform is busy must not burn its
@@ -307,15 +321,20 @@ class TestLaunchAndSupervision:
             events.append((kind, payload))
 
         async def fake_create(**kwargs):
-            return "cid-7"
+            return next(container_ids)
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
 
         async def noop(*args, **kwargs):
             return None
 
+        container_ids = iter(["cid-prepare", "cid-7"])
         monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
         monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", self._async_value("/vol/data"))
         monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
         monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
         monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
         monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
@@ -324,8 +343,10 @@ class TestLaunchAndSupervision:
 
         await sessions.manager._launch(self.SESSION)
 
+        # The prepare helper already ran to completion and cleaned up after
+        # itself; only the agent container is stopped by the lost transition.
         assert stopped == ["cid-7"]
-        assert removed == ["cid-7"]
+        assert removed == ["cid-prepare", "cid-7"]
         # One transition attempt (to running), and no settlement afterwards:
         # the row belongs to the cancel, not to this launch.
         assert transitions == [SessionStatus.RUNNING]
@@ -393,6 +414,9 @@ class TestLaunchAndSupervision:
         monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
         monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
         monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+        # The settled exit is a clean one, so settlement would run the
+        # finalizer; this test is about the cancel race, not the helper.
+        monkeypatch.setattr(sessions.SessionManager, "_finalize", self._async_value(True))
 
         moved = await sessions.manager.cancel(7)
 
@@ -403,6 +427,236 @@ class TestLaunchAndSupervision:
         assert dispatched == []
         assert events == [(EventKind.STATUS, {"status": "cancelled"})]
         assert removed.count("cid-7") >= 1
+
+
+class TestAgentPhaseIsolation:
+    """What the untrusted agent phase may hold and reach.
+
+    The agent runs with permission prompts disabled, so a hostile task or a
+    poisoned repository instruction can steer it anywhere its credentials
+    and network allow. It therefore carries no reusable credential and no
+    unrestricted egress: model traffic goes to the credential-injecting
+    gateway on the internal network, and the GitHub operations run in the
+    runner-owned helper phases instead.
+    """
+
+    SESSION = {
+        "id": 7,
+        "workspace_id": 1,
+        "task": "a long enough task description",
+        "model": None,
+        "open_pull_request": True,
+        "screenshot_paths": [],
+    }
+    WORKSPACE = {
+        "id": 1,
+        "name": "feature-work",
+        "base_branch": "main",
+        "volume_name": "logos-agent-ws-1",
+    }
+    ROW = {
+        "id": 7,
+        "workspace_id": 1,
+        "status": "running",
+        "container_id": "cid-7",
+        "branch_name": "agent/feature-work/session-7",
+        "task": "a long enough task description",
+        "deploy_to_dev": False,
+        "open_pull_request": True,
+        "screenshot_paths": [],
+    }
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    def _patch_base(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        patched = replace(sessions.settings, artifact_root=str(tmp_path), session_github_token="ghp-session-token")
+        monkeypatch.setattr(sessions, "settings", patched)
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", self._async_value("/vol/data"))
+        return patched
+
+    async def test_the_agent_phase_carries_no_reusable_credentials(self, monkeypatch, tmp_path):
+        # Launch runs two containers: the trusted prepare helper (egress,
+        # push token) and the agent (internal network, nothing reusable).
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        created: list = []
+        supervised: list = []
+        container_ids = iter(["cid-prepare", "cid-7"])
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return next(container_ids)
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        def fake_supervise(_self, sid, cid):
+            supervised.append((sid, cid))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", fake_supervise)
+
+        await sessions.manager._launch(self.SESSION)
+
+        assert [c["env"]["LOGOS_SESSION_PHASE"] for c in created] == ["prepare", "agent"]
+        prepare, agent = created
+
+        # The helper gets the scoped token and the egress network.
+        assert prepare["env"]["GITHUB_TOKEN"] == "ghp-session-token"
+        assert prepare["network"] == patched.session_egress_network
+        assert prepare["labels"] == {"logos.agent.helper": "prepare"}
+
+        # The agent gets neither: no GitHub token in any form, and the model
+        # credential is a placeholder the gateway replaces — the real key
+        # never enters the container. It stays on the internal network,
+        # where the gateway is the only peer.
+        assert "GITHUB_TOKEN" not in agent["env"]
+        assert "GH_TOKEN" not in agent["env"]
+        assert agent["env"]["ANTHROPIC_AUTH_TOKEN"] == "injected-by-logos-agent-gateway"
+        assert agent["env"]["ANTHROPIC_BASE_URL"] == patched.session_model_url
+        assert agent.get("network") is None
+        assert not agent.get("labels")
+        # Only the agent container is a supervised session.
+        assert supervised == [(7, "cid-7")]
+
+    async def test_a_successful_settlement_runs_the_trusted_finalizer(self, monkeypatch, tmp_path):
+        # The agent phase pushed nothing: with a clean agent exit, settlement
+        # runs the finalize helper — the container that commits, pushes, and
+        # opens the pull request with the scoped token.
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        created: list = []
+        removed: list = []
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert len(created) == 1
+        helper = created[0]
+        assert helper["name"] == "logos-agent-finalize-7"
+        assert helper["env"]["LOGOS_SESSION_PHASE"] == "finalize"
+        assert helper["env"]["GITHUB_TOKEN"] == "ghp-session-token"
+        assert helper["env"]["GH_TOKEN"] == "ghp-session-token"
+        assert helper["env"]["LOGOS_SESSION_OPEN_PR"] == "1"
+        assert helper["network"] == patched.session_egress_network
+        assert helper["labels"] == {"logos.agent.helper": "finalize"}
+        # The helper is a one-shot: created, waited on, removed.
+        assert removed == ["cid-finalize", "cid-7"]
+
+    async def test_a_failed_agent_run_is_not_finalized(self, monkeypatch, tmp_path):
+        # A crashed agent left nothing worth committing: no finalizer runs,
+        # and no authenticated GitHub operation happens at all.
+        from app import sessions
+
+        self._patch_base(monkeypatch, tmp_path)
+        created: list = []
+        transitions: list = []
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_transition(_sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.manager._settle(7, exit_code=1, error=None)
+
+        assert created == []
+        assert transitions == [SessionStatus.FAILED]
+
+    async def test_a_failed_finalizer_fails_the_session(self, monkeypatch, tmp_path):
+        # The agent exited cleanly but the push did not happen (the helper
+        # failed): settling that as a success would dispatch a deploy behind
+        # work that never reached the repository. The session is failed
+        # instead, with the reason recorded.
+        from app import sessions
+
+        self._patch_base(monkeypatch, tmp_path)
+        transitions: list = []
+
+        async def fake_create(**_kwargs):
+            return "cid-finalize"
+
+        async def fake_wait(_cid, **_kwargs):
+            return 1
+
+        async def fake_transition(_sid, target, **fields):
+            transitions.append((target, fields))
+            return True
+
+        async def fake_event(_sid, _kind, payload):
+            events.append(payload)
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        events: list = []
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        target, fields = transitions[0]
+        assert target is SessionStatus.FAILED
+        assert "finalization failed" in fields["error"]
+        assert events[0]["status"] == "failed"
 
 
 class TestOverlappingAdmission:
@@ -636,6 +890,9 @@ class TestScreenshotOrchestration:
         monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
         monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", self._async_value("/vol/data"))
         monkeypatch.setattr(sessions.db, "update_session", self._async_value(None))
+        # These tests settle sessions directly; the finalizer is the
+        # runner's job in the real flow and is covered on its own.
+        monkeypatch.setattr(sessions.SessionManager, "_finalize", self._async_value(True))
         return sessions
 
     async def test_screenshots_are_captured_in_settlement_without_a_deploy(self, monkeypatch, tmp_path):
@@ -966,6 +1223,9 @@ class TestSettlementRaceAndDeployTag:
         )
         monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
         monkeypatch.setattr(sessions.db, "update_session", self._async_value(None))
+        # These tests settle sessions directly; the finalizer is the
+        # runner's job in the real flow and is covered on its own.
+        monkeypatch.setattr(sessions.SessionManager, "_finalize", self._async_value(True))
         return sessions
 
     def _write_result(self, tmp_path, **payload):
@@ -1347,6 +1607,9 @@ class TestRestartReconciliation:
         monkeypatch.setattr(sessions.docker_engine, "container_state", fake_state)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        # The recovered exit is a clean one, so settlement would run the
+        # finalizer; this test is about the reconciliation transitions.
+        monkeypatch.setattr(sessions.SessionManager, "_finalize", self._async_value(True))
 
         await sessions.manager._reconcile()
 

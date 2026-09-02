@@ -85,13 +85,16 @@ class Settings:
     # Where a *session container* sends its model traffic. Sessions live on
     # the session network, which must not reach the orchestrator itself (that
     # would hand a bypassPermissions agent the whole internal API), so they
-    # are pointed at a gateway that forwards only the /v1 model surface.
+    # are pointed at a gateway that forwards only the /v1 model surface and
+    # injects the model credential — the container sends none of its own.
     # The default is the compose service name of that gateway.
     session_model_url: str = os.getenv("LOGOS_AGENT_SESSION_MODEL_URL", "http://logos-agent-gateway")
     internal_secret: str = os.getenv("LOGOS_INTERNAL_SECRET", "")
-    # The Logos key sessions authenticate with. It is what makes agent traffic
-    # ordinary, accounted Logos traffic — give it LOW priority and a token
-    # budget so agent work never outranks a user at the scheduler.
+    # The Logos key: the runner authenticates its capacity reads with it, and
+    # the session gateway injects it into the agent's model calls. It is what
+    # makes agent traffic ordinary, accounted Logos traffic — give it LOW
+    # priority and a token budget so agent work never outranks a user at the
+    # scheduler. It no longer enters a session container at all.
     agent_api_key: str = os.getenv("LOGOS_AGENT_API_KEY", "")
     default_model: str = os.getenv("LOGOS_AGENT_DEFAULT_MODEL", "")
 
@@ -101,9 +104,15 @@ class Settings:
         "LOGOS_AGENT_WORKSPACE_IMAGE",
         "ghcr.io/ls1intum/edutelligence/logos-agent-workspace:latest",
     )
-    # The network sessions are attached to. It is created separately from the
-    # stack's `internal` network so that egress rules can differ.
+    # The network the untrusted agent phase is attached to. It is an
+    # *internal* bridge: no external egress at all, so the only reachable
+    # peer is the credential-injecting model gateway on the same network.
     session_network: str = os.getenv("LOGOS_AGENT_SESSION_NETWORK", "logos-agent-net")
+    # The network the trusted helper containers run on — checkout
+    # preparation, post-agent commit/push, screenshots. Unlike the session
+    # network it may reach the outside (GitHub, the dev environment); the
+    # agent itself never runs there.
+    session_egress_network: str = os.getenv("LOGOS_AGENT_SESSION_EGRESS_NETWORK", "logos-agent-egress-net")
     session_memory_mb: int = _int("LOGOS_AGENT_SESSION_MEMORY_MB", 4096)
     session_cpus: float = _float("LOGOS_AGENT_SESSION_CPUS", 2.0)
     session_pids_limit: int = _int("LOGOS_AGENT_SESSION_PIDS_LIMIT", 512)
@@ -114,6 +123,11 @@ class Settings:
     # Wall-clock ceiling for one session. A stuck agent burns capacity that the
     # whole point of this runner is to reclaim, so the cap is not optional.
     session_timeout_s: int = _int("LOGOS_AGENT_SESSION_TIMEOUT_S", 3 * 3600)
+    # One helper container (checkout preparation, finalization) must not
+    # outlive the session budget either: these are git and GitHub
+    # round-trips, not agent work, and a stuck helper would pin its session
+    # in 'starting' forever.
+    helper_timeout_s: int = _int("LOGOS_AGENT_HELPER_TIMEOUT_S", 600)
 
     # --- concurrency and capacity ----------------------------------------
     # Hard ceiling regardless of how idle the platform looks.

@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
 """Entrypoint of an agent session container.
 
-Runs one task end to end: prepare a working copy, let the coding agent work,
-and — if it produced anything — commit, push, and open a pull request. Progress
-goes to stdout, which the runner service collects as the session transcript;
-the machine-readable outcome goes to ``$LOGOS_ARTIFACT_DIR/result.json``, which
-the service reads once the container exits.
+One session runs in three phases of this image, selected by
+``LOGOS_SESSION_PHASE`` and run by the runner as separate containers:
+
+* ``prepare`` — trusted, with egress and the scoped push token: clone or
+  reset the working copy, rebuild its git metadata, and replace the agent's
+  home.
+* ``agent`` — untrusted, no reusable credentials, and its only network peer
+  is the credential-injecting model gateway: the coding agent does the work.
+* ``finalize`` — trusted, with the push token: commit, push, and open the
+  pull request, then update the result file.
+
+Progress goes to stdout, which the runner service collects as the session
+transcript; the machine-readable outcome goes to
+``$LOGOS_ARTIFACT_DIR/result.json``, which the service reads once the session
+has settled.
 
 Everything here runs unprivileged inside a container with no Docker socket, no
 workflow-scoped token, and no route to production. That sandbox is what lets
 the agent run with permission prompts disabled: there is nothing inside the
-container worth protecting from it.
+agent phase worth protecting from it — and the two trusted phases only ever
+run fixed harness code, never the agent.
 """
 
 from __future__ import annotations
@@ -443,38 +454,92 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
     return None
 
 
+def run_prepare() -> None:
+    """Trusted phase one: bring the working copy to a trusted state.
+
+    Runs in a helper container with egress and the scoped push token —
+    the agent phase has neither, so whatever the agent later finds under
+    /workspace was created here, by fixed harness code.
+    """
+    repo_url = require_env("LOGOS_REPO_URL")
+    base_branch = os.environ.get("LOGOS_SESSION_BASE_BRANCH", "main")
+    branch = require_env("LOGOS_SESSION_BRANCH")
+    token = os.environ.get("GITHUB_TOKEN", "")
+    prepare_checkout(repo_url, base_branch, branch, token)
+
+
+def run_agent_phase(result: Result) -> None:
+    """Untrusted phase two: the coding agent works on the checkout.
+
+    This container holds no reusable credential: model traffic goes only to
+    the credential-injecting gateway (the token in the environment is a
+    placeholder the gateway replaces), and the GitHub operations belong to
+    the finalizer. So even an agent that is steered into exfiltrating its
+    environment can exfiltrate nothing of value.
+    """
+    task = require_env("LOGOS_SESSION_TASK")
+    require_env("LOGOS_SESSION_BRANCH")
+    if not os.environ.get("ANTHROPIC_BASE_URL"):
+        raise RuntimeError("no model endpoint provided; the agent has no model to call")
+
+    usage = run_agent(task)
+
+    tokens_in, tokens_out, cost = usage_totals(usage)
+    result.data.update(tokens_in=tokens_in, tokens_out=tokens_out, cost_eur=cost)
+    # Screenshots are the runner's job, taken after settlement: a
+    # session's own view of the dev environment is stale the moment its
+    # deploy is queued, and the runner is the one that knows when the
+    # deploy has landed.
+    log("agent finished; handing the checkout to the finalizer")
+
+
+def run_finalize(result: Result) -> None:
+    """Trusted phase three: the authenticated GitHub operations.
+
+    The agent phase never held a GitHub token; this container gets the
+    scoped one and egress, and is the only phase allowed to talk to GitHub
+    with it. It adds its outcome to the result file the agent phase wrote
+    (tokens, cost) rather than replacing it.
+    """
+    branch = require_env("LOGOS_SESSION_BRANCH")
+    task = require_env("LOGOS_SESSION_TASK")
+    base_branch = os.environ.get("LOGOS_SESSION_BASE_BRANCH", "main")
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        log("no GitHub token provided; leaving changes uncommitted in the workspace")
+        return
+
+    path = Path(os.environ.get("LOGOS_ARTIFACT_DIR", "/artifacts")) / "result.json"
+    if path.is_file():
+        try:
+            result.data.update(json.loads(path.read_text()))
+        except Exception as exc:
+            log(f"ignoring unreadable result file from the agent phase: {exc}")
+
+    count = commit_and_push(branch, task)
+    result.data["files_changed"] = count
+    result.data["committed"] = count > 0
+    if count and os.environ.get("LOGOS_SESSION_OPEN_PR") == "1":
+        result.data["pr_url"] = open_pull_request(branch, base_branch, task)
+
+
 def main() -> int:
+    """Run whichever phase of the session this container was asked for.
+
+    The runner runs ``prepare``, ``agent``, and ``finalize`` as separate
+    containers: the two trusted phases carry credentials and egress, the
+    untrusted agent phase carries neither.
+    """
+    phase = os.environ.get("LOGOS_SESSION_PHASE", "agent").strip().lower()
     result = Result()
     try:
-        task = require_env("LOGOS_SESSION_TASK")
-        branch = require_env("LOGOS_SESSION_BRANCH")
-        base_branch = os.environ.get("LOGOS_SESSION_BASE_BRANCH", "main")
-        repo_url = require_env("LOGOS_REPO_URL")
-        token = os.environ.get("GITHUB_TOKEN", "")
-
-        if not os.environ.get("ANTHROPIC_AUTH_TOKEN"):
-            raise RuntimeError("no Logos key provided; the agent has no model to call")
-
-        prepare_checkout(repo_url, base_branch, branch, token)
-        usage = run_agent(task)
-
-        tokens_in, tokens_out, cost = usage_totals(usage)
-        result.data.update(tokens_in=tokens_in, tokens_out=tokens_out, cost_eur=cost)
-
-        if token:
-            count = commit_and_push(branch, task)
-            result.data["files_changed"] = count
-            result.data["committed"] = count > 0
-            if count and os.environ.get("LOGOS_SESSION_OPEN_PR") == "1":
-                result.data["pr_url"] = open_pull_request(branch, base_branch, task)
+        if phase == "prepare":
+            run_prepare()
+        elif phase == "finalize":
+            run_finalize(result)
         else:
-            log("no GitHub token provided; leaving changes uncommitted in the workspace")
-
-        # Screenshots are the runner's job, taken after settlement: a
-        # session's own view of the dev environment is stale the moment its
-        # deploy is queued, and the runner is the one that knows when the
-        # deploy has landed.
-        log("session complete")
+            run_agent_phase(result)
+        log("phase complete")
         return 0
     except Exception as exc:
         fail(str(exc))

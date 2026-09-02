@@ -98,7 +98,14 @@ async def remove_volume(name: str, *, force: bool = False) -> None:
             raise
 
 
-async def ensure_network(name: str) -> None:
+async def ensure_network(name: str, *, internal: bool = False) -> None:
+    """Create a network if it does not exist. Idempotent.
+
+    ``internal`` applies at creation time only: an existing network (for
+    example one an older deployment created as a plain bridge) is reused
+    as-is, so tightening the flag in a config change does not rewrite a
+    live deployment's network.
+    """
     try:
         await _request("GET", f"/networks/{name}")
         return
@@ -108,7 +115,12 @@ async def ensure_network(name: str) -> None:
     await _request(
         "POST",
         "/networks/create",
-        json={"Name": name, "Driver": "bridge", "Labels": {"logos.agent": "session-network"}},
+        json={
+            "Name": name,
+            "Driver": "bridge",
+            "Internal": internal,
+            "Labels": {"logos.agent": "session-network"},
+        },
     )
 
 
@@ -121,6 +133,7 @@ async def create_session_container(
     artifact_host_path: str,
     session_id: int,
     labels: dict[str, str] | None = None,
+    network: str | None = None,
 ) -> str:
     """Create the container an agent session runs in.
 
@@ -136,13 +149,16 @@ async def create_session_container(
       artefact directory (a host path, so the bind cannot grow to the shared
       volume and expose other sessions' output); everything else is
       read-only.
+
+    The default network is the internal session network (the agent phase);
+    the trusted helper containers pass the egress network explicitly.
     """
     host_config: dict[str, Any] = {
         "Binds": [
             f"{workspace_volume}:/workspace",
             f"{artifact_host_path}:/artifacts",
         ],
-        "NetworkMode": settings.session_network,
+        "NetworkMode": network or settings.session_network,
         "ReadonlyRootfs": True,
         # The agent needs scratch space; give it tmpfs rather than a writable
         # root so nothing it writes outside /workspace survives the session.
@@ -196,7 +212,10 @@ async def create_screenshot_container(
     """
     host_config: dict[str, Any] = {
         "Binds": [f"{artifact_host_path}:/artifacts"],
-        "NetworkMode": settings.session_network,
+        # The page to photograph is on the dev environment, i.e. outside:
+        # the screenshot runs on the egress network, not the internal
+        # session network.
+        "NetworkMode": settings.session_egress_network,
         "ReadonlyRootfs": True,
         "Tmpfs": {"/tmp": "rw,nosuid,size=2g"},
         "CapDrop": ["ALL"],

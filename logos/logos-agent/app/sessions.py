@@ -101,7 +101,12 @@ class SessionManager:
     # --- lifecycle --------------------------------------------------------
 
     async def start(self) -> None:
-        await docker_engine.ensure_network(settings.session_network)
+        # The session network is internal: no external egress at all, so the
+        # only peer an agent container can reach is the model gateway that
+        # sits on the same network. The egress network exists for the
+        # trusted helper containers (prepare, finalize, screenshots).
+        await docker_engine.ensure_network(settings.session_network, internal=True)
+        await docker_engine.ensure_network(settings.session_egress_network)
         await docker_engine.ensure_volume(settings.artifact_volume, labels={"logos.agent": "artifacts"})
         await self._reconcile()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop(), name="agent-scheduler")
@@ -133,7 +138,15 @@ class SessionManager:
         live: dict[int, dict[str, Any]] = {}
         try:
             for container in await docker_engine.list_managed_containers():
-                label = (container.get("Labels") or {}).get("logos.agent.session")
+                labels = container.get("Labels") or {}
+                if labels.get("logos.agent.helper"):
+                    # A transient prepare/finalize container: never the
+                    # supervised session container. A restart mid-helper is
+                    # the only way one survives this far, so remove it
+                    # instead of re-adopting it as a session.
+                    await docker_engine.remove_container(container.get("Id", ""))
+                    continue
+                label = labels.get("logos.agent.session")
                 if label and label.isdigit():
                     live[int(label)] = container
         except Exception as exc:
@@ -363,10 +376,16 @@ class SessionManager:
             _give_to_session_user(directory)
             artifact_host_path = str(Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(sid))
 
+            # Phase one, trusted: the working copy is prepared by a helper
+            # container with egress and the scoped push token. The agent
+            # phase that follows has neither — it runs on the internal
+            # network with no credentials at all.
+            await self._prepare_checkout(session, workspace, branch, artifact_host_path)
+
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
                 image=settings.workspace_image,
-                env=self._session_env(session, workspace, branch),
+                env=self._session_env(session, branch),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
                 session_id=sid,
@@ -407,31 +426,30 @@ class SessionManager:
         await db.add_event(sid, EventKind.STATUS, {"status": "running", "branch": branch})
         self._supervise(sid, container_id)
 
-    def _session_env(self, session: dict[str, Any], workspace: dict[str, Any], branch: str) -> dict[str, str]:
-        """The environment a session container runs with.
+    def _session_env(self, session: dict[str, Any], branch: str) -> dict[str, str]:
+        """The environment the untrusted agent phase runs with.
 
-        Everything the agent needs to reach Logos, and nothing that would let
-        it reach anything else: no workflow-scoped token, no production URL,
-        no internal secret.
+        Nothing reusable: no GitHub token (the helper phases do the
+        authenticated work), no model credential (the gateway injects it —
+        the placeholder only keeps the CLI from refusing to start without a
+        token). No workflow scope, no production URL, no internal secret.
         """
         model = session.get("model") or settings.default_model
         env = {
+            "LOGOS_SESSION_PHASE": "agent",
             # The agent's model traffic goes to Logos itself, so it is
-            # authenticated, policy-checked, and billed like any other caller.
-            # It is pointed at the gateway, not at the orchestrator: the
-            # session network must reach only the /v1 model surface, never
-            # the orchestrator's full internal API.
+            # authenticated, policy-checked, and billed like any other
+            # caller. It is pointed at the gateway, not at the orchestrator:
+            # the internal session network reaches only the gateway, and the
+            # gateway replaces whatever credential the container sends with
+            # the real one — the container holds none.
             "ANTHROPIC_BASE_URL": settings.session_model_url,
-            "ANTHROPIC_AUTH_TOKEN": settings.agent_api_key,
+            "ANTHROPIC_AUTH_TOKEN": "injected-by-logos-agent-gateway",
             "ANTHROPIC_API_KEY": "",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "LOGOS_SESSION_ID": str(session["id"]),
             "LOGOS_SESSION_TASK": session["task"],
             "LOGOS_SESSION_BRANCH": branch,
-            "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
-            "LOGOS_SESSION_OPEN_PR": "1" if session.get("open_pull_request") else "0",
-            "LOGOS_REPO_URL": settings.repo_url,
-            "LOGOS_REPO_SLUG": settings.repo_slug,
             # The bind source *is* this session's artefact directory, so
             # /artifacts is its output root; there is no per-session prefix
             # to get wrong.
@@ -445,10 +463,115 @@ class SessionManager:
                 "ANTHROPIC_DEFAULT_OPUS_MODEL",
             ):
                 env[key] = model
+        return env
+
+    async def _run_helper(
+        self,
+        *,
+        phase: str,
+        session_id: int,
+        env: dict[str, str],
+        workspace_volume: str,
+        artifact_host_path: str,
+    ) -> int | None:
+        """Run one trusted one-shot helper container to completion, remove it.
+
+        The helper phases (checkout preparation, finalization) are
+        runner-owned containers, never supervised sessions: a fixed
+        entrypoint, a short budget, and the exit code is the whole protocol.
+        They run on the egress network, the one network a container with
+        credentials is allowed to have.
+        """
+        container_id: str | None = None
+        try:
+            container_id = await docker_engine.create_session_container(
+                name=f"logos-agent-{phase}-{session_id}",
+                image=settings.workspace_image,
+                env=env,
+                workspace_volume=workspace_volume,
+                artifact_host_path=artifact_host_path,
+                session_id=session_id,
+                network=settings.session_egress_network,
+                labels={"logos.agent.helper": phase},
+            )
+            await docker_engine.start_container(container_id)
+            code = await docker_engine.wait_container(container_id, timeout_s=settings.helper_timeout_s)
+            if code is None:
+                logger.warning("helper %s for session %s timed out; stopping it", phase, session_id)
+                await docker_engine.stop_container(container_id)
+                code = 124
+            return code
+        finally:
+            if container_id:
+                try:
+                    await docker_engine.remove_container(container_id)
+                except Exception:
+                    logger.warning("could not remove %s helper container for session %s", phase, session_id)
+
+    async def _prepare_checkout(
+        self, session: dict[str, Any], workspace: dict[str, Any], branch: str, artifact_host_path: str
+    ) -> None:
+        """Phase one: the helper that makes the working copy trustworthy."""
+        env = {
+            "LOGOS_SESSION_PHASE": "prepare",
+            "LOGOS_SESSION_ID": str(session["id"]),
+            "LOGOS_SESSION_BRANCH": branch,
+            "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
+            "LOGOS_REPO_URL": settings.repo_url,
+            "LOGOS_ARTIFACT_DIR": "/artifacts",
+        }
+        if settings.session_github_token:
+            env["GITHUB_TOKEN"] = settings.session_github_token
+        code = await self._run_helper(
+            phase="prepare",
+            session_id=session["id"],
+            env=env,
+            workspace_volume=workspace["volume_name"],
+            artifact_host_path=artifact_host_path,
+        )
+        if code != 0:
+            raise RuntimeError(f"checkout preparation failed (exit {code})")
+
+    async def _finalize(self, session_id: int) -> bool:
+        """Phase three: commit, push, and open the pull request, if asked.
+
+        The agent phase carried no GitHub credential, so the authenticated
+        work happens here — in a runner-owned container that gets the scoped
+        token and egress, after the agent has exited. A failure means the
+        work did not reach the repository, and the session is failed rather
+        than settled as a success with a deploy attached.
+        """
+        session = await db.get_session(session_id)
+        if not session or not session.get("branch_name"):
+            logger.warning("no branch recorded for session %s; cannot finalize", session_id)
+            return False
+        workspace = await db.get_workspace(session["workspace_id"])
+        if workspace is None:
+            logger.warning("workspace of session %s is gone; cannot finalize", session_id)
+            return False
+        env = {
+            "LOGOS_SESSION_PHASE": "finalize",
+            "LOGOS_SESSION_ID": str(session_id),
+            "LOGOS_SESSION_BRANCH": session["branch_name"],
+            "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
+            "LOGOS_SESSION_TASK": str(session.get("task") or ""),
+            "LOGOS_SESSION_OPEN_PR": "1" if session.get("open_pull_request") else "0",
+            "LOGOS_REPO_SLUG": settings.repo_slug,
+            "LOGOS_ARTIFACT_DIR": "/artifacts",
+        }
         if settings.session_github_token:
             env["GITHUB_TOKEN"] = settings.session_github_token
             env["GH_TOKEN"] = settings.session_github_token
-        return env
+        code = await self._run_helper(
+            phase="finalize",
+            session_id=session_id,
+            env=env,
+            workspace_volume=workspace["volume_name"],
+            artifact_host_path=str(
+                Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(session_id)
+            ),
+        )
+        return code == 0
 
     # --- supervision ------------------------------------------------------
 
@@ -534,6 +657,15 @@ class SessionManager:
 
     async def _settle(self, session_id: int, *, exit_code: int | None, error: str | None) -> None:
         """Record the outcome of a finished session and clean up after it."""
+        if exit_code == 0 and not error:
+            # A clean agent exit is not yet a finished session: the agent
+            # phase carried no GitHub credential, so the trusted finalizer
+            # performs the authenticated work (commit, push, pull request)
+            # and updates the result file before settlement reads it. A
+            # finalizer that fails fails the session — nothing landed, and a
+            # deploy must not be dispatched behind it.
+            if not await self._finalize(session_id):
+                error = "finalization failed: the agent's work did not reach the repository"
         result = self._read_result(session_id)
         succeeded = exit_code == 0 and not error
 

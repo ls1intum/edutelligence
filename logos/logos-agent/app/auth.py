@@ -98,6 +98,25 @@ def _internal_roles(external_roles: frozenset[str]) -> frozenset[str]:
     return frozenset()
 
 
+def _audience_ok(claims: dict[str, Any]) -> bool:
+    """Whether the token was issued for the configured Logos client.
+
+    Mirrors the webservice's resource-server check (SecurityConfig's
+    AudienceValidator): Keycloak carries the authorized party in ``aud`` for
+    some flows and in ``azp`` for the standard browser flow, so the client ID
+    is accepted in either place. A token that presents neither is not one for
+    this client, and no role claim can make it one.
+    """
+    expected = settings.keycloak_audience
+    if not expected:
+        return True
+    audience = claims.get("aud")
+    if isinstance(audience, str):
+        audience = [audience]
+    in_aud = isinstance(audience, list) and any(entry == expected for entry in audience if isinstance(entry, str))
+    return in_aud or claims.get("azp") == expected
+
+
 def _bearer(request: Request) -> str:
     header = request.headers.get("authorization", "")
     if not header.lower().startswith("bearer "):
@@ -127,12 +146,8 @@ async def current_principal(request: Request) -> Principal:
             token,
             signing_key.key,
             algorithms=["RS256", "RS384", "RS512", "ES256", "ES384"],
-            audience=settings.keycloak_audience or None,
             issuer=settings.keycloak_issuer_uri or None,
-            options={
-                "verify_aud": bool(settings.keycloak_audience),
-                "verify_iss": bool(settings.keycloak_issuer_uri),
-            },
+            options={"verify_iss": bool(settings.keycloak_issuer_uri), "verify_aud": False},
         )
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
@@ -141,6 +156,16 @@ async def current_principal(request: Request) -> Principal:
     except httpx.HTTPError as exc:
         logger.warning("JWKS fetch failed: %s", exc)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Identity provider unreachable")
+
+    # The audience is checked by hand, after signature and issuer: the
+    # webservice accepts the client ID in `aud` or in `azp`, and PyJWT only
+    # knows the former — with its built-in check, the standard browser tokens
+    # (azp, no aud) would all 401 here.
+    if not _audience_ok(claims):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: required audience '{settings.keycloak_audience}' is missing",
+        )
 
     return Principal(
         subject=str(claims.get("sub", "")),
