@@ -7,12 +7,12 @@ import logging
 import os
 import sys
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 if TYPE_CHECKING:
-    from logos_worker_node.models import AppConfig
+    from logos_worker_node.models import AppConfig, LaneConfig
 
 import uvicorn
 from fastapi import FastAPI
@@ -329,35 +329,66 @@ async def _auto_calibrate_if_needed(
         model_profiles._load_persisted()
 
 
+def _lane_can_sleep(cfg: AppConfig, lane: LaneConfig) -> bool:
+    """Whether a specific lane is sleep-capable.
+
+    A lane can only sleep if it is a vLLM lane whose effective
+    ``vllm_config.enable_sleep_mode`` is true — the same predicate
+    ``LaneManager.sleeping_model_counts`` uses to probe what is actually
+    asleep, so the sleep reserve and the asleep count agree on what
+    "sleepable" means. Non-vLLM lanes, and vLLM lanes pinned to sleep-mode-off,
+    can never sleep and so never enter the reserve (counting them would inflate
+    the floor and evict or reject cache entries for no gain). The worker-wide
+    ``disable_sleep_mode`` kill switch and per-model overrides are folded in
+    via ``model_can_sleep``.
+    """
+    if not lane.vllm:
+        return False
+    if not model_can_sleep(cfg, lane.model):
+        return False
+    return bool(lane.vllm_config and lane.vllm_config.enable_sleep_mode)
+
+
 def _sleepable_lane_replicas(cfg: AppConfig, lane_manager: LaneManager | None = None) -> dict[str, int]:
-    """Configured and live sleep-capable lane replicas per model.
+    """Sleep-capable lane replicas per model, deduplicated by lane identity.
 
     ``static_lanes`` may enable sleep mode for models outside
     ``capabilities_models``, and ``_add_lane_unlocked`` caches any vLLM model on
     demand (a lane added by the server, not just one from config) — so the
     re-plan reserve must cover their sleeping residency too, not just the
-    capability models. Capability models are passed to
-    ``_build_ram_cache_candidates`` separately; they keep the "uncalibrated ⇒
-    not served" rule, but a configured/live lane model is served regardless of
-    calibration, so it is reserved here even without a profile.
+    capability models.
+
+    A configured static lane and the live handle it produces are the SAME lane
+    (``apply_lanes`` applies static lanes, so both carry the same
+    ``_lane_id_from_config``), and counting both would double its footprint.
+    The live handle is authoritative when present (its ``vllm_config`` reflects
+    what the spawned process actually honours), so a static lane whose id is
+    already live is skipped; the static config is used only for lanes not yet
+    applied (startup, before ``apply_lanes`` runs).
 
     Returns ``model -> replica_count``. ``LaneSetRequest`` allows multiple
     uniquely named lanes for the same model, and each sleeping vLLM process
-    keeps its own weights in host RAM, so the reserve must know how many
-    replicas exist — not just which model names exist.
+    keeps its own weights in host RAM, so the count is per distinct lane id,
+    not per model name.
     """
     replicas: dict[str, int] = {}
-    for sl in cfg.static_lanes:
-        if model_can_sleep(cfg, sl.model):
-            replicas[sl.model] = replicas.get(sl.model, 0) + 1
+    live_lane_ids: set[str] = set()
     if lane_manager is not None:
         for lane_id in lane_manager.lane_ids:
             handle = lane_manager.get_handle(lane_id)
             if handle is None or handle.lane_config is None:
                 continue
-            model = handle.lane_config.model
-            if model_can_sleep(cfg, model):
-                replicas[model] = replicas.get(model, 0) + 1
+            live_lane_ids.add(lane_id)
+            lane = handle.lane_config
+            if _lane_can_sleep(cfg, lane):
+                replicas[lane.model] = replicas.get(lane.model, 0) + 1
+    for sl in cfg.static_lanes:
+        if _lane_id_from_config(sl) in live_lane_ids:
+            # The live handle already accounts for this lane — counting the
+            # static config too would double its footprint.
+            continue
+        if _lane_can_sleep(cfg, sl):
+            replicas[sl.model] = replicas.get(sl.model, 0) + 1
     return replicas
 
 
@@ -382,18 +413,22 @@ def _cache_candidate(
     ``size_bytes`` (the shared tmpfs cache copy) stays one copy per model.
     """
     profile = model_profiles.get_profile(name)
+    # The on-disk size is read once and reused both as the conservative
+    # sleeping-footprint fallback and as the tmpfs cost — the re-plan runs on
+    # every tick/sleep/add, so the stat is not worth paying twice per candidate.
+    size_bytes = model_cache.model_size_bytes(name)
     sleeping_host_ram_mb = 0.0
     if profile is not None and (profile.base_residency_mb or 0) > 0:
         sleeping_host_ram_mb = profile.estimate_sleeping_host_ram_mb()
     if sleeping_host_ram_mb <= 0.0:
         # No measured/calibrated sleeping footprint. On-disk size underestimates
         # by ~tokenizer + compile cache overhead but is the right ballpark.
-        sleeping_host_ram_mb = model_cache.model_size_bytes(name) / (1024 * 1024)
+        sleeping_host_ram_mb = size_bytes / (1024 * 1024)
     return CacheCandidate(
         name=name,
         can_sleep=model_can_sleep(cfg, name),
         sleeping_host_ram_mb=sleeping_host_ram_mb,
-        size_bytes=model_cache.model_size_bytes(name),
+        size_bytes=size_bytes,
         sleeping_replicas=max(1, int(sleeping_replicas)),
     )
 
@@ -1085,10 +1120,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # reason to take "worst" for free.
     if ram_cache_replan_task is not None:
         ram_cache_replan_task.cancel()
-        try:
-            await ram_cache_replan_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        # We just cancelled it, so CancelledError is the expected outcome —
+        # suppress that explicitly (no try/except/pass). The re-plan loop
+        # catches its own errors, so any other exception here is unexpected;
+        # log it without letting it abort the rest of the shutdown.
+        with suppress(asyncio.CancelledError):
+            try:
+                await ram_cache_replan_task
+            except Exception:  # noqa: BLE001
+                logger.warning("RAM cache re-plan task raised during shutdown", exc_info=True)
     try:
         await logos_bridge.stop()
     except Exception:

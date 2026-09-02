@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -412,6 +413,56 @@ async def test_add_lane_invokes_the_on_lane_added_hook(monkeypatch) -> None:
     )
 
     assert out2 is sentinel  # the add still succeeds
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_replans_after_each_registration_before_staggered_sleep(monkeypatch) -> None:
+    """A batch add of sleep-capable lanes must re-plan after each registration
+    and BEFORE that lane's staggered sleep — otherwise the lane's sleeping
+    footprint is not reserved until the post-sleep hook (which fires only AFTER
+    the weights are already in host RAM) or the periodic loop's 60 s tick.
+    apply_lanes fires the re-plan per registration, so the cache has shrunk to
+    make room before the staggered sleep of each lane lands."""
+    events: list[str] = []
+
+    async def _hook() -> None:
+        events.append("replan")
+
+    manager = LaneManager(OllamaConfig(), nvidia_smi_available=lambda: True, on_lane_added=_hook)
+    lanes = [
+        LaneConfig(model="org/a", vllm=True, lane_id="org_a", vllm_config=VllmConfig(enable_sleep_mode=True)),
+        LaneConfig(model="org/b", vllm=True, lane_id="org_b", vllm_config=VllmConfig(enable_sleep_mode=True)),
+    ]
+
+    async def _fake_add(lid: str, lc: LaneConfig) -> None:
+        events.append(f"add:{lid}")
+        manager._handles[lid] = SimpleNamespace(  # noqa: SLF001
+            lane_id=lid,
+            lane_config=lc,
+            status=lambda: SimpleNamespace(state=ProcessState.RUNNING, pid=None),
+        )
+
+    async def _fake_sleep(handle: Any, level: int, mode: str) -> None:
+        events.append(f"sleep:{handle.lane_id}")
+
+    monkeypatch.setattr(manager, "_add_lane_unlocked", _fake_add)
+    monkeypatch.setattr(manager, "_sleep_handle_and_replan", _fake_sleep)
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    await manager.apply_lanes(lanes)
+
+    # Both lanes are added; exactly one (the non-last) is stagger-slept. Each
+    # registration fires the re-plan, plus the batch backstop fires once more.
+    assert sum(e.startswith("add:") for e in events) == 2
+    assert sum(e.startswith("sleep:") for e in events) == 1
+    assert events.count("replan") == 3
+    # The whole point of the fix: for the stagger-slept lane, the re-plan fires
+    # AFTER its registration and BEFORE its sleep, so the reserve is in place
+    # before the weights move to host RAM.
+    slept = next(e for e in events if e.startswith("sleep:"))
+    lid = slept.split(":", 1)[1]
+    i_add, i_sleep = events.index(f"add:{lid}"), events.index(slept)
+    assert any(e == "replan" for e in events[i_add:i_sleep])
 
 
 @pytest.mark.asyncio

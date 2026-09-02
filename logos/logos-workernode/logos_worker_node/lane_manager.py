@@ -722,6 +722,16 @@ class LaneManager:
                             errors.append(msg)
                             raise _ApplyAbort(msg)
 
+                        # Re-plan now that this lane is registered, BEFORE its
+                        # staggered sleep below: the reserve must already hold
+                        # this lane's sleeping footprint so the cache has
+                        # shrunk to make room before the weights move to host
+                        # RAM. The post-sleep hook (_sleep_handle_and_replan)
+                        # only fires AFTER the weights are in RAM — too late to
+                        # bound the copy that just landed. Safe under self._lock:
+                        # the re-plan's lane inspection takes no lock of its own.
+                        await self._notify_lane_added()
+
                         # Stagger: sleep the just-spawned lane before starting
                         # the next one, so VRAM is freed for the next model load.
                         if idx < len(add_list) - 1:
