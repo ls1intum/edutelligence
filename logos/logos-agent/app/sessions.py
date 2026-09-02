@@ -81,6 +81,22 @@ def _give_to_session_user(path: Path) -> None:
         logger.warning("could not hand %s to session uid %s: %s", path, settings.session_uid, exc)
 
 
+class _Helper:
+    """One session's trusted helper container, while it is running.
+
+    ``started`` is set the moment the in-flight start has settled, whether
+    it returned or raised. A cancel that pops the helper while the start is
+    still in flight must wait on it: stopping a container that has not
+    started yet is a 304 no-op, and the pending start would otherwise
+    complete after the cancel reported success — a credential-bearing
+    container, running, with no one left tracking it.
+    """
+
+    def __init__(self, container_id: str) -> None:
+        self.container_id = container_id
+        self.started = asyncio.Event()
+
+
 class SessionManager:
     def __init__(self) -> None:
         self._supervisors: dict[int, asyncio.Task] = {}
@@ -89,7 +105,7 @@ class SessionManager:
         # reconciliation, where the finalizer runs without a supervisor at
         # all — and a cancel must be able to reach the credential-bearing
         # helper on that path too, not just the one the supervisor is in.
-        self._helpers: dict[int, str] = {}
+        self._helpers: dict[int, _Helper] = {}
         self._scheduler_task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
         # Serialises admission so two scheduler passes cannot both decide there
@@ -505,6 +521,7 @@ class SessionManager:
         credentials is allowed to have.
         """
         container_id: str | None = None
+        helper: _Helper | None = None
         try:
             container_id = await docker_engine.create_session_container(
                 name=f"logos-agent-{phase}-{session_id}",
@@ -518,13 +535,20 @@ class SessionManager:
             )
             # Registered before the start, not after it: the container holds
             # the credential the moment it exists, and a cancel that lands
-            # inside the create-to-start window must find the id here and
-            # stop the container — not report a clean cancellation for a
-            # helper that is still starting. The assignment is synchronous,
-            # so no other coroutine can run between the create that returns
-            # the id and the registration that tracks it.
-            self._helpers[session_id] = container_id
-            await docker_engine.start_container(container_id)
+            # inside the create-to-start window must find the helper here —
+            # not report a clean cancellation for one that is still
+            # starting. The assignment is synchronous, so no other
+            # coroutine can run between the create that returns the id and
+            # the registration that tracks it.
+            helper = _Helper(container_id)
+            self._helpers[session_id] = helper
+            try:
+                await docker_engine.start_container(container_id)
+            finally:
+                # The start has settled: from here on a stop is a real
+                # stop, not a 304 against a container that is not running
+                # yet.
+                helper.started.set()
             code = await docker_engine.wait_container(container_id, timeout_s=settings.helper_timeout_s)
             if code is None:
                 logger.warning("helper %s for session %s timed out; stopping it", phase, session_id)
@@ -1090,15 +1114,26 @@ class SessionManager:
         # otherwise keep committing, pushing, or opening a pull request after
         # the API has already reported the session cancelled. It is tracked
         # per session rather than read from the supervisor because restart
-        # reconciliation finalizes without one. Removal is left to the code
-        # that runs the helper — its cleanup removes the container either
-        # way; this only has to make it stop.
-        helper_id = self._helpers.pop(session_id, None)
-        if helper_id:
+        # reconciliation finalizes without one.
+        helper = self._helpers.pop(session_id, None)
+        if helper is not None:
+            # Wait for the in-flight start to settle before stopping: a stop
+            # that lands first is a 304 no-op, and the pending start would
+            # complete after this returns — a credential-bearing container,
+            # running, with no one left to stop it. Settled, the stop is a
+            # real stop, and the force-remove after it makes the
+            # cancellation final, so a success here can never be followed by
+            # a running helper. The helper's own cleanup removes the
+            # container as well; it tolerates the one that is already gone.
+            await helper.started.wait()
             try:
-                await docker_engine.stop_container(helper_id, timeout_s=5)
+                await docker_engine.stop_container(helper.container_id, timeout_s=5)
             except Exception:
                 logger.warning("could not stop the helper of cancelled session %s", session_id)
+            try:
+                await docker_engine.remove_container(helper.container_id)
+            except Exception:
+                logger.warning("could not remove the helper of cancelled session %s", session_id)
         task = self._supervisors.pop(session_id, None)
         if task:
             task.cancel()

@@ -905,7 +905,8 @@ class TestAgentPhaseIsolation:
                     break
                 await asyncio.sleep(0.01)
             assert "cid-finalize" in wait_calls
-            assert manager._helpers.get(7) == "cid-finalize"
+            helper = manager._helpers.get(7)
+            assert helper is not None and helper.container_id == "cid-finalize"
 
             # Cancel while the helper is still running.
             assert await manager.cancel(7) is True
@@ -934,6 +935,12 @@ class TestAgentPhaseIsolation:
         # create-to-start window must find it in the helper map and stop
         # it — the registration happens before the start returns, not
         # after, and the launch that loses the race records nothing.
+        #
+        # The stop must also run against a settled start: a stop that lands
+        # before the in-flight start has completed is a 304 no-op, and the
+        # start would then complete and leave a credential-bearing
+        # container running with no one tracking it. So the cancel waits
+        # for the start, then stops and removes before reporting success.
         from app import sessions
         from app.schemas import can_transition
 
@@ -944,12 +951,16 @@ class TestAgentPhaseIsolation:
 
         states = {7: "starting"}
         row = {**self.ROW, "status": "starting", "container_id": None}
+        # The fake daemon: the start is what actually brings the container
+        # up, a stop only works once it is running (stop-before-start is a
+        # 304 no-op), and the wait returns only when the container is out.
+        docker: dict = {"started": False, "running": False, "removed": False}
+        order: list = []
         events: list = []
-        stopped: list = []
-        removed: list = []
         created: list = []
         start_entered = asyncio.Event()
-        start_block = asyncio.Event()
+        start_go = asyncio.Event()
+        stopped = asyncio.Event()
 
         async def fake_create(**kwargs):
             created.append(kwargs)
@@ -960,19 +971,28 @@ class TestAgentPhaseIsolation:
                 # A slow start: the window in which the container exists
                 # and is starting but the cancel is still allowed to land.
                 start_entered.set()
-                await start_block.wait()
+                await start_go.wait()
+            docker["started"] = True
+            docker["running"] = True
+            order.append("start")
 
         async def fake_wait(cid, **_kwargs):
-            # The cancel stopped the helper: it exits non-zero.
-            if cid == "cid-prepare":
-                return 137
-            return 0
+            # The container exits when it is stopped or removed.
+            await stopped.wait()
+            return 137
 
         async def fake_stop(cid, **_kwargs):
-            stopped.append(cid)
+            order.append("stop")
+            if docker["started"] and docker["running"]:
+                docker["running"] = False
+                stopped.set()
+            # else: 304 — nothing running to stop, nothing happens.
 
         async def fake_remove(cid, **_kwargs):
-            removed.append(cid)
+            order.append("remove")
+            docker["removed"] = True
+            docker["running"] = False
+            stopped.set()
 
         async def fake_get_session(_sid):
             return {**row, "status": states[7]}
@@ -1009,25 +1029,40 @@ class TestAgentPhaseIsolation:
             # container id, and there is no supervisor.
             await start_entered.wait()
 
-            # The fix itself: the helper is already tracked before its
-            # start returns, so the cancel that lands here has an id to
-            # stop.
-            assert manager._helpers.get(7) == "cid-prepare"
+            # The helper is already tracked before its start returns, so
+            # the cancel that lands here has a container to stop.
+            helper = manager._helpers.get(7)
+            assert helper is not None and helper.container_id == "cid-prepare"
 
-            assert await manager.cancel(7) is True
-            # Success means the credential-bearing helper was stopped first.
-            assert "cid-prepare" in stopped
+            cancel_task = asyncio.create_task(manager.cancel(7))
+            # The cancel pops the in-flight helper ...
+            for _ in range(100):
+                if 7 not in manager._helpers:
+                    break
+                await asyncio.sleep(0.01)
+            # ... and must not have reported success yet: the start has
+            # not settled, so a stop now would be a 304 no-op.
+            assert not cancel_task.done()
+
+            # The start now completes after the cancel has popped the
+            # helper — the ordering the 304 race is about.
+            start_go.set()
+            assert await cancel_task is True
+            # The stop ran against the settled start, not before it, and
+            # the success means the container is stopped and gone — not
+            # merely that a stop was invoked.
+            assert order.index("start") < order.index("stop")
+            assert docker["running"] is False
+            assert docker["removed"] is True
         finally:
-            start_block.set()
+            start_go.set()
             with contextlib.suppress(Exception):
-                await launch
+                await asyncio.wait_for(launch, timeout=1)
 
         # The launch that lost the race to the cancel records nothing: no
-        # running status, no supervision of a cancelled session, and the
-        # helper that ran removed its own container.
+        # running status, no supervision of a cancelled session.
         assert states[7] == "cancelled"
         assert [p["status"] for k, p in events if k == EventKind.STATUS] == ["cancelled"]
-        assert "cid-prepare" in removed
         assert 7 not in manager._supervisors
         assert created and created[0]["labels"] == {"logos.agent.helper": "prepare"}
 
