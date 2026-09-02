@@ -26,6 +26,9 @@ public class TokenPrice {
     @Column(nullable = false)
     private Instant validFrom;
 
+    /** Open end of the price generation; NULL means the row is still current. */
+    private Instant validTo;
+
     @Column(name = "price_per_k_token", nullable = false)
     private Long pricePerKToken;
 
@@ -36,11 +39,13 @@ public class TokenPrice {
     public Integer getModelId() { return modelId; }
     public Integer getProviderId() { return providerId; }
     public Instant getValidFrom() { return validFrom; }
+    public Instant getValidTo() { return validTo; }
     public Long getPricePerKToken() { return pricePerKToken; }
 
     public void setTypeId(Integer typeId) { this.typeId = typeId; }
     public void setModelId(Integer modelId) { this.modelId = modelId; }
     public void setProviderId(Integer providerId) { this.providerId = providerId; }
     public void setValidFrom(Instant validFrom) { this.validFrom = validFrom; }
+    public void setValidTo(Instant validTo) { this.validTo = validTo; }
     public void setPricePerKToken(Long pricePerKToken) { this.pricePerKToken = pricePerKToken; }
 }

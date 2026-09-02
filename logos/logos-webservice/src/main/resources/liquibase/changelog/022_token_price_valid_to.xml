@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+        http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Price generations have an open end: a row is current from valid_from
+         until valid_to (NULL = still open). A provider type change closes the
+         rows opened under the previous type instead of deleting them, so the
+         historical billing rows stay valid for requests made before the
+         change, while no price selection (billing, model list, cost
+         derivation) can read them as current afterwards. A failed or empty
+         catalogue refresh after the change therefore derives no cost from
+         the previous provider type's prices. -->
+    <changeSet id="022-token-price-valid-to" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="token_prices" columnName="valid_to"/></not>
+        </preConditions>
+        <addColumn tableName="token_prices">
+            <column name="valid_to" type="TIMESTAMPTZ"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="022-budget-usage-price-valid-to" author="wasnertobias">
+        <comment>
+            The view's price lookup now requires the row to be open at the
+            request time (valid_to NULL or after the request), matching the
+            boundary semantics above; requests before a type change still
+            match their closed row.
+        </comment>
+        <sql>
+            CREATE OR REPLACE VIEW budget_usage AS
+            SELECT
+                le.api_key_id,
+                DATE_TRUNC('month', le.timestamp_request)::DATE AS month,
+                COALESCE(SUM(
+                    CASE WHEN tp.price_per_k_token IS NOT NULL
+                        THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
+                        ELSE 0
+                    END
+                ), 0) AS cost_micro_cents
+            FROM log_entry le
+            JOIN usage_tokens ut ON ut.log_entry_id = le.id
+            LEFT JOIN LATERAL (
+                SELECT price_per_k_token
+                FROM token_prices
+                WHERE type_id = ut.type_id
+                  AND (model_id = le.model_id OR model_id IS NULL)
+                  AND (provider_id = le.provider_id OR provider_id IS NULL)
+                  AND valid_from &lt;= le.timestamp_request
+                  AND (valid_to IS NULL OR valid_to &gt; le.timestamp_request)
+                ORDER BY (model_id = le.model_id)DESC NULLS LAST,
+                        (provider_id = le.provider_id) DESC NULLS LAST,
+                        valid_from DESC
+                LIMIT 1
+            ) tp ON true
+            WHERE le.api_key_id IS NOT NULL
+            GROUP BY le.api_key_id, DATE_TRUNC('month', le.timestamp_request)::DATE;
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

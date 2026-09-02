@@ -14,6 +14,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
@@ -116,7 +119,7 @@ class ProviderControllerTest {
     }
 
     @Test
-    void connectModelProvider_refreshesPricesForTheLinkedModel() throws Exception {
+    void connectModelProvider_triggersDerivationAfterPriceRefresh() throws Exception {
         mvc.perform(post("/logosdb/connect_model_provider")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
@@ -124,8 +127,10 @@ class ProviderControllerTest {
            .andExpect(status().isOk());
 
         // Without this refresh a freshly linked cloud model kept reporting a
-        // cost of zero until the next daily full refresh.
-        verify(priceUpdaterService).updatePricesForModelAsync(5002);
+        // cost of zero until the next daily full refresh. The derivation runs
+        // asynchronously and only after the catalogue price refresh committed,
+        // so wait for the price refresh to be observed.
+        verify(priceUpdaterService, timeout(5000)).updatePricesForModel(eq(5002), anyString());
     }
 
     @Test

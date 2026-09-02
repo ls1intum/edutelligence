@@ -15,6 +15,7 @@ import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCapabilitiesRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelMetricsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
@@ -161,6 +162,16 @@ public class ModelController {
     @PostMapping("/get_general_model_stats")
     public ResponseEntity<?> getGeneralModelStats() {
         return ResponseEntity.ok(modelService.getGeneralModelStats());
+    }
+
+    /**
+     * Auto-derived L/A/C/Q metrics per model-provider pair.
+     * The optional model_id restricts the result to one model's pairs.
+     */
+    @PostMapping("/get_model_metrics")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> getModelMetrics(@RequestBody GetModelMetricsRequestDTO req) {
+        return ResponseEntity.ok(modelService.getModelMetrics(req.modelId()));
     }
 
     @PostMapping("/update_model")

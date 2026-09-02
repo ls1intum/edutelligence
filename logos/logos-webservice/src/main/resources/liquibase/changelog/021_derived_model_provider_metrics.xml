@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+        http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Auto-derived L/A/C/Q metrics per model-provider pair.
+
+         The derived_* columns on model_provider hold the auto-derived metrics
+         for one pair: observed latency percentiles (TTFT / total / TPOT) from
+         log_entry, plus a derived cost figure. The cost unit depends on the
+         provider type: cloud pairs carry the catalogue blend in USD per
+         million tokens, local pairs a VRAM x latency proxy in USD per request
+         - the two units are only commensurable within one provider type, so
+         the model-level cost ranking uses cloud pairs only. All columns are
+         nullable until the derivation has seen enough data.
+
+         weight_overrides on models records which of the four classification
+         weight dimensions (latency/accuracy/cost/quality) an admin set
+         manually; the derivation never overwrites a dimension that carries an
+         override. -->
+    <changeSet id="021-model-provider-derived-metrics" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="model_provider" columnName="derived_ttft_ms"/></not>
+        </preConditions>
+        <addColumn tableName="model_provider">
+            <column name="derived_ttft_ms" type="INTEGER"/>
+            <column name="derived_total_latency_ms" type="INTEGER"/>
+            <column name="derived_tpot_ms" type="INTEGER"/>
+            <column name="derived_cost_usd" type="NUMERIC(12,6)"/>
+            <column name="derived_samples" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="derived_updated_at" type="TIMESTAMPTZ"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="021-models-weight-overrides" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="models" columnName="weight_overrides"/></not>
+        </preConditions>
+        <addColumn tableName="models">
+            <column name="weight_overrides" type="JSONB" defaultValue="{}">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="021-backfill-legacy-manual-weights" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="models" columnName="weight_overrides"/>
+        </preConditions>
+        <comment>
+            Latency and cost weights were manually configurable before
+            weight_overrides existed, so on an upgrade install every existing
+            non-zero latency or cost weight is a manual value: backfill those
+            dimensions as overrides so the derivation's population-leave
+            fallback treats them as pins and never resets them to the default.
+            On a fresh install the models table is still empty here, so this
+            is a no-op.
+        </comment>
+        <sql>
+            UPDATE models
+            SET weight_overrides = jsonb_set(weight_overrides, '{latency}', 'true')
+            WHERE COALESCE(weight_latency, 0) &lt;&gt; 0;
+        </sql>
+        <sql>
+            UPDATE models
+            SET weight_overrides = jsonb_set(weight_overrides, '{cost}', 'true')
+            WHERE COALESCE(weight_cost, 0) &lt;&gt; 0;
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

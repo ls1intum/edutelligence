@@ -119,6 +119,45 @@ public class ModelWeightService {
         modelRepository.deleteById(deletedModelId);
     }
 
+    /**
+     * Map per-model derived values (lower value = better, e.g. latency in ms
+     * or cost in $/M tokens) onto the same relative weight scale used for the
+     * manual rankings. The score depends on the rank of a model's value among
+     * the distinct values — not on the model's position in the iteration — so
+     * models with equal values get equal weights; the id only fixes the
+     * iteration order. Returns modelId -> weight, where a higher weight means
+     * a better model.
+     */
+    public Map<Integer, Integer> rankValuesToWeights(Map<Integer, Double> values) {
+        if (values.isEmpty()) return Map.of();
+        List<Integer> ids = values.keySet().stream()
+            .sorted(Comparator.<Integer>comparingDouble(values::get)
+                .thenComparingInt(id -> id)
+                .reversed())
+            .toList();
+        // Worst distinct value first, so rank 0 is the worst score position;
+        // models sharing a value share a rank and therefore a weight.
+        List<Double> distinctValues = values.values().stream()
+            .distinct()
+            .sorted(Comparator.reverseOrder())
+            .toList();
+        Map<Double, Integer> rankByValue = new HashMap<>();
+        for (int rank = 0; rank < distinctValues.size(); rank++) {
+            rankByValue.put(distinctValues.get(rank), rank);
+        }
+        ModelScore[] scored = new ModelScore[ids.size()];
+        for (int i = 0; i < ids.size(); i++) {
+            Integer id = ids.get(i);
+            int rank = rankByValue.get(values.get(id));
+            scored[i] = new ModelScore(computeScore(rank, distinctValues.size()), id);
+        }
+        Map<Integer, Integer> result = new HashMap<>();
+        for (ModelScore entry : rebalance(scored)) {
+            result.put(entry.modelId(), entry.score());
+        }
+        return result;
+    }
+
     void testInsertModel(List<ModelScore> list, Integer worseId, int newId) {
         insertModel(list, worseId, newId);
     }
