@@ -384,36 +384,56 @@ async def pull_request(number: int) -> dict[str, Any]:
 
 
 async def latest_changes_requested_review(number: int) -> dict[str, Any] | None:
-    """The newest review on a pull request that asked for changes.
+    """The open request for changes on a pull request, if there is one.
 
-    Only the newest one is work: an older changes-requested review on the
-    same pull request has been superseded by it, and answering both would
-    mean two sessions writing to one branch about overlapping points.
+    GitHub tracks an opinion *per reviewer*, and so does this. Each
+    reviewer's latest opinionated review — `APPROVED` or
+    `CHANGES_REQUESTED` — is their current position; a `COMMENTED` review is
+    not an opinion and does not clear one, and a `DISMISSED` review is a
+    withdrawn one. The newest request for changes among the reviewers who
+    currently hold that position is the work.
 
-    The newest review is chosen across *all* states and only then checked,
-    so an approval or a comment that came after a change request withdraws
-    it — which is what the reviewer meant by submitting it. Returns None
-    when the newest review is not a request for changes, and when there are
-    no reviews at all.
+    A single globally newest review would get this wrong in both
+    directions: reviewer B approving would appear to withdraw reviewer A's
+    objection, and anybody's passing comment would bury it.
 
     Every page is read: the endpoint answers oldest-first and ignores a
-    direction parameter, so on a long-running pull request the newest review
-    is on the last page, not the first.
+    direction parameter, so on a long-running pull request the newest
+    review is on the last page, not the first.
     """
     payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews")
     if not isinstance(payload, list):
         return None
-    newest: dict[str, Any] | None = None
-    newest_at: datetime | None = None
+
+    # Per reviewer: their latest opinionated review, in submission order.
+    positions: dict[str, tuple[datetime | None, dict[str, Any]]] = {}
     for review in payload:
         if not isinstance(review, dict) or not isinstance(review.get("id"), int):
             continue
+        state = str(review.get("state") or "").upper()
+        if state not in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            # COMMENTED and PENDING say nothing about whether the reviewer
+            # is still asking for changes.
+            continue
+        author = str((review.get("user") or {}).get("login") or "")
+        if not author:
+            continue
         submitted = _parse_time(review.get("submitted_at"))
-        if newest is None or (submitted is not None and (newest_at is None or submitted >= newest_at)):
-            newest, newest_at = review, submitted
-    if newest is None or str(newest.get("state") or "").upper() != "CHANGES_REQUESTED":
+        held = positions.get(author)
+        if held is None or submitted is None or held[0] is None or submitted >= held[0]:
+            positions[author] = (submitted, review)
+
+    outstanding = [
+        (submitted, review)
+        for submitted, review in positions.values()
+        if str(review.get("state") or "").upper() == "CHANGES_REQUESTED"
+    ]
+    if not outstanding:
         return None
-    return newest
+    # The newest of the open objections: one session answers the review it
+    # names, and the others are seen again once it has.
+    outstanding.sort(key=lambda item: (item[0] is not None, item[0] or datetime.min.replace(tzinfo=timezone.utc)))
+    return outstanding[-1][1]
 
 
 async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
@@ -506,6 +526,34 @@ def _trailing_number(url: str) -> int | None:
 
 def _stamp(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# Repository permissions that mean "may change this code". GitHub's
+# `read` and `none` do not.
+_WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
+
+
+async def may_push(login: str) -> bool:
+    """Whether an account may write to this repository.
+
+    On a public repository anybody can comment, review, and ask the agent
+    for things. What they cannot do is push — and a session that commits on
+    their say-so would push for them. So the ability to direct code changes
+    is checked against the repository's own collaborator permissions, not
+    inferred from being able to type in a comment box.
+
+    A lookup that fails answers False: an unknown permission is not a
+    permission.
+    """
+    if not login:
+        return False
+    try:
+        payload = await _get(f"/repos/{settings.repo_slug}/collaborators/{login}/permission")
+    except GitHubError as exc:
+        # 404 is the ordinary answer for "not a collaborator".
+        logger.info("could not establish repository permission for %s: %s", login, exc)
+        return False
+    return str(payload.get("permission") or "").lower() in _WRITE_PERMISSIONS
 
 
 async def react(path: str, content: str = "eyes") -> bool:

@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from .config import settings
-from .schemas import ACTIVE_STATUSES, EventKind, SessionStatus
+from .schemas import ACTIVE_STATUSES, TERMINAL_STATUSES, EventKind, SessionStatus
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker | None = None
@@ -399,6 +399,56 @@ async def session_is_starting(session_id: int) -> bool:
             await db.execute(text("SELECT status FROM agent_sessions WHERE id = :id"), {"id": session_id})
         ).scalar_one_or_none()
     return status == SessionStatus.STARTING.value
+
+
+async def sessions_owing_a_reply(max_attempts: int) -> list[dict[str, Any]]:
+    """Finished sessions whose answer has not reached GitHub yet.
+
+    The reply is attempted once when a session settles; a timeout or a 5xx
+    at that moment would otherwise lose it, because the trigger reference
+    counts as handled and nothing looks at it again. This is what a later
+    pass retries.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        """
+                    SELECT id, reply_target, reply_attempts
+                      FROM agent_sessions
+                     WHERE reply_target IS NOT NULL
+                       AND reply_posted_at IS NULL
+                       AND reply_attempts < :max_attempts
+                       AND status = ANY(:terminal)
+                     ORDER BY id
+                     LIMIT 20
+                    """
+                    ),
+                    {"max_attempts": max_attempts, "terminal": [s.value for s in TERMINAL_STATUSES]},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    return [dict(row) for row in rows]
+
+
+async def record_reply_attempt(session_id: int, *, delivered: bool) -> None:
+    """Count an attempt, and stamp the delivery when it worked."""
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                UPDATE agent_sessions
+                   SET reply_attempts = reply_attempts + 1,
+                       reply_posted_at = CASE WHEN :delivered THEN :now ELSE reply_posted_at END
+                 WHERE id = :id
+                """
+            ),
+            {"id": session_id, "delivered": delivered, "now": _now()},
+        )
+        await db.commit()
 
 
 async def count_active_trigger_sessions() -> int:

@@ -627,8 +627,8 @@ class TestReviewSupersession:
         self._reviews(
             monkeypatch,
             [
-                {"id": 1, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-01T10:00:00Z"},
-                {"id": 2, "state": "APPROVED", "submitted_at": "2026-09-02T10:00:00Z"},
+                {"id": 1, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-01T10:00:00Z", "user": {"login": "a"}},
+                {"id": 2, "state": "APPROVED", "submitted_at": "2026-09-02T10:00:00Z", "user": {"login": "a"}},
             ],
         )
 
@@ -638,8 +638,8 @@ class TestReviewSupersession:
         self._reviews(
             monkeypatch,
             [
-                {"id": 1, "state": "APPROVED", "submitted_at": "2026-09-01T10:00:00Z"},
-                {"id": 2, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-02T10:00:00Z"},
+                {"id": 1, "state": "APPROVED", "submitted_at": "2026-09-01T10:00:00Z", "user": {"login": "a"}},
+                {"id": 2, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-02T10:00:00Z", "user": {"login": "a"}},
             ],
         )
 
@@ -647,18 +647,19 @@ class TestReviewSupersession:
 
         assert review["id"] == 2
 
-    async def test_a_plain_comment_after_a_change_request_also_withdraws_it(self, monkeypatch):
-        # Reviews are submitted deliberately; the newest one is what the
-        # reviewer currently says.
+    async def test_a_plain_comment_does_not_withdraw_a_change_request(self, monkeypatch):
+        # A COMMENTED review states no position, so the reviewer's earlier
+        # objection still stands.
         self._reviews(
             monkeypatch,
             [
-                {"id": 1, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-01T10:00:00Z"},
-                {"id": 2, "state": "COMMENTED", "submitted_at": "2026-09-02T10:00:00Z"},
+                {"id": 1, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-01T10:00:00Z", "user": {"login": "a"}},
+                {"id": 2, "state": "COMMENTED", "submitted_at": "2026-09-02T10:00:00Z", "user": {"login": "a"}},
             ],
         )
 
-        assert await github.latest_changes_requested_review(772) is None
+        review = await github.latest_changes_requested_review(772)
+        assert review is not None and review["id"] == 1
 
 
 class TestThreadIdentity:

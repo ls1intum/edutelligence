@@ -263,6 +263,8 @@ class TriggerPoller:
         self._last_error: str = ""
         self._last_pass: datetime | None = None
         self._queued_total = 0
+        # login -> may push, for the duration of one pass.
+        self._writers: dict[str, bool] = {}
         # Called after a pass queued something, so the work starts on the
         # next admission rather than at the scheduler's own tick. Set by the
         # service on startup; the poller does not import the session manager
@@ -326,6 +328,9 @@ class TriggerPoller:
             self._last_pass = now
             return []
 
+        # Permission answers are cached per pass: they can change, and a
+        # pass is short enough that reading them once is honest.
+        self._writers = {}
         candidates = await self._candidates(now)
         self._last_pass = now
         self._last_error = ""
@@ -403,6 +408,19 @@ class TriggerPoller:
                     # cannot update the pull request its task is about.
                     logger.info("review on pull request %s has no writable branch; leaving it to a person", number)
                     continue
+                reviewer = str((review.get("user") or {}).get("login") or "")
+                if not await self._writer(reviewer):
+                    # Anybody may review a public pull request, and a review
+                    # is a request to change code: acting on one from
+                    # outside the repository would let a stranger direct
+                    # what the agent commits.
+                    logger.info(
+                        "review on pull request %s is by %s, who may not write to this repository; "
+                        "leaving it to a person",
+                        number,
+                        reviewer or "an unknown account",
+                    )
+                    continue
                 found.append(
                     {
                         "ref": f"pr-{number}-review-{review_id}",
@@ -458,6 +476,25 @@ class TriggerPoller:
         for entry in await github.authored_pull_requests(login):
             await remember(entry, assigned=False)
         return pulls
+
+    async def _writer(self, login: str) -> bool:
+        """Whether an account may write to this repository.
+
+        Cached for the pass: one conversation is usually one person, and a
+        lookup per comment would spend requests on the same answer.
+        """
+        key = login.lower()
+        if key not in self._writers:
+            self._writers[key] = await github.may_push(login)
+        return self._writers[key]
+
+    async def _may_direct_changes(self, comments: list[dict[str, Any]]) -> bool:
+        """Whether anyone in this conversation may direct a code change."""
+        for comment in comments:
+            author = str((comment.get("user") or {}).get("login") or "")
+            if author and await self._writer(author):
+                return True
+        return False
 
     async def _writable_head(self, number: int) -> str | None:
         """The branch of a pull request the agent may push to, or None.
@@ -549,8 +586,15 @@ class TriggerPoller:
         for (kind, key), thread in threads.items():
             number = thread["number"]
             pull = responsible.get(number)
-            branch = pull["branch"] if pull else None
             title = pull["title"] if pull else f"#{number}"
+            # Anybody may comment on a public repository; not everybody may
+            # direct a change to it. A conversation with no writer in it is
+            # answered in words and gets no branch, so the credentialed
+            # finalizer cannot be made to push on a stranger's say-so.
+            branch = pull["branch"] if pull else None
+            if branch is not None and not await self._may_direct_changes(thread["comments"]):
+                logger.info("comments on #%s come from outside the repository; answering without a branch", number)
+                branch = None
             newest = thread["newest_id"]
             inline = kind == "inline"
             candidates.append(

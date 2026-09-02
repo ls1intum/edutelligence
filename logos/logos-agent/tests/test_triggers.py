@@ -75,6 +75,7 @@ class FakeRepo:
         review_comments=None,
         issue_comments=None,
         inline_comments=None,
+        writers=("wasnertobias",),
     ):
         self.assigned_issues = assigned_issues or []
         self.assigned_pulls = assigned_pulls or []
@@ -87,6 +88,9 @@ class FakeRepo:
         self.issue_comments = issue_comments or []
         self.inline_comments = inline_comments or []
         self.reactions: list = []
+        # Who may write to the repository. Anybody may comment on a public
+        # one; only these may direct a change to it.
+        self.writers = {w.lower() for w in writers}
 
     def install(self, monkeypatch):
         async def assigned_issues(_login):
@@ -118,6 +122,9 @@ class FakeRepo:
             self.reactions.append((path, content))
             return True
 
+        async def may_push(login):
+            return login.lower() in self.writers
+
         for name, fn in [
             ("assigned_issues", assigned_issues),
             ("assigned_pull_requests", assigned_pull_requests),
@@ -128,6 +135,7 @@ class FakeRepo:
             ("recent_issue_comments", recent_issue_comments),
             ("recent_review_comments", recent_review_comments),
             ("react", react),
+            ("may_push", may_push),
         ]:
             monkeypatch.setattr(triggers.github, name, fn)
 
@@ -671,3 +679,93 @@ class TestInlineThreads:
         await triggers.TriggerPoller().poll_once()
 
         assert fake_db.created[0]["trigger_ref"] == "thread-772-issue-10"
+
+
+class TestWhoMayDirectChanges:
+    """Anybody may ask; not everybody may have code written for them.
+
+    On a public repository the comment box is open to the world, and a
+    session that commits does so with the runner's credentials. What decides
+    is the repository's own permissions, not the ability to type.
+    """
+
+    async def test_an_outsider_gets_an_answer_but_no_branch(self, monkeypatch):
+        FakeRepo(
+            authored_pulls=[pull(772)],
+            issue_comments=[comment(9100, 772, f"@{AGENT} could you rewrite this?", "passer-by")],
+            writers=("wasnertobias",),
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        created = fake_db.created[0]
+        assert created["branch"] is None
+        assert created["reply_target"] == "issue:772"
+
+    async def test_a_collaborator_may_ask_for_a_change(self, monkeypatch):
+        FakeRepo(
+            authored_pulls=[pull(772)],
+            issue_comments=[comment(9101, 772, "please also handle the empty case", "wasnertobias")],
+            heads={772: ("logos/agent/x/session-1", REPO)},
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created[0]["branch"] == "logos/agent/x/session-1"
+
+    async def test_one_writer_in_the_thread_is_enough(self, monkeypatch):
+        # A maintainer answering a passer-by is still a maintainer asking.
+        FakeRepo(
+            authored_pulls=[pull(772)],
+            issue_comments=[
+                comment(9102, 772, f"@{AGENT} what about X?", "passer-by", minutes_ago=30),
+                comment(9103, 772, "good point — please do that", "wasnertobias", minutes_ago=5),
+            ],
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created[0]["branch"] is not None
+
+    async def test_a_review_from_outside_the_repository_is_left_to_a_person(self, monkeypatch):
+        # A review is a request to change code. From somebody who cannot
+        # push, acting on it would let a stranger direct what is committed.
+        outside = review(77)
+        outside["user"] = {"login": "passer-by"}
+        FakeRepo(authored_pulls=[pull(772)], reviews={772: outside}).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        assert fake_db.created == []
+
+    async def test_permissions_are_looked_up_once_per_pass(self, monkeypatch):
+        repo = FakeRepo(
+            authored_pulls=[pull(772)],
+            issue_comments=[comment(9104 + i, 772, f"note {i}", "wasnertobias") for i in range(4)],
+        )
+        repo.install(monkeypatch)
+        looked_up: list = []
+        original = triggers.github.may_push
+
+        async def counting(login):
+            looked_up.append(login)
+            return await original(login)
+
+        monkeypatch.setattr(triggers.github, "may_push", counting)
+        FakeDb().install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert looked_up == ["wasnertobias"]

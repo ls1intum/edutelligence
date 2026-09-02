@@ -55,6 +55,9 @@ _CANCEL_LAUNCH_WAIT_S = 60.0
 # leaves room for the truncation note.
 _MAX_REPLY_CHARS = 60000
 
+# How often an undelivered answer is retried before it is left alone.
+_MAX_REPLY_ATTEMPTS = 5
+
 
 def container_name(session_id: int) -> str:
     return f"{_CONTAINER_PREFIX}{session_id}"
@@ -352,6 +355,16 @@ class SessionManager:
                 raise
             except Exception:
                 logger.exception("scheduler pass failed")
+            try:
+                # Answers that did not reach GitHub when their session
+                # settled. Beside the pass rather than inside it: a pass is
+                # about admitting and yielding, and every session creation
+                # schedules one of those.
+                await self.deliver_pending_replies()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("retrying undelivered answers failed")
             try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=settings.scheduler_interval_s)
             except asyncio.TimeoutError:
@@ -1050,11 +1063,30 @@ class SessionManager:
         else:
             await self._cleanup_container(session_id)
 
+    async def deliver_pending_replies(self) -> None:
+        """Try again for answers that did not reach GitHub the first time.
+
+        Delivery happens once when a session settles, and a timeout or a 5xx
+        at that moment would otherwise lose the answer for good: the trigger
+        reference counts as handled, so nothing looks at it again. Every
+        scheduler pass gives the few outstanding ones another go, until they
+        land or the attempts run out.
+        """
+        try:
+            owing = await db.sessions_owing_a_reply(_MAX_REPLY_ATTEMPTS)
+        except Exception as exc:
+            logger.warning("could not look for undelivered answers: %s", exc)
+            return
+        for row in owing:
+            await self._post_reply(int(row["id"]))
+
     async def _post_reply(self, session_id: int) -> None:
         """Post the answer a session wrote, if it was asked for one."""
         session = await db.get_session(session_id)
         target = str((session or {}).get("reply_target") or "")
         if not target:
+            return
+        if (session or {}).get("reply_posted_at"):
             return
         path = artifact_dir(session_id) / REPLY_FILE
         try:
@@ -1074,9 +1106,13 @@ class SessionManager:
         try:
             url = await self._send_reply(target, body)
         except Exception as exc:
-            logger.warning("could not post the answer of session %s: %s", session_id, exc)
+            # Counted, not given up on: the next scheduler pass tries again
+            # until it lands or the attempts run out.
+            await db.record_reply_attempt(session_id, delivered=False)
+            logger.warning("could not post the answer of session %s (will retry): %s", session_id, exc)
             await db.add_event(session_id, EventKind.ERROR, {"error": f"could not post the reply: {exc}"})
             return
+        await db.record_reply_attempt(session_id, delivered=True)
         await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True})
         logger.info("session %s answered at %s", session_id, url)
 

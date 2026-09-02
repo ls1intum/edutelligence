@@ -225,6 +225,13 @@ assigned it, reviewed its work, or asked it something by name. That is why
 this needs no service-wide opt-in to be safe; `LOGOS_AGENT_TRIGGERS_ENABLED`
 exists as a kill switch, not as a second consent.
 
+**Who may ask for what.** Anybody can comment on a public repository, and a
+session that commits does so with the runner's credentials — so the ability
+to direct a code change is checked against the repository's own collaborator
+permissions. A question from outside is answered in words, with no branch;
+a review from outside is left to a person. Assignment needs write access
+anyway: GitHub only assigns collaborators.
+
 Only a **changes-requested** review is work — an approval or a plain comment
 is not, and an approval submitted after a change request withdraws it.
 Comments are read from the last 24 hours: assignments and reviews are read
