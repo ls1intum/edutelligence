@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import logos_worker_node.lane_manager as lane_mod
 import logos_worker_node.main as worker_main
 from logos_worker_node.lane_manager import LaneManager
 from logos_worker_node.models import (
@@ -677,6 +678,172 @@ def test_replan_triggered_on_lane_add_establishes_reserve_before_first_sleep(mon
     # The reserve is established by the ADD — the lane's sleeping footprint is
     # in the floor before the lane has ever slept.
     assert cache.floor_mb == pytest.approx(10_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
+def _restart_env(monkeypatch, model_old, model_new, sleeping_old, sleeping_new):  # noqa: ANN001
+    """Shared scaffolding for the restart-reserve regression tests.
+
+    A live, awake, sleep-capable vLLM lane for ``model_old`` is seeded into a
+    REAL LaneManager wired to the real re-plan (``on_lane_added`` ->
+    ``_replan_ram_cache_once``). Every bit of process I/O the restart path
+    would otherwise do — spawn, GPU placement, status collection — is stubbed,
+    so no vLLM process is required. Both production model-swap paths
+    (``reconfigure_lane`` and the ``apply_lanes`` Phase-2 reconfigure) funnel
+    into the real ``_restart_lane_unlocked``, which is where the re-plan now
+    fires; the tests only differ in how they drive that call.
+    """
+    margin = worker_main._host_ram_safety_margin_mb(512_000.0)
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    registry = _FakeRegistry(
+        {
+            model_old: _FakeProfile(base_residency_mb=sleeping_old, sleeping_mb=sleeping_old),
+            model_new: _FakeProfile(base_residency_mb=sleeping_new, sleeping_mb=sleeping_new),
+        }
+    )
+    cache = _FakeCache(sizes={model_old: _mb(8_000), model_new: _mb(8_000)})
+
+    lane_id = "org_lane"
+
+    class _Handle:
+        """A live, awake, sleep-capable vLLM lane handle (no process I/O)."""
+
+        def __init__(self, lane_config: LaneConfig) -> None:
+            self.lane_id = lane_id
+            self.lane_config = lane_config
+
+        def status(self):
+            return SimpleNamespace(state=ProcessState.RUNNING)
+
+        async def is_sleeping(self) -> bool:
+            return False
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _cfg: LaneConfig) -> None:
+            pass
+
+    old_handle = _Handle(
+        LaneConfig(model=model_old, vllm=True, lane_id=lane_id, vllm_config=VllmConfig(enable_sleep_mode=True))
+    )
+
+    new_handle_box: dict[str, _Handle] = {}
+
+    def _fake_create_handle(_lid, _port, _gcfg, _vcfg, new_config, **_kw):  # noqa: ANN001
+        # _restart_lane_unlocked calls the module-level _create_handle with the
+        # (validated) new config; adopt it so the new handle reports the
+        # replacement model — the re-plan reads this to size the reserve.
+        handle = _Handle(new_config)
+        new_handle_box["handle"] = handle
+        return handle
+
+    # Late binding: `app` is constructed after the manager (it needs it), but
+    # the hook resolves it at call time.
+    manager = LaneManager(
+        OllamaConfig(),
+        nvidia_smi_available=lambda: True,
+        on_lane_added=lambda: worker_main._replan_ram_cache_once(app),
+    )
+    manager._handles[lane_id] = old_handle  # noqa: SLF001
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            # Empty capabilities: the reserve is driven purely by the live
+            # lane, so the floor moves from model_old's to model_new's
+            # footprint as the lane's model changes — nothing else shifts.
+            config=AppConfig(logos=LogosConfig(capabilities_models=[]), static_lanes=[]),
+            model_cache=cache,
+            model_profiles=registry,
+            lane_manager=manager,
+            ram_cache_replan_lock=asyncio.Lock(),
+            ram_cache_in_plan_ticks={},
+        )
+    )
+
+    # Stub the process/GPU I/O the real restart would do: the module-level
+    # _create_handle builds the new handle, and the auto-* helpers are identity
+    # so the real new config is passed through untouched.
+    monkeypatch.setattr(lane_mod, "_create_handle", _fake_create_handle)
+    monkeypatch.setattr(manager, "_auto_tensor_parallel", lambda lc: lc)
+
+    async def _auto_place(_lid, lc):  # noqa: ANN001
+        return lc
+
+    monkeypatch.setattr(manager, "_auto_place_gpu_devices", _auto_place)
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=None))
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    return {
+        "manager": manager,
+        "app": app,
+        "cache": cache,
+        "lane_id": lane_id,
+        "margin": margin,
+    }
+
+
+def test_replan_reserves_replacement_footprint_on_reconfigure_lane(monkeypatch) -> None:
+    """Restart-reserve fix: swapping a lane to a model with a LARGER sleeping
+    host-RAM footprint must move the reserve BEFORE the new model's first
+    sleep. The only other triggers fire after the sleep (post-sleep hook) or
+    after the periodic loop's first 60 s, so without the restart re-plan the
+    replacement's first sleep could overlap the old cache allocation under the
+    stale (smaller) floor.
+
+    Drives the REAL direct reconfigure_lane path (reconfigure_lane ->
+    _restart_lane_unlocked -> on_lane_added -> _replan_ram_cache_once) with the
+    spawn/GPU/status I/O stubbed, and asserts the floor is the replacement
+    model's footprint immediately after the restart — no sleep, no tick.
+    """
+    env = _restart_env(monkeypatch, "org/model-a", "org/model-b", 10_000.0, 30_000.0)
+    manager, cache, lane_id, margin = env["manager"], env["cache"], env["lane_id"], env["margin"]
+
+    async def _run() -> None:
+        # Baseline: the initial add already reserved model-a's footprint, so the
+        # stale-floor failure mode is visible (the floor would STAY at this).
+        await worker_main._replan_ram_cache_once(env["app"])
+        assert cache.floor_mb == pytest.approx(10_000.0 + margin)
+        # The model swap — the reserve must follow to model-b on the spot.
+        await manager.reconfigure_lane(lane_id, {"model": "org/model-b"})
+
+    asyncio.run(_run())
+
+    # Immediately after the restart (before any sleep or tick) the floor holds
+    # the REPLACEMENT model's larger footprint, not the old (smaller) one.
+    assert cache.floor_mb == pytest.approx(30_000.0 + margin)
+
+
+def test_replan_reserves_replacement_footprint_on_apply_lanes_reconfigure(monkeypatch) -> None:
+    """Same guarantee as the reconfigure_lane test, but via the declarative
+    apply_lanes Phase-2 reconfigure path — the other of the two production
+    paths that swap a lane's model (the restarted lane lands in
+    restarted_ids). The reserve must reflect the replacement model's larger
+    sleeping footprint immediately after the restart, before any sleep or tick.
+    """
+    env = _restart_env(monkeypatch, "org/model-a", "org/model-b", 10_000.0, 30_000.0)
+    manager, cache, lane_id, margin = env["manager"], env["cache"], env["lane_id"], env["margin"]
+
+    desired = [
+        LaneConfig(model="org/model-b", vllm=True, lane_id=lane_id, vllm_config=VllmConfig(enable_sleep_mode=True))
+    ]
+
+    async def _run() -> None:
+        # Baseline: the initial state reserved model-a's footprint.
+        await worker_main._replan_ram_cache_once(env["app"])
+        assert cache.floor_mb == pytest.approx(10_000.0 + margin)
+        # The declarative swap — same lane id, replacement model.
+        await manager.apply_lanes(desired)
+
+    asyncio.run(_run())
+
+    assert cache.floor_mb == pytest.approx(30_000.0 + margin)
 
 
 # ── _replan_ram_cache_once ───────────────────────────────────────────────────
