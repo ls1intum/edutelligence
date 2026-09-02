@@ -314,6 +314,10 @@ async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
                             SessionStatus.STARTING.value,
                             SessionStatus.RUNNING.value,
                             SessionStatus.PAUSED.value,
+                            # The finalizer runs git in the working copy on
+                            # the same volume: a new session admitted during
+                            # finalization would write over it.
+                            SessionStatus.FINALIZING.value,
                         ],
                     },
                 )

@@ -161,7 +161,7 @@ class SessionManager:
         # by then, and the recovered session would be settled as vanished
         # while its supervisor keeps running it.
         occupying: list[tuple[SessionStatus, dict[str, Any]]] = []
-        for status in (SessionStatus.STARTING, SessionStatus.RUNNING, SessionStatus.PAUSED):
+        for status in (SessionStatus.STARTING, SessionStatus.RUNNING, SessionStatus.PAUSED, SessionStatus.FINALIZING):
             for session in await db.sessions_in_status(status):
                 occupying.append((status, session))
 
@@ -169,7 +169,19 @@ class SessionManager:
             sid = session["id"]
             container = live.pop(sid, None)
             if container is None:
-                await self._settle(sid, exit_code=None, error="container vanished during restart")
+                if status is SessionStatus.FINALIZING:
+                    # The agent already exited cleanly — finalizing is only
+                    # ever claimed on a clean exit — and the restart killed
+                    # the first finalizer (its container is swept above by
+                    # the helper label). The working copy is intact on the
+                    # volume, and the finalizer is idempotent, so settling
+                    # through a fresh run either completes the push or
+                    # records a real failure; settling it as a vanished
+                    # container instead would fail sessions whose work had
+                    # in fact landed.
+                    await self._settle(sid, exit_code=0, error=None)
+                else:
+                    await self._settle(sid, exit_code=None, error="container vanished during restart")
                 continue
             container_id = container.get("Id", "")
             # Re-adopt the container's identity into the row, but by the
@@ -252,6 +264,10 @@ class SessionManager:
                         await self._relinquish_container(container_id)
                         continue
                     fields = {}
+                # A finalizing row can also land here (the exited agent
+                # container survives the restart until cleanup): settlement
+                # re-runs the idempotent finalizer and settles from the
+                # finalizing edge.
                 _, exit_code = await docker_engine.container_state(container_id)
                 await self._settle(sid, exit_code=exit_code, error=None)
 
@@ -556,6 +572,7 @@ class SessionManager:
             "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
             "LOGOS_SESSION_TASK": str(session.get("task") or ""),
             "LOGOS_SESSION_OPEN_PR": "1" if session.get("open_pull_request") else "0",
+            "LOGOS_REPO_URL": settings.repo_url,
             "LOGOS_REPO_SLUG": settings.repo_slug,
             "LOGOS_ARTIFACT_DIR": "/artifacts",
         }
@@ -661,9 +678,38 @@ class SessionManager:
             # A clean agent exit is not yet a finished session: the agent
             # phase carried no GitHub credential, so the trusted finalizer
             # performs the authenticated work (commit, push, pull request)
-            # and updates the result file before settlement reads it. A
-            # finalizer that fails fails the session — nothing landed, and a
-            # deploy must not be dispatched behind it.
+            # and updates the result file before settlement reads it.
+            status = ((await db.get_session(session_id)) or {}).get("status")
+            if status not in (SessionStatus.RUNNING.value, SessionStatus.FINALIZING.value):
+                # A competing actor (a cancel, a second settlement) reached
+                # the row first: it is no longer ours to finish. Give the
+                # container back and record nothing.
+                logger.warning("settlement of session %s found the row in %r; only cleaning up", session_id, status)
+                await self._cleanup_container(session_id)
+                return
+            if status == SessionStatus.RUNNING.value:
+                # Claim the non-pausable finalizing state *before* the
+                # helper starts: while the row is still running, a
+                # scheduler pass can move it to paused — but the agent
+                # container is already gone, so Docker ignores the pause
+                # (409), and a later resume would return the row to running
+                # with no supervisor left to finish it. The claim is the
+                # same atomic move the terminal transition is: a cancel
+                # that wins it owns the row, and this settlement records
+                # nothing.
+                if not await db.transition_session(session_id, SessionStatus.FINALIZING):
+                    logger.warning(
+                        "session %s was claimed by another actor before finalization; only cleaning up",
+                        session_id,
+                    )
+                    await self._cleanup_container(session_id)
+                    return
+            # The row is already finalizing: a restart interrupted the first
+            # finalizer. The finalizer is idempotent — it re-fetches the
+            # base, re-commits the same tree, and force-pushes — so running
+            # it again either completes the work or reports a real failure.
+            # A finalizer that fails fails the session — nothing landed, and
+            # a deploy must not be dispatched behind it.
             if not await self._finalize(session_id):
                 error = "finalization failed: the agent's work did not reach the repository"
         result = self._read_result(session_id)

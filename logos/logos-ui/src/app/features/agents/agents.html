@@ -181,7 +181,13 @@
               <i class="pi pi-github" aria-hidden="true"></i> Open pull request
             </a>
           }
-          @if (session.status === 'queued' || session.status === 'running' || session.status === 'paused' || session.status === 'starting') {
+          @if (
+            session.status === 'queued' ||
+            session.status === 'running' ||
+            session.status === 'paused' ||
+            session.status === 'starting' ||
+            session.status === 'finalizing'
+          ) {
             <button class="btn btn--danger" (click)="cancel(session)">Cancel session</button>
           }
 

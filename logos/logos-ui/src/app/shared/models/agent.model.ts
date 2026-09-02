@@ -3,6 +3,7 @@ export type AgentSessionStatus =
   | 'starting'
   | 'running'
   | 'paused'
+  | 'finalizing'
   | 'succeeded'
   | 'failed'
   | 'cancelled';

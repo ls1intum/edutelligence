@@ -348,6 +348,10 @@ export class Agents implements OnInit {
       // A queued session with no capacity is waiting on purpose, not stuck.
       if (capacity && !capacity.may_start) return 'queued · waiting for capacity';
     }
+    if (session.status === 'finalizing') {
+      // The agent is done; the runner is committing and pushing the work.
+      return 'finalizing · pushing changes';
+    }
     return session.status;
   }
 

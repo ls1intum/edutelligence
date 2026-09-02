@@ -202,16 +202,32 @@ def _rebuild_git_metadata(repo_url: str) -> None:
     reads, never executes, and the one part worth keeping. The agent's home
     is reset before this is called, because git reads the global
     configuration (including the initialisation template) from there.
+
+    Symlinks count as agent-writable too: a ``.git`` — or an ``objects`` —
+    that is a link into another tree would be followed by anything that
+    reads it, so links are unlinked, never traversed.
     """
     git_dir = CHECKOUT / ".git"
-    keep_objects = (git_dir / "objects").is_dir()
-    for entry in git_dir.iterdir():
-        if keep_objects and entry.name == "objects":
-            continue
-        if entry.is_symlink() or not entry.is_dir():
-            entry.unlink()
-        else:
-            shutil.rmtree(entry)
+    if git_dir.is_symlink() or (git_dir.exists() and not git_dir.is_dir()):
+        # The metadata itself replaced by a link to another repository (or a
+        # plain file): following it would wipe and reinitialise the target's
+        # .git, so the path is unlinked and re-initialised from nothing.
+        git_dir.unlink()
+    elif git_dir.is_dir():
+        objects = git_dir / "objects"
+        # The object store is kept only when it is a real directory: a link
+        # named ``objects`` would make git read and write its store through
+        # the target, and the target belongs to no repository we own.
+        keep_objects = objects.is_dir() and not objects.is_symlink()
+        for entry in git_dir.iterdir():
+            if entry.is_symlink():
+                entry.unlink()
+            elif keep_objects and entry.name == "objects":
+                continue
+            elif entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
     run(["git", "init", "--quiet"], cwd=CHECKOUT, quiet=True)
     run(["git", "remote", "add", "origin", repo_url], cwd=CHECKOUT, quiet=True)
 
@@ -226,6 +242,13 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
     """
     _install_git_askpass(token)
     _reset_agent_home()
+    if CHECKOUT.is_symlink() or (CHECKOUT.exists() and not CHECKOUT.is_dir()):
+        # A session may have replaced the checkout itself with a link: the
+        # `.git` check below would follow it into another tree and treat
+        # that tree's metadata as this workspace's. The work behind a link
+        # is not a working copy of this workspace, so the path is unlinked
+        # and the repository comes back as a fresh clone.
+        CHECKOUT.unlink()
     if not (CHECKOUT / ".git").is_dir():
         log(f"cloning {repo_url} at {base_branch}")
         CHECKOUT.parent.mkdir(parents=True, exist_ok=True)
@@ -248,6 +271,68 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
     )
     # -B so a retried session reuses its branch name instead of failing.
     run(["git", "checkout", "-B", branch], cwd=CHECKOUT)
+
+
+def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) -> bool:
+    """Bring the agent's working tree under trusted metadata, then hand git the token.
+
+    The agent phase owned this checkout and its home without a credential,
+    but it could still plant hooks in ``.git``, a ``core.hooksPath``, a
+    credential helper in the repository config, and a global configuration
+    in its home — all of which git would run or read on the next fetch,
+    commit, and push. This container is the first process in the session to
+    hold the push token, so the home is replaced and the repository
+    metadata rebuilt *before* the token is introduced, and the askpass
+    helper is installed only after that rebuild: a fresh, standard
+    configuration is what the token meets, and nothing the agent planted
+    can intercept it.
+
+    Unlike preparation, the working tree itself is kept — it is the
+    session's work. The branch is re-anchored on a fresh fetch of the base
+    branch: the rebuild removed its ref, and a retried session must push a
+    diff against the base, not build on a previous run's tip. The index is
+    aligned with the branch without touching a single file.
+
+    Returns False when there is no working copy to finalize: the agent left
+    nothing, or a link in place of the checkout.
+    """
+    _reset_agent_home()
+    if CHECKOUT.is_symlink() or (CHECKOUT.exists() and not CHECKOUT.is_dir()):
+        log("the checkout is not a directory; there is no work to finalize")
+        if CHECKOUT.is_symlink():
+            CHECKOUT.unlink()
+        return False
+    if not (CHECKOUT / ".git").is_dir():
+        # No repository at the checkout path: nothing to commit, and an
+        # init here would only create an empty one the push would fill
+        # with a history-less tree.
+        log("no repository at the checkout; there is no work to finalize")
+        return False
+    _rebuild_git_metadata(repo_url)
+    # Only now that the metadata is fresh and standard does the token enter
+    # the process: askpass is the only credential git will see, and
+    # nothing the agent planted can run before it is installed.
+    _install_git_askpass(token)
+    run(["git", "fetch", "--depth", "50", "origin", base_branch], cwd=CHECKOUT)
+    # Re-anchor the session's branch on the base it was given (the rebuild
+    # removed its ref, see above).
+    run(["git", "update-ref", f"refs/heads/{branch}", "FETCH_HEAD"], cwd=CHECKOUT, quiet=True)
+    # Track the remote branch when a previous run left one, so the
+    # force-with-lease push below verifies against what is actually there.
+    # A first run has none; the lease then requires the remote branch to be
+    # absent, which it is.
+    run(["git", "fetch", "--depth", "50", "origin", branch], cwd=CHECKOUT, check=False, quiet=True)
+    run(["git", "symbolic-ref", "HEAD", f"refs/heads/{branch}"], cwd=CHECKOUT, quiet=True)
+    # Mixed reset: the index follows the branch, the working tree — the
+    # agent's work — is left exactly as it stands.
+    run(["git", "reset"], cwd=CHECKOUT, quiet=True)
+    run(["git", "config", "user.name", "Logos Agent"], cwd=CHECKOUT, quiet=True)
+    run(
+        ["git", "config", "user.email", "logos-agent@users.noreply.github.com"],
+        cwd=CHECKOUT,
+        quiet=True,
+    )
+    return True
 
 
 def build_prompt(task: str) -> str:
@@ -498,12 +583,17 @@ def run_finalize(result: Result) -> None:
 
     The agent phase never held a GitHub token; this container gets the
     scoped one and egress, and is the only phase allowed to talk to GitHub
-    with it. It adds its outcome to the result file the agent phase wrote
-    (tokens, cost) rather than replacing it.
+    with it. Before the token is introduced, the checkout and home are
+    brought under trusted metadata again — the agent owned both while it
+    ran — and the askpass helper is installed only after that rebuild, so
+    ``git push`` authenticates with a credential nothing planted can
+    intercept. It adds its outcome to the result file the agent phase
+    wrote (tokens, cost) rather than replacing it.
     """
     branch = require_env("LOGOS_SESSION_BRANCH")
     task = require_env("LOGOS_SESSION_TASK")
     base_branch = os.environ.get("LOGOS_SESSION_BASE_BRANCH", "main")
+    repo_url = require_env("LOGOS_REPO_URL")
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         log("no GitHub token provided; leaving changes uncommitted in the workspace")
@@ -516,7 +606,7 @@ def run_finalize(result: Result) -> None:
         except Exception as exc:
             log(f"ignoring unreadable result file from the agent phase: {exc}")
 
-    count = commit_and_push(branch, task)
+    count = commit_and_push(branch, task) if finalize_checkout(repo_url, base_branch, branch, token) else 0
     result.data["files_changed"] = count
     result.data["committed"] = count > 0
     if count and os.environ.get("LOGOS_SESSION_OPEN_PR") == "1":

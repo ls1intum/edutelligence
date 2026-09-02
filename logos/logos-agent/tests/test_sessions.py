@@ -54,6 +54,23 @@ class TestStateMachine:
         # row claiming a container that was never created.
         assert not can_transition(SessionStatus.QUEUED, SessionStatus.RUNNING)
 
+    def test_finalizing_is_claimed_from_running(self):
+        # Settlement claims the non-pausable state before the finalizer
+        # helper starts, so the scheduler can no longer see the row as
+        # running once the agent container is gone.
+        assert can_transition(SessionStatus.RUNNING, SessionStatus.FINALIZING)
+
+    def test_finalizing_never_returns_to_running_or_paused(self):
+        # Pausing would have nothing left to freeze (the agent container is
+        # gone), and a resume would hand the row back with no supervisor to
+        # finish it — the stranded-session race this state exists to close.
+        assert not can_transition(SessionStatus.FINALIZING, SessionStatus.PAUSED)
+        assert not can_transition(SessionStatus.FINALIZING, SessionStatus.RUNNING)
+
+    def test_finalizing_reaches_its_outcomes(self):
+        for target in (SessionStatus.SUCCEEDED, SessionStatus.FAILED, SessionStatus.CANCELLED):
+            assert can_transition(SessionStatus.FINALIZING, target)
+
 
 class TestBranchDerivation:
     def test_branch_carries_the_configured_prefix(self):
@@ -422,8 +439,9 @@ class TestLaunchAndSupervision:
 
         assert moved is True
         # The claim comes first: CANCELLED before the stop, and the
-        # settle's SUCCEEDED attempt loses the race to it.
-        assert order == [("transition", SessionStatus.CANCELLED), "stop", ("transition", SessionStatus.SUCCEEDED)]
+        # settle's finalizing claim — the move that would have handed the
+        # session to the finalizer — loses the race to it.
+        assert order == [("transition", SessionStatus.CANCELLED), "stop", ("transition", SessionStatus.FINALIZING)]
         assert dispatched == []
         assert events == [(EventKind.STATUS, {"status": "cancelled"})]
         assert removed.count("cid-7") >= 1
@@ -541,15 +559,19 @@ class TestAgentPhaseIsolation:
     async def test_a_successful_settlement_runs_the_trusted_finalizer(self, monkeypatch, tmp_path):
         # The agent phase pushed nothing: with a clean agent exit, settlement
         # runs the finalize helper — the container that commits, pushes, and
-        # opens the pull request with the scoped token.
+        # opens the pull request with the scoped token. The row leaves
+        # 'running' (into the non-pausable finalizing state) before the
+        # helper exists, so a scheduler pass can never pause it underneath.
         from app import sessions
 
         patched = self._patch_base(monkeypatch, tmp_path)
         created: list = []
         removed: list = []
+        order: list = []
 
         async def fake_create(**kwargs):
             created.append(kwargs)
+            order.append(("helper", "created"))
             return "cid-finalize"
 
         async def fake_wait(_cid, **_kwargs):
@@ -557,6 +579,10 @@ class TestAgentPhaseIsolation:
 
         async def fake_remove(cid, **_kwargs):
             removed.append(cid)
+
+        async def fake_transition(_sid, target, **_fields):
+            order.append(("transition", target))
+            return True
 
         async def noop(*_args, **_kwargs):
             return None
@@ -567,10 +593,19 @@ class TestAgentPhaseIsolation:
         monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
         monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
         monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
-        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
         monkeypatch.setattr(sessions.db, "add_event", noop)
 
         await sessions.manager._settle(7, exit_code=0, error=None)
+
+        # The finalizing claim precedes the helper; the terminal transition
+        # comes after it.
+        assert order[0] == ("transition", SessionStatus.FINALIZING)
+        assert order.index(("helper", "created")) > 0
+        assert [target for kind, target in order if kind == "transition"] == [
+            SessionStatus.FINALIZING,
+            SessionStatus.SUCCEEDED,
+        ]
 
         assert len(created) == 1
         helper = created[0]
@@ -578,6 +613,7 @@ class TestAgentPhaseIsolation:
         assert helper["env"]["LOGOS_SESSION_PHASE"] == "finalize"
         assert helper["env"]["GITHUB_TOKEN"] == "ghp-session-token"
         assert helper["env"]["GH_TOKEN"] == "ghp-session-token"
+        assert helper["env"]["LOGOS_REPO_URL"] == patched.repo_url
         assert helper["env"]["LOGOS_SESSION_OPEN_PR"] == "1"
         assert helper["network"] == patched.session_egress_network
         assert helper["labels"] == {"logos.agent.helper": "finalize"}
@@ -653,10 +689,139 @@ class TestAgentPhaseIsolation:
 
         await sessions.manager._settle(7, exit_code=0, error=None)
 
-        target, fields = transitions[0]
+        # The claim to finalizing comes first; the failure lands on the
+        # terminal transition from there.
+        assert transitions[0][0] is SessionStatus.FINALIZING
+        target, fields = transitions[1]
         assert target is SessionStatus.FAILED
         assert "finalization failed" in fields["error"]
         assert events[0]["status"] == "failed"
+
+    async def test_a_finalizing_row_still_reaches_the_finalizer(self, monkeypatch, tmp_path):
+        # Restart recovery hands a finalizing row back to settlement with a
+        # clean exit: the finalizer must still run — it is idempotent, so a
+        # second run either completes the push or reports a real failure —
+        # and no second claim is attempted: the row is already finalizing.
+        from app import sessions
+
+        self._patch_base(monkeypatch, tmp_path)
+        created: list = []
+        transitions: list = []
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        async def fake_transition(_sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({**self.ROW, "status": "finalizing"}))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert len(created) == 1
+        assert created[0]["name"] == "logos-agent-finalize-7"
+        # Only the terminal transition: no re-claim of a state the row
+        # already has.
+        assert transitions == [SessionStatus.SUCCEEDED]
+
+    async def test_a_scheduler_pass_cannot_pause_a_finalizing_session(self, monkeypatch, tmp_path):
+        # The agent exited cleanly and settlement claimed finalizing before
+        # the finalizer started; the agent container is gone. A high-load
+        # scheduler pass must not move the row to paused: the pause would
+        # hit an exited container (Docker's 409 ignored), and a later
+        # resume would return the row to running with no supervisor left to
+        # finish it — stranding the session. The row leaves the running set
+        # with the claim, so the pass has nothing to pause; a pause that
+        # raced the claim loses the transition, and the session still
+        # settles.
+        from app import capacity, sessions
+        from app.schemas import can_transition
+
+        self._patch_base(monkeypatch, tmp_path)
+        # A fresh manager: the module singleton's admission lock binds to
+        # whichever loop first contended on it.
+        manager = sessions.SessionManager()
+        monkeypatch.setattr(sessions, "manager", manager)
+
+        states = {7: "running"}
+        order: list = []
+        paused: list = []
+        events: list = []
+
+        async def fake_reading(_timeout_s=5.0):
+            return capacity.Reading(load=0.99, busy_slots=10, total_slots=10, queue_total=0, ok=True)
+
+        async def fake_in_status(status):
+            # A fresh read on every call, like the database.
+            return [dict(self.ROW)] if states[7] == status.value else []
+
+        async def fake_transition(sid, target, **_fields):
+            order.append(("transition", target))
+            # A validated transition, like the database: only legal edges,
+            # and the row really moves.
+            if not can_transition(SessionStatus(states[sid]), target):
+                return False
+            states[sid] = target.value
+            return True
+
+        async def fake_finalize(_self, _sid):
+            order.append(("finalize", "start"))
+            # The platform spikes while the finalizer runs: a full pass,
+            # plus a pause that read the running row before the claim and
+            # lands anyway.
+            await manager.scheduler_pass()
+            await manager._pause(dict(self.ROW), "load")
+            order.append(("finalize", "end"))
+            return True
+
+        async def fake_pause(cid, **_kwargs):
+            paused.append(cid)
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.capacity, "read_load", fake_reading)
+        monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.SessionManager, "_finalize", fake_finalize)
+
+        await manager._settle(7, exit_code=0, error=None)
+
+        # The claim came first, the pass ran while the row was finalizing,
+        # and the row still reached its terminal state.
+        assert order[0] == ("transition", SessionStatus.FINALIZING)
+        assert ("finalize", "start") in order and ("finalize", "end") in order
+        assert states[7] == "succeeded"
+        # The racing pause did reach Docker (409 on the exited container,
+        # ignored in production) and did attempt the transition — but the
+        # state machine refused it: the row went straight from finalizing
+        # to its terminal state, no pause event was emitted, and the
+        # session was not left stranded.
+        assert paused == ["cid-7"]
+        assert ("transition", SessionStatus.PAUSED) in order
+        assert events == [(EventKind.STATUS, {"status": "succeeded", "exit_code": 0, "error": None})]
 
 
 class TestOverlappingAdmission:
@@ -866,6 +1031,7 @@ class TestScreenshotOrchestration:
     """
 
     SESSION_ROW = {
+        "status": "running",
         "container_id": "cid-7",
         "deploy_to_dev": False,
         "branch_name": "agent/feature-work/session-7",
@@ -1084,6 +1250,7 @@ class TestScreenshotOrchestration:
 
         async def fake_get_session(_sid):
             return {
+                "status": "running",
                 "container_id": "cid-x",
                 "deploy_to_dev": True,
                 "branch_name": "agent/feature-work/session",
@@ -1200,6 +1367,7 @@ class TestSettlementRaceAndDeployTag:
     """
 
     SESSION_ROW = {
+        "status": "running",
         "container_id": "cid-7",
         "deploy_to_dev": True,
         "branch_name": "agent/feature-work/session-7",
@@ -1599,9 +1767,16 @@ class TestRestartReconciliation:
             sessions.db,
             "get_session",
             # The row as it stands after the re-adoption above: the cleanup
-            # below can only find the container because the id is in there.
+            # below can only find the container because the id is in there,
+            # and settlement sees the row where the re-adoption left it.
             self._async_value(
-                {**self.STARTING_ROW, "container_id": "cid-x", "deploy_to_dev": False, "screenshot_paths": []}
+                {
+                    **self.STARTING_ROW,
+                    "status": "running",
+                    "container_id": "cid-x",
+                    "deploy_to_dev": False,
+                    "screenshot_paths": [],
+                }
             ),
         )
         monkeypatch.setattr(sessions.docker_engine, "container_state", fake_state)
@@ -1615,12 +1790,53 @@ class TestRestartReconciliation:
 
         assert updated == []
         # The id and branch ride on the normalizing transition; starting has
-        # no edge to succeeded, so settlement's terminal transition is the
-        # second.
+        # no edge to succeeded, so settlement claims finalizing and the
+        # terminal transition is the last.
         assert transitions[0] == (SessionStatus.RUNNING, self.META)
-        assert [target for target, _ in transitions] == [SessionStatus.RUNNING, SessionStatus.SUCCEEDED]
+        assert [target for target, _ in transitions] == [
+            SessionStatus.RUNNING,
+            SessionStatus.FINALIZING,
+            SessionStatus.SUCCEEDED,
+        ]
         assert removed == ["cid-x"]
         assert events == [(EventKind.STATUS, {"status": "succeeded", "exit_code": 0, "error": None})]
+
+    async def test_a_finalizing_row_refinalizes_after_a_restart(self, monkeypatch, tmp_path):
+        # The runner restarted while the finalizer ran: the row is
+        # finalizing, the agent container is gone, and the helper container
+        # was swept by the label check. The working copy is intact on the
+        # volume, and the finalizer is idempotent, so the row settles
+        # through a fresh finalizer run — a clean exit, not a "container
+        # vanished" failure, which would fail sessions whose work had in
+        # fact landed.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        finalizing_row = {
+            **self.STARTING_ROW,
+            "status": "finalizing",
+            "branch_name": "agent/feature-work/session-7",
+        }
+        settled: list = []
+        removed: list = []
+
+        async def fake_settle(_self, sid, **kwargs):
+            settled.append((sid, kwargs))
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        # No live container at all: the agent's has exited, the helper's
+        # was removed by the reconciliation's own sweep.
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", self._async_value([]))
+        self._patch_rows(monkeypatch, sessions, {SessionStatus.FINALIZING: [finalizing_row]})
+        monkeypatch.setattr(sessions.SessionManager, "_settle", fake_settle)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+
+        await sessions.manager._reconcile()
+
+        # Settled as a clean exit — the finalizer will run again — never as
+        # a vanished-container failure.
+        assert settled == [(7, {"exit_code": 0, "error": None})]
+        assert removed == []
 
     async def test_paused_container_from_a_starting_row_normalizes_through_running(self, monkeypatch, tmp_path):
         # The platform paused the container inside the start window, before

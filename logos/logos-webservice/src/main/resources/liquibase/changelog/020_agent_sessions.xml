@@ -69,7 +69,7 @@
                 cost_eur NUMERIC(12, 6) NOT NULL DEFAULT 0,
 
                 CONSTRAINT agent_sessions_status_check CHECK (status IN (
-                    'queued', 'starting', 'running', 'paused',
+                    'queued', 'starting', 'running', 'paused', 'finalizing',
                     'succeeded', 'failed', 'cancelled'
                 ))
             );
@@ -84,9 +84,11 @@
             -- At most one session may occupy a workspace. Enforced here as
             -- well as in the admission query, because a bug in the scheduler
             -- would otherwise corrupt a working copy rather than raise.
+            -- Finalizing occupies it too: the finalizer container runs git
+            -- in the same working copy on the same volume.
             CREATE UNIQUE INDEX uq_agent_sessions_active_workspace
                 ON agent_sessions(workspace_id)
-             WHERE status IN ('starting', 'running', 'paused');
+             WHERE status IN ('starting', 'running', 'paused', 'finalizing');
         ]]></sql>
         <rollback>
             <sql>DROP TABLE IF EXISTS agent_sessions CASCADE;</sql>

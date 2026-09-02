@@ -18,13 +18,24 @@ class SessionStatus(StrEnum):
     STARTING = "starting"  # container being created
     RUNNING = "running"  # agent working
     PAUSED = "paused"  # container stopped to give capacity back
+    FINALIZING = "finalizing"  # agent exited, the trusted finalizer is pushing
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
 
 TERMINAL_STATUSES = frozenset({SessionStatus.SUCCEEDED, SessionStatus.FAILED, SessionStatus.CANCELLED})
-ACTIVE_STATUSES = frozenset({SessionStatus.QUEUED, SessionStatus.STARTING, SessionStatus.RUNNING, SessionStatus.PAUSED})
+ACTIVE_STATUSES = frozenset(
+    {
+        SessionStatus.QUEUED,
+        SessionStatus.STARTING,
+        SessionStatus.RUNNING,
+        SessionStatus.PAUSED,
+        # Finalizing still occupies the workspace: the finalizer container
+        # has the volume mounted and runs git in the working copy.
+        SessionStatus.FINALIZING,
+    }
+)
 
 # Transitions the service is allowed to make. Paused sessions return to
 # running (their container is unpaused), never to starting: the container and
@@ -35,12 +46,18 @@ _ALLOWED: dict[SessionStatus, frozenset[SessionStatus]] = {
     SessionStatus.RUNNING: frozenset(
         {
             SessionStatus.PAUSED,
+            SessionStatus.FINALIZING,
             SessionStatus.SUCCEEDED,
             SessionStatus.FAILED,
             SessionStatus.CANCELLED,
         }
     ),
     SessionStatus.PAUSED: frozenset({SessionStatus.RUNNING, SessionStatus.CANCELLED, SessionStatus.FAILED}),
+    # Finalizing is not pausable and never returns to running: the agent
+    # container is gone, so a pause would have nothing to freeze, and a
+    # resume would hand the row back with no supervisor to finish it. The
+    # finalizer runs to completion, or the session is cancelled or failed.
+    SessionStatus.FINALIZING: frozenset({SessionStatus.SUCCEEDED, SessionStatus.FAILED, SessionStatus.CANCELLED}),
     SessionStatus.SUCCEEDED: frozenset(),
     SessionStatus.FAILED: frozenset(),
     SessionStatus.CANCELLED: frozenset(),

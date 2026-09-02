@@ -9,10 +9,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
+import os
+import stat
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from . import capacity, db, docker_engine, github
 from .auth import Principal, require_agent_operator
@@ -313,17 +317,58 @@ async def stream_events(
     )
 
 
+def _serve_session_file(target: Path) -> Response | None:
+    """Open one of a session's own files without following links, or None.
+
+    The session that wrote the file ran unprivileged: it can leave a
+    symlink named like a file, and a check-then-serve sequence leaves a
+    window in which a still-running session can swap the file for a link
+    before the read. Opening with ``O_NOFOLLOW`` and verifying the opened
+    descriptor closes both: whatever name the link had, the open fails,
+    and the regular-file check happens on the descriptor, not on the name.
+    """
+    try:
+        fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+    except OSError:
+        os.close(fd)
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        return None
+    file = os.fdopen(fd, "rb")
+    response = Response(status_code=200)
+    response.media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    response.headers["Content-Length"] = str(info.st_size)
+    response.body_iterator = file
+    return response
+
+
 @app.get("/sessions/{session_id}/screenshots/{name}", tags=["sessions"])
-async def get_screenshot(session_id: int, name: str, _: Principal = Depends(require_agent_operator)) -> FileResponse:
+async def get_screenshot(session_id: int, name: str, _: Principal = Depends(require_agent_operator)) -> Response:
     # Reject traversal before touching the filesystem: `name` comes straight
     # from a URL, and the artefact root holds every session's output.
     if "/" in name or "\\" in name or name.startswith("."):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid name")
-    path = (artifact_dir(session_id) / "screenshots" / name).resolve()
-    root = (artifact_dir(session_id) / "screenshots").resolve()
-    if not str(path).startswith(str(root)) or not path.is_file():
+    # The trusted root is the artefact directory as the runner knows it —
+    # never the resolved screenshots path: the session that wrote it ran
+    # unprivileged and could turn `screenshots` itself into a link into
+    # anywhere the runner can read (its own /proc/self included), and a
+    # link resolved into its own root would pass any containment check
+    # built on it.
+    base = artifact_dir(session_id) / "screenshots"
+    target = base / name
+    if base.is_symlink() or target.is_symlink() or not target.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Screenshot not found")
-    return FileResponse(path)
+    if not target.resolve().is_relative_to(base.resolve()):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Screenshot not found")
+    response = _serve_session_file(target)
+    if response is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Screenshot not found")
+    return response
 
 
 @app.get("/sessions/{session_id}/pull-request", tags=["sessions"])

@@ -62,3 +62,124 @@ def test_openapi_schema_generates(routes):
     schema = main.app.openapi()
     assert schema["info"]["title"] == "Logos Agent Runner"
     assert "/sessions" in schema["paths"]
+
+
+class TestScreenshotContainment:
+    """What the screenshot route may hand out.
+
+    The screenshots are written by the session itself, which runs
+    unprivileged: it can leave a link named like a screenshot pointing at
+    anything the runner can read — the runner's own /proc/self included.
+    The route must serve only regular files inside the session's own
+    artefact directory, verified without following links.
+    """
+
+    @staticmethod
+    def _patch_root(monkeypatch, tmp_path):
+        from dataclasses import replace
+
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+
+    @staticmethod
+    async def _body(response) -> bytes:
+        # Read the body the same way the ASGI layer does.
+        from starlette.concurrency import iterate_in_threadpool
+
+        return b"".join([chunk async for chunk in iterate_in_threadpool(response.body_iterator)])
+
+    async def test_a_regular_file_is_served(self, monkeypatch, tmp_path):
+        from app.main import get_screenshot
+
+        self._patch_root(monkeypatch, tmp_path)
+        directory = tmp_path / "7" / "screenshots"
+        directory.mkdir(parents=True)
+        payload = b"\x89PNG fake bytes"
+        (directory / "shot.png").write_bytes(payload)
+
+        response = await get_screenshot(session_id=7, name="shot.png", _=None)
+
+        assert response.status_code == 200
+        assert response.media_type == "image/png"
+        assert response.headers["content-length"] == str(len(payload))
+        assert await self._body(response) == payload
+
+    async def test_a_symlinked_screenshots_directory_is_not_followed(self, monkeypatch, tmp_path):
+        # The agent can replace the whole screenshots directory with a link
+        # into runner space (its own /proc/self included): resolving such a
+        # link as the trusted root would make every file under it pass the
+        # containment check and be served.
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "environ").write_text("GITHUB_TOKEN=must-not-leave")
+        directory = tmp_path / "7"
+        directory.mkdir(parents=True)
+        (directory / "screenshots").symlink_to(outside)
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="environ", _=None)
+
+        assert exc.value.status_code == 404
+        # The target was never opened and stays untouched.
+        assert (outside / "environ").exists()
+
+    async def test_a_symlinked_file_is_not_served(self, monkeypatch, tmp_path):
+        # The same trick one level down: a link named like a screenshot,
+        # into a file outside the session's artefact directory.
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.png").write_bytes(b"runner file")
+        directory = tmp_path / "7" / "screenshots"
+        directory.mkdir(parents=True)
+        (directory / "shot.png").symlink_to(outside / "secret.png")
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="shot.png", _=None)
+
+        assert exc.value.status_code == 404
+
+    async def test_a_dangling_symlink_file_is_not_served(self, monkeypatch, tmp_path):
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+        directory = tmp_path / "7" / "screenshots"
+        directory.mkdir(parents=True)
+        (directory / "shot.png").symlink_to(tmp_path / "never-created")
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="shot.png", _=None)
+
+        assert exc.value.status_code == 404
+
+    async def test_a_traversal_name_is_refused(self, monkeypatch, tmp_path):
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="../secret.png", _=None)
+
+        assert exc.value.status_code == 400
+
+    async def test_a_missing_file_is_not_found(self, monkeypatch, tmp_path):
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+        (tmp_path / "7" / "screenshots").mkdir(parents=True)
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="nope.png", _=None)
+
+        assert exc.value.status_code == 404
