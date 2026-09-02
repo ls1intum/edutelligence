@@ -990,12 +990,13 @@ class LogosBridgeClient:
         per_gpu_free_mb = min(v["free_mb"] for v in relevant_snap.values())
         hardware_max_tp = _max_tp_for_plan({"model": model_name, "gpu_devices": gpu_devices}, len(gpu_snap))
 
-        # kv_per_token_bytes is cached under the model's own torch_dtype —
-        # an operator's --kv-cache-dtype override (e.g. fp8 on a bf16
-        # model) must be applied here, not left baked into a stale value,
-        # or the min-KV check can fail on a footprint twice the real one.
+        # kv_per_token_bytes is cached under the model's own dtype; a plan's
+        # --kv-cache-dtype override must be applied here, or the min-KV
+        # check uses double the real footprint. "auto" means "use the
+        # model's dtype" though — not a concrete one, so it must skip.
+        is_explicit_override = bool(kv_cache_dtype) and kv_cache_dtype.strip().lower() != "auto"
         kv_per_token_bytes = hf_meta.kv_per_token_bytes
-        if kv_cache_dtype and hf_meta.num_hidden_layers and hf_meta.num_key_value_heads and hf_meta.kv_head_dim:
+        if is_explicit_override and hf_meta.num_hidden_layers and hf_meta.num_key_value_heads and hf_meta.kv_head_dim:
             kv_per_token_bytes = kv_bytes_for_dtype(
                 hf_meta.num_hidden_layers, hf_meta.num_key_value_heads, hf_meta.kv_head_dim, kv_cache_dtype
             )

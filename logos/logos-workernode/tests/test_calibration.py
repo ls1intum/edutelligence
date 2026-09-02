@@ -938,6 +938,55 @@ def test_calibrate_with_tp_escalation_retries_remote_code_after_widening(tmp_pat
     assert result.tensor_parallel_size == 8
 
 
+def test_calibrate_with_tp_escalation_stops_on_fatal_error_surfaced_after_widening(tmp_path):
+    """A fatal error (unsupported architecture) can be invisible at the
+    HF-derived ceiling (OOM hits first) and only surface once the widened
+    hardware-max probe gets far enough to reach vLLM's model-loading code.
+    Once that happens, escalation must stop immediately instead of wasting
+    another spawn on the configured tp fallback — re-checking fatal-ness
+    only against the very first probe let a later, real fatal failure slip
+    through the "not _fatal" guard."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp < 8:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="CUDA out of memory",
+            )
+        return CalibrationResult(
+            model="big-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error="ValueError: vLLM does not recognize this architecture: FooNet",
+        )
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "_hf_max_tp_ceiling": 2, "tensor_parallel_size": 1},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=8,
+        )
+
+    # 2 (ceiling, OOM — not yet fatal) -> 8 (widened, genuinely fatal).
+    # Must NOT also try tp=1 (the configured/original tp fallback).
+    assert seen_tps == [2, 8]
+    assert not result.success
+    assert result.tensor_parallel_size == 8
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Group 6 — _format_kv_mb helper
 # ═══════════════════════════════════════════════════════════════════════

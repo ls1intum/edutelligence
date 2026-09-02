@@ -1935,6 +1935,42 @@ async def test_run_compatibility_precheck_applies_kv_cache_dtype_override(tmp_pa
     assert profile.kv_per_token_bytes == 2 * 32 * 8 * 128 * 1
 
 
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_kv_cache_dtype_auto_keeps_model_dtype(tmp_path, monkeypatch):
+    """ "auto" is vLLM's own value for "use the model's dtype" — not a
+    concrete dtype name. Recomputing it through the 2-byte fallback would
+    silently discard a correctly-derived non-2-byte estimate (fp32 here)
+    and wrongly report an oversized model as compatible."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_MIN_KV, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=10 * 1024 * 1024,
+            kv_per_token_bytes=2 * 32 * 8 * 128 * 4,  # fp32 (4 bytes/element)
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            kv_head_dim=128,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 400.0, "used_mb": 0.0, "free_mb": 400.0}},
+    )
+
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, kv_cache_dtype="auto"
+    )
+    assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
+
+
 # ── Streaming: defer stream_start until first token byte (wake-readiness fix) ──
 
 

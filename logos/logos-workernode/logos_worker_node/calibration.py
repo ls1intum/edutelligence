@@ -3251,14 +3251,15 @@ def calibrate_with_tp_escalation(
         retried_plan = {**plan, "tensor_parallel_size": tp}
         return plan, _try_calibrate(retried_plan, **cal_kwargs)
 
+    def _is_fatal(result: CalibrationResult) -> bool:
+        _err = result.error or ""
+        return "does not recognize this architecture" in _err or "Cannot access gated repo" in _err
+
     tp = max_tp
     current_plan = {**plan, "tensor_parallel_size": tp}
     result = _try_calibrate(current_plan, **cal_kwargs)
     plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
-
-    _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
-        result.error or ""
-    )
+    _fatal = _is_fatal(result)
 
     # _hf_max_tp_ceiling is only the smallest TP the HF byte-count estimate
     # expects to fit — an optimization to skip needlessly high probes, not
@@ -3275,6 +3276,7 @@ def calibrate_with_tp_escalation(
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
         plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+        _fatal = _is_fatal(result)
 
     # If max tp fails, try the configured (original) tp before giving up.
     # Models may have attention-head counts that aren't divisible by max_tp
@@ -3290,6 +3292,7 @@ def calibrate_with_tp_escalation(
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
         plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+        _fatal = _is_fatal(result)
 
     if not result.success or _fatal:
         return result
