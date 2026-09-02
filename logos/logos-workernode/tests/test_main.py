@@ -95,6 +95,27 @@ def test_download_one_model_explicit_quant_beats_operator_pin(tmp_path, monkeypa
     assert all("q4_k_m" not in pattern.lower() for pattern in kwargs["allow_patterns"])
 
 
+def test_download_one_model_skips_local_file_refs(tmp_path, monkeypatch) -> None:
+    # Regression: local GGUF file references (absolute AND relative) point at
+    # the host filesystem, not a Hub repository — the prefetch must not
+    # attempt to download them (the relative form used to fall through to
+    # snapshot_download(repo_id="./models")).
+    pytest.importorskip("huggingface_hub")
+
+    def _no_download(**kwargs) -> None:
+        raise AssertionError(f"local reference must not be downloaded: {kwargs}")
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", _no_download)
+
+    # Absolute local file …
+    worker_main._download_one_model(str(tmp_path / "models" / "model.gguf"), str(tmp_path))
+    # … relative local file (resolved against the working directory) …
+    monkeypatch.chdir(tmp_path)
+    worker_main._download_one_model("./models/model.gguf", str(tmp_path))
+    # … and the local directory reference, as before.
+    worker_main._download_one_model(f"{tmp_path}/qwen-GGUF:Q4_K_M", str(tmp_path))
+
+
 def test_startup_hf_home_blank_env_falls_back_to_models_path(tmp_path, monkeypatch) -> None:
     # Regression: a blank/whitespace HF_HOME must fall back to
     # <models_path>/.hf_cache — the directory the startup prefetch populates

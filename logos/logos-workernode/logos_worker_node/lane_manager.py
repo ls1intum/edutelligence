@@ -410,8 +410,15 @@ class LaneManager:
                 # check a host path can offer.
                 if gguf.is_gguf_ref_cached(hf_home, served_ref) is not True:
                     missing.append(model_name)
-                    local_dir = gguf.local_dir_path_of(served_ref)
-                    if local_dir is not None:
+                    if gguf.is_local_gguf_file_ref(served_ref):
+                        logger.warning(
+                            "Capability model '%s' not available locally: the local "
+                            "file %s is missing. Ensure the model is present "
+                            "on the host before it can be loaded.",
+                            model_name,
+                            served_ref,
+                        )
+                    elif (local_dir := gguf.local_dir_path_of(served_ref)) is not None:
                         logger.warning(
                             "Capability model '%s' not available locally: its local "
                             "directory %s is missing. Ensure the model is present "

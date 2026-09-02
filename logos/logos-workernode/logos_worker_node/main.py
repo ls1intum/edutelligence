@@ -52,17 +52,19 @@ def _download_one_model(model_name: str, hf_home: str, gguf_quant: str = "") -> 
     selected quant's files are downloaded, mirroring what the GGUF plugin's
     own download resolves to.
     """
-    from huggingface_hub import snapshot_download
-
     from logos_worker_node import gguf
 
-    # Local references (/path/model.gguf, /path/dir:<quant>) name host-
-    # filesystem locations, not Hub repositories — a download can never make
-    # them available, so the capability check (the local path itself) is
-    # their whole proof and the prefetch has nothing to do.
-    if model_name.startswith("/"):
+    # Local references (/path/model.gguf, ./models/model.gguf, /path/dir:
+    # <quant>) name host-filesystem locations, not Hub repositories — a
+    # download can never make them available, so the capability check (the
+    # local path itself) is their whole proof and the prefetch has nothing
+    # to do. (Checked before the huggingface_hub import: a local reference
+    # never needs the transitive dependency.)
+    if model_name.startswith("/") or gguf.is_local_gguf_file_ref(model_name):
         logger.info("Prefetch: %s is a local reference — nothing to download", model_name)
         return
+
+    from huggingface_hub import snapshot_download
 
     # validate_capabilities checks <hf_home>/hub/models--org--name, so download
     # into <hf_home>/hub to match (HF_HUB_CACHE == HF_HOME/hub).

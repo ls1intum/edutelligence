@@ -127,6 +127,27 @@ def test_validate_capabilities_local_dir_ref_checks_directory(tmp_path: Path, mo
     assert manager.validate_capabilities([str(bare_dir)]) == []
 
 
+def test_validate_capabilities_local_gguf_file_ref_checks_the_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("HF_HOME", raising=False)
+    models_root = tmp_path / "models"
+    models_root.mkdir()
+    manager = LaneManager(
+        OllamaConfig(models_path=str(models_root)),
+        lane_port_start=16141,
+        lane_port_end=16150,
+    )
+    model_dir = tmp_path / "local" / "Qwen3-8B-GGUF"
+    model_dir.mkdir(parents=True)
+    gguf_file = model_dir / "Qwen3-8B-Q4_K_M.gguf"
+    ref = str(gguf_file)
+
+    # The check is the FILE's existence (isfile), not the directory fallback
+    # (isdir), which can never accept a file — even inside a -GGUF directory.
+    assert manager.validate_capabilities([ref]) == [ref]
+    gguf_file.write_bytes(b"\x00")
+    assert manager.validate_capabilities([ref]) == []
+
+
 def test_validate_capabilities_partial_snapshot_reports_missing_quant(tmp_path: Path, monkeypatch) -> None:
     # The partial-cache regression: Hugging Face snapshots can be partial —
     # the prefetch cached Q4_K_M of the repository, and the capability now

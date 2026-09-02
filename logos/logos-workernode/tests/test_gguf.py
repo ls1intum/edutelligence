@@ -136,6 +136,20 @@ def test_local_dir_path_of() -> None:
     assert gguf.local_dir_path_of("/models/qwen") is None
 
 
+def test_is_local_gguf_file_ref() -> None:
+    # Absolute and relative local paths alike — any .gguf name that is not
+    # the strict org/name/file.gguf Hub form points at the host filesystem.
+    assert gguf.is_local_gguf_file_ref("/models/Qwen3-8B-GGUF/model-Q4_K_M.gguf") is True
+    assert gguf.is_local_gguf_file_ref("./models/model.gguf") is True
+    assert gguf.is_local_gguf_file_ref("../models/model.gguf") is True
+    assert gguf.is_local_gguf_file_ref("model.gguf") is True
+    # The Hub form is not a local file …
+    assert gguf.is_local_gguf_file_ref("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf") is False
+    # … and neither is anything that is not a file reference.
+    assert gguf.is_local_gguf_file_ref("unsloth/Qwen3-8B-GGUF") is False
+    assert gguf.is_local_gguf_file_ref("/models/qwen-GGUF:Q4_K_M") is False
+
+
 def test_is_gguf_repo_name() -> None:
     assert gguf.is_gguf_repo_name("unsloth/Qwen3-8B-GGUF") is True
     assert gguf.is_gguf_repo_name("huihui_ai/gemma-3-4b-it-GGUF") is True
@@ -461,11 +475,12 @@ def test_is_gguf_ref_cached_repo_not_cached_is_unavailable(tmp_path: Path) -> No
 
 
 def test_is_gguf_ref_cached_non_explicit_refs_are_not_checked(tmp_path: Path) -> None:
-    # A bare repo picks its quant from whatever is cached, a local path is a
-    # filesystem check — neither has a concrete snapshot target to verify.
+    # A bare repo picks its quant from whatever is cached, a plain model is a
+    # directory check — neither has a concrete snapshot target to verify.
+    # (Local GGUF FILE references are explicit: see
+    # test_is_gguf_ref_cached_local_file_ref_checks_the_file.)
     _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M.gguf"])
     assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF") is None
-    assert gguf.is_gguf_ref_cached(str(tmp_path), "/data/models/Qwen3-8B.gguf") is None
     assert gguf.is_gguf_ref_cached(str(tmp_path), "Qwen/Qwen3-8B") is None
 
 
@@ -529,6 +544,42 @@ def test_is_gguf_ref_cached_sharded_file_ref_family_must_be_in_one_path(tmp_path
     assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is True
 
 
+def test_is_gguf_ref_cached_sharded_file_ref_declared_total_must_match(tmp_path: Path) -> None:
+    # The declared total is part of the family's identity: a 2-shard request
+    # must not be satisfied by the shards of a 3-shard family of the same
+    # base name — erasing the marker's total used to let "…-of-3" shards fill
+    # the "…-of-2" index range, reporting an incomplete cache complete and
+    # suppressing the prefetch.
+    mismatch = tmp_path / "mismatch"
+    _write_gguf(
+        mismatch,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00003.gguf", "Qwen3-8B-Q4_K_M-00002-of-00003.gguf"],
+    )
+    ref = "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M-00001-of-00002.gguf"
+    assert gguf.is_gguf_ref_cached(str(mismatch), ref) is False
+    # The matching-total family satisfies the request …
+    matching = tmp_path / "matching"
+    _write_gguf(
+        matching,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "Qwen3-8B-Q4_K_M-00002-of-00002.gguf"],
+    )
+    assert gguf.is_gguf_ref_cached(str(matching), ref) is True
+    # … and stray different-total shards alongside it do not disqualify it.
+    stray = tmp_path / "stray"
+    _write_gguf(
+        stray,
+        "unsloth/Qwen3-8B-GGUF",
+        [
+            "Qwen3-8B-Q4_K_M-00001-of-00002.gguf",
+            "Qwen3-8B-Q4_K_M-00002-of-00002.gguf",
+            "Qwen3-8B-Q4_K_M-00001-of-00003.gguf",
+        ],
+    )
+    assert gguf.is_gguf_ref_cached(str(stray), ref) is True
+
+
 def test_is_gguf_ref_cached_sharded_quant_family_must_be_in_one_path(tmp_path: Path) -> None:
     # Same completeness rule for a sharded QUANT: the indices must sit in a
     # single directory, not scattered across paths.
@@ -568,6 +619,24 @@ def test_is_gguf_ref_cached_sharded_quant_families_do_not_complete_each_other(tm
     assert gguf.is_gguf_ref_cached(str(complete), f"{model}:Q4_K_M") is True
 
 
+def test_is_gguf_ref_cached_local_file_ref_checks_the_file(tmp_path: Path, monkeypatch) -> None:
+    # A .gguf file inside a …-GGUF directory is a FILE reference: the check
+    # is isfile, never isdir on the file (which would always be False and
+    # suppress the capability), and relative paths are checked the same way.
+    model_dir = tmp_path / "Qwen3-8B-GGUF"
+    model_dir.mkdir()
+    gguf_file = model_dir / "Qwen3-8B-Q4_K_M.gguf"
+    assert gguf.is_gguf_ref_cached(str(tmp_path), str(gguf_file)) is False
+    gguf_file.write_bytes(b"\x00")
+    assert gguf.is_gguf_ref_cached(str(tmp_path), str(gguf_file)) is True
+    # Relative form, resolved against the working directory …
+    monkeypatch.chdir(tmp_path)
+    assert gguf.is_gguf_ref_cached(None, "Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf") is True
+    assert gguf.is_gguf_ref_cached(None, "./models/missing.gguf") is False
+    # A directory of the same name still resolves as a directory reference.
+    assert gguf.is_gguf_ref_cached(str(tmp_path), str(model_dir)) is True
+
+
 def test_is_gguf_ref_cached_local_dir_ref_checks_the_directory(tmp_path: Path) -> None:
     # A local dir:quant reference is a filesystem fact, not a Hub cache: the
     # check targets the directory WITHOUT the quant suffix (no path ever
@@ -600,9 +669,10 @@ def test_gguf_capability_target_shapes(tmp_path: Path) -> None:
     assert gguf.gguf_capability_target(str(tmp_path), "unsloth/Qwen3-8B-GGUF", pinned_quant="Q9_X") is None
     # … else the quant the spec resolver auto-selects from the cached listing.
     assert gguf.gguf_capability_target(str(tmp_path), "unsloth/Qwen3-8B-GGUF") == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
-    # Plain models and local paths are not a GGUF concern (directory check).
+    # Plain models are not a GGUF concern (directory check); a local GGUF
+    # file proves itself — its file existence, never the directory fallback.
     assert gguf.gguf_capability_target(str(tmp_path), "Qwen/Qwen3-8B") is None
-    assert gguf.gguf_capability_target(str(tmp_path), "/data/models/model.gguf") is None
+    assert gguf.gguf_capability_target(str(tmp_path), "/data/models/model.gguf") == "/data/models/model.gguf"
     # An unresolvable listing proves nothing — the bare repo must stay missing.
     assert gguf.gguf_capability_target(str(tmp_path), "org/never-cached-GGUF") == "org/never-cached-GGUF"
     # A cached repo without GGUF files serves as a plain model (directory
@@ -612,6 +682,15 @@ def test_gguf_capability_target_shapes(tmp_path: Path) -> None:
     assert gguf.gguf_capability_target(str(tmp_path), "org/plain-GGUF") is None
     _write_gguf(tmp_path, "org/aux-only-GGUF", ["tokenizer.gguf"])
     assert gguf.gguf_capability_target(str(tmp_path), "org/aux-only-GGUF") == "org/aux-only-GGUF"
+
+
+def test_gguf_capability_target_local_file_ref_is_itself() -> None:
+    # A local GGUF file proves itself (its file existence) in absolute and
+    # relative form — the directory fallback can never accept a file.
+    ref = "/models/Qwen3-8B-GGUF/model-Q4_K_M.gguf"
+    assert gguf.gguf_capability_target(None, ref) == ref
+    rel = "./models/model.gguf"
+    assert gguf.gguf_capability_target(None, rel) == rel
 
 
 def test_gguf_capability_target_local_dir_ref_is_itself() -> None:
