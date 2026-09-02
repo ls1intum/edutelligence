@@ -9,6 +9,7 @@ from iris.pipeline.struggle_intervention_pipeline import (
     CONFIRM_CLOSE_FALLBACK_SENTENCE,
     DEGRADED_CLOSE_RATIONALE,
     INLINE_HINT_MAX_CHARS,
+    MIXED_SCHEMA_CLOSE_RATIONALE,
     StruggleInterventionPipeline,
     parse_confirm_close_result,
     parse_gate_result,
@@ -1062,3 +1063,33 @@ def test_a_silent_decision_maps_no_gutter_payload_onto_the_status():
     assert state.callback.status.anchor_file is None
     assert state.callback.status.anchor_line is None
     assert state.callback.status.inline_hint is None
+
+
+def test_a_close_that_names_a_gate_action_is_refused():
+    """
+    An answer that claims a surface level and a finished episode at once answered the wrong
+    contract, and says nothing trustworthy about either. Refusing costs one more round with the
+    episode open; honouring it would show a closing sentence and file the episode as recovered.
+    """
+    cc = parse_confirm_close_result(
+        '{"resolved":true,"action":"silent","closingSentence":"Nice work.",'
+        '"episodeLabel":"Loop fixed","rationale":"tests pass"}'
+    )
+
+    assert cc.resolved is False
+    assert cc.closing_sentence is None
+    assert cc.episode_label is None
+    # The marker and the model's own reason both reach the evaluation log.
+    assert MIXED_SCHEMA_CLOSE_RATIONALE in cc.rationale
+    assert "tests pass" in cc.rationale
+
+
+def test_an_invented_extra_field_still_closes():
+    """The fingerprint is deliberately narrow: only the gate's own three action values."""
+    cc = parse_confirm_close_result(
+        '{"resolved":true,"action":"close","closingSentence":"Nice work.",'
+        '"episodeLabel":"Loop fixed"}'
+    )
+
+    assert cc.resolved is True
+    assert cc.closing_sentence == "Nice work."

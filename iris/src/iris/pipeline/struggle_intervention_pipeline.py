@@ -105,6 +105,9 @@ class GateResult:
 CONFIRM_CLOSE_FALLBACK_SENTENCE = "Nice work, that looks resolved."
 CONFIRM_CLOSE_FALLBACK_LABEL = "Resolved"
 DEGRADED_CLOSE_RATIONALE = "degraded close: model omitted closingSentence/episodeLabel"
+MIXED_SCHEMA_CLOSE_RATIONALE = "refused close: answer carried a gate action"
+# The gate's three surface levels. A confirm_close answer has no business naming one.
+GATE_ACTIONS = ("silent", "ambient", "active")
 
 
 @dataclass
@@ -130,7 +133,7 @@ def parse_gate_result(raw: Optional[str]) -> GateResult:
             "silent", None, 0.0, "unparseable model output", parse_failed=True
         )
     action = obj.get("action")
-    if action not in ("silent", "ambient", "active"):
+    if action not in GATE_ACTIONS:
         return GateResult("silent", None, 0.0, "invalid action", parse_failed=True)
     message = None
     if action != "silent":
@@ -191,6 +194,28 @@ def parse_confirm_close_result(raw: str) -> ConfirmCloseResult:
     obj = _extract_json_object(raw)
     if obj is None:
         return ConfirmCloseResult(False, None, None, None)
+    if obj.get("action") in GATE_ACTIONS:
+        # The model answered the gate's contract, not this one, and an answer that claims a
+        # surface level and a finished episode at once says nothing trustworthy about either.
+        # Refusing costs an episode that stays open one round longer; honouring it would show
+        # the student a closing sentence and file the episode as recovered. Deliberately a
+        # narrow fingerprint: only these three values, so an invented extra field does not
+        # cost a close that is otherwise well formed.
+        logger.warning(
+            "confirm_close answered with a gate action (%s); refusing the close",
+            obj.get("action"),
+        )
+        own_rationale = _as_opt_str(obj.get("rationale"))
+        return ConfirmCloseResult(
+            False,
+            None,
+            None,
+            (
+                f"{MIXED_SCHEMA_CLOSE_RATIONALE} ({own_rationale})"
+                if own_rationale
+                else MIXED_SCHEMA_CLOSE_RATIONALE
+            ),
+        )
     resolved = obj.get("resolved")
     if not isinstance(resolved, bool):
         return ConfirmCloseResult(False, None, None, _as_opt_str(obj.get("rationale")))
