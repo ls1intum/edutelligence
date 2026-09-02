@@ -390,6 +390,18 @@ class CapacityPlanner:
         # Track inflight removals separately: provider_id -> set of lane_ids
         self._inflight_removals: dict[int, set[str]] = {}
 
+        # Provider-wide in-flight lane-id reservation, shared by every load
+        # path: provider_id -> {lane_id -> (model_name, claiming task)}.
+        # The replica suffix scheme is not unique across models
+        # (planner-foo-2 is replica 2 of foo and replica 1 of foo-2), so two
+        # concurrent loads for different models can derive the same id from
+        # the same report. The manual path claims at pick time, the planner
+        # and request-time paths claim at dispatch time; the claim is what
+        # makes the second of them take the next suffix or skip, instead of
+        # dispatching over the lane the first is bringing up. Released when
+        # the load completes (or is dropped).
+        self._inflight_load_lane_ids: dict[int, dict[str, tuple[str, "asyncio.Task | None"]]] = {}
+
         # Phase 1b: Per-lane action locks to serialize operations on the same
         # lane without blocking unrelated lanes.
         self._lane_action_locks: dict[tuple[int, str], asyncio.Lock] = {}
@@ -764,6 +776,17 @@ class CapacityPlanner:
             if (self._replica_first_eviction or self._replicate_on_free_vram)
             else None
         )
+        # In-flight copies (see _count_starting_lanes_per_model): a scale-out
+        # the worker accepted but has not finished. The demand pass counts
+        # such a lane as an active copy of the model — which is what
+        # justifies planning yet another — so the cluster cap must count it
+        # too, or every cycle during a multi-minute startup plans a fresh
+        # suffix past MAX_REPLICAS_PER_MODEL. Loads planned in this same
+        # cycle need no separate count: both passes increment
+        # cluster_lanes_by_model as they plan.
+        cluster_starting_lanes_by_model = (
+            self._count_starting_lanes_per_model() if self._replicate_on_free_vram else None
+        )
 
         for provider_id in provider_ids:
             # Skip providers that haven't sent their first status yet —
@@ -792,6 +815,7 @@ class CapacityPlanner:
                     cycle_planned_additional_models=cycle_planned_additional_models,
                     best_provider_for_model=best_provider_for_model,
                     cluster_lanes_by_model=cluster_lanes_by_model,
+                    cluster_starting_lanes_by_model=cluster_starting_lanes_by_model,
                     cycle_balance_wake_models=cycle_balance_wake_models,
                     cycle_reserved_lane_ids=cycle_reserved_lane_ids,
                 )
@@ -818,6 +842,7 @@ class CapacityPlanner:
                     cycle_planned_models,
                     cycle_planned_additional_models,
                     cycle_reserved_lane_ids,
+                    cluster_starting_lanes_by_model=cluster_starting_lanes_by_model,
                 )
             )
 
@@ -1442,10 +1467,34 @@ class CapacityPlanner:
         # after reclaiming.  If the model truly can't fit (misconfiguration),
         # the reclaim loop will exhaust candidates and return None.
 
-        # Reserved against every lane on the worker: this model holds no
-        # lane, but another model may hold this one's replica-1 id (the
-        # suffix scheme is not unique across models).
-        lane_id = self._next_lane_id_for_model(provider_id, model_name)
+        # The demand path's model-level backoff, applied here as well: a
+        # lane of this model that errored (or failed to confirm) still holds
+        # its id, so the allocation below would answer with the next free
+        # suffix — under sustained request traffic that leaves a fresh
+        # failed lane (planner-X-2, planner-X-3, ...) per request, and the
+        # per-lane cooldown check on the fresh id further down cannot see
+        # the broken sibling.
+        model_lanes = [lane for lane in self._safe_get_lanes(provider_id) if lane.model_name == model_name]
+        blocked_reason = self._model_cold_load_blocked_reason(provider_id, model_name, model_lanes)
+        if blocked_reason is not None:
+            logger.info(
+                "Skipping cold load of %s on worker=%s: %s",
+                model_name,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                blocked_reason,
+            )
+            return None
+
+        # Reserved against every lane on the worker and every id an in-flight
+        # load already claims: another model may hold this one's replica-1 id
+        # (the suffix scheme is not unique across models), and the claim
+        # keeps the pick out of ids a concurrent load is about to take.
+        lane_id = self._next_lane_id_for_model(
+            provider_id,
+            model_name,
+            None,
+            reserved_ids=self._claimed_load_lane_ids(provider_id),
+        )
         load_action = CapacityPlanAction(
             action="load",
             provider_id=provider_id,
@@ -2128,6 +2177,26 @@ class CapacityPlanner:
                     if isinstance(lane, dict) and str(lane.get("lane_id") or "") == lane_id:
                         return True
         return any(lane.lane_id == lane_id for lane in self._safe_get_lanes(provider_id))
+
+    def _runtime_lane_model(self, provider_id: int, lane_id: str) -> Optional[str]:
+        """The model the worker (or the newest report) holds under this lane
+        id, or None when no lane exists there or the record that names it
+        carries no model. The manual load path uses this to tell "the id I
+        would take already runs my model's lane (no-op)" apart from "another
+        model's load raced me to the id (take the next suffix)".
+        """
+        if self._registry is not None:
+            snap = self._registry.peek_runtime_snapshot(provider_id)
+            lanes = ((snap or {}).get("runtime") or {}).get("lanes") or []
+            if isinstance(lanes, list):
+                for lane in lanes:
+                    if isinstance(lane, dict) and str(lane.get("lane_id") or "") == lane_id:
+                        model = str(lane.get("model") or "").strip()
+                        return model or None
+        for lane in self._safe_get_lanes(provider_id):
+            if lane.lane_id == lane_id:
+                return lane.model_name
+        return None
 
     # ------------------------------------------------------------------
     # GPU-aware eviction helpers
@@ -3028,6 +3097,33 @@ class CapacityPlanner:
                     counts[lane.model_name] = counts.get(lane.model_name, 0) + 1
         return counts
 
+    def _count_starting_lanes_per_model(self) -> dict[str, int]:
+        """Count in-flight (starting) lanes across the whole cluster, by model.
+
+        A scale-out the worker accepted but has not finished. The demand pass
+        counts such a lane as an active copy of the model (its ``active_lanes``
+        set excludes only stopped, error, sleeping, and failed lanes), so the
+        cluster-copy cap must count it as well — otherwise every cycle during
+        a multi-minute startup plans yet another suffix, exceeding
+        ``MAX_REPLICAS_PER_MODEL``. A starting lane whose load failed (the
+        persistent marker) does not count: the demand pass's active set
+        excludes it for the same reason.
+        """
+        counts: dict[str, int] = {}
+        failed = self._load_failed_ids()
+        for pid in self._facade.provider_ids():
+            try:
+                lanes = self._facade.get_all_provider_lane_signals(pid)
+            except Exception:
+                continue
+            for lane in lanes:
+                if lane.runtime_state != "starting":
+                    continue
+                if (pid, lane.lane_id) in failed:
+                    continue
+                counts[lane.model_name] = counts.get(lane.model_name, 0) + 1
+        return counts
+
     # ------------------------------------------------------------------
     # Cross-provider best-first ranking
     # ------------------------------------------------------------------
@@ -3320,6 +3416,7 @@ class CapacityPlanner:
         cycle_planned_additional_models: Optional[set[str]] = None,
         best_provider_for_model: Optional[dict[str, int]] = None,
         cluster_lanes_by_model: Optional[dict[str, int]] = None,
+        cluster_starting_lanes_by_model: Optional[dict[str, int]] = None,
         cycle_balance_wake_models: Optional[set[str]] = None,
         cycle_reserved_lane_ids: Optional[dict[int, set[str]]] = None,
     ) -> List[CapacityPlanAction]:
@@ -3857,10 +3954,16 @@ class CapacityPlanner:
                 )
                 continue
             is_additional_lane = bool(active_lanes)
+            # The cap counts in-flight copies too: active_lanes above treats
+            # an unfailed starting replica as an existing copy — which is
+            # what justifies this scale-out — so a cap that only saw
+            # loaded/running would plan a fresh suffix every cycle during a
+            # multi-minute startup, past MAX_REPLICAS_PER_MODEL.
+            in_flight_copies = (cluster_starting_lanes_by_model or {}).get(model_name, 0)
             if is_additional_lane and (
                 not self._replicate_on_free_vram
                 or eff < self.DEMAND_REPLICATION_FLOOR
-                or (cluster_lanes_by_model or {}).get(model_name, 0) >= self.MAX_REPLICAS_PER_MODEL
+                or (cluster_lanes_by_model or {}).get(model_name, 0) + in_flight_copies >= self.MAX_REPLICAS_PER_MODEL
             ):
                 logger.info(
                     "Skipping additional lane of %s on worker=%s: extra copies need "
@@ -4180,6 +4283,7 @@ class CapacityPlanner:
         cycle_planned_models: set[str],
         cycle_planned_additional_models: Optional[set[str]] = None,
         cycle_reserved_lane_ids: Optional[dict[int, set[str]]] = None,
+        cluster_starting_lanes_by_model: Optional[dict[str, int]] = None,
     ) -> list[CapacityPlanAction]:
         """Cross-provider replication pass — runs once per cycle.
 
@@ -4226,7 +4330,13 @@ class CapacityPlanner:
             current_replicas = cluster_lanes_by_model.get(model_name, 0)
             if current_replicas == 0:
                 continue  # not loaded anywhere yet → main demand pass owns first load
-            if current_replicas >= self.MAX_REPLICAS_PER_MODEL:
+            # In-flight copies count against the cap like the demand pass
+            # does: a replica still starting on some worker is a copy the
+            # cluster has committed to, not headroom for another one.
+            if (
+                current_replicas + (cluster_starting_lanes_by_model or {}).get(model_name, 0)
+                >= self.MAX_REPLICAS_PER_MODEL
+            ):
                 continue
 
             for pid in provider_ids:
@@ -6147,6 +6257,83 @@ class CapacityPlanner:
             index += 1
         return self._planner_lane_id(model_name, index)
 
+    # ------------------------------------------------------------------
+    # Provider-wide in-flight lane-id reservation
+    #
+    # Every load path — the manual "Load lane", the planner cycle, and the
+    # request-time cold load — allocates lane ids from the same report, and
+    # the replica suffix scheme is not unique across models (replica 2 of
+    # "foo" and replica 1 of "foo-2" both want "planner-foo-2"). The
+    # reservation below is the shared answer: a load claims the id it is
+    # about to take, other loads allocate around the claim, and the claim is
+    # released when the load completes.
+    # ------------------------------------------------------------------
+
+    def _inflight_load_owners(self, provider_id: int) -> dict[str, tuple[str, "asyncio.Task | None"]]:
+        """The provider's lane_id -> (model, claiming task) map, created on
+        demand so harness planners that skip __init__ work unchanged."""
+        owners = self.__dict__.get("_inflight_load_lane_ids")
+        if owners is None:
+            owners = self._inflight_load_lane_ids = {}
+        return owners.setdefault(provider_id, {})
+
+    def _claimed_load_lane_ids(self, provider_id: int) -> set[str]:
+        """Lane ids claimed by loads still in flight on this provider.
+
+        Stale entries (claiming task gone) do not count: they no longer gate
+        a dispatch, so letting them pin an id would only push future loads
+        onto ever higher suffixes.
+        """
+        return {
+            lane_id
+            for lane_id, (_model, owner) in self._inflight_load_owners(provider_id).items()
+            if owner is None or not owner.done()
+        }
+
+    def _inflight_load_models(self, provider_id: int) -> dict[str, str]:
+        """lane_id -> model for the loads in flight on this provider (live claims only)."""
+        return {
+            lane_id: model
+            for lane_id, (model, owner) in self._inflight_load_owners(provider_id).items()
+            if owner is None or not owner.done()
+        }
+
+    def _claim_load_lane_id(self, provider_id: int, lane_id: str, model_name: str) -> bool:
+        """Claim a lane id for an in-flight load.
+
+        Check-and-set with no await in between, so it is atomic on the event
+        loop: no other load can take the id between the reader's snapshot and
+        the claim. The claiming task may claim the same id again (the manual
+        path claims at pick time and the execution path re-claims at dispatch
+        time); a claim held by a live task elsewhere fails, which is the
+        collision signal.
+        """
+        owners = self._inflight_load_owners(provider_id)
+        task = asyncio.current_task()
+        entry = owners.get(lane_id)
+        if entry is not None:
+            _model, owner = entry
+            if owner is not None and owner is not task and not owner.done():
+                return False
+        owners[lane_id] = (model_name, task)
+        return True
+
+    def _release_load_lane_id(self, provider_id: int, lane_id: str) -> None:
+        """Give up a claimed lane id.
+
+        Owner-checked, so a release by someone else — or a second release of
+        a claim already gone — is a no-op.
+        """
+        owners = self._inflight_load_owners(provider_id)
+        entry = owners.get(lane_id)
+        if entry is None:
+            return
+        task = asyncio.current_task()
+        _model, owner = entry
+        if owner is not None and owner is not task:
+            return
+        owners.pop(lane_id, None)
+
     def manual_load_rejection_reason(self, provider_id: int) -> Optional[str]:
         """Why a manual load must not be attempted now, or None if it may run.
 
@@ -6196,71 +6383,133 @@ class CapacityPlanner:
         8B model can share a node's VRAM for extra parallelism. A manual load
         adds one such lane with no count to enforce — the plannability and
         capacity-snapshot checks above are the gate, and the worker's own
-        VRAM is the final word — and is a no-op only once the lane id it
-        would take already exists. That id is the next free replica id:
-        replica 1's id while that is free, the lowest unused index once it
-        is — the same rule the planner's demand path uses, so manual and
-        planner loads never fight over an id.
+        VRAM is the final word.
+
+        The lane id it takes is the next free replica id: replica 1's id
+        while that is free, the lowest unused index once it is — the same
+        rule the planner's demand path uses. Off limits are the ids the
+        worker reports *and* the ids other loads already claim: the replica
+        suffix scheme is not unique across models (``planner-foo-2`` is
+        replica 2 of ``foo`` and replica 1 of ``foo-2``), so two concurrent
+        loads for different models can derive the same id from the same
+        report. The pick is claimed against the provider-wide in-flight
+        reservation before the first await, so the second of them takes the
+        next suffix instead of dispatching over the lane the first is
+        bringing up. A second click for the same model is a no-op while the
+        first load is still in flight — its lane is not in the report yet,
+        and handing out the next suffix would place a second copy of the
+        very model the operator is already waiting for.
 
         Serialized on the per-lane lock, like every other path that loads or
         unloads a lane. The API answers 202 and leaves this running in the
-        background, so a second click — or a planner cycle deciding on the same
-        model — arrives while the first load is still in flight. Both derive the
-        same next-free lane id, so without the lock both would dispatch
-        ``add_lane`` for it, and the check inside the lock is what turns the
-        second into a no-op instead of a duplicate.
+        background, so everything is re-read under the lock: a load takes
+        minutes, and the provider state this was admitted on is long stale
+        by the time the lock is free. If the claimed id turned out to hold a
+        lane of the same model after all (the report lagged the runtime),
+        the load is a no-op; if another model's load holds it, the load
+        takes the next suffix instead of giving up.
         """
         rejection = self.manual_load_rejection_reason(provider_id)
         if rejection is not None:
             logger.warning("Refusing manual load of %s on worker=%s: %s", model_name, provider_id, rejection)
             return False
 
-        lanes = self._safe_get_lanes(provider_id)
-        lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes)
-        async with self._lane_lock(provider_id, lane_id):
-            # Everything below is re-read under the lock: a load takes minutes,
-            # so the provider state this was admitted on is long stale by the
-            # time the lock is free.
-            if self._lane_exists_in_runtime(provider_id, lane_id):
-                logger.info(
-                    "Manual load of %s on worker=%s is a no-op: lane %s already exists",
-                    model_name,
-                    provider_id,
-                    lane_id,
-                )
-                return False
-
-            rejection = self.manual_load_rejection_reason(provider_id)
-            if rejection is not None:
-                logger.warning(
-                    "Refusing manual load of %s on worker=%s after waiting for the lane lock: %s",
-                    model_name,
-                    provider_id,
-                    rejection,
-                )
-                return False
-
-            capacity = self._safe_get_capacity(provider_id)
-            if capacity is None:
-                logger.warning(
-                    "Refusing manual load of %s on worker=%s: capacity snapshot went away before dispatch",
-                    model_name,
-                    provider_id,
-                )
-                return False
-
-            profile = self._safe_get_profiles(provider_id).get(model_name)
-            action = CapacityPlanAction(
-                action="load",
-                provider_id=provider_id,
-                lane_id=lane_id,
-                model_name=model_name,
-                params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-                reason="Manual load requested by an operator",
+        # A load of this model already in flight on this worker: a second
+        # click, or the planner deciding the same model while the first copy
+        # is still minutes from serving. Its lane is not in the report yet,
+        # so the pick below would hand out the next free suffix and place a
+        # second copy of the very model the operator is already waiting for.
+        if any(model.lower() == model_name.lower() for model in self._inflight_load_models(provider_id).values()):
+            logger.info(
+                "Manual load of %s on worker=%s is a no-op: a load of the model is already in flight",
+                model_name,
+                provider_id,
             )
-            return await self._execute_action_with_confirmation(
-                action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S
+            return False
+
+        excluded: set[str] = set()
+        lane_id = ""
+        try:
+            for _attempt in range(3):
+                # Pick against the reported lanes and the ids in-flight loads
+                # already claim, then claim the result — no await in between,
+                # so the pick-then-claim is atomic on the event loop.
+                lane_id = self._next_lane_id_for_model(
+                    provider_id,
+                    model_name,
+                    None,
+                    reserved_ids=self._claimed_load_lane_ids(provider_id) | excluded,
+                )
+                if not self._claim_load_lane_id(provider_id, lane_id, model_name):
+                    # Lost a claim race: re-read the reservation and pick again.
+                    continue
+                async with self._lane_lock(provider_id, lane_id):
+                    # Everything below is re-read under the lock: a load takes
+                    # minutes, so the provider state this was admitted on is
+                    # long stale by the time the lock is free.
+                    if self._lane_exists_in_runtime(provider_id, lane_id):
+                        self._release_load_lane_id(provider_id, lane_id)
+                        existing_model = self._runtime_lane_model(provider_id, lane_id)
+                        if existing_model is None or existing_model.lower() == model_name.lower():
+                            logger.info(
+                                "Manual load of %s on worker=%s is a no-op: lane %s already exists",
+                                model_name,
+                                provider_id,
+                                lane_id,
+                            )
+                            return False
+                        logger.info(
+                            "Manual load of %s on worker=%s: lane %s is held by %s; taking the next suffix",
+                            model_name,
+                            provider_id,
+                            lane_id,
+                            existing_model,
+                        )
+                        excluded.add(lane_id)
+                        continue
+
+                    rejection = self.manual_load_rejection_reason(provider_id)
+                    if rejection is not None:
+                        logger.warning(
+                            "Refusing manual load of %s on worker=%s after waiting for the lane lock: %s",
+                            model_name,
+                            provider_id,
+                            rejection,
+                        )
+                        return False
+
+                    capacity = self._safe_get_capacity(provider_id)
+                    if capacity is None:
+                        logger.warning(
+                            "Refusing manual load of %s on worker=%s: capacity snapshot went away before dispatch",
+                            model_name,
+                            provider_id,
+                        )
+                        return False
+
+                    profile = self._safe_get_profiles(provider_id).get(model_name)
+                    action = CapacityPlanAction(
+                        action="load",
+                        provider_id=provider_id,
+                        lane_id=lane_id,
+                        model_name=model_name,
+                        params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
+                        reason="Manual load requested by an operator",
+                    )
+                    return await self._execute_action_with_confirmation(
+                        action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S
+                    )
+            logger.warning(
+                "Manual load of %s on worker=%s: no free lane id after re-reading the runtime",
+                model_name,
+                provider_id,
             )
+            return False
+        finally:
+            # The dispatch releases its (re)claim in its own finally; the
+            # owner check makes this a no-op when the claim is already gone.
+            if lane_id:
+                self._release_load_lane_id(provider_id, lane_id)
 
     def _build_load_params(
         self,
@@ -7779,6 +8028,29 @@ class CapacityPlanner:
                     return False
 
             elif action.action == "load":
+                # The provider-wide in-flight reservation: a concurrent load
+                # — a manual one, or a planned load of another model that
+                # derived the same id — may already hold this lane id. The
+                # worker keys lanes by id alone, so dispatching over it would
+                # overwrite the lane the other one is bringing up (the
+                # apply_lanes desired set is last-write-wins).
+                if not self._claim_load_lane_id(action.provider_id, action.lane_id, action.model_name):
+                    logger.warning(
+                        "Skipping load of %s on worker=%s: lane %s is claimed by an in-flight load",
+                        action.model_name,
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.lane_id,
+                    )
+                    return False
+                if self._lane_exists_in_runtime(action.provider_id, action.lane_id):
+                    logger.warning(
+                        "Skipping load of %s on worker=%s: lane %s already exists in the runtime",
+                        action.model_name,
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.lane_id,
+                    )
+                    self._release_load_lane_id(action.provider_id, action.lane_id)
+                    return False
                 # Estimate VRAM and atomically reserve
                 _estimated_load_vram = self._estimate_action_vram(action, _profile, _capacity) if _capacity else 0.0
                 if _reservation_id is None and _estimated_load_vram > 0 and _capacity is not None:
@@ -8010,6 +8282,11 @@ class CapacityPlanner:
             # Poll for confirmation
             confirmed = await self._poll_confirmation(action, timeout_seconds)
         finally:
+            # Release the in-flight lane-id claim (load actions claim it at
+            # the top of their branch) — runs even on CancelledError/BaseException,
+            # so a cancelled dispatch never pins the id.
+            if action.action == "load":
+                self._release_load_lane_id(action.provider_id, action.lane_id)
             # Release VRAM reservation — runs even on CancelledError/BaseException.
             # The worker's actual VRAM usage is reflected in the next capacity snapshot.
             self._release_vram(_reservation_id)

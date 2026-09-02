@@ -359,7 +359,8 @@ describe('LaneHealthPanel pending-note baseline', () => {
     const inFlight = panel.handleAddLane();
 
     // A fast status update reports the new starting lane before the HTTP
-    // promise settles — the stream already contains the accepted replica.
+    // promise settles — the stream already contains the accepted replica,
+    // and ngOnChanges cannot act on it yet: acceptedModel is still null.
     pushLanes({
       'planner-foo': lane({ model: 'foo', runtime_state: 'running' }),
       'planner-foo-2': lane({ model: 'foo', runtime_state: 'starting' }),
@@ -368,16 +369,13 @@ describe('LaneHealthPanel pending-note baseline', () => {
     resolveAdd?.();
     await inFlight;
 
-    // The load was accepted: the note is up and the model withheld...
-    expect(panel.acceptedModel()).toBe('foo');
-    expect(filterLoadableModels(panel.loadModels(), panel.acceptedModel())).toEqual([]);
-    // ...and the replica the stream has been reporting all along must count
-    // as fresh: the next push lifts the note and re-offers the model.
-    pushLanes({
-      'planner-foo': lane({ model: 'foo', runtime_state: 'running' }),
-      'planner-foo-2': lane({ model: 'foo', runtime_state: 'starting' }),
-    });
+    // The replica the stream has been reporting all along counts as fresh:
+    // the note never needs to stay up, and the model is offered again
+    // immediately — not on the next update.
     expect(panel.acceptedModel()).toBeNull();
+    expect(filterLoadableModels(panel.loadModels(), panel.acceptedModel())).toEqual([
+      { model_id: 1, model_name: 'foo' },
+    ]);
   });
 
   it('keeps the note up while only sibling lanes report in flight', async () => {

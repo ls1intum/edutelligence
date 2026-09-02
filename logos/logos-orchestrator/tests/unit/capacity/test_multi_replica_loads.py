@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from types import ModuleType, SimpleNamespace
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 # The planner imports `prometheus_client` at module load time. In CI / docker
 # it's installed; locally we stub it so the planner module is importable for
@@ -68,6 +68,7 @@ if "prometheus_client" not in sys.modules:
     sys.modules["prometheus_client"] = _prom_stub
 
 from logos import CapacityPlanner, LaneSchedulerSignals  # noqa: E402
+from logos.sdi.models import CapacityPlanAction  # noqa: E402
 
 
 def _lane(
@@ -1190,6 +1191,128 @@ class TestWorkerWideLaneIdReservation:
         assert [(a.provider_id, a.lane_id) for a in replication_actions] == [(1, "planner-foo-2-2")]
 
 
+class TestInFlightLaneIdReservation:
+    """The provider-wide in-flight lane-id reservation shared by the load
+    paths.
+
+    The cycle-wide reservation only covers loads planned in the same batch.
+    A manual load — or a load from an earlier cycle — is in flight while a
+    fresh picker reads the report, and the report shows nothing about it:
+    only a reservation that outlives the planning batch keeps two concurrent
+    loads from taking the same id, and the id is not unique across models
+    (replica 2 of foo and replica 1 of foo-2 both want planner-foo-2).
+    """
+
+    def test_manual_load_of_a_colliding_model_takes_the_next_suffix(self):
+        """A manual load of foo is in flight, holding planner-foo-2. A
+        concurrent manual load of foo-2 derives exactly that id (its
+        replica 1) from the same report: it must claim the next suffix
+        instead of dispatching over the lane the first load is bringing up."""
+        planner = _manual_load_planner([_lane("planner-foo", "foo", "running")])
+        dispatched: Dict[str, str] = {}
+        first_in_flight = asyncio.Event()
+        release = asyncio.Event()
+
+        async def execute(action, timeout_seconds=None):
+            dispatched[action.lane_id] = action.model_name
+            if action.model_name == "foo":
+                first_in_flight.set()
+                # Hold the id the way a real load does: minutes, not
+                # microseconds.
+                await release.wait()
+            return True
+
+        planner._execute_action_with_confirmation = execute
+        planner._lane_exists_in_runtime = lambda provider_id, lane_id: lane_id in dispatched
+        planner._runtime_lane_model = lambda provider_id, lane_id: dispatched.get(lane_id)
+
+        async def scenario():
+            first = asyncio.create_task(planner.load_lane_manually(1, "foo"))
+            await first_in_flight.wait()
+            second = asyncio.create_task(planner.load_lane_manually(1, "foo-2"))
+            # The colliding load runs to completion on its own while the
+            # first still holds its id.
+            second_result = await second
+            release.set()
+            first_result = await first
+            return first_result, second_result
+
+        first_result, second_result = asyncio.run(scenario())
+
+        assert first_result is True
+        assert second_result is True
+        assert dispatched == {"planner-foo-2": "foo", "planner-foo-2-2": "foo-2"}
+
+    def test_second_click_of_the_same_model_stays_a_no_op_while_in_flight(self):
+        """A load of the same model in flight is not a collision to route
+        around: a second click for foo must not take the next suffix, which
+        would place a second copy of the model the operator is already
+        waiting for."""
+        planner = _manual_load_planner([_lane("planner-foo", "foo", "running")])
+        dispatched: List[str] = []
+        first_in_flight = asyncio.Event()
+        release = asyncio.Event()
+
+        async def execute(action, timeout_seconds=None):
+            dispatched.append(action.lane_id)
+            first_in_flight.set()
+            await release.wait()
+            return True
+
+        planner._execute_action_with_confirmation = execute
+
+        async def scenario():
+            first = asyncio.create_task(planner.load_lane_manually(1, "foo"))
+            await first_in_flight.wait()
+            second_result = await planner.load_lane_manually(1, "foo")
+            release.set()
+            first_result = await first
+            return first_result, second_result
+
+        first_result, second_result = asyncio.run(scenario())
+
+        assert first_result is True
+        assert second_result is False
+        assert dispatched == ["planner-foo-2"]
+
+    def test_planned_load_skips_an_id_a_concurrent_load_claimed(self):
+        """A planned load was allocated its id from an earlier report; by
+        dispatch time a manual load for the colliding model holds it. The
+        planner's execution path must skip — the apply_lanes desired set is
+        last-write-wins, and dispatching would overwrite the lane the manual
+        load is bringing up."""
+        planner = _manual_load_planner([_lane("planner-foo", "foo", "running")])
+        release = asyncio.Event()
+        real_execute = planner._execute_action_with_confirmation
+
+        async def execute(action, timeout_seconds=None):
+            if action.model_name == "foo":
+                await release.wait()
+            return True
+
+        planner._execute_action_with_confirmation = execute
+
+        async def scenario():
+            first = asyncio.create_task(planner.load_lane_manually(1, "foo"))
+            while not planner._claimed_load_lane_ids(1):
+                await asyncio.sleep(0)
+            # The real execution path — not the stub — must refuse the id.
+            action = CapacityPlanAction(
+                action="load",
+                provider_id=1,
+                lane_id="planner-foo-2",
+                model_name="foo-2",
+                params={},
+                reason="planned",
+            )
+            skipped = await real_execute(action, timeout_seconds=5.0)
+            release.set()
+            await first
+            return skipped
+
+        assert asyncio.run(scenario()) is False
+
+
 # ---------------------------------------------------------------------------
 # Cycle accounting: first lanes count and end the additional-only tag
 # ---------------------------------------------------------------------------
@@ -1307,3 +1430,223 @@ class TestCycleAccountingFirstLanes:
 
         loads = [a for a in actions_a + actions_b + actions_c if a.action == "load" and a.model_name == "foo"]
         assert [(a.provider_id, a.lane_id) for a in loads] == [(2, "planner-foo")]
+
+
+# ---------------------------------------------------------------------------
+# The cluster cap counts copies a scale-out accepted but has not finished
+# ---------------------------------------------------------------------------
+
+
+class TestInFlightCopiesCountTowardTheCap:
+    """The demand pass's active set treats an unfailed starting replica as
+    an existing copy of the model — which is what justifies planning yet
+    another. A cap that only saw loaded/running would therefore plan a
+    fresh suffix every cycle during a multi-minute startup, more copies
+    than MAX_REPLICAS_PER_MODEL can hold."""
+
+    def _provider(self, lanes: List[LaneSchedulerSignals]) -> _MockProvider:
+        return _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=lanes,
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+
+    def _demand_actions(self, planner: CapacityPlanner, provider: _MockProvider):
+        # What _run_cycle builds for the two cap inputs: loaded/running from
+        # the live report, plus starting copies from the same report.
+        return planner._compute_demand_actions(
+            1,
+            provider.lanes,
+            cluster_lanes_by_model=planner._count_loaded_lanes_per_model(),
+            cluster_starting_lanes_by_model=planner._count_starting_lanes_per_model(),
+        )
+
+    def test_cap_reached_by_starting_copies_blocks_the_next_suffix(self):
+        """One running plus two starting copies is the cap (3): a fourth
+        suffix would exceed MAX_REPLICAS_PER_MODEL once the startups land,
+        so the scale-out stops — every cycle, not just the last one."""
+        provider = self._provider(
+            [
+                _lane("planner-X", "X", "running"),
+                _lane("planner-X-2", "X", "starting"),
+                _lane("planner-X-3", "X", "starting"),
+            ]
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+
+        actions = self._demand_actions(planner, provider)
+
+        assert [a.lane_id for a in actions if a.action == "load"] == []
+
+    def test_two_copies_with_one_starting_leaves_room_for_one_more(self):
+        """1 + 2 = 3 is the cap, so the third copy is planned while the
+        second is still starting — the block is at the cap, not on
+        'anything is starting'."""
+        provider = self._provider(
+            [
+                _lane("planner-X", "X", "running"),
+                _lane("planner-X-2", "X", "starting"),
+            ]
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+
+        actions = self._demand_actions(planner, provider)
+
+        assert [a.lane_id for a in actions if a.action == "load"] == ["planner-X-3"]
+
+    def test_a_failed_starting_lane_does_not_count(self):
+        """The demand pass's active set excludes a starting lane whose load
+        failed (the persistent marker) — the cap does the same: a broken
+        copy is backoff material, not headroom."""
+        provider = self._provider(
+            [
+                _lane("planner-X", "X", "running"),
+                _lane("planner-X-2", "X", "starting"),
+                _lane("planner-X-3", "X", "starting"),
+            ]
+        )
+        planner = _planner(provider, score=2.5, replicate=True)
+        planner._load_failed_ids().add((1, "planner-X-3"))
+
+        assert planner._count_starting_lanes_per_model() == {"X": 1}
+
+
+class TestInFlightCopiesCountTowardTheReplicationCap:
+    """The cross-provider replication pass holds the same cap: a replica
+    still starting on one worker is a copy the cluster has committed to,
+    not headroom for another one."""
+
+    def _two_provider_planner(self, lanes_1: List[LaneSchedulerSignals]):
+        provider_1 = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=lanes_1,
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        # A second, empty worker with capability: a valid replica target,
+        # so an empty result is the cap's doing, not a lack of targets.
+        provider_2 = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner = _planner(provider_1, score=2.5, replicate=True)
+        planner._facade = _MockFacade([provider_1, provider_2])
+        return planner
+
+    def test_replication_stops_when_starting_copies_reach_the_cap(self):
+        planner = self._two_provider_planner(
+            [
+                _lane("planner-X", "X", "running"),
+                _lane("planner-X-2", "X", "starting"),
+                _lane("planner-X-3", "X", "starting"),
+            ]
+        )
+
+        actions = planner._compute_replication_actions(
+            [1, 2],
+            [("X", 2.5)],
+            planner._count_loaded_lanes_per_model(),
+            set(),
+            None,
+            None,
+            cluster_starting_lanes_by_model=planner._count_starting_lanes_per_model(),
+        )
+
+        assert actions == []
+
+    def test_replication_still_places_beneath_the_cap(self):
+        planner = self._two_provider_planner(
+            [
+                _lane("planner-X", "X", "running"),
+                _lane("planner-X-2", "X", "starting"),
+            ]
+        )
+
+        actions = planner._compute_replication_actions(
+            [1, 2],
+            [("X", 2.5)],
+            planner._count_loaded_lanes_per_model(),
+            set(),
+            None,
+            None,
+            cluster_starting_lanes_by_model=planner._count_starting_lanes_per_model(),
+        )
+
+        assert [(a.provider_id, a.lane_id) for a in actions] == [(2, "planner-X")]
+
+
+# ---------------------------------------------------------------------------
+# Request-time cold load: the model-level backoff applies here too
+# ---------------------------------------------------------------------------
+
+
+class TestRequestTimeColdLoadBackoff:
+    """The request-time cold load must honor the model-level backoff the
+    demand path applies. A lane of the model in error — or one whose load
+    failed to confirm — still holds its id, so an ungated allocation answers
+    with the next free suffix, and under sustained benchmark traffic that
+    leaves a fresh failed lane (planner-X-2, planner-X-3, ...) per request.
+    The per-lane cooldown on the fresh id cannot see the broken sibling."""
+
+    def _planner(self, lanes: List[LaneSchedulerSignals]) -> CapacityPlanner:
+        planner = CapacityPlanner.__new__(CapacityPlanner)
+        planner._lane_load_failure_until = {}
+        planner._pending_capacity = {}
+        planner._registry = None
+        facade = MagicMock()
+        facade.get_provider_name.return_value = "worker-a"
+        facade.get_all_provider_lane_signals.return_value = lanes
+        facade.get_capacity_info.return_value = SimpleNamespace(
+            available_vram_mb=50_000,
+            total_vram_mb=96_000,
+        )
+        planner._facade = facade
+        planner._safe_get_profiles = MagicMock(return_value={})
+        return planner
+
+    def _spy_allocations(self, planner: CapacityPlanner) -> list:
+        allocated = []
+        original = planner._next_lane_id_for_model
+
+        def spy(*args, **kwargs):
+            allocated.append((args, kwargs))
+            return original(*args, **kwargs)
+
+        planner._next_lane_id_for_model = spy
+        return allocated
+
+    def test_errored_lane_blocks_the_cold_load_before_any_allocation(self):
+        planner = self._planner([_lane("planner-foo", "foo", "error")])
+        allocated = self._spy_allocations(planner)
+
+        assert asyncio.run(planner._cold_load_for_request(1, "foo", 60.0)) is None
+        assert allocated == []
+
+    def test_a_lane_that_failed_to_load_blocks_the_cold_load(self):
+        planner = self._planner([_lane("planner-foo", "foo", "starting")])
+        planner._load_failed_ids().add((1, "planner-foo"))
+        allocated = self._spy_allocations(planner)
+
+        assert asyncio.run(planner._cold_load_for_request(1, "foo", 60.0)) is None
+        assert allocated == []
+
+    def test_cold_load_proceeds_when_no_lane_of_the_model_is_broken(self):
+        """The gate is quiet for a healthy (or absent) lane set: the
+        allocation happens and the load continues into the reclaim engine —
+        which the stub worker cannot satisfy, but the gate let it through."""
+        planner = self._planner([])
+        allocated = self._spy_allocations(planner)
+        planner._ensure_request_capacity = AsyncMock(return_value=False)
+
+        assert asyncio.run(planner._cold_load_for_request(1, "foo", 60.0)) is None
+        assert len(allocated) == 1
+        assert planner._ensure_request_capacity.called

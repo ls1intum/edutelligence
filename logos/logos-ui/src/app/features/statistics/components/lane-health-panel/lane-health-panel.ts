@@ -536,6 +536,23 @@ export class LaneHealthPanel implements OnChanges {
       // Baseline for acceptedModelIsResolved(): the pre-request snapshot, so
       // the accepted lane counts as fresh whatever the stream has shown since.
       this.acceptedLaneIds = preRequestLaneIds;
+      // A fast stream may already have reported the accepted lane while this
+      // request was in flight: ngOnChanges ran with acceptedModel still null
+      // and could not resolve the note, and the next update might be minutes
+      // away (the lane only changes state when the load finishes). Re-check
+      // the resolution against the current stream right here, so a lane that
+      // is already visible clears the note (and re-offers the model)
+      // immediately instead of waiting for the next push.
+      if (
+        acceptedModelIsResolved(
+          model,
+          preRequestLaneIds,
+          name ? (this.lanesByProvider[name] ?? {}) : {},
+        )
+      ) {
+        this.acceptedModel.set(null);
+        this.acceptedLaneIds = null;
+      }
     } catch (err: unknown) {
       this.addingLane.set(false);
       const e = err as { status?: number };
