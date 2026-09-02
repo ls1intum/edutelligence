@@ -294,6 +294,7 @@ class LaneManager:
         auto_reboot_on_stuck_gpu: bool = True,
         reboot_sentinel_path: str = "/host/reboot-requested",
         on_lane_slept: Callable[[], Awaitable[None]] | None = None,
+        on_lane_added: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
@@ -314,6 +315,14 @@ class LaneManager:
         # of sleeps push the host to the OOM killer. Must never raise into
         # the sleep path (see sleep_lane).
         self._on_lane_slept = on_lane_slept
+        # Invoked after one or more lanes have been added (startup static
+        # lanes, restored dynamic lanes, or a new dynamic lane). main.py
+        # points this at the same RAM-cache re-plan so the sleep reserve is
+        # in place *before* the lane's first sleep: without it a freshly
+        # added sleep-capable lane would have to sleep (post-sleep hook) or
+        # wait out the periodic loop's initial delay before its footprint is
+        # ever reserved. Idempotent, so it composes with the post-sleep hook.
+        self._on_lane_added = on_lane_added
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -764,13 +773,20 @@ class LaneManager:
             lane_statuses = await self._collect_statuses_unlocked()
             prom.LANE_TRANSITIONS_TOTAL.labels(action="apply").inc()
 
-            return LaneApplyResult(
+            result = LaneApplyResult(
                 success=len(errors) == 0,
                 actions=actions,
                 lanes=lane_statuses,
                 errors=errors,
                 rolled_back=rolled_back,
             )
+            notify_added = bool(added_ids) and not rolled_back
+
+        if notify_added:
+            # Fire outside the lane lock: the hook runs the RAM-cache re-plan,
+            # which re-reads lane state and must not be serialized behind it.
+            await self._notify_lane_added()
+        return result
 
     # ------------------------------------------------------------------
     # Imperative lane operations
@@ -786,7 +802,9 @@ class LaneManager:
             if lid in self._handles:
                 raise ValueError(f"Lane '{lid}' already exists")
             await self._add_lane_unlocked(lid, lane_config)
-            return await self._get_status_unlocked(lid)
+            status = await self._get_status_unlocked(lid)
+        await self._notify_lane_added()
+        return status
 
     async def remove_lane(self, lane_id: str) -> None:
         """Remove a single lane and free its port.
@@ -907,6 +925,23 @@ class LaneManager:
             raise
         except Exception:  # noqa: BLE001
             logger.debug("on_lane_slept hook failed", exc_info=True)
+
+    async def _notify_lane_added(self) -> None:
+        """Invoke the on_lane_added hook after lanes have been added.
+
+        This establishes the RAM-cache sleep reserve *before* the first sleep
+        of a newly added (or startup) lane. The hook is idempotent, so it is
+        safe to compose with the post-sleep hook and the periodic backstop.
+        A failing hook must never fail the lane add that triggered it.
+        """
+        if self._on_lane_added is None:
+            return
+        try:
+            await self._on_lane_added()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.debug("on_lane_added hook failed", exc_info=True)
 
     async def _sleep_handle_and_replan(self, handle: ProcessHandle, level: int, mode: str) -> None:
         """Sleep a lane handle and, on success, run the reactive RAM-cache
@@ -1052,22 +1087,25 @@ class LaneManager:
     # Status / queries
     # ------------------------------------------------------------------
 
-    async def sleeping_models(self) -> set[str]:
-        """Models whose lane is alive and in vLLM sleep mode right now —
-        i.e. holding its weights in host RAM.
+    async def sleeping_model_counts(self) -> dict[str, int]:
+        """Per-model count of lanes alive and in vLLM sleep mode right now —
+        i.e. holding their own weights in host RAM.
 
         Only the ``/is_sleeping`` probe is paid, and only for live vLLM
         lanes with sleep mode enabled (a dead process holds no RAM) — no
         VRAM queries, no profile recording, no lane recovery, so this is a
         fraction of what ``get_all_statuses`` costs. The RAM-cache re-plan
-        uses this to keep the sleep reserve from counting a model twice: an
-        asleep model's RAM is already out of MemAvailable, so reserving it
+        uses this to keep the sleep reserve from counting a lane twice: an
+        asleep lane's RAM is already out of MemAvailable, so reserving it
         again would shrink the cache's budget by the size of every sleeping
-        model. A lane that cannot be probed (engine wedged, transport
-        failure) is not counted as asleep — the reserve then still covers
-        it, which is the safe direction.
+        lane. Counts are per model (not a set) so that with several
+        same-model replicas each asleep replica drops exactly its own share
+        of the reserve — a set would collapse them and under-reserve. A lane
+        that cannot be probed (engine wedged, transport failure) is not
+        counted as asleep — the reserve then still covers it, which is the
+        safe direction.
         """
-        asleep: set[str] = set()
+        counts: dict[str, int] = {}
         for handle in list(self._handles.values()):
             ps = handle.status()
             if ps.state != ProcessState.RUNNING:
@@ -1077,10 +1115,17 @@ class LaneManager:
                 continue
             try:
                 if await handle.is_sleeping() is True:
-                    asleep.add(lc.model)
+                    counts[lc.model] = counts.get(lc.model, 0) + 1
             except Exception:
                 logger.debug("sleep probe failed for lane '%s'", handle.lane_id, exc_info=True)
-        return asleep
+        return counts
+
+    async def sleeping_models(self) -> set[str]:
+        """Models whose lane is asleep right now — the set of model names from
+        :meth:`sleeping_model_counts`. Kept for callers that only need the
+        names; the RAM-cache re-plan uses the counts so same-model replicas
+        each drop their own share of the reserve."""
+        return set(await self.sleeping_model_counts())
 
     async def get_all_statuses(self) -> list[LaneStatus]:
         # Snapshot handles without the lock so status collection (which does

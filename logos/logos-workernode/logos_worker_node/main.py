@@ -329,8 +329,8 @@ async def _auto_calibrate_if_needed(
         model_profiles._load_persisted()
 
 
-def _sleepable_lane_models(cfg: AppConfig, lane_manager: LaneManager | None = None) -> set[str]:
-    """Configured and live lane models that can sleep.
+def _sleepable_lane_replicas(cfg: AppConfig, lane_manager: LaneManager | None = None) -> dict[str, int]:
+    """Configured and live sleep-capable lane replicas per model.
 
     ``static_lanes`` may enable sleep mode for models outside
     ``capabilities_models``, and ``_add_lane_unlocked`` caches any vLLM model on
@@ -340,19 +340,25 @@ def _sleepable_lane_models(cfg: AppConfig, lane_manager: LaneManager | None = No
     ``_build_ram_cache_candidates`` separately; they keep the "uncalibrated ⇒
     not served" rule, but a configured/live lane model is served regardless of
     calibration, so it is reserved here even without a profile.
+
+    Returns ``model -> replica_count``. ``LaneSetRequest`` allows multiple
+    uniquely named lanes for the same model, and each sleeping vLLM process
+    keeps its own weights in host RAM, so the reserve must know how many
+    replicas exist — not just which model names exist.
     """
-    models: set[str] = set()
+    replicas: dict[str, int] = {}
     for sl in cfg.static_lanes:
         if model_can_sleep(cfg, sl.model):
-            models.add(sl.model)
+            replicas[sl.model] = replicas.get(sl.model, 0) + 1
     if lane_manager is not None:
         for lane_id in lane_manager.lane_ids:
             handle = lane_manager.get_handle(lane_id)
             if handle is None or handle.lane_config is None:
                 continue
-            if model_can_sleep(cfg, handle.lane_config.model):
-                models.add(handle.lane_config.model)
-    return models
+            model = handle.lane_config.model
+            if model_can_sleep(cfg, model):
+                replicas[model] = replicas.get(model, 0) + 1
+    return replicas
 
 
 def _cache_candidate(
@@ -360,6 +366,7 @@ def _cache_candidate(
     model_cache: ModelRamCache | _DisabledModelRamCache,
     model_profiles: ModelProfileRegistry,
     name: str,
+    sleeping_replicas: int = 1,
 ) -> CacheCandidate:
     """A single cache-plan candidate.
 
@@ -369,6 +376,10 @@ def _cache_candidate(
     estimate used for a measured-but-never-slept capability model. A model not
     yet cached has size 0 and so reserves nothing: it holds no host RAM the
     floor must bound until it is copied.
+
+    ``sleeping_replicas`` is how many sleep-capable lane replicas of this model
+    exist. The per-process sleeping residency is multiplied by it, while
+    ``size_bytes`` (the shared tmpfs cache copy) stays one copy per model.
     """
     profile = model_profiles.get_profile(name)
     sleeping_host_ram_mb = 0.0
@@ -383,6 +394,7 @@ def _cache_candidate(
         can_sleep=model_can_sleep(cfg, name),
         sleeping_host_ram_mb=sleeping_host_ram_mb,
         size_bytes=model_cache.model_size_bytes(name),
+        sleeping_replicas=max(1, int(sleeping_replicas)),
     )
 
 
@@ -391,30 +403,35 @@ def _build_ram_cache_candidates(
     model_cache: ModelRamCache | _DisabledModelRamCache,
     model_profiles: ModelProfileRegistry,
     caps: list[str],
-    reserve_models: set[str] | None = None,
+    reserve_replicas: dict[str, int] | None = None,
 ) -> tuple[list[CacheCandidate], list[str]]:
     """Cache-plan candidates for the capability models that have profile data.
 
-    ``reserve_models`` are sleep-capable configured/live lane models that MUST
+    ``reserve_replicas`` are sleep-capable configured/live lane models that MUST
     enter the sleep reserve even without a profile (see
-    ``_sleepable_lane_models``); they are included with the conservative
-    on-disk footprint when uncalibrated instead of being skipped.
+    ``_sleepable_lane_replicas``); they are included with the conservative
+    on-disk footprint when uncalibrated instead of being skipped. Its value is
+    the number of sleep-capable lane replicas for that model.
 
     Returns ``(candidates, uncalibrated)`` — the uncalibrated capability models
-    are not served at all, so they never enter the plan (``reserve_models`` are
-    the exception: they are served regardless of calibration).
+    are not served at all, so they never enter the plan (``reserve_replicas``
+    are the exception: they are served regardless of calibration).
 
-    Each candidate carries the two numbers the planner balances:
+    Each candidate carries the numbers the planner balances:
 
-      * ``sleeping_host_ram_mb`` — the RAM this model holds *while asleep*.
-        The sleep reserve exists for these models being asleep at once, so the
-        sleeping residency is what it has to cover. Using the awake footprint
-        would double-count RAM an awake lane already holds regardless of the
-        cache, and leave the actual sleep cost out of the only calculation
-        that balances the two consumers of host RAM.
-      * ``size_bytes`` — the tmpfs cost (the weights on disk).
+      * ``sleeping_host_ram_mb`` — the RAM one lane of this model holds
+        *while asleep*. The sleep reserve exists for these models being asleep
+        at once, so the sleeping residency is what it has to cover. Using the
+        awake footprint would double-count RAM an awake lane already holds
+        regardless of the cache, and leave the actual sleep cost out of the
+        only calculation that balances the two consumers of host RAM.
+      * ``sleeping_replicas`` — how many sleep-capable lane replicas of this
+        model exist. The per-process sleeping residency is multiplied by this
+        count because each vLLM process keeps its own weights in host RAM.
+      * ``size_bytes`` — the tmpfs cost (the shared cache copy of the weights
+        on disk, once per model).
     """
-    reserve_models = set(reserve_models or set())
+    reserve_replicas = dict(reserve_replicas or {})
     candidates: list[CacheCandidate] = []
     uncalibrated: list[str] = []
     seen: set[str] = set()
@@ -424,10 +441,28 @@ def _build_ram_cache_candidates(
             uncalibrated.append(m)
             continue
         seen.add(m)
-        candidates.append(_cache_candidate(cfg, model_cache, model_profiles, m))
-    for m in sorted(reserve_models - seen):
+        candidates.append(
+            _cache_candidate(
+                cfg,
+                model_cache,
+                model_profiles,
+                m,
+                sleeping_replicas=reserve_replicas.get(m, 1),
+            )
+        )
+    for m in sorted(reserve_replicas):
+        if m in seen:
+            continue
         seen.add(m)
-        candidates.append(_cache_candidate(cfg, model_cache, model_profiles, m))
+        candidates.append(
+            _cache_candidate(
+                cfg,
+                model_cache,
+                model_profiles,
+                m,
+                sleeping_replicas=reserve_replicas[m],
+            )
+        )
     return candidates, uncalibrated
 
 
@@ -580,9 +615,10 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     # for models outside capabilities_models, and _add_lane_unlocked caches any
     # vLLM model on demand. Their sleeping residency must enter the reserve, so
     # a static-only worker (empty capabilities_models) still reserves host RAM
-    # instead of returning here and leaving the floor unset.
-    reserve_models = _sleepable_lane_models(cfg, lane_manager)
-    candidates, _uncalibrated = _build_ram_cache_candidates(cfg, model_cache, model_profiles, caps, reserve_models)
+    # instead of returning here and leaving the floor unset. Counts are per
+    # model because same-model replicas each keep their own sleeping weights.
+    reserve_replicas = _sleepable_lane_replicas(cfg, lane_manager)
+    candidates, _uncalibrated = _build_ram_cache_candidates(cfg, model_cache, model_profiles, caps, reserve_replicas)
     if not candidates:
         # No calibrated capability models and no sleep-capable static/live lane
         # models means an empty reserve and a plan that keeps exactly what it
@@ -602,12 +638,13 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
         )
         return
 
-    # Models whose lane is asleep right now: their sleeping RAM is already
-    # out of MemAvailable, so it must not enter the reserve again —
+    # Per-model count of lanes asleep right now: an asleep lane's sleeping RAM
+    # is already out of MemAvailable, so its share of the reserve is dropped —
     # double-counting would shrink the budget by the size of every sleeping
-    # model and over-evict, precisely in the situation this loop exists to
-    # handle.
-    asleep = await lane_manager.sleeping_models()
+    # lane and over-evict, precisely in the situation this loop exists to
+    # handle. Counts (not a set of model names) so that with same-model
+    # replicas only the awake replicas' footprints stay reserved.
+    asleep = await lane_manager.sleeping_model_counts()
 
     plan = plan_cache_order(
         candidates,
@@ -901,6 +938,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # fires this hook BEFORE the bridge starts, and _notify_lane_slept
         # swallows a missing-state error (silently skipping the reclaim).
         on_lane_slept=lambda: _replan_ram_cache_once(app),
+        # Establish the reserve the instant the lane set gains a
+        # sleep-capable lane (startup static lanes, restored dynamic lanes, or
+        # a newly added dynamic lane) so it is in place BEFORE that lane's
+        # first sleep — on_lane_slept only fires after the sleep has already
+        # happened. Idempotent, so it composes with the post-sleep hook.
+        on_lane_added=lambda: _replan_ram_cache_once(app),
     )
 
     # Initialise the re-plan's app.state dependencies NOW, before the startup

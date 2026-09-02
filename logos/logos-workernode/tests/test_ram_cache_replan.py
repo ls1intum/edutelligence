@@ -23,12 +23,21 @@ import inspect
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 import logos_worker_node.main as worker_main
 from logos_worker_node.lane_manager import LaneManager
-from logos_worker_node.models import AppConfig, HostMemorySummary, LaneConfig, LogosConfig, OllamaConfig, ProcessState
+from logos_worker_node.models import (
+    AppConfig,
+    HostMemorySummary,
+    LaneConfig,
+    LogosConfig,
+    OllamaConfig,
+    ProcessState,
+    VllmConfig,
+)
 
 
 def _mb(mb: float) -> int:
@@ -128,10 +137,18 @@ class _FakeLaneManager:
         handles: dict[str, _FakeHandle],
         sleeping: set[str] | None = None,
         starting: set[str] | None = None,
+        sleeping_counts: dict[str, int] | None = None,
     ) -> None:
         self._handles = handles
-        self.sleeping = set(sleeping or set())
         self._starting = set(starting or set())
+        # Per-model asleep replica counts. ``sleeping`` (a set of model names)
+        # is the legacy shorthand for "one asleep replica of each"; pass
+        # ``sleeping_counts`` to express several same-model replicas.
+        if sleeping_counts is not None:
+            self._sleeping_counts = {m: int(n) for m, n in sleeping_counts.items() if n}
+        else:
+            self._sleeping_counts = {m: 1 for m in (sleeping or set())}
+        self.sleeping = set(self._sleeping_counts)
 
     @property
     def lane_ids(self) -> list[str]:
@@ -142,6 +159,9 @@ class _FakeLaneManager:
 
     def get_handle(self, lane_id: str):
         return self._handles.get(lane_id)
+
+    async def sleeping_model_counts(self) -> dict[str, int]:
+        return dict(self._sleeping_counts)
 
     async def sleeping_models(self) -> set[str]:
         return set(self.sleeping)
@@ -458,6 +478,131 @@ def test_replan_reserves_live_lane_model_outside_capabilities(monkeypatch) -> No
     # The reserve covers BOTH sleepable models: the capability model (10_000)
     # and the live model outside caps (25_000), plus the safety margin.
     assert cache.floor_mb == pytest.approx(35_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
+def test_replan_reserves_one_footprint_per_awake_replica(monkeypatch) -> None:
+    """Regression: LaneSetRequest allows several uniquely named lanes for the
+    same model, and each sleeping vLLM process keeps its own weights in host
+    RAM. The reserve must hold one footprint per AWAKE replica — not one for
+    the whole model — while the shared tmpfs cache copy is charged exactly once.
+
+    Two lanes of the same model reserve two footprints; once one sleeps its RAM
+    is already out of MemAvailable, so the remaining awake replica's footprint
+    stays reserved (the floor drops by exactly one footprint). The cache copy
+    is a single per-model entry, so it is held once in both states.
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    model = "org/replicated"
+    # Two uniquely-named lanes for the same model, both RUNNING.
+    handles = {
+        "r1": _FakeHandle("r1", model, ProcessState.RUNNING),
+        "r2": _FakeHandle("r2", model, ProcessState.RUNNING),
+    }
+    # No profile -> the on-disk size is the conservative sleeping footprint.
+    registry = _FakeRegistry({})
+    sizes = {model: _mb(20_000)}
+    margin = worker_main._host_ram_safety_margin_mb(512_000.0)
+
+    # Both replicas awake: reserve = 2 * footprint.
+    cache = _FakeCache(cached=[model], sizes=sizes)
+    app = _app(cache, registry, _FakeLaneManager(handles, sleeping_counts={}), [])
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+    assert cache.floor_mb == pytest.approx(2 * 20_000.0 + margin)
+    assert cache.is_cached(model)
+
+    # One replica asleep: its RAM is out of MemAvailable, so only the awake
+    # replica's footprint stays reserved — the floor drops by exactly one
+    # footprint, and the single shared cache copy is still held.
+    cache = _FakeCache(cached=[model], sizes=sizes)
+    app = _app(cache, registry, _FakeLaneManager(handles, sleeping_counts={model: 1}), [])
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+    assert cache.floor_mb == pytest.approx(20_000.0 + margin)
+    assert cache.is_cached(model)
+
+
+def test_replan_triggered_on_lane_add_establishes_reserve_before_first_sleep(monkeypatch) -> None:
+    """Fix 1: the reserve must be in place BEFORE a newly added lane's first
+    sleep. The only other production triggers fire AFTER the sleep (the
+    post-sleep hook) or after the periodic loop's initial 60 s delay, so a
+    lane that is added and left awake had no trigger to reserve its sleeping
+    residency first — its first sleep could push host RAM past the floor.
+
+    The on_lane_added hook closes that gap. This drives the REAL LaneManager
+    add path (add_lane -> _notify_lane_added -> _replan_ram_cache_once) with
+    the spawn/status I/O stubbed, so no vLLM process is required. The floor is
+    0 before the add and set to the lane's sleeping footprint immediately
+    after — established by the add itself, before any sleep.
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    model = "org/new-lane"
+    registry = _FakeRegistry({model: _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0)})
+    sizes = {model: _mb(8_000)}
+    cache = _FakeCache(cached=[model], sizes=sizes)
+
+    class _AwakeHandle:
+        """A just-added, still-awake vLLM sleep-capable lane (no process I/O)."""
+
+        def __init__(self) -> None:
+            self.lane_id = "org_new-lane"
+            self.lane_config = SimpleNamespace(
+                model=model,
+                vllm=True,
+                vllm_config=SimpleNamespace(enable_sleep_mode=True),
+            )
+
+        def status(self):
+            return SimpleNamespace(state=ProcessState.RUNNING)
+
+        async def is_sleeping(self):
+            return False
+
+    handle = _AwakeHandle()
+
+    manager = LaneManager(
+        OllamaConfig(),
+        nvidia_smi_available=lambda: True,
+        # The closure resolves `app` at call time (late binding), so `app` may
+        # be constructed after the manager.
+        on_lane_added=lambda: worker_main._replan_ram_cache_once(app),
+    )
+    cfg = AppConfig(logos=LogosConfig(capabilities_models=[model]))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config=cfg,
+            model_cache=cache,
+            model_profiles=registry,
+            lane_manager=manager,
+            ram_cache_replan_lock=asyncio.Lock(),
+            ram_cache_in_plan_ticks={},
+        )
+    )
+
+    # Stub the spawn + status I/O so add_lane registers a handle without a
+    # real vLLM process.
+    async def _fake_add(lid: str, lane_config: LaneConfig) -> None:
+        manager._handles[lid] = handle  # noqa: SLF001
+
+    monkeypatch.setattr(manager, "_add_lane_unlocked", _fake_add)
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=None))
+
+    assert cache.floor_mb == 0.0  # nothing reserved yet — no lane exists
+
+    asyncio.run(
+        manager.add_lane(
+            LaneConfig(
+                model=model,
+                vllm=True,
+                lane_id="org_new-lane",
+                vllm_config=VllmConfig(enable_sleep_mode=True),
+            )
+        )
+    )
+
+    # The reserve is established by the ADD — the lane's sleeping footprint is
+    # in the floor before the lane has ever slept.
+    assert cache.floor_mb == pytest.approx(10_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
 # ── _replan_ram_cache_once ───────────────────────────────────────────────────
