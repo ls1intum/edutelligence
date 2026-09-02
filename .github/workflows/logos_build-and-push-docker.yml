@@ -249,10 +249,10 @@ jobs:
     with:
       output: image
       push: true
-      # The gateway's own directory is the context: it needs nothing but its
-      # nginx configuration, and a root context would put the whole
-      # repository through the .dockerignore whitelist for one small file.
-      context: ./logos/agent-gateway
+      # Built from the repository root like the other agent images: the
+      # `file` path is resolved relative to the context, so a context of the
+      # gateway's own directory would look for the Dockerfile inside itself.
+      context: .
       file: logos/agent-gateway/Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest

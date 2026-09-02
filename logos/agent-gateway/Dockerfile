@@ -16,4 +16,4 @@
 # the running container, not in an image layer.
 FROM nginx:1.28-alpine
 
-COPY nginx.conf /etc/nginx/templates/default.conf.template
+COPY logos/agent-gateway/nginx.conf /etc/nginx/templates/default.conf.template
