@@ -2934,6 +2934,49 @@ class DBManager:
         ).fetchone()
         return int(row[0]) if row else 0
 
+    # ------------------------------------------------------------------
+    # LatencyStore persistence
+    # ------------------------------------------------------------------
+
+    def upsert_latency_observation(
+        self,
+        model_name: str,
+        provider_id: int,
+        tier: str,
+        ewma_value: float,
+        n: int,
+    ) -> None:
+        """Insert or update a LatencyStore EWMA row."""
+        self.session.execute(
+            text(
+                """
+                INSERT INTO latency_observations (model_name, provider_id, tier, ewma_value, n, updated_at)
+                VALUES (:model_name, :provider_id, :tier, :ewma_value, :n, NOW())
+                ON CONFLICT (model_name, provider_id, tier)
+                DO UPDATE SET ewma_value = EXCLUDED.ewma_value,
+                              n          = EXCLUDED.n,
+                              updated_at = NOW()
+                """
+            ),
+            {
+                "model_name": model_name,
+                "provider_id": int(provider_id),
+                "tier": tier,
+                "ewma_value": float(ewma_value),
+                "n": int(n),
+            },
+        )
+        self.session.commit()
+
+    def get_all_latency_observations(self) -> list[tuple[str, int, str, float, int]]:
+        """Return all persisted EWMA rows as (model_name, provider_id, tier, ewma_value, n)."""
+        rows = self.session.execute(
+            text(
+                "SELECT model_name, provider_id, tier, ewma_value, n FROM latency_observations"
+            )
+        ).fetchall()
+        return [(str(r[0]), int(r[1]), str(r[2]), float(r[3]), int(r[4])) for r in rows]
+
     def __enter__(self):
         self.engine = _init_engine()
         _ensure_metadata(self.engine)

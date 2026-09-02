@@ -202,7 +202,7 @@ def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str])
     task.add_done_callback(_background_tasks.discard)
 
 
-_latency_store = LatencyStore()
+_latency_store = LatencyStore(db_factory=DBManager)
 _logosnode_registry = LogosNodeRuntimeRegistry(
     on_capabilities_changed=_sync_logosnode_capabilities_to_db,
     latency_store=_latency_store,

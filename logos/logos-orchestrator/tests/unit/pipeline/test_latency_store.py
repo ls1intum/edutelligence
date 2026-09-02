@@ -1,5 +1,8 @@
 """Unit tests for logos.pipeline.latency_store."""
 
+from contextlib import contextmanager
+from unittest.mock import MagicMock, call
+
 import pytest
 
 from logos.pipeline.ettft_estimator import (
@@ -182,3 +185,75 @@ class TestE2eLatency:
         store.record_e2e_latency("m", 5.0)
         expected = 0.2 * 5.0 + 0.8 * 10.0  # 9.0
         assert store.get_e2e_latency_s("m") == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# DB persistence
+# ---------------------------------------------------------------------------
+
+def _make_db_factory(rows=None, upsert_mock=None):
+    """Return a db_factory that yields a mock DBManager with the given rows."""
+    db_mock = MagicMock()
+    db_mock.get_all_latency_observations.return_value = rows or []
+    if upsert_mock is not None:
+        db_mock.upsert_latency_observation = upsert_mock
+
+    @contextmanager
+    def factory():
+        yield db_mock
+
+    return factory, db_mock
+
+
+class TestPersistence:
+    def test_loads_overhead_from_db_on_init(self):
+        rows = [("model-a", 1, "cold", 42.0, 5)]
+        factory, _ = _make_db_factory(rows)
+        store = LatencyStore(db_factory=factory)
+        assert store.get_overhead_s("model-a", 1, ReadinessTier.COLD) == pytest.approx(42.0)
+        assert store.get_observation_count("model-a", 1, ReadinessTier.COLD) == 5
+
+    def test_loads_ttft_from_db_on_init(self):
+        rows = [("model-a", -1, "ttft", 1.5, 10)]
+        factory, _ = _make_db_factory(rows)
+        store = LatencyStore(db_factory=factory)
+        assert store.get_ttft_s("model-a") == pytest.approx(1.5)
+
+    def test_loads_e2e_from_db_on_init(self):
+        rows = [("model-a", -1, "e2e", 8.0, 3)]
+        factory, _ = _make_db_factory(rows)
+        store = LatencyStore(db_factory=factory)
+        assert store.get_e2e_latency_s("model-a") == pytest.approx(8.0)
+
+    def test_unknown_tier_in_db_is_skipped(self):
+        rows = [("model-a", 1, "unknown_tier_xyz", 99.0, 1)]
+        factory, _ = _make_db_factory(rows)
+        store = LatencyStore(db_factory=factory)
+        # Should not crash; no overhead stored
+        assert store.get_observation_count("model-a", 1, ReadinessTier.COLD) == 0
+
+    def test_record_overhead_calls_upsert(self):
+        upsert = MagicMock()
+        factory, _ = _make_db_factory(upsert_mock=upsert)
+        store = LatencyStore(db_factory=factory)
+        store.record_overhead("m", 2, ReadinessTier.SLEEPING, 3.5)
+        upsert.assert_called_once_with("m", 2, "sleeping", pytest.approx(3.5), 1)
+
+    def test_record_ttft_calls_upsert(self):
+        upsert = MagicMock()
+        factory, _ = _make_db_factory(upsert_mock=upsert)
+        store = LatencyStore(db_factory=factory)
+        store.record_ttft("m", 2.0)
+        upsert.assert_called_once_with("m", -1, "ttft", pytest.approx(2.0), 1)
+
+    def test_record_e2e_calls_upsert(self):
+        upsert = MagicMock()
+        factory, _ = _make_db_factory(upsert_mock=upsert)
+        store = LatencyStore(db_factory=factory)
+        store.record_e2e_latency("m", 5.0)
+        upsert.assert_called_once_with("m", -1, "e2e", pytest.approx(5.0), 1)
+
+    def test_no_db_factory_stays_in_memory(self):
+        store = LatencyStore()  # no db_factory
+        store.record_overhead("m", 1, ReadinessTier.COLD, 30.0)
+        assert store.get_overhead_s("m", 1, ReadinessTier.COLD) == pytest.approx(30.0)
