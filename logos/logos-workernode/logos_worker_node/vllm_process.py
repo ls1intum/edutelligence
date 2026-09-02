@@ -1604,13 +1604,17 @@ class VllmProcessHandle:
         """Detect a GGUF model and resolve its serve reference.
 
         Detection is two-stage: the model string first (``repo:quant``
-        reference, ``…/file.gguf``, or the ``…-GGUF`` repo naming convention),
-        then the file listing — local HF cache first, HuggingFace Hub as a
-        fallback — so repositories that only contain GGUF weights are found
-        even when their name doesn't follow the convention. A cached listing
-        without GGUF files disproves the naming convention; an unavailable
-        listing does not (the lane then fails at spawn with a clear error if
-        the name was a false positive).
+        reference, ``…/file.gguf``, local ``/path/dir:<quant>`` directory
+        reference, or the ``…-GGUF`` naming convention), then the file
+        listing — local HF cache first, HuggingFace Hub as a fallback — so
+        repositories that only contain GGUF weights are found even when their
+        name doesn't follow the convention. A cached listing without GGUF
+        files disproves the naming convention; an unavailable listing does
+        not (the lane then fails at spawn with a clear error if the name was
+        a false positive). A cached listing that also holds non-GGUF backbone
+        weights (``model.safetensors``, …) proves a plain-named repository is
+        a mixed-format model whose name refers to the backbone, so it is
+        served as a plain model, not through the GGUF plugin.
 
         Multi-file GGUFs (``-N-of-M`` shards) need no merge step: the GGUF
         plugin's loader expands the shard set itself, making the ``gguf-split``
@@ -1632,9 +1636,12 @@ class VllmProcessHandle:
         hf_home = gguf.effective_hf_home(self.hf_home_override)
         if not hf_home:
             hf_home = self._resolve_hf_home(self._resolve_persistent_cache_root(self._global_config))
-        file_names: list[str] | None = None
+        file_names: list[tuple[str, int]] | None = None
+        non_gguf_weights: list[str] | None = None
         if not gguf.is_explicit_gguf_ref(model):
-            file_names = gguf.list_cached_gguf_files(hf_home, model)
+            cached = gguf.list_cached_model_weights(hf_home, model)
+            if cached is not None:
+                file_names, non_gguf_weights = cached
             # An authoritative (possibly empty) local listing stays local; only
             # an absent one falls back to the Hub.
             if gguf.needs_hub_listing(file_names, model):
@@ -1657,6 +1664,7 @@ class VllmProcessHandle:
                 gguf_quant=vc.gguf_quant,
                 gguf_tokenizer=vc.gguf_tokenizer,
                 gguf_file_names=file_names,
+                non_gguf_weight_names=non_gguf_weights,
             )
         except ValueError as exc:
             raise RuntimeError(f"[{self.lane_id}] {exc}") from exc

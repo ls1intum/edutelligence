@@ -404,17 +404,30 @@ class LaneManager:
                 # THAT in the active snapshot. A cache holding only a different
                 # quant, or an unfinished shard family, of the same repo must
                 # stay missing, or the prefetch never downloads what the lane
-                # serves and the lane fails offline.
+                # serves and the lane fails offline. A local directory
+                # reference is proven by the directory itself (the path
+                # without the embedded quant suffix), which is the whole
+                # check a host path can offer.
                 if gguf.is_gguf_ref_cached(hf_home, served_ref) is not True:
                     missing.append(model_name)
-                    logger.warning(
-                        "Capability model '%s' not available locally: its selected "
-                        "quant or file is not present in the cache (checked %s and %s). "
-                        "Ensure the model is downloaded before it can be loaded.",
-                        model_name,
-                        hf_cache_dir,
-                        direct_path,
-                    )
+                    local_dir = gguf.local_dir_path_of(served_ref)
+                    if local_dir is not None:
+                        logger.warning(
+                            "Capability model '%s' not available locally: its local "
+                            "directory %s is missing. Ensure the model is present "
+                            "on the host before it can be loaded.",
+                            model_name,
+                            local_dir,
+                        )
+                    else:
+                        logger.warning(
+                            "Capability model '%s' not available locally: its selected "
+                            "quant or file is not present in the cache (checked %s and %s). "
+                            "Ensure the model is downloaded before it can be loaded.",
+                            model_name,
+                            hf_cache_dir,
+                            direct_path,
+                        )
             elif not os.path.isdir(hf_cache_dir) and not os.path.isdir(direct_path):
                 missing.append(model_name)
                 logger.warning(

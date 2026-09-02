@@ -61,7 +61,7 @@ from logos_worker_node.gguf import (
     effective_hf_home,
     fetch_repo_gguf_files,
     is_explicit_gguf_ref,
-    list_cached_gguf_files,
+    list_cached_model_weights,
     needs_hub_listing,
     repo_id_of,
     resolve_gguf_spec,
@@ -955,7 +955,8 @@ def _resolve_gguf_calibration_spec(plan: dict[str, Any], hf_home: str | None) ->
     blocking call there.
     """
     model = plan["model"]
-    file_names: list[str] | None = None
+    file_names: list[tuple[str, int]] | None = None
+    non_gguf_weights: list[str] | None = None
     if not is_explicit_gguf_ref(model):
         # Respect the inherited HF_HOME (and the explicit cache root) before
         # the resolved default, so the local listing is consulted before the
@@ -963,7 +964,9 @@ def _resolve_gguf_calibration_spec(plan: dict[str, Any], hf_home: str | None) ->
         effective = effective_hf_home(hf_home)
         if not effective:
             effective = _default_hf_home()
-        file_names = list_cached_gguf_files(effective, model)
+        cached = list_cached_model_weights(effective, model)
+        if cached is not None:
+            file_names, non_gguf_weights = cached
         # An authoritative (possibly empty) local listing stays local; only an
         # absent one falls back to the Hub.
         if needs_hub_listing(file_names, model):
@@ -983,6 +986,7 @@ def _resolve_gguf_calibration_spec(plan: dict[str, Any], hf_home: str | None) ->
             gguf_quant=str(plan.get("gguf_quant") or ""),
             gguf_tokenizer=str(plan.get("gguf_tokenizer") or ""),
             gguf_file_names=file_names,
+            non_gguf_weight_names=non_gguf_weights,
         )
     except ValueError as exc:
         raise RuntimeError(f"GGUF model {model}: {exc}") from exc

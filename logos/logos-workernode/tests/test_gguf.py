@@ -108,6 +108,34 @@ def test_is_remote_gguf_file_ref() -> None:
     assert gguf.is_remote_gguf_file_ref("unsloth/Qwen3-8B-GGUF") is False
 
 
+def test_is_local_gguf_dir_ref() -> None:
+    # The documented /path/to/dir:<quant_type> form — the quant is embedded
+    # in the reference, so the directory name needs no -GGUF marker.
+    assert gguf.is_local_gguf_dir_ref("/models/qwen-GGUF:Q4_K_M") is True
+    assert gguf.is_local_gguf_dir_ref("/models/qwen:Q4_K_M") is True
+    # Quant matching is case-insensitive, like the remote repo:quant form.
+    assert gguf.is_local_gguf_dir_ref("/models/qwen-GGUF:q4_k_m") is True
+    # A bare local directory counts only under the -GGUF naming convention …
+    assert gguf.is_local_gguf_dir_ref("/models/qwen-GGUF") is True
+    assert gguf.is_local_gguf_dir_ref("/models/qwen") is False
+    # … and an unrecognizable quant token is no quant at all.
+    assert gguf.is_local_gguf_dir_ref("/models/qwen:BOGUS") is False
+    # Remote references are not local directories (and vice versa).
+    assert gguf.is_local_gguf_dir_ref("unsloth/Qwen3-8B-GGUF:Q4_K_M") is False
+    # Relative paths are not the documented absolute local form.
+    assert gguf.is_local_gguf_dir_ref("./models/qwen-GGUF:Q4_K_M") is False
+    assert gguf.is_local_gguf_dir_ref("../models/qwen-GGUF:Q4_K_M") is False
+
+
+def test_local_dir_path_of() -> None:
+    # The quant suffix is not part of the path: existence checks (capability
+    # validation) target the directory alone, never "…:Q4_K_M".
+    assert gguf.local_dir_path_of("/models/qwen-GGUF:Q4_K_M") == "/models/qwen-GGUF"
+    assert gguf.local_dir_path_of("/models/qwen-GGUF") == "/models/qwen-GGUF"
+    assert gguf.local_dir_path_of("unsloth/Qwen3-8B-GGUF:Q4_K_M") is None
+    assert gguf.local_dir_path_of("/models/qwen") is None
+
+
 def test_is_gguf_repo_name() -> None:
     assert gguf.is_gguf_repo_name("unsloth/Qwen3-8B-GGUF") is True
     assert gguf.is_gguf_repo_name("huihui_ai/gemma-3-4b-it-GGUF") is True
@@ -150,6 +178,20 @@ def test_is_gguf_model_and_explicit_ref() -> None:
     assert gguf.is_explicit_gguf_ref(file_ref) is True
     assert gguf.is_explicit_gguf_ref(bare) is False
     assert gguf.is_explicit_gguf_ref("Qwen/Qwen3-8B") is False
+
+
+def test_is_gguf_model_and_explicit_ref_include_local_dirs() -> None:
+    # A local dir:quant reference carries its own quant — it is a GGUF model
+    # AND an explicit reference: no listing (local or Hub) may resolve it.
+    assert gguf.is_gguf_model("/models/qwen-GGUF:Q4_K_M") is True
+    assert gguf.is_explicit_gguf_ref("/models/qwen-GGUF:Q4_K_M") is True
+    # A bare local …-GGUF directory is explicit too (it serves its content
+    # as-is), so tokenizer handling and the sharded-checkpoint bypass apply.
+    assert gguf.is_gguf_model("/models/qwen-GGUF") is True
+    assert gguf.is_explicit_gguf_ref("/models/qwen-GGUF") is True
+    # A plain local directory without the marker is not a GGUF reference.
+    assert gguf.is_gguf_model("/models/qwen") is False
+    assert gguf.is_explicit_gguf_ref("/models/qwen") is False
 
 
 def test_repo_id_of_all_reference_shapes() -> None:
@@ -288,6 +330,46 @@ def test_list_cached_gguf_files_empty_authoritative(tmp_path: Path) -> None:
     # Cached repo without GGUF weights → empty list, not None.
     _write_gguf(tmp_path, "org/some-model", ["config.json", "model.safetensors"])
     assert gguf.list_cached_gguf_files(str(tmp_path), "org/some-model") == []
+
+
+def test_list_cached_model_weights_reports_both_formats(tmp_path: Path) -> None:
+    # A mixed-format snapshot keeps the weight-format evidence: the GGUF
+    # files AND the non-GGUF backbone weights that disqualify a plain name
+    # from GGUF serving.
+    _write_gguf(
+        tmp_path,
+        "org/mixed-model",
+        ["model.safetensors", "model-Q4_K_M.gguf", "tokenizer.gguf", "config.json"],
+    )
+    gguf_files, non_gguf = gguf.list_cached_model_weights(str(tmp_path), "org/mixed-model")
+    assert gguf_files == [("model-Q4_K_M.gguf", 1), ("tokenizer.gguf", 1)]
+    assert non_gguf == ["model.safetensors"]
+
+
+def test_list_cached_model_weights_gguf_only_has_no_backbone(tmp_path: Path) -> None:
+    # A GGUF-only snapshot is authoritative about the ABSENCE of backbone
+    # weights: the plain name may keep resolving to GGUF.
+    _write_gguf(tmp_path, "org/gguf-only", ["Qwen3-8B-Q4_K_M.gguf", "tokenizer.gguf"])
+    gguf_files, non_gguf = gguf.list_cached_model_weights(str(tmp_path), "org/gguf-only")
+    assert [name for name, _ in gguf_files] == ["Qwen3-8B-Q4_K_M.gguf", "tokenizer.gguf"]
+    assert non_gguf == []
+
+
+def test_is_non_gguf_backbone_weight() -> None:
+    # The backbone names a plain repository loads as a transformers model …
+    assert gguf.is_non_gguf_backbone_weight("model.safetensors") is True
+    assert gguf.is_non_gguf_backbone_weight("model-00001-of-00004.safetensors") is True
+    assert gguf.is_non_gguf_backbone_weight("pytorch_model.bin") is True
+    # … wherever the snapshot keeps them, in any case …
+    assert gguf.is_non_gguf_backbone_weight("quants/model.bin") is True
+    assert gguf.is_non_gguf_backbone_weight("MODEL.SAFETENSORS") is True
+    # … but auxiliary weight files do not name the model — a GGUF-only repo
+    # bundling one (an mmproj projector, a LoRA adapter) is still GGUF.
+    assert gguf.is_non_gguf_backbone_weight("mmproj.safetensors") is False
+    assert gguf.is_non_gguf_backbone_weight("adapter_model.safetensors") is False
+    assert gguf.is_non_gguf_backbone_weight("tokenizer.gguf") is False
+    assert gguf.is_non_gguf_backbone_weight("model-Q4_K_M.gguf") is False
+    assert gguf.is_non_gguf_backbone_weight("config.json") is False
 
 
 def test_list_cached_gguf_files_finds_nested_subdirectory_files(tmp_path: Path) -> None:
@@ -464,6 +546,17 @@ def test_is_gguf_ref_cached_sharded_quant_family_must_be_in_one_path(tmp_path: P
     assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
 
 
+def test_is_gguf_ref_cached_local_dir_ref_checks_the_directory(tmp_path: Path) -> None:
+    # A local dir:quant reference is a filesystem fact, not a Hub cache: the
+    # check targets the directory WITHOUT the quant suffix (no path ever
+    # ends in ":Q4_K_M"), and no hf_home listing is involved.
+    local_dir = tmp_path / "qwen-GGUF"
+    local_dir.mkdir()
+    assert gguf.is_gguf_ref_cached(str(tmp_path), f"{local_dir}:Q4_K_M") is True
+    assert gguf.is_gguf_ref_cached(str(tmp_path), str(local_dir)) is True
+    assert gguf.is_gguf_ref_cached(str(tmp_path), f"{tmp_path / 'missing-GGUF'}:Q4_K_M") is False
+
+
 # ---------------------------------------------------------------------------
 # gguf_capability_target — the concrete reference a capability cache check proves
 # ---------------------------------------------------------------------------
@@ -497,6 +590,15 @@ def test_gguf_capability_target_shapes(tmp_path: Path) -> None:
     assert gguf.gguf_capability_target(str(tmp_path), "org/plain-GGUF") is None
     _write_gguf(tmp_path, "org/aux-only-GGUF", ["tokenizer.gguf"])
     assert gguf.gguf_capability_target(str(tmp_path), "org/aux-only-GGUF") == "org/aux-only-GGUF"
+
+
+def test_gguf_capability_target_local_dir_ref_is_itself() -> None:
+    # A local dir:quant reference proves itself: the cache check is the
+    # directory's existence, never a snapshot listing. A bare -GGUF local
+    # directory must not fall into the bare-REPO branch (its path segment
+    # ends in -GGUF, but that convention is about repo names, not paths).
+    assert gguf.gguf_capability_target(None, "/models/qwen-GGUF:Q4_K_M") == "/models/qwen-GGUF:Q4_K_M"
+    assert gguf.gguf_capability_target(None, "/models/qwen-GGUF") == "/models/qwen-GGUF"
 
 
 # ---------------------------------------------------------------------------
@@ -598,6 +700,32 @@ def test_resolve_gguf_spec_file_ref_passthrough() -> None:
     assert spec.quant is None
 
 
+def test_resolve_gguf_spec_local_dir_quant_ref() -> None:
+    # Regression: the documented local form /path/model-GGUF:Q4_K_M was read
+    # as a bare -GGUF repository — resolution chased a Hub listing for a
+    # path and failed with "no quant discovered". The quant comes from the
+    # reference itself: no listing (gguf_file_names=None) is consulted, and
+    # the serve reference keeps the dir:quant form the plugin parses.
+    spec = gguf.resolve_gguf_spec(
+        "/models/qwen-GGUF:q4_k_m",
+        gguf_tokenizer="Qwen/Qwen3-8B",
+        gguf_file_names=None,
+    )
+    assert spec is not None
+    assert spec.serve_ref == "/models/qwen-GGUF:Q4_K_M"
+    assert spec.quant == "Q4_K_M"
+    assert spec.tokenizer == "Qwen/Qwen3-8B"
+
+
+def test_resolve_gguf_spec_bare_local_gguf_dir() -> None:
+    # A bare local …-GGUF directory is an explicit reference that serves its
+    # content as-is — no quant to discover, nothing to list.
+    spec = gguf.resolve_gguf_spec("/models/qwen-GGUF")
+    assert spec is not None
+    assert spec.serve_ref == "/models/qwen-GGUF"
+    assert spec.quant is None
+
+
 def test_resolve_gguf_spec_bare_repo_auto_quant() -> None:
     spec = gguf.resolve_gguf_spec(
         "unsloth/Qwen3-8B-GGUF",
@@ -671,9 +799,57 @@ def test_resolve_gguf_spec_plain_name_with_gguf_cache_is_gguf() -> None:
     spec = gguf.resolve_gguf_spec(
         "org/some-quantized-model",
         gguf_file_names=[("some-model-Q4_K_M.gguf", 1024)],
+        non_gguf_weight_names=[],
     )
     assert spec is not None
     assert spec.serve_ref == "org/some-quantized-model:Q4_K_M"
+
+
+def test_resolve_gguf_spec_mixed_format_plain_repo_is_not_gguf() -> None:
+    # Regression: a plain-named repository whose listing holds BOTH backbone
+    # weights (model.safetensors) and GGUF files used to be forced onto the
+    # GGUF path — the safetensors backbone the name refers to was dropped.
+    # The backbone wins: the model is served as a plain model.
+    assert (
+        gguf.resolve_gguf_spec(
+            "org/some-model",
+            gguf_file_names=[("some-model-Q4_K_M.gguf", 1024)],
+            non_gguf_weight_names=["model.safetensors"],
+        )
+        is None
+    )
+    # The disqualifier is the BACKBONE, not any auxiliary weight file: a
+    # GGUF-only repo bundling an mmproj projector is still GGUF.
+    spec = gguf.resolve_gguf_spec(
+        "org/some-model",
+        gguf_file_names=[("some-model-Q4_K_M.gguf", 1024)],
+        non_gguf_weight_names=["mmproj.safetensors"],
+    )
+    assert spec is not None
+    assert spec.serve_ref == "org/some-model:Q4_K_M"
+
+
+def test_resolve_gguf_spec_mixed_format_gguf_named_repo_stays_gguf() -> None:
+    # A …-GGUF named repository is the operator's explicit GGUF choice: even
+    # a mixed-format listing serves the GGUF quant, not the backbone.
+    spec = gguf.resolve_gguf_spec(
+        "org/some-model-GGUF",
+        gguf_file_names=[("some-model-Q4_K_M.gguf", 1024)],
+        non_gguf_weight_names=["model.safetensors"],
+    )
+    assert spec is not None
+    assert spec.serve_ref == "org/some-model-GGUF:Q4_K_M"
+
+
+def test_resolve_gguf_spec_unknown_weight_evidence_keeps_old_behaviour() -> None:
+    # non_gguf_weight_names=None (no listing evidence, e.g. a Hub listing for
+    # a -GGUF name) does not disprove a plain name with GGUF files.
+    spec = gguf.resolve_gguf_spec(
+        "org/some-model",
+        gguf_file_names=[("some-model-Q4_K_M.gguf", 1024)],
+    )
+    assert spec is not None
+    assert spec.serve_ref == "org/some-model:Q4_K_M"
 
 
 def test_resolve_gguf_spec_auxiliary_only_listing_is_not_gguf() -> None:

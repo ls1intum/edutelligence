@@ -179,6 +179,28 @@ def _shard_marker_parts(marker: str) -> tuple[int, int]:
     return int(index.lstrip("-")), int(total)
 
 
+# Non-GGUF backbone weight file name: the transformers-style weights a plain
+# repository name refers to (model.safetensors, model-00001-of-00004.bin,
+# pytorch_model.bin, …). Anchored on the backbone base name on purpose —
+# auxiliary weight files (mmproj projectors, LoRA adapter_model.safetensors)
+# do not name the model, so a GGUF-only repository bundling one is still
+# GGUF, and only the backbone disqualifies a plain name from GGUF serving.
+_NON_GGUF_WEIGHT_RE = re.compile(r"^(pytorch_)?model(-\d+-of-\d+)?\.(safetensors|bin)$")
+
+
+def is_non_gguf_backbone_weight(filename: str) -> bool:
+    """Whether *filename* names non-GGUF backbone weights.
+
+    ``model.safetensors``, ``model-00001-of-00004.safetensors``,
+    ``pytorch_model.bin`` — the weights a plain (non-``…-GGUF``) repository
+    name loads as a transformers model. A repository shipping them also
+    shipping GGUF files is mixed-format: the plain name refers to the
+    backbone, and the GGUF files are an additional format, not the model.
+    """
+    name = (filename or "").rsplit("/", 1)[-1].lower()
+    return bool(_NON_GGUF_WEIGHT_RE.fullmatch(name))
+
+
 def is_valid_gguf_quant_type(quant_type: str) -> bool:
     """Whether *quant_type* is a known GGUF quantization name.
 
@@ -240,6 +262,40 @@ def is_remote_gguf_file_ref(model: str) -> bool:
     return bool(_REMOTE_GGUF_FILE_RE.fullmatch(model))
 
 
+def is_local_gguf_dir_ref(model: str) -> bool:
+    """Whether *model* is a local-directory GGUF reference.
+
+    The documented ``/path/to/dir:<quant_type>`` form — a local directory
+    whose quant is embedded in the reference — and a bare local
+    ``…-GGUF`` directory, whose name carries the repo naming convention.
+    Local paths are never Hub references: their presence is a filesystem
+    fact and their quant evidence lives in the directory itself, so no
+    listing (local or Hub) is needed to resolve them.
+    """
+    model = (model or "").strip()
+    if not model.startswith("/"):
+        return False
+    if ":" in model:
+        quant = model.rsplit(":", 1)[1].upper()
+        return is_valid_gguf_quant_type(quant) or is_nonstandard_gguf_quant_type(quant)
+    return is_gguf_repo_name(model)
+
+
+def local_dir_path_of(model: str) -> str | None:
+    """The local directory of a local-directory GGUF reference, or None.
+
+    ``/path/to/dir:Q4_K_M`` → ``/path/to/dir`` — the quant is embedded in
+    the reference, so an existence check (e.g. capability validation) must
+    target the directory alone, not ``"<dir>:<quant>"``.
+    """
+    model = (model or "").strip()
+    if not is_local_gguf_dir_ref(model):
+        return None
+    if ":" in model:
+        return model.rsplit(":", 1)[0]
+    return model
+
+
 def is_gguf_repo_name(model: str) -> bool:
     """Whether a bare repo id follows the ``…-GGUF`` / ``…_GGUF`` naming convention.
 
@@ -260,18 +316,23 @@ def is_gguf_repo_name(model: str) -> bool:
 
 
 def is_gguf_model(model: str) -> bool:
-    """Syntactic GGUF detection: file reference, remote reference, or the
-    ``…-GGUF`` repo naming convention."""
+    """Syntactic GGUF detection: file reference, remote reference, local
+    directory reference, or the ``…-GGUF`` repo naming convention."""
     model = (model or "").strip()
-    return is_gguf_file_ref(model) or is_remote_gguf_ref(model) or is_gguf_repo_name(model)
+    return (
+        is_gguf_file_ref(model) or is_remote_gguf_ref(model) or is_local_gguf_dir_ref(model) or is_gguf_repo_name(model)
+    )
 
 
 def is_explicit_gguf_ref(model: str) -> bool:
     """Whether the reference carries its own quant/file information.
 
-    For these, no file listing is needed to resolve the serve target.
+    For these, no file listing is needed to resolve the serve target: the
+    file reference names its file, the remote ``repo:quant`` its quant, and
+    the local directory reference ``/path/dir:<quant>`` its quant (a bare
+    ``…-GGUF`` directory its whole content).
     """
-    return is_gguf_file_ref(model) or is_remote_gguf_ref(model)
+    return is_gguf_file_ref(model) or is_remote_gguf_ref(model) or is_local_gguf_dir_ref(model)
 
 
 def repo_id_of(model: str) -> str:
@@ -408,14 +469,21 @@ def _active_revision(refs_dir: Path) -> str | None:
         return None
 
 
-def list_cached_gguf_files(hf_home: str | None, model: str) -> list[tuple[str, int]] | None:
-    """(name, size) pairs of *model*'s GGUF files in the local HF cache.
+def list_cached_model_weights(
+    hf_home: str | None,
+    model: str,
+) -> tuple[list[tuple[str, int]], list[str]] | None:
+    """Weight-format evidence of *model*'s active snapshot in the local HF cache.
 
-    Returns the (possibly empty) list of ``(name, size)`` pairs when the model
-    directory exists under ``<hf_home>/hub/models--<org>--<name>``, and None
-    when it does not (model not downloaded yet) or its active revision cannot
-    be resolved — the caller may then fall back to a remote listing. An empty
-    list is authoritative: the repo is cached and contains no GGUF weights.
+    ``(gguf_files, non_gguf_weights)`` — ``(name, size)`` pairs of the
+    snapshot's GGUF files (possibly empty) plus the names of its non-GGUF
+    backbone weight files (see :func:`is_non_gguf_backbone_weight`) — or None
+    when the model directory does not exist under
+    ``<hf_home>/hub/models--<org>--<name>`` (model not downloaded yet) or its
+    active revision cannot be resolved. The caller may then fall back to a
+    remote listing. Both lists are authoritative when returned: an empty GGUF
+    list proves the repo holds no GGUF weights, an empty weight list proves it
+    holds no transformers backbone.
 
     Only the snapshot the repo's ``refs`` currently point at is walked
     recursively. Walking every cached revision instead would merge files from
@@ -440,19 +508,52 @@ def list_cached_gguf_files(hf_home: str | None, model: str) -> list[tuple[str, i
     snapshot = repo_dir / "snapshots" / revision
     if not snapshot.is_dir():
         return None
-    sizes: dict[str, int] = {}
+    gguf_sizes: dict[str, int] = {}
+    non_gguf_weights: set[str] = set()
     try:
-        for entry in snapshot.rglob("*.gguf"):
+        for entry in snapshot.rglob("*"):
             try:
                 # stat() follows the snapshot symlink into blobs/
+                if not entry.is_file():
+                    continue
                 size = entry.stat().st_size
-                if size > 0:
-                    sizes[str(entry.relative_to(snapshot))] = size
             except OSError:
                 continue
+            if size <= 0:
+                continue
+            name = str(entry.relative_to(snapshot))
+            base = name.rsplit("/", 1)[-1].lower()
+            if base.endswith(".gguf"):
+                gguf_sizes[name] = size
+            elif is_non_gguf_backbone_weight(base):
+                non_gguf_weights.add(name)
     except OSError:
         return None
-    return sorted(sizes.items())
+    return sorted(gguf_sizes.items()), sorted(non_gguf_weights)
+
+
+def list_cached_gguf_files(hf_home: str | None, model: str) -> list[tuple[str, int]] | None:
+    """(name, size) pairs of *model*'s GGUF files in the local HF cache.
+
+    Returns the (possibly empty) list of ``(name, size)`` pairs when the model
+    directory exists under ``<hf_home>/hub/models--<org>--<name>``, and None
+    when it does not (model not downloaded yet) or its active revision cannot
+    be resolved — the caller may then fall back to a remote listing. An empty
+    list is authoritative: the repo is cached and contains no GGUF weights.
+    See :func:`list_cached_model_weights` for the walk itself.
+    """
+    result = list_cached_model_weights(hf_home, model)
+    return None if result is None else result[0]
+
+
+def list_cached_non_gguf_weights(hf_home: str | None, model: str) -> list[str] | None:
+    """Non-GGUF backbone weight file names in *model*'s active snapshot.
+
+    Same availability semantics as :func:`list_cached_gguf_files`; an empty
+    list is authoritative (the snapshot holds no transformers backbone).
+    """
+    result = list_cached_model_weights(hf_home, model)
+    return None if result is None else result[1]
 
 
 def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
@@ -474,6 +575,11 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
       whole family in one directory, which the plugin's loader expands the
       first shard to.
 
+    A local directory reference is a filesystem fact, not a Hub cache: it is
+    True when the directory (the path without any ``:quant`` suffix) exists,
+    False when it does not — the embedded quant's files are validated by the
+    plugin at load time.
+
     Returns True when the snapshot proves the reference loadable, False when
     the active snapshot is present but lacks the quant or file (a partial
     cache of a different quant), and None when the local listing is
@@ -482,6 +588,9 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
     (missing), since only a prefetch can then (re)build the cache.
     """
     model = (model or "").strip()
+    if is_local_gguf_dir_ref(model):
+        directory = local_dir_path_of(model)
+        return directory is not None and os.path.isdir(directory)
     if not (is_remote_gguf_ref(model) or is_remote_gguf_file_ref(model)):
         return None
     listing = list_cached_gguf_files(hf_home, model)
@@ -547,13 +656,18 @@ def gguf_capability_target(
       (unresolvable, or holding only auxiliary files):
       :func:`is_gguf_ref_cached` reports that as not cached, so the
       capability stays missing and the prefetch can (re)build it;
-    - ``None`` when the model is not a GGUF concern (plain model, local
-      path, or a repository whose authoritative listing holds no GGUF files
-      at all — the resolver serves that as a plain model) — the caller
-      applies its regular directory check.
+    - a local directory reference → itself: :func:`is_gguf_ref_cached`
+      proves the directory (without the quant suffix) exists on the host,
+      which is the whole proof a local path can offer;
+    - ``None`` when the model is not a GGUF concern (plain model, or a
+      repository whose authoritative listing holds no GGUF files at all — the
+      resolver serves that as a plain model) — the caller applies its regular
+      directory check.
     """
     model = (model or "").strip()
     if is_remote_gguf_ref(model) or is_remote_gguf_file_ref(model):
+        return model
+    if is_local_gguf_dir_ref(model):
         return model
     if not is_gguf_repo_name(model):
         return None
@@ -688,6 +802,7 @@ def resolve_gguf_spec(
     gguf_quant: str = "",
     gguf_tokenizer: str = "",
     gguf_file_names: list[tuple[str, int]] | None = None,
+    non_gguf_weight_names: list[str] | None = None,
 ) -> GgufServeSpec | None:
     """Resolve the serve reference for a lane model, or None when it is not GGUF.
 
@@ -698,6 +813,10 @@ def resolve_gguf_spec(
     * ``gguf_file_names`` — ``(name, size)`` pairs of the model's ``.gguf``
       files. None means the listing is unavailable (nothing cached, Hub
       listing failed); a list — possibly empty — is authoritative.
+    * ``non_gguf_weight_names`` — names of the listing's non-GGUF backbone
+      weight files (``model.safetensors``, ``pytorch_model.bin``, …). None
+      means unknown (no evidence either way); a list — possibly empty — is
+      authoritative.
 
     Raises ValueError when the model is detected as a GGUF repository but no
     quant can be determined — serving a bare repo without a quant is
@@ -723,6 +842,22 @@ def resolve_gguf_spec(
                 quant=quant,
                 tokenizer=tokenizer,
             )
+        if is_local_gguf_dir_ref(model):
+            # A local directory reference is a filesystem fact, not a Hub
+            # reference: the embedded quant is taken from the reference
+            # itself (no listing — local or Hub — can resolve it), and the
+            # serve reference keeps the dir:quant form the plugin parses.
+            directory = local_dir_path_of(model) or model
+            if ":" in model:
+                quant = model.rsplit(":", 1)[1].upper()
+                return GgufServeSpec(
+                    model=model,
+                    serve_ref=f"{directory}:{quant}",
+                    quant=quant,
+                    tokenizer=tokenizer,
+                )
+            # A bare …-GGUF directory serves its content as-is.
+            return GgufServeSpec(model=model, serve_ref=directory, quant=None, tokenizer=tokenizer)
         return GgufServeSpec(model=model, serve_ref=model, quant=None, tokenizer=tokenizer)
 
     looks_like_gguf_repo = is_gguf_repo_name(model)
@@ -741,6 +876,16 @@ def resolve_gguf_spec(
     # a cached tokenizer as GGUF and fail at spawn time on quant resolution.
     has_gguf_files = bool(candidate_quants(gguf_file_names))
     if not looks_like_gguf_repo and not has_gguf_files:
+        return None
+    if not looks_like_gguf_repo and any(is_non_gguf_backbone_weight(name) for name in non_gguf_weight_names or []):
+        # A plain-named repository whose listing holds non-GGUF backbone
+        # weights is a transformers model that also bundles GGUF files: the
+        # plain name refers to the backbone, so the GGUF files are an
+        # additional format and the model is not a GGUF one. Auxiliary weight
+        # files (mmproj, adapters) do not name the model and never
+        # disqualify. A ``…-GGUF`` named repository is the operator's explicit
+        # GGUF choice and keeps that preference, and an explicit repo:quant /
+        # repo/file.gguf reference always wins (resolved above).
         return None
 
     if quant_override:

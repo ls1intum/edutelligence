@@ -56,6 +56,14 @@ def _download_one_model(model_name: str, hf_home: str, gguf_quant: str = "") -> 
 
     from logos_worker_node import gguf
 
+    # Local references (/path/model.gguf, /path/dir:<quant>) name host-
+    # filesystem locations, not Hub repositories — a download can never make
+    # them available, so the capability check (the local path itself) is
+    # their whole proof and the prefetch has nothing to do.
+    if model_name.startswith("/"):
+        logger.info("Prefetch: %s is a local reference — nothing to download", model_name)
+        return
+
     # validate_capabilities checks <hf_home>/hub/models--org--name, so download
     # into <hf_home>/hub to match (HF_HUB_CACHE == HF_HOME/hub).
     cache_dir = os.path.join(hf_home, "hub")

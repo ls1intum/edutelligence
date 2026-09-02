@@ -99,6 +99,34 @@ def test_validate_capabilities_checks_hf_cache_dir(tmp_path: Path, monkeypatch) 
     assert stale.validate_capabilities([model]) == [model]
 
 
+def test_validate_capabilities_local_dir_ref_checks_directory(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("HF_HOME", raising=False)
+    models_root = tmp_path / "models"
+    models_root.mkdir()
+    manager = LaneManager(
+        OllamaConfig(models_path=str(models_root)),
+        lane_port_start=16121,
+        lane_port_end=16130,
+    )
+    local_dir = tmp_path / "local" / "qwen-GGUF"
+    model = f"{local_dir}:Q4_K_M"
+
+    # The check targets the directory WITHOUT the quant suffix: a directory
+    # literally named "…:Q4_K_M" cannot satisfy it …
+    (tmp_path / "local" / "qwen-GGUF:Q4_K_M").mkdir(parents=True)
+    assert manager.validate_capabilities([model]) == [model]
+
+    # … while the plain directory does.
+    local_dir.mkdir(parents=True)
+    assert manager.validate_capabilities([model]) == []
+
+    # A bare -GGUF local directory is checked the same way.
+    bare_dir = tmp_path / "local" / "plain-GGUF"
+    assert manager.validate_capabilities([str(bare_dir)]) == [str(bare_dir)]
+    bare_dir.mkdir(parents=True)
+    assert manager.validate_capabilities([str(bare_dir)]) == []
+
+
 def test_validate_capabilities_partial_snapshot_reports_missing_quant(tmp_path: Path, monkeypatch) -> None:
     # The partial-cache regression: Hugging Face snapshots can be partial —
     # the prefetch cached Q4_K_M of the repository, and the capability now

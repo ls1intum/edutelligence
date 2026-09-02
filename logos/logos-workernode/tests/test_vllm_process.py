@@ -2741,8 +2741,14 @@ def test_build_cmd_non_gguf_lane_unchanged(monkeypatch) -> None:
 
 
 def _hf_cache_with_gguf(hf_home, model: str, filenames: list[str]) -> None:
-    snapshot = Path(hf_home) / "hub" / ("models--" + model.replace("/", "--")) / "snapshots" / "rev"
+    repo_dir = Path(hf_home) / "hub" / ("models--" + model.replace("/", "--"))
+    snapshot = repo_dir / "snapshots" / "rev"
     snapshot.mkdir(parents=True, exist_ok=True)
+    # refs/main points at the active revision — without it the local listing
+    # is "unavailable" and resolution would fall back to a Hub fetch, which is
+    # not what these local-cache tests exercise.
+    (repo_dir / "refs").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs" / "main").write_text("rev")
     for name in filenames:
         (snapshot / name).write_bytes(b"\x00")
 
@@ -2821,4 +2827,84 @@ async def test_resolve_gguf_spec_unresolvable_bare_repo_raises(monkeypatch, tmp_
     lane = LaneConfig(model="unsloth/Qwen3-8B-GGUF", vllm=True, vllm_config=VllmConfig())
     with pytest.raises(RuntimeError, match="gguf_quant"):
         await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_local_dir_quant_ref_resolves_offline(monkeypatch, tmp_path: Path) -> None:
+    """Regression: /path/model-GGUF:Q4_K_M is an explicit local GGUF reference.
+
+    It was read as a bare -GGUF repository — resolution chased a Hub listing
+    for a path and raised "no quant discovered". The quant is embedded in the
+    reference: no Hub call, and the resolved spec triggers the
+    safetensors-sharding bypass.
+    """
+    from logos_worker_node import gguf as gguf_module
+
+    def _no_hub(_repo: str):
+        raise AssertionError("Hub listing must not be fetched for a local reference")
+
+    monkeypatch.setattr(gguf_module, "fetch_repo_gguf_files", _no_hub)
+
+    local_dir = tmp_path / "qwen-GGUF"
+    local_dir.mkdir()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle.hf_home_override = str(tmp_path)
+
+    lane = LaneConfig(
+        model=f"{local_dir}:Q4_K_M",
+        vllm=True,
+        vllm_config=VllmConfig(gguf_tokenizer="Qwen/Qwen3-8B"),
+    )
+    await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is not None
+    assert handle._gguf_spec.serve_ref == f"{local_dir}:Q4_K_M"
+    assert handle._gguf_spec.quant == "Q4_K_M"
+    assert handle._gguf_spec.tokenizer == "Qwen/Qwen3-8B"
+    # A resolved spec is what gates the sharded-checkpoint bypass.
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_bare_local_gguf_dir_is_explicit(monkeypatch, tmp_path: Path) -> None:
+    """A bare local …-GGUF directory resolves without any listing at all."""
+    from logos_worker_node import gguf as gguf_module
+
+    def _no_hub(_repo: str):
+        raise AssertionError("Hub listing must not be fetched for a local reference")
+
+    monkeypatch.setattr(gguf_module, "fetch_repo_gguf_files", _no_hub)
+
+    local_dir = tmp_path / "qwen-GGUF"
+    local_dir.mkdir()
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle.hf_home_override = str(tmp_path)
+
+    lane = LaneConfig(model=str(local_dir), vllm=True, vllm_config=VllmConfig())
+    await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is not None
+    assert handle._gguf_spec.serve_ref == str(local_dir)
+    assert handle._gguf_spec.quant is None
+    # Tokenizer handling + sharded-checkpoint bypass apply to it as well.
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_mixed_format_plain_repo_served_plain(tmp_path: Path) -> None:
+    """A plain-named repo holding backbone weights AND GGUF files is not GGUF.
+
+    Regression: the GGUF file in the listing forced the lane onto the GGUF
+    path and the configured safetensors model was never served. The backbone
+    weight in the same snapshot disqualifies the GGUF classification.
+    """
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle.hf_home_override = str(tmp_path)
+    _hf_cache_with_gguf(tmp_path, "org/some-model", ["model.safetensors", "config.json", "some-model-Q4_K_M.gguf"])
+
+    lane = LaneConfig(model="org/some-model", vllm=True, vllm_config=VllmConfig())
+    await handle._resolve_gguf_spec(lane)
     assert handle._gguf_spec is None
