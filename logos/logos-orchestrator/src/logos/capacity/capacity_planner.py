@@ -5559,9 +5559,14 @@ class CapacityPlanner:
             else:
                 kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
 
+            # kv_mb above is a PER-RANK budget (vLLM applies it on each of
+            # the tp GPUs); multiply by tp to get the whole-lane total that
+            # is comparable to available_mb (summed across the node's GPUs).
+            kv_total_mb = kv_mb * tp
+
             # Apply estimation slack to the disk → memory size estimate so
             # the gate matches what _estimate_model_loaded_vram returns.
-            minimum_needed = (base_mb + kv_mb) * self.ESTIMATION_SLACK_RATIO
+            minimum_needed = (base_mb + kv_total_mb) * self.ESTIMATION_SLACK_RATIO
 
             if tp > 1:
                 # Add TP overhead: NCCL buffers, duplicated embedding/output layers
@@ -5574,7 +5579,11 @@ class CapacityPlanner:
                 "Feasibility FAILED for %s: need %.0fMB%s × %.2f margin, have %.0fMB",
                 model_name,
                 minimum_needed,
-                (" (calibrated, KV+TP included)" if is_calibrated else f" (base={base_mb:.0f}MB + kv={kv_mb:.0f}MB)"),
+                (
+                    " (calibrated, KV+TP included)"
+                    if is_calibrated
+                    else f" (base={base_mb:.0f}MB + kv={kv_total_mb:.0f}MB)"
+                ),
                 self.VRAM_SAFETY_MARGIN,
                 available_mb,
             )
@@ -6490,8 +6499,12 @@ class CapacityPlanner:
                 if observed > 0.0:
                     return min(base, observed) if base > 0.0 else observed
                 return base  # no live observation yet — fall back to calibrated value
-            kv = self._estimate_kv_mb(profile, self._profile_tp(profile))
-            return (base + kv) * self.ESTIMATION_SLACK_RATIO
+            tp = self._profile_tp(profile)
+            # _estimate_kv_mb is per-rank; multiply by tp for the whole-lane
+            # total this function's callers compare against a node-wide
+            # available_vram_mb (see _passes_minimum_load_feasibility).
+            kv_total = self._estimate_kv_mb(profile, tp) * tp
+            return (base + kv_total) * self.ESTIMATION_SLACK_RATIO
         return profile.estimate_vram_mb()
 
     @staticmethod
@@ -6541,7 +6554,9 @@ class CapacityPlanner:
                 kv_mb = self._parse_kv_cache_to_mb(kv_str) if kv_str else 0.0
                 if kv_mb <= 0:
                     kv_mb = self._estimate_kv_mb(profile, tp)
-                loaded_vram = (base_residency + kv_mb) * self.ESTIMATION_SLACK_RATIO
+                # kv_mb is per-rank; multiply by tp for the whole-lane total.
+                kv_total_mb = kv_mb * tp
+                loaded_vram = (base_residency + kv_total_mb) * self.ESTIMATION_SLACK_RATIO
 
                 if tp > 1:
                     loaded_vram *= 1.0 + self.TP_OVERHEAD_RATIO

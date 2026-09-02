@@ -115,10 +115,24 @@ def _effective_max_context_length(config: dict[str, Any], base: int | None) -> i
     return int(base * factor)
 
 
+# config.json fields marking architectures whose KV cache doesn't
+# follow the standard "layers * kv_heads * head_dim" shape: kv_lora_rank
+# (MLA — DeepSeek-V2/V3/R1, compressed latent, not per-head) and
+# mamba_d_state / layers_block_type (SSM hybrids — Jamba, Zamba).
+_NON_STANDARD_KV_MARKER_FIELDS = ("kv_lora_rank", "mamba_d_state", "layers_block_type")
+
+
+def _uses_non_standard_kv_cache(config: dict[str, Any]) -> bool:
+    return any(_get_config_field(config, key) is not None for key in _NON_STANDARD_KV_MARKER_FIELDS)
+
+
 def _kv_geometry(config: dict[str, Any]) -> tuple[int, int, float] | None:
     """(num_hidden_layers, num_key_value_heads, head_dim) — the
-    dtype-independent shape of one token's KV cache slot. None if the
-    config doesn't expose enough of it to derive a value at all."""
+    dtype-independent shape of one token's KV cache slot. None when the
+    config lacks the fields, or the architecture's KV cache doesn't
+    fit this shape at all (see _uses_non_standard_kv_cache)."""
+    if _uses_non_standard_kv_cache(config):
+        return None
     num_hidden_layers = _get_config_field(config, "num_hidden_layers")
     hidden_size = _get_config_field(config, "hidden_size")
     num_attention_heads = _get_config_field(config, "num_attention_heads")
@@ -398,10 +412,15 @@ def _fits_at_tp(
     num_key_value_heads: int | None,
 ) -> bool:
     per_gpu_weight_mb = (weight_bytes / (1024 * 1024)) / tp
-    per_gpu_kv_mb = min_kv_mb
     if num_key_value_heads and num_key_value_heads > 0:
         heads_per_rank = max(1, num_key_value_heads // tp)
         per_gpu_kv_mb = min_kv_mb * heads_per_rank / num_key_value_heads
+    else:
+        # Head count unknown: split evenly across ranks rather than
+        # charging the whole-model KV floor to every GPU regardless of
+        # tp — the latter never shrinks with tp and can permanently
+        # block a model that would actually fit at a higher tp.
+        per_gpu_kv_mb = min_kv_mb / tp
     return per_gpu_weight_mb + per_gpu_kv_mb <= per_gpu_free_mb * safety_ratio
 
 

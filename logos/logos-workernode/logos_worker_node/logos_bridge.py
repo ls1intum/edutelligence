@@ -1409,6 +1409,10 @@ class LogosBridgeClient:
                     and not profile.kv_cache_to_max_model_len_pairs
                 )
                 or collapsed_envelope
+                # An HF precheck estimate is not a live measurement — keep
+                # the model a candidate until a real calibration/measurement
+                # replaces it, or it never gets probed once a precheck runs.
+                or (profile is not None and profile.residency_source == "hf")
             )
             if needs_calib:
                 ordered.append(model_name)

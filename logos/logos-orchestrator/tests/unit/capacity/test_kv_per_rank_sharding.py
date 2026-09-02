@@ -120,12 +120,30 @@ def test_compute_kv_cache_bytes_shards_legacy_profile_at_tp():
     assert tp4_mb == tp1_mb / 4
 
 
-def test_estimate_model_loaded_vram_uncalibrated_shards_kv_at_tp():
-    """_estimate_model_loaded_vram (placement/feasibility sizing) must use
-    the profile's own tensor_parallel_size to shard the KV estimate, not
-    silently assume tp=1 for a model calibration pinned wider."""
+def test_estimate_model_loaded_vram_totals_kv_back_across_ranks():
+    """_estimate_model_loaded_vram feeds every caller's comparison against
+    a node-wide available_vram_mb (summed across all GPUs — see gpu.py's
+    free_memory_mb). _estimate_kv_mb returns a PER-RANK budget, so this
+    must multiply it back by tp to reconstruct the total KV memory vLLM
+    actually reserves across all tp GPUs — not just the single rank's
+    share, which would silently under-count the real footprint.
+
+    At tp=4 with 8 KV heads (divides evenly), each rank holds 1/4 of the
+    whole-model KV figure, but there are 4 ranks — the total is unchanged
+    from tp=1, not smaller."""
     planner = _make_planner()
     narrow = _hf_profile(kv_per_token_bytes=2 * 32 * 8 * 128 * 2, num_key_value_heads=8)
     wide = _hf_profile(kv_per_token_bytes=2 * 32 * 8 * 128 * 2, num_key_value_heads=8)
     wide.tensor_parallel_size = 4
-    assert planner._estimate_model_loaded_vram(wide) < planner._estimate_model_loaded_vram(narrow)  # noqa: SLF001
+    assert planner._estimate_model_loaded_vram(wide) == planner._estimate_model_loaded_vram(narrow)  # noqa: SLF001
+
+
+def test_estimate_model_loaded_vram_grows_when_kv_heads_replicated():
+    """At tp > num_key_value_heads, vLLM replicates KV heads onto the extra
+    ranks instead of sharding further, so the total KV memory grows with
+    tp — the whole-lane estimate must reflect that growth, not shrink."""
+    planner = _make_planner()
+    narrow = _hf_profile(kv_per_token_bytes=2 * 32 * 8 * 128 * 2, num_key_value_heads=8)
+    wide = _hf_profile(kv_per_token_bytes=2 * 32 * 8 * 128 * 2, num_key_value_heads=8)
+    wide.tensor_parallel_size = 16
+    assert planner._estimate_model_loaded_vram(wide) > planner._estimate_model_loaded_vram(narrow)  # noqa: SLF001

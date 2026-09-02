@@ -61,6 +61,36 @@ def test_derive_kv_per_token_bytes():
     assert _derive_kv_per_token_bytes({"num_hidden_layers": 10}, None) is None
 
 
+def test_derive_kv_per_token_bytes_skips_mla_architectures():
+    """DeepSeek-V2/V3/R1-style Multi-head Latent Attention compresses KV
+    into a small shared latent rather than one slot per attention head —
+    the generic per-head formula would badly overestimate it, so a
+    config carrying kv_lora_rank is left without a KV estimate."""
+    config = {
+        "num_hidden_layers": 60,
+        "num_attention_heads": 128,
+        "hidden_size": 5120,
+        "torch_dtype": "bfloat16",
+        "kv_lora_rank": 512,
+    }
+    assert _derive_kv_per_token_bytes(config, None) is None
+
+
+def test_derive_kv_per_token_bytes_skips_mamba_hybrid_architectures():
+    """Hybrid SSM+attention models (Jamba, Zamba) carry a real KV cache
+    on only a fraction of num_hidden_layers — the generic formula
+    multiplies by the full layer count and overestimates it, so a
+    config exposing mamba_d_state is left without a KV estimate."""
+    config = {
+        "num_hidden_layers": 32,
+        "num_attention_heads": 32,
+        "hidden_size": 4096,
+        "torch_dtype": "bfloat16",
+        "mamba_d_state": 16,
+    }
+    assert _derive_kv_per_token_bytes(config, None) is None
+
+
 def test_kv_bytes_for_dtype():
     # Same geometry, a plan's --kv-cache-dtype override recomputed on
     # demand instead of the value cached under the config's own dtype.
@@ -446,13 +476,25 @@ def test_min_feasible_tp_shards_kv_cache_across_tp_ranks():
     way it shards attention heads — num_key_value_heads fixes that."""
     # 8000 MB whole-model KV footprint, 8 KV heads: tp=4 still charges
     # 2000 MB/rank (2 heads) and misses a 1440 MB budget; tp=8 shrinks to
-    # 1000 MB/rank (1 head) and fits. Without num_key_value_heads, the
-    # full 8000 MB is charged at every tp and it never fits, anywhere.
+    # 1000 MB/rank (1 head) and fits.
     assert (
         min_feasible_tp(8_000_000, per_gpu_free_mb=1600.0, hardware_max_tp=8, min_kv_mb=8000.0, num_key_value_heads=8)
         == 8
     )
-    assert min_feasible_tp(8_000_000, per_gpu_free_mb=1600.0, hardware_max_tp=8, min_kv_mb=8000.0) is None
+
+
+def test_min_feasible_tp_falls_back_to_even_split_when_heads_unknown():
+    """Without num_key_value_heads, the whole-model KV footprint is
+    still split evenly across tp ranks (best effort) rather than
+    charged unchanged to every candidate — an unrecognized architecture
+    must not look permanently infeasible regardless of tp when a wider
+    tp genuinely has room for it (no auto-recovery once persisted as
+    calibration_unsupported — see model_profiles.py)."""
+    # 8000 MB whole-model KV footprint, unknown heads: tp=4 still
+    # charges the full 8000 MB/rank (2000 with the even split) and
+    # misses a 1440 MB budget; tp=8 shrinks to 1000 MB/rank and fits.
+    assert min_feasible_tp(8_000_000, per_gpu_free_mb=1600.0, hardware_max_tp=4, min_kv_mb=8000.0) is None
+    assert min_feasible_tp(8_000_000, per_gpu_free_mb=1600.0, hardware_max_tp=8, min_kv_mb=8000.0) == 8
 
 
 def test_min_feasible_tp_checks_configured_non_power_of_two_tp():
