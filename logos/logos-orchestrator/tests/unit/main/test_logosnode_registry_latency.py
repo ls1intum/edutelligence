@@ -6,9 +6,7 @@ status dicts into the LatencyStore via _absorb_latency_observations.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call
-
-import pytest
+from unittest.mock import MagicMock
 
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 from logos.pipeline.ettft_estimator import ReadinessTier

@@ -529,9 +529,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     tp_size=tp_size,
                 )
                 overhead_overrides = {
-                    tier: self._latency_store.get_overhead_s(
-                        model_name_for_store, provider_id, tier, **_store_kwargs
-                    )
+                    tier: self._latency_store.get_overhead_s(model_name_for_store, provider_id, tier, **_store_kwargs)
                     for tier in (ReadinessTier.COLD, ReadinessTier.SLEEPING)
                 }
                 for tier in (ReadinessTier.COLD_RECLAIM, ReadinessTier.SLEEPING_RECLAIM):

@@ -8,7 +8,6 @@ import pytest
 from logos.pipeline.ettft_estimator import OVERHEAD_COLD_S, OVERHEAD_SLEEPING_S, RECLAIM_IDLE_EVICT_S, ReadinessTier
 from logos.pipeline.latency_store import _MIN_PLAUSIBLE_S, LatencyStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
