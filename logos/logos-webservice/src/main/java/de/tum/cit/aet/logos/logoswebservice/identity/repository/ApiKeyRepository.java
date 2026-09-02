@@ -83,6 +83,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
                   AND (model_id = le.model_id OR model_id IS NULL)
                   AND (provider_id = le.provider_id OR provider_id IS NULL)
                   AND valid_from <= le.timestamp_request
+                  AND (valid_to IS NULL OR valid_to > le.timestamp_request)
                 ORDER BY (model_id = le.model_id) DESC NULLS LAST,
                          (provider_id = le.provider_id) DESC NULLS LAST,
                          valid_from DESC
@@ -122,6 +123,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
                   AND (model_id = le.model_id OR model_id IS NULL)
                   AND (provider_id = le.provider_id OR provider_id IS NULL)
                   AND valid_from <= le.timestamp_request
+                  AND (valid_to IS NULL OR valid_to > le.timestamp_request)
                 ORDER BY (model_id = le.model_id) DESC NULLS LAST,
                          (provider_id = le.provider_id) DESC NULLS LAST,
                          valid_from DESC

@@ -159,9 +159,11 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
                                           @Param("since") Timestamp since);
 
     /**
-     * Latest valid catalogue prices (per-1K-token, micro-cents) for the pair,
-     * with the same model+provider > model > provider > global specificity as
-     * the billing queries.
+     * Latest currently-valid catalogue prices (per-1K-token, micro-cents) for
+     * the pair, with the same model+provider > model > provider > global
+     * specificity as the billing queries. Rows whose validity was closed (by
+     * a provider type change) are not eligible, so the cost is only derived
+     * from a price generation opened for the provider's current type.
      */
     @Query(value = """
         SELECT
@@ -170,6 +172,7 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
              WHERE (tp.model_id = :modelId OR tp.model_id IS NULL)
                AND (tp.provider_id = :providerId OR tp.provider_id IS NULL)
                AND tp.valid_from <= NOW()
+               AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
              ORDER BY (tp.model_id = :modelId) DESC NULLS LAST,
                       (tp.provider_id = :providerId) DESC NULLS LAST,
                       tp.valid_from DESC
@@ -179,6 +182,7 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
              WHERE (tp.model_id = :modelId OR tp.model_id IS NULL)
                AND (tp.provider_id = :providerId OR tp.provider_id IS NULL)
                AND tp.valid_from <= NOW()
+               AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
              ORDER BY (tp.model_id = :modelId) DESC NULLS LAST,
                       (tp.provider_id = :providerId) DESC NULLS LAST,
                       tp.valid_from DESC

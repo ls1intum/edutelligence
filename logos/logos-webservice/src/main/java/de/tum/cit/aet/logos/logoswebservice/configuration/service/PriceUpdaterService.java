@@ -208,7 +208,13 @@ public class PriceUpdaterService {
         Optional<TokenPrice> latest = tokenPriceRepository
             .findTopByModelIdAndTypeIdAndProviderIdOrderByValidFromDesc(modelId, tokenType.getId(), providerId);
 
-        if (latest.isPresent() && latest.get().getPricePerKToken().longValue() == pricePerK) return;
+        // The same-value shortcut only applies within one open generation:
+        // a generation closed by a provider type change must be re-opened
+        // even when the catalogue returns the very same value, and that new
+        // row starts at validFrom (history exists, so not at the 2020
+        // baseline).
+        if (latest.isPresent() && latest.get().getValidTo() == null
+                && latest.get().getPricePerKToken().longValue() == pricePerK) return;
 
         Instant from = latest.isEmpty() ? Instant.parse("2020-01-01T00:00:00Z") : validFrom;
 

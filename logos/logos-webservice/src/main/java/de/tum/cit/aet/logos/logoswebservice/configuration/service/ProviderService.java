@@ -24,6 +24,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProvid
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderModelProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TokenPriceRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
@@ -37,15 +38,18 @@ public class ProviderService {
 
     private final ProviderRepository providerRepository;
     private final ModelProviderRepository modelProviderRepository;
+    private final TokenPriceRepository tokenPriceRepository;
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelMetricsService modelMetricsService;
 
     public ProviderService(ProviderRepository providerRepository,
                            ModelProviderRepository modelProviderRepository,
+                           TokenPriceRepository tokenPriceRepository,
                            OrchestratorNotificationService orchestratorNotificationService,
                            ModelMetricsService modelMetricsService) {
         this.providerRepository = providerRepository;
         this.modelProviderRepository = modelProviderRepository;
+        this.tokenPriceRepository = tokenPriceRepository;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelMetricsService = modelMetricsService;
     }
@@ -112,6 +116,14 @@ public class ProviderService {
             // derivation committed before the invalidation (and is
             // overwritten) or it will read the new type.
             providerRepository.lockProviderDerivation(ModelMetricsService.providerDerivationLockKey(p.getId()));
+            // The catalogue price rows opened under the previous type are
+            // closed, not deleted: billing of requests made before the change
+            // still matches them, but the re-derivation can only read prices
+            // opened after the change. Without the boundary, a failed or
+            // empty catalogue refresh would leave the previous type's rows
+            // as the latest eligible prices and re-derive the cost from
+            // them.
+            tokenPriceRepository.closeCurrentPricesByProviderId(p.getId());
             List<Integer> modelIds = modelProviderRepository.findByProviderId(p.getId()).stream()
                 .map(ModelProvider::getModelId).distinct().toList();
             modelProviderRepository.invalidateDerivedCostByProviderId(p.getId());

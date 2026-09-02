@@ -25,6 +25,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
@@ -466,6 +467,57 @@ class ModelMetricsControllerTest {
     }
 
     @Test
+    void cloudTypeChange_withEmptyRefresh_doesNotResurrectPreviousCatalogueCost() throws Exception {
+        // A previous test may have stubbed the price refresh to install rows;
+        // this test needs a genuinely empty refresh, so start from the
+        // default no-op mock.
+        reset(priceUpdaterService);
+        // Drain any re-derivation still in flight from a previous test: the
+        // shared async executor is not quiesced between tests, and a
+        // derivation that reads this test's fresh seed before the type
+        // change below would race the price close. Wait until the pairs stop
+        // moving.
+        awaitQuiescent(new int[][]{{5101, 6101}, {5102, 6101}});
+        modelMetricsService.deriveAllMetrics();
+        // Baseline: the cloud costs are the previous (openai) catalogue
+        // blend.
+        assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.015"));
+        Timestamp before = jdbc.queryForObject(
+            "SELECT MAX(derived_updated_at) FROM model_provider", Timestamp.class);
+
+        // Switch the cloud type (openai -> anthropic). The catalogue refresh
+        // that follows is a no-op in this context (the price updater is
+        // mocked), so no price row is opened for the new type - the failed /
+        // empty refresh case.
+        providerService.updateProvider(
+            new UpdateProviderRequestDTO(6101, null, null, null, null, null, null, "anthropic", null));
+
+        // Wait until the after-commit re-derivation has written the pairs
+        // again (updateDerivedMetrics always stamps derived_updated_at):
+        // that is the write that would resurrect the cost if the previous
+        // type's price rows were still selectable.
+        awaitUntil(() -> {
+            Instant a = updatedAt(5101, 6101);
+            Instant b = updatedAt(5102, 6101);
+            return a != null && a.isAfter(before.toInstant())
+                && b != null && b.isAfter(before.toInstant());
+        });
+        // No price is current for the new type, so the cost stays null
+        // instead of being reconstructed from the previous provider's
+        // catalogue.
+        assertThat(costOf(5101, 6101)).isNull();
+        assertThat(costOf(5102, 6101)).isNull();
+
+        // The historical price rows are kept for billing, with their current
+        // validity closed.
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM token_prices WHERE provider_id = 6101", Integer.class)).isEqualTo(4);
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM token_prices WHERE provider_id = 6101 AND valid_to IS NULL",
+            Integer.class)).isZero();
+    }
+
+    @Test
     void providerDeletion_rederivesAndReranksAffectedModelsImmediately() throws Exception {
         modelMetricsService.deriveAllMetrics();
         // Baseline: 5101 is fastest via its 500 ms cloud pair, 5102 slowest.
@@ -647,6 +699,42 @@ class ModelMetricsControllerTest {
 
     private Integer weightCost(int modelId) {
         return jdbc.queryForObject("SELECT weight_cost FROM models WHERE id = ?", Integer.class, modelId);
+    }
+
+    private Instant updatedAt(int modelId, int providerId) {
+        return pairStamp(modelId, providerId).toInstant();
+    }
+
+    private Timestamp pairStamp(int modelId, int providerId) {
+        return jdbc.queryForObject(
+            "SELECT derived_updated_at FROM model_provider WHERE model_id = ? AND provider_id = ?",
+            Timestamp.class, modelId, providerId);
+    }
+
+    /**
+     * Waits until the derived stamps of the given pairs stop changing for
+     * 300 ms: re-derivations triggered by previous tests share the async
+     * executor and are not quiesced between tests, so a test that races a
+     * type change first drains any in-flight derivation.
+     */
+    private void awaitQuiescent(int[][] pairs) throws InterruptedException {
+        Timestamp[] stamps = new Timestamp[pairs.length];
+        for (int i = 0; i < pairs.length; i++) {
+            stamps[i] = pairStamp(pairs[i][0], pairs[i][1]);
+        }
+        long stableFor = 0;
+        while (stableFor < 300) {
+            Thread.sleep(50);
+            boolean changed = false;
+            for (int i = 0; i < pairs.length; i++) {
+                Timestamp now = pairStamp(pairs[i][0], pairs[i][1]);
+                if (!Objects.equals(now, stamps[i])) {
+                    changed = true;
+                    stamps[i] = now;
+                }
+            }
+            stableFor = changed ? 0 : stableFor + 50;
+        }
     }
 
     /**

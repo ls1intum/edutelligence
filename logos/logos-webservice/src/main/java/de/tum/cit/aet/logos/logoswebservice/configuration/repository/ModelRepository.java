@@ -27,12 +27,14 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
                   AND tt.name = 'prompt_tokens' AND tp.valid_from <= NOW()
+                  AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
                 ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
                ) AS input_usd_per_million,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
                   AND tt.name = 'completion_tokens' AND tp.valid_from <= NOW()
+                  AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
                 ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
                ) AS output_usd_per_million,
                (SELECT MAX(le.timestamp_request)
@@ -74,12 +76,14 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
                   AND tt.name = 'prompt_tokens' AND tp.valid_from <= NOW()
+                  AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
                 ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
                ) AS input_usd_per_million,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
                   AND tt.name = 'completion_tokens' AND tp.valid_from <= NOW()
+                  AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
                 ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
                ) AS output_usd_per_million,
                m.weight_overrides::text AS weight_overrides_text
