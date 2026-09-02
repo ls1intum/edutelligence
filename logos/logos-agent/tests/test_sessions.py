@@ -1066,6 +1066,138 @@ class TestAgentPhaseIsolation:
         assert 7 not in manager._supervisors
         assert created and created[0]["labels"] == {"logos.agent.helper": "prepare"}
 
+    async def test_a_cancel_inside_the_prepare_helper_create_window_stops_the_helper(self, monkeypatch, tmp_path):
+        # One step earlier than the start window: the create request
+        # itself. While the POST is in flight no container exists yet —
+        # but it holds the push token the moment the request returns. The
+        # helper is therefore tracked from before the create, a cancel that
+        # lands inside the request waits for it to settle, and the
+        # returned container is stopped and removed instead of being
+        # started — only then does the cancel report success.
+        from app import sessions
+        from app.schemas import can_transition
+
+        self._patch_base(monkeypatch, tmp_path)
+        # A fresh manager: the module singleton's locks bind to whichever
+        # loop first contended on them.
+        manager = sessions.SessionManager()
+
+        states = {7: "starting"}
+        row = {**self.ROW, "status": "starting", "container_id": None}
+        # The fake daemon: the create POST is the delayed one, the start
+        # is what would bring the container up, and a stop only works once
+        # it is running (stop-before-start is a 304 no-op).
+        docker: dict = {"running": False, "removed": False}
+        order: list = []
+        events: list = []
+        created: list = []
+        create_entered = asyncio.Event()
+        create_go = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            # A slow create: the window in which the request is in flight
+            # and the cancel is still allowed to land.
+            create_entered.set()
+            await create_go.wait()
+            order.append("create")
+            return "cid-prepare"
+
+        async def fake_start(cid):
+            order.append("start")
+            docker["running"] = True
+
+        async def fake_wait(cid, **_kwargs):
+            # The container exits when it is stopped or removed.
+            await stopped.wait()
+            return 137
+
+        async def fake_stop(cid, **_kwargs):
+            order.append("stop")
+            if docker["running"]:
+                docker["running"] = False
+                stopped.set()
+            # else: 304 — never running, nothing to stop.
+
+        async def fake_remove(cid, **_kwargs):
+            order.append("remove")
+            docker["removed"] = True
+            docker["running"] = False
+            stopped.set()
+
+        async def fake_get_session(_sid):
+            return {**row, "status": states[7]}
+
+        async def fake_transition(sid, target, **_fields):
+            # A validated transition, like the database: only legal edges,
+            # and the row really moves.
+            if not can_transition(SessionStatus(states[sid]), target):
+                return False
+            states[sid] = target.value
+            return True
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "get_session", fake_get_session)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+
+        launch = asyncio.create_task(manager._launch(self.SESSION))
+        try:
+            # The prepare helper's create is in flight: no container exists
+            # yet, the row is still 'starting' with no stored container
+            # id, and there is no supervisor.
+            await create_entered.wait()
+
+            # The fix itself: the helper is already tracked while its
+            # create is in flight — a record without a container id yet.
+            helper = manager._helpers.get(7)
+            assert helper is not None and helper.container_id is None
+
+            cancel_task = asyncio.create_task(manager.cancel(7))
+            # The cancel pops the in-flight helper ...
+            for _ in range(100):
+                if 7 not in manager._helpers:
+                    break
+                await asyncio.sleep(0.01)
+            # ... and must not have reported success yet: the create has
+            # not settled, so the container is not known to exist or not.
+            assert not cancel_task.done()
+
+            # The create now returns a container id after the cancel has
+            # popped the helper — the ordering this race is about.
+            create_go.set()
+            assert await cancel_task is True
+            # The returned container was never started and is gone; the
+            # stop is the 304 against a container that never ran.
+            assert "start" not in order
+            assert docker["running"] is False
+            assert docker["removed"] is True
+            assert "stop" in order and "remove" in order
+        finally:
+            create_go.set()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(launch, timeout=1)
+
+        # The launch that lost the race to the cancel records nothing: no
+        # running status, no supervision of a cancelled session.
+        assert states[7] == "cancelled"
+        assert [p["status"] for k, p in events if k == EventKind.STATUS] == ["cancelled"]
+        assert 7 not in manager._supervisors
+        assert created and created[0]["labels"] == {"logos.agent.helper": "prepare"}
+
 
 class TestOverlappingAdmission:
     """Admission under overlapping scheduler passes.
