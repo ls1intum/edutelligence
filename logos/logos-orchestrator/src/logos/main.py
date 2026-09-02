@@ -70,8 +70,8 @@ from logos.logosnode_registry import (
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.latency_store import LatencyStore
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
+from logos.pipeline.latency_store import LatencyStore
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (

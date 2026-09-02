@@ -2971,9 +2971,7 @@ class DBManager:
     def get_all_latency_observations(self) -> list[tuple[str, int, str, float, int]]:
         """Return all persisted EWMA rows as (model_name, provider_id, tier, ewma_value, n)."""
         rows = self.session.execute(
-            text(
-                "SELECT model_name, provider_id, tier, ewma_value, n FROM latency_observations"
-            )
+            text("SELECT model_name, provider_id, tier, ewma_value, n FROM latency_observations")
         ).fetchall()
         return [(str(r[0]), int(r[1]), str(r[2]), float(r[3]), int(r[4])) for r in rows]
 

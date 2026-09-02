@@ -49,17 +49,9 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import Any, Callable, Optional
 
-from logos.pipeline.ettft_estimator import (
-    OVERHEAD_COLD_S,
-    OVERHEAD_SLEEPING_S,
-    RECLAIM_IDLE_EVICT_S,
-    ReadinessTier,
-)
-
-if TYPE_CHECKING:
-    pass
+from logos.pipeline.ettft_estimator import OVERHEAD_COLD_S, OVERHEAD_SLEEPING_S, RECLAIM_IDLE_EVICT_S, ReadinessTier
 
 logger = logging.getLogger(__name__)
 
@@ -249,9 +241,7 @@ class LatencyStore:
                     try:
                         tier = ReadinessTier(tier_str)
                     except ValueError:
-                        logger.warning(
-                            "LatencyStore: unknown tier %r in DB, skipping", tier_str
-                        )
+                        logger.warning("LatencyStore: unknown tier %r in DB, skipping", tier_str)
                         continue
                     self._overhead[(model_name, provider_id, tier)] = state
                 loaded += 1
@@ -268,9 +258,7 @@ class LatencyStore:
             return
         try:
             with self._db_factory() as db:
-                db.upsert_latency_observation(
-                    model_name, provider_id, tier.value, state.value, state.n
-                )
+                db.upsert_latency_observation(model_name, provider_id, tier.value, state.value, state.n)
         except Exception:
             logger.exception(
                 "LatencyStore: failed to persist overhead for %s/%s/%s",
@@ -279,20 +267,14 @@ class LatencyStore:
                 tier,
             )
 
-    def _persist_model_metric(
-        self, model_name: str, tier_str: str, state: _EWMAState
-    ) -> None:
+    def _persist_model_metric(self, model_name: str, tier_str: str, state: _EWMAState) -> None:
         if self._db_factory is None:
             return
         try:
             with self._db_factory() as db:
-                db.upsert_latency_observation(
-                    model_name, _MODEL_ONLY_PROVIDER_ID, tier_str, state.value, state.n
-                )
+                db.upsert_latency_observation(model_name, _MODEL_ONLY_PROVIDER_ID, tier_str, state.value, state.n)
         except Exception:
-            logger.exception(
-                "LatencyStore: failed to persist %s for %s", tier_str, model_name
-            )
+            logger.exception("LatencyStore: failed to persist %s for %s", tier_str, model_name)
 
     # ------------------------------------------------------------------
     # Prior computation

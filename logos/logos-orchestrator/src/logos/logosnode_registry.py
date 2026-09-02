@@ -395,6 +395,7 @@ class LogosNodeRuntimeRegistry:
         # logosnode_registry ← latency_store ← ettft_estimator ← sdi.models
         #   ← sdi.providers.logosnode_provider ← logosnode_registry
         from logos.pipeline.ettft_estimator import ReadinessTier  # noqa: PLC0415
+
         for lane in runtime.get("lanes") or []:
             if not isinstance(lane, dict):
                 continue
@@ -405,9 +406,7 @@ class LogosNodeRuntimeRegistry:
             # Cold load timing reported directly by the worker process.
             cold_s = lane.get("last_cold_load_s")
             if isinstance(cold_s, (int, float)) and cold_s > 0:
-                self._latency_store.record_overhead(
-                    model_name, provider_id, ReadinessTier.COLD, float(cold_s)
-                )
+                self._latency_store.record_overhead(model_name, provider_id, ReadinessTier.COLD, float(cold_s))
 
             # TTFT and e2e latency from vLLM Prometheus histograms.
             bm = lane.get("backend_metrics")

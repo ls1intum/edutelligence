@@ -1,22 +1,18 @@
 """Unit tests for logos.pipeline.latency_store."""
 
 from contextlib import contextmanager
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
-from logos.pipeline.ettft_estimator import (
-    OVERHEAD_COLD_S,
-    OVERHEAD_SLEEPING_S,
-    RECLAIM_IDLE_EVICT_S,
-    ReadinessTier,
-)
-from logos.pipeline.latency_store import DEFAULT_ALPHA, LatencyStore, _MIN_PLAUSIBLE_S
+from logos.pipeline.ettft_estimator import OVERHEAD_COLD_S, OVERHEAD_SLEEPING_S, RECLAIM_IDLE_EVICT_S, ReadinessTier
+from logos.pipeline.latency_store import _MIN_PLAUSIBLE_S, LatencyStore
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def make_store(**kwargs) -> LatencyStore:
     return LatencyStore(**kwargs)
@@ -25,6 +21,7 @@ def make_store(**kwargs) -> LatencyStore:
 # ---------------------------------------------------------------------------
 # record_overhead / get_overhead_s
 # ---------------------------------------------------------------------------
+
 
 class TestRecordOverhead:
     def test_first_observation_seeds_ewma_directly(self):
@@ -84,6 +81,7 @@ class TestRecordOverhead:
 # Prior computation (fallback when no learned value exists)
 # ---------------------------------------------------------------------------
 
+
 class TestPrior:
     def test_cold_prior_uses_vram_and_bandwidth(self):
         store = make_store(io_bandwidth_mb_s=500.0)
@@ -94,9 +92,7 @@ class TestPrior:
     def test_cold_prior_divides_by_tp_size(self):
         store = make_store(io_bandwidth_mb_s=1000.0)
         # 80 000 MB / 4 / 1000 MB/s = 20 s
-        prior = store.get_overhead_s(
-            "m", 1, ReadinessTier.COLD, model_vram_mb=80_000.0, tp_size=4
-        )
+        prior = store.get_overhead_s("m", 1, ReadinessTier.COLD, model_vram_mb=80_000.0, tp_size=4)
         assert prior == pytest.approx(20.0)
 
     def test_cold_prior_falls_back_to_constant_when_vram_unknown(self):
@@ -107,9 +103,7 @@ class TestPrior:
     def test_cold_reclaim_prior_adds_reclaim_constant(self):
         store = make_store(io_bandwidth_mb_s=500.0)
         cold_prior = 50_000.0 / 500.0  # 100 s
-        prior = store.get_overhead_s(
-            "m", 1, ReadinessTier.COLD_RECLAIM, model_vram_mb=50_000.0
-        )
+        prior = store.get_overhead_s("m", 1, ReadinessTier.COLD_RECLAIM, model_vram_mb=50_000.0)
         assert prior == pytest.approx(cold_prior + RECLAIM_IDLE_EVICT_S)
 
     def test_sleeping_prior_is_static_constant(self):
@@ -133,6 +127,7 @@ class TestPrior:
 # ---------------------------------------------------------------------------
 # record_ttft / get_ttft_s
 # ---------------------------------------------------------------------------
+
 
 class TestTtft:
     def test_returns_none_before_any_observation(self):
@@ -169,6 +164,7 @@ class TestTtft:
 # record_e2e_latency / get_e2e_latency_s
 # ---------------------------------------------------------------------------
 
+
 class TestE2eLatency:
     def test_returns_none_before_any_observation(self):
         store = make_store()
@@ -190,6 +186,7 @@ class TestE2eLatency:
 # ---------------------------------------------------------------------------
 # DB persistence
 # ---------------------------------------------------------------------------
+
 
 def _make_db_factory(rows=None, upsert_mock=None):
     """Return a db_factory that yields a mock DBManager with the given rows."""
