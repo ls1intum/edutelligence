@@ -122,9 +122,24 @@ class _FakeCache:
 
 
 class _FakeHandle:
-    def __init__(self, lane_id: str, model: str, state: ProcessState) -> None:
+    def __init__(
+        self,
+        lane_id: str,
+        model: str,
+        state: ProcessState,
+        *,
+        vllm: bool = True,
+        sleep_capable: bool = True,
+    ) -> None:
         self.lane_id = lane_id
-        self.lane_config = SimpleNamespace(model=model)
+        # A real LaneConfig always carries vllm + vllm_config once validated;
+        # mirror that so the re-plan's per-lane sleepability check
+        # (vllm AND vllm_config.enable_sleep_mode) sees the right shape.
+        self.lane_config = SimpleNamespace(
+            model=model,
+            vllm=vllm,
+            vllm_config=SimpleNamespace(enable_sleep_mode=sleep_capable) if vllm else None,
+        )
         self._state = state
 
     def status(self):
@@ -440,7 +455,13 @@ def test_replan_reserves_static_lane_model_outside_capabilities(monkeypatch) -> 
     sizes = {model: _mb(20_000)}
     cache = _FakeCache(cached=[model], sizes=sizes)
     # Static-only worker: no capabilities, one sleepable static lane model.
-    app = _app(cache, registry, lanes, [], static_lanes=[LaneConfig(model=model, vllm=True)])
+    app = _app(
+        cache,
+        registry,
+        lanes,
+        [],
+        static_lanes=[LaneConfig(model=model, vllm=True, vllm_config=VllmConfig(enable_sleep_mode=True))],
+    )
 
     asyncio.run(worker_main._replan_ram_cache_once(app))
 
@@ -478,6 +499,59 @@ def test_replan_reserves_live_lane_model_outside_capabilities(monkeypatch) -> No
     # The reserve covers BOTH sleepable models: the capability model (10_000)
     # and the live model outside caps (25_000), plus the safety margin.
     assert cache.floor_mb == pytest.approx(35_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
+def test_replan_counts_static_and_live_lane_once(monkeypatch) -> None:
+    """Regression: a static lane and the live handle it produces (via
+    apply_lanes) share one lane id, so its sleeping footprint must be counted
+    ONCE — counting it from cfg.static_lanes AND from the live handle would
+    double the reserve and over-evict the cache."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    model = "org/dup"
+    lane_id = "org_dup"
+    # The static config and the live handle are the SAME lane (same id).
+    static = [LaneConfig(model=model, vllm=True, lane_id=lane_id, vllm_config=VllmConfig(enable_sleep_mode=True))]
+    lanes = _FakeLaneManager({lane_id: _FakeHandle(lane_id, model, ProcessState.RUNNING)})
+    registry = _FakeRegistry({})  # no profile -> on-disk footprint
+    sizes = {model: _mb(20_000)}
+    cache = _FakeCache(cached=[model], sizes=sizes)
+    app = _app(cache, registry, lanes, [], static_lanes=static)
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # Exactly ONE footprint (deduped by lane id), not two.
+    assert cache.floor_mb == pytest.approx(20_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
+def test_replan_excludes_non_sleepable_lanes_from_reserve(monkeypatch) -> None:
+    """Regression: a lane can only enter the sleep reserve if it can actually
+    sleep — a vLLM lane pinned to enable_sleep_mode=false and a non-vLLM lane
+    can never hold sleeping weights, so counting them would inflate the floor
+    and evict/reject cache entries for no gain. Only the sleep-capable lane's
+    footprint is reserved."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    nosleep = "org/nosleep"  # vLLM, sleep-mode off
+    ollama = "org/ollama"  # non-vLLM
+    sleepable = "org/sleepable"  # vLLM, sleep-capable
+    lanes = _FakeLaneManager(
+        {
+            nosleep: _FakeHandle(nosleep, nosleep, ProcessState.RUNNING, sleep_capable=False),
+            ollama: _FakeHandle(ollama, ollama, ProcessState.RUNNING, vllm=False),
+            sleepable: _FakeHandle(sleepable, sleepable, ProcessState.RUNNING),
+        }
+    )
+    registry = _FakeRegistry({})
+    sizes = {nosleep: _mb(20_000), ollama: _mb(20_000), sleepable: _mb(20_000)}
+    cache = _FakeCache(cached=[nosleep, ollama, sleepable], sizes=sizes)
+    app = _app(cache, registry, lanes, [])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # Only the sleep-capable lane's footprint is reserved (one footprint), not
+    # the sleep-mode-off vLLM lane or the non-vLLM lane.
+    assert cache.floor_mb == pytest.approx(20_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
 def test_replan_reserves_one_footprint_per_awake_replica(monkeypatch) -> None:
