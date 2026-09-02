@@ -364,6 +364,57 @@ async def test_sleep_lane_invokes_the_on_lane_slept_hook(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_add_lane_invokes_the_on_lane_added_hook(monkeypatch) -> None:
+    """The moment a lane is added — a startup static lane, a restored dynamic
+    lane, or a new dynamic lane — the wired hook (the RAM-cache re-plan) must
+    run so the sleep reserve is in place BEFORE the lane's first sleep: the
+    post-sleep hook only fires after the sleep has already happened, and the
+    periodic loop waits its initial 60 s. A failing hook must never fail the
+    lane add itself."""
+    calls = []
+
+    async def _hook() -> None:
+        calls.append(1)
+
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15071,
+        lane_port_end=15080,
+        nvidia_smi_available=lambda: True,
+        on_lane_added=_hook,
+    )
+    sentinel = object()
+    monkeypatch.setattr(manager, "_add_lane_unlocked", AsyncMock())
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+
+    out = await manager.add_lane(
+        LaneConfig(
+            model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+            vllm=True,
+            vllm_config=VllmConfig(enable_sleep_mode=True),
+        )
+    )
+
+    assert out is sentinel
+    assert calls == [1]
+
+    async def _boom() -> None:
+        raise RuntimeError("simulated re-plan failure")
+
+    manager._on_lane_added = _boom  # noqa: SLF001
+    out2 = await manager.add_lane(
+        LaneConfig(
+            model="org/other-model",
+            vllm=True,
+            lane_id="org_other-model",
+            vllm_config=VllmConfig(enable_sleep_mode=True),
+        )
+    )
+
+    assert out2 is sentinel  # the add still succeeds
+
+
+@pytest.mark.asyncio
 async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
     manager = LaneManager(OllamaConfig(), lane_port_start=15031, lane_port_end=15040)
     lane = LaneConfig(
