@@ -4,7 +4,9 @@ import { firstValueFrom } from 'rxjs';
 import {
   AgentCapacity,
   AgentEvent,
+  AgentModels,
   AgentSession,
+  AgentTriggers,
   AgentWorkspace,
   CreateSessionRequest,
 } from '../../shared/models/agent.model';
@@ -77,5 +79,15 @@ export class AgentService {
   // ── capacity ─────────────────────────────────────────────────────────────
   getCapacity(): Promise<AgentCapacity> {
     return firstValueFrom(this.http.get<AgentCapacity>(`${AgentService.BASE}/capacity`));
+  }
+
+  /** The locally served models a session may be driven by. */
+  getModels(): Promise<AgentModels> {
+    return firstValueFrom(this.http.get<AgentModels>(`${AgentService.BASE}/models`));
+  }
+
+  /** Whether the runner reacts to the repository on its own. */
+  getTriggers(): Promise<AgentTriggers> {
+    return firstValueFrom(this.http.get<AgentTriggers>(`${AgentService.BASE}/triggers`));
   }
 }

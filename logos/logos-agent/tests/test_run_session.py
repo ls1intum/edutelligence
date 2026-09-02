@@ -95,6 +95,10 @@ def _patch_workspace(monkeypatch, workspace: Path) -> None:
     monkeypatch.setattr(run_session, "WORKSPACE", workspace)
     monkeypatch.setattr(run_session, "CHECKOUT", workspace / "repo")
     monkeypatch.setenv("HOME", str(workspace / ".home"))
+    # These tests push to a bare repository on disk, so there is no GitHub
+    # account behind the token to resolve. The check itself is covered by
+    # TestPushIdentity below, against a stubbed `gh`.
+    monkeypatch.setattr(run_session, "verify_token_identity", lambda _token: None)
 
 
 def test_planted_git_metadata_does_not_survive_the_rebuild(tmp_path, monkeypatch):
@@ -466,3 +470,75 @@ class TestFinalizer:
         assert (other / ".git" / "config").is_file()
         assert _git("config", "--get", "user.name", cwd=other).stdout.strip() == "other repo"
         assert _git("config", "--get", "remote.origin.url", cwd=checkout).stdout.strip() == REPO_URL
+
+
+class TestPushIdentity:
+    """The finalizer pushes as the agent account or not at all.
+
+    The runner checks the token at startup, but the container is where the
+    push happens and where a rotated or swapped token would show up. A
+    token belonging to a person must not put agent commits under that
+    person's name.
+    """
+
+    @staticmethod
+    def _stub_gh(monkeypatch, *, login: str = "LogosOSSAgent", returncode: int = 0, stderr: str = ""):
+        import run_session
+
+        calls: list = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, returncode, stdout=login + "\n", stderr=stderr)
+
+        monkeypatch.setattr(run_session.subprocess, "run", fake_run)
+        return calls
+
+    def test_the_agent_account_is_accepted(self, monkeypatch):
+        import run_session
+
+        monkeypatch.delenv("LOGOS_AGENT_GITHUB_LOGIN", raising=False)
+        calls = self._stub_gh(monkeypatch)
+
+        run_session.verify_token_identity("ghp-token")
+
+        # The token is passed to gh through the environment, never on the
+        # command line where it would land in a process listing.
+        cmd, kwargs = calls[0]
+        assert cmd[:3] == ["gh", "api", "user"]
+        assert kwargs["env"]["GH_TOKEN"] == "ghp-token"
+        assert "ghp-token" not in " ".join(cmd)
+
+    def test_a_configured_account_is_honoured(self, monkeypatch):
+        import run_session
+
+        monkeypatch.setenv("LOGOS_AGENT_GITHUB_LOGIN", "SomeOtherBot")
+        self._stub_gh(monkeypatch, login="SomeOtherBot")
+
+        run_session.verify_token_identity("ghp-token")
+
+    def test_a_human_token_is_refused(self, monkeypatch):
+        import run_session
+
+        monkeypatch.delenv("LOGOS_AGENT_GITHUB_LOGIN", raising=False)
+        self._stub_gh(monkeypatch, login="wasnertobias")
+
+        with pytest.raises(RuntimeError, match="not as the agent account"):
+            run_session.verify_token_identity("ghp-token")
+
+    def test_an_unresolvable_token_is_refused(self, monkeypatch):
+        import run_session
+
+        monkeypatch.delenv("LOGOS_AGENT_GITHUB_LOGIN", raising=False)
+        self._stub_gh(monkeypatch, returncode=1, stderr="gh: Bad credentials (HTTP 401)")
+
+        with pytest.raises(RuntimeError, match="could not establish the identity"):
+            run_session.verify_token_identity("ghp-token")
+
+    def test_the_comparison_ignores_case(self, monkeypatch):
+        import run_session
+
+        monkeypatch.setenv("LOGOS_AGENT_GITHUB_LOGIN", "logosossagent")
+        self._stub_gh(monkeypatch, login="LogosOSSAgent")
+
+        run_session.verify_token_identity("ghp-token")

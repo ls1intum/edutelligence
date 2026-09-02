@@ -9,13 +9,7 @@ export type AgentSessionStatus =
   | 'cancelled';
 
 export type AgentEventKind =
-  | 'log'
-  | 'status'
-  | 'pull_request'
-  | 'deploy'
-  | 'screenshot'
-  | 'capacity'
-  | 'error';
+  'log' | 'status' | 'pull_request' | 'deploy' | 'screenshot' | 'capacity' | 'error';
 
 export interface AgentWorkspace {
   id: number;
@@ -46,6 +40,10 @@ export interface AgentSession {
   tokens_out: number;
   cost_eur: number;
   screenshot_count: number;
+  /** Set when the runner queued this session itself: 'issue' or 'review'. */
+  trigger_kind: string | null;
+  /** Which event it reacted to, e.g. 'issue-812'. */
+  trigger_ref: string | null;
 }
 
 export interface AgentEvent {
@@ -67,6 +65,30 @@ export interface AgentCapacity {
   max_parallel: number;
   may_start: boolean;
   reason: string;
+  /** False when the agent key could reach a cloud model: nothing starts. */
+  models_local_only: boolean;
+  models_detail: string;
+}
+
+/** The locally served models a session may be driven by. */
+export interface AgentModels {
+  models: string[];
+  default: string;
+  local_only: boolean;
+  detail: string;
+}
+
+/** Whether the runner queues work of its own, and what it has queued. */
+export interface AgentTriggers {
+  enabled: boolean;
+  polling: boolean;
+  label: string;
+  poll_interval_s: number;
+  max_active_sessions: number;
+  active_sessions: number;
+  last_pass: string | null;
+  queued_total: number;
+  last_error: string;
 }
 
 export interface CreateSessionRequest {

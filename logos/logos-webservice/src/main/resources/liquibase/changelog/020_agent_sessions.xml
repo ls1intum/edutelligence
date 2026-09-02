@@ -124,4 +124,34 @@
         </rollback>
     </changeSet>
 
+    <!-- Where a session came from, when the runner queued it by itself in
+         response to something on GitHub (an opened issue, a review asking
+         for changes). The reference is the thing reacted to — 'issue-812',
+         'pr-772-review-5085681761' — and it is what keeps the reaction
+         idempotent: a poll that sees the same event again finds the session
+         it already queued instead of queueing a second one. Sessions a
+         person created leave both columns null. -->
+    <changeSet id="020-agent-session-triggers" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="trigger_ref"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_sessions ADD COLUMN trigger_kind TEXT;
+            ALTER TABLE agent_sessions ADD COLUMN trigger_ref TEXT;
+
+            -- The dedup lookup asks "is there already a session for this
+            -- reference", newest first.
+            CREATE INDEX idx_agent_sessions_trigger_ref
+                ON agent_sessions(trigger_ref, created_at DESC)
+             WHERE trigger_ref IS NOT NULL;
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+                DROP INDEX IF EXISTS idx_agent_sessions_trigger_ref;
+                ALTER TABLE agent_sessions DROP COLUMN IF EXISTS trigger_ref;
+                ALTER TABLE agent_sessions DROP COLUMN IF EXISTS trigger_kind;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>

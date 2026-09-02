@@ -9,7 +9,9 @@ the wrong image tag.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 
+import pytest
 from app import github
 
 
@@ -309,3 +311,217 @@ async def test_wait_for_pr_builds_times_out_when_no_build_ran(monkeypatch):
 
     assert status == "timeout"
     assert "still running" in detail
+
+
+class TestAgentIdentity:
+    """Every token this service holds must be the agent account's.
+
+    A token belonging to a person would put agent commits, pull requests,
+    and deploy dispatches under that person's name — which nothing later can
+    undo, so it is checked before the service accepts any work.
+    """
+
+    @staticmethod
+    def _identity_client(monkeypatch, logins: dict[str, object]):
+        """A stub /user endpoint answering per bearer token."""
+        seen: list = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None, params=None):
+                token = (headers or {}).get("Authorization", "").removeprefix("Bearer ")
+                seen.append((url, token))
+                answer = logins.get(token)
+                if answer is None:
+                    return FakeResponse(401, {}, text="Bad credentials")
+                if isinstance(answer, Exception):
+                    raise answer
+                return FakeResponse(200, {"login": answer})
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+        return seen
+
+    async def test_both_tokens_of_the_agent_account_are_accepted(self, monkeypatch):
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(
+                github.settings,
+                github_login="LogosOSSAgent",
+                github_token="runner-token",
+                session_github_token="session-token",
+            ),
+        )
+        seen = self._identity_client(
+            monkeypatch,
+            {"runner-token": "LogosOSSAgent", "session-token": "LogosOSSAgent"},
+        )
+
+        notes = await github.verify_identities()
+
+        assert len(seen) == 2
+        assert all("authenticates as LogosOSSAgent" in note for note in notes)
+
+    async def test_a_token_of_another_account_stops_the_service(self, monkeypatch):
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(
+                github.settings,
+                github_login="LogosOSSAgent",
+                github_token="runner-token",
+                session_github_token="",
+            ),
+        )
+        self._identity_client(monkeypatch, {"runner-token": "wasnertobias"})
+
+        with pytest.raises(github.IdentityError, match="wasnertobias"):
+            await github.verify_identities()
+
+    async def test_the_session_token_is_checked_too(self, monkeypatch):
+        # The session token is the one that reaches a container, so a
+        # mismatch there is the more dangerous of the two.
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(
+                github.settings,
+                github_login="LogosOSSAgent",
+                github_token="runner-token",
+                session_github_token="someone-elses",
+            ),
+        )
+        self._identity_client(
+            monkeypatch,
+            {"runner-token": "LogosOSSAgent", "someone-elses": "wasnertobias"},
+        )
+
+        with pytest.raises(github.IdentityError, match="SESSION_GITHUB_TOKEN"):
+            await github.verify_identities()
+
+    async def test_the_account_name_is_matched_case_insensitively(self, monkeypatch):
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(
+                github.settings,
+                github_login="logosossagent",
+                github_token="runner-token",
+                session_github_token="",
+            ),
+        )
+        self._identity_client(monkeypatch, {"runner-token": "LogosOSSAgent"})
+
+        assert await github.verify_identities()
+
+    async def test_an_unreachable_api_is_reported_but_does_not_stop_startup(self, monkeypatch):
+        # A network blip must not take the service down: the finalizer
+        # verifies the same thing inside the container before it pushes.
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(
+                github.settings,
+                github_login="LogosOSSAgent",
+                github_token="runner-token",
+                session_github_token="",
+            ),
+        )
+        self._identity_client(monkeypatch, {"runner-token": RuntimeError("no route to host")})
+
+        notes = await github.verify_identities()
+
+        assert any("could not be verified" in note for note in notes)
+
+    async def test_an_unconfigured_token_is_not_a_mismatch(self, monkeypatch):
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(github.settings, github_login="LogosOSSAgent", github_token="", session_github_token=""),
+        )
+        self._identity_client(monkeypatch, {})
+
+        notes = await github.verify_identities()
+
+        assert all("is not configured" in note for note in notes)
+
+
+class TestListingPagination:
+    """Long threads must not hide their newest entries.
+
+    These endpoints answer oldest-first and ignore a direction parameter, so
+    one page of a pull request with hundreds of reviews contains the oldest
+    ones. Reading a single page would miss every new review, permanently.
+    """
+
+    @staticmethod
+    def _paged_client(monkeypatch, pages: list[list[dict]]):
+        requested: list = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None, params=None):
+                requested.append(params or {})
+                page = int((params or {}).get("page", 1))
+                items = pages[page - 1] if page <= len(pages) else []
+                return FakeResponse(200, items)
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(github, "settings", replace(github.settings, github_token="tok"))
+        return requested
+
+    async def test_reviews_are_read_past_the_first_page(self, monkeypatch):
+        old = [{"id": i, "state": "COMMENTED", "submitted_at": "2020-01-01T00:00:00Z"} for i in range(100)]
+        newest = {"id": 999, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-02T10:00:00Z"}
+        requested = self._paged_client(monkeypatch, [old, [newest]])
+
+        fresh = await github.reviews_since(772, datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+        assert [r["id"] for r in fresh] == [999]
+        assert [p["page"] for p in requested] == [1, 2]
+        assert all(p["per_page"] == 100 for p in requested)
+
+    async def test_a_short_thread_costs_one_request(self, monkeypatch):
+        requested = self._paged_client(
+            monkeypatch, [[{"id": 1, "state": "APPROVED", "submitted_at": "2026-09-02T10:00:00Z"}]]
+        )
+
+        await github.reviews_since(772, datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+        assert len(requested) == 1
+
+    async def test_labelled_issues_are_paginated_too(self, monkeypatch):
+        first = [{"number": i, "title": "t"} for i in range(100)]
+        second = [{"number": 500, "title": "the newest"}]
+        requested = self._paged_client(monkeypatch, [first, second])
+
+        issues = await github.labelled_issues("logos-agent", since=datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+        assert len(issues) == 101
+        assert [p["page"] for p in requested] == [1, 2]
+
+    async def test_pagination_stops_at_the_page_ceiling(self, monkeypatch):
+        # A pathological thread must not turn one poll into hundreds of
+        # requests — and the truncation is logged rather than silent.
+        full_page = [{"id": i, "state": "COMMENTED", "submitted_at": "2020-01-01T00:00:00Z"} for i in range(100)]
+        requested = self._paged_client(monkeypatch, [full_page] * (github._MAX_PAGES + 5))
+
+        await github.reviews_since(772, datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+        assert len(requested) == github._MAX_PAGES

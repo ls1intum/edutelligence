@@ -53,6 +53,84 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# --- what the agent key may reach -----------------------------------------
+
+# Which model deployments the runner's own Logos key is permitted to use, and
+# what kind of provider serves each. The permission rules are the platform's,
+# not this service's: the CTEs mirror the orchestrator's
+# `DBManager.get_deployments_for_api_key` exactly — a key with custom
+# permissions is scoped by its own grants, otherwise by its team's — so the
+# runner sees the same deployments a request with that key would be routed
+# to. `app/model_policy.py` turns the rows into the local-only decision;
+# duplicating the rules there instead of here would put the permission logic
+# two joins away from the tables it is about.
+_REACHABLE_DEPLOYMENTS = """
+    WITH key_info AS (
+        SELECT ak.id AS aki,
+               ak.team_id AS tid,
+               ak.use_custom_permissions AS custom
+          FROM api_keys ak
+         WHERE ak.key_value = :key_value
+           AND ak.is_active = true
+    ),
+    effective_providers AS (
+        SELECT akpp.provider_id
+          FROM api_key_provider_permissions akpp, key_info ki
+         WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+        UNION
+        SELECT tpp.provider_id
+          FROM team_provider_permissions tpp, key_info ki
+         WHERE tpp.team_id = ki.tid AND ki.custom = false
+    ),
+    effective_models AS (
+        SELECT akmp.model_id
+          FROM api_key_model_permissions akmp, key_info ki
+         WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+        UNION
+        SELECT tmp.model_id
+          FROM team_model_permissions tmp, key_info ki
+         WHERE tmp.team_id = ki.tid AND ki.custom = false
+    )
+    SELECT m.id AS model_id,
+           m.name AS model_name,
+           p.id AS provider_id,
+           p.provider_type AS provider_type,
+           (SELECT string_agg(a.alias, ',' ORDER BY a.alias)
+              FROM model_aliases a
+             WHERE a.model_id = m.id) AS aliases
+      FROM models m
+      JOIN model_provider mp ON m.id = mp.model_id
+      JOIN providers p ON mp.provider_id = p.id
+      JOIN effective_models em ON m.id = em.model_id
+      JOIN effective_providers ep ON p.id = ep.provider_id
+     ORDER BY m.name, p.id
+"""
+
+
+async def agent_key_exists(key_value: str) -> bool:
+    """Whether the runner's Logos key is an active key of this platform.
+
+    A key that does not resolve has no permissions to read, which is not the
+    same as having none: the difference decides whether the model policy is
+    'nothing reachable' or 'unknown', and only the first is safe to run on.
+    """
+    async with sessionmaker()() as db:
+        row = (
+            await db.execute(
+                text("SELECT 1 FROM api_keys WHERE key_value = :key_value AND is_active = true"),
+                {"key_value": key_value},
+            )
+        ).first()
+    return row is not None
+
+
+async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
+    """Every model deployment the given Logos key is permitted to use."""
+    async with sessionmaker()() as db:
+        rows = (await db.execute(text(_REACHABLE_DEPLOYMENTS), {"key_value": key_value})).mappings().all()
+    return [dict(row) for row in rows]
+
+
 # --- workspaces -----------------------------------------------------------
 
 
@@ -110,6 +188,41 @@ async def list_workspaces() -> list[dict[str, Any]]:
             .all()
         )
     return [dict(r) for r in rows]
+
+
+async def workspace_capacity() -> tuple[int, int]:
+    """How many workspaces exist, and how many are free right now.
+
+    A session needs a workspace of its own — two sessions in one working
+    copy would write over each other — so this is what decides whether the
+    runner has to create another one before queued work can start.
+    """
+    async with sessionmaker()() as db:
+        row = (
+            (
+                await db.execute(
+                    text(
+                        """
+                    SELECT COUNT(*) AS total,
+                           COUNT(*) FILTER (
+                               WHERE NOT EXISTS (
+                                   SELECT 1 FROM agent_sessions s
+                                    WHERE s.workspace_id = w.id
+                                      AND s.status = ANY(:active)
+                               )
+                           ) AS free
+                      FROM agent_workspaces w
+                    """
+                    ),
+                    {"active": [s.value for s in ACTIVE_STATUSES]},
+                )
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        return 0, 0
+    return int(row["total"] or 0), int(row["free"] or 0)
 
 
 async def get_workspace(workspace_id: int) -> dict[str, Any] | None:
@@ -176,6 +289,8 @@ async def create_session(
     open_pull_request: bool,
     deploy_to_dev: bool,
     screenshot_paths: Sequence[str],
+    trigger_kind: str | None = None,
+    trigger_ref: str | None = None,
 ) -> int:
     async with sessionmaker()() as db:
         # Lock the workspace row before inserting. delete_workspace takes
@@ -200,10 +315,12 @@ async def create_session(
                     """
                     INSERT INTO agent_sessions
                         (workspace_id, task, model, status, created_by,
-                         open_pull_request, deploy_to_dev, screenshot_paths)
+                         open_pull_request, deploy_to_dev, screenshot_paths,
+                         trigger_kind, trigger_ref)
                     VALUES
                         (:workspace_id, :task, :model, 'queued', :created_by,
-                         :open_pr, :deploy, CAST(:paths AS jsonb))
+                         :open_pr, :deploy, CAST(:paths AS jsonb),
+                         :trigger_kind, :trigger_ref)
                     RETURNING id
                     """
                 ),
@@ -215,6 +332,8 @@ async def create_session(
                     "open_pr": open_pull_request,
                     "deploy": deploy_to_dev,
                     "paths": json.dumps(list(screenshot_paths)),
+                    "trigger_kind": trigger_kind,
+                    "trigger_ref": trigger_ref,
                 },
             )
         ).scalar_one()
@@ -222,12 +341,62 @@ async def create_session(
     return int(session_id)
 
 
+async def handled_trigger_refs(refs: Sequence[str], since: datetime) -> set[str]:
+    """Which of these GitHub events already have a session.
+
+    A reference counts as handled while its session is still active, and for
+    as long as ``since`` looks back once it has finished. Both halves matter:
+    without the first, a poll would queue a second session for an event the
+    first is still working on; without the second, a finished session would
+    let the same review trigger the same work forever.
+    """
+    if not refs:
+        return set()
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT DISTINCT trigger_ref
+                      FROM agent_sessions
+                     WHERE trigger_ref = ANY(:refs)
+                       AND (status = ANY(:active) OR created_at >= :since)
+                    """
+                ),
+                {"refs": list(refs), "active": [s.value for s in ACTIVE_STATUSES], "since": since},
+            )
+        ).all()
+    return {row[0] for row in rows}
+
+
+async def count_active_trigger_sessions() -> int:
+    """Active sessions the runner queued by itself.
+
+    The ceiling this feeds is separate from the parallel-session ceiling: a
+    person asking for work must not find the queue already full of the
+    runner's own ideas.
+    """
+    async with sessionmaker()() as db:
+        count = (
+            await db.execute(
+                text(
+                    """
+                    SELECT COUNT(*) FROM agent_sessions
+                     WHERE trigger_ref IS NOT NULL AND status = ANY(:active)
+                    """
+                ),
+                {"active": [s.value for s in ACTIVE_STATUSES]},
+            )
+        ).scalar_one()
+    return int(count or 0)
+
+
 _SESSION_SELECT = """
     SELECT s.id, s.workspace_id, w.name AS workspace_name, s.task, s.status,
            s.model, s.branch_name, s.pr_url, s.created_by, s.created_at,
            s.started_at, s.finished_at, s.exit_code, s.error,
            s.container_id, s.open_pull_request, s.deploy_to_dev,
-           s.screenshot_paths,
+           s.screenshot_paths, s.trigger_kind, s.trigger_ref,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_eur, 0) AS cost_eur,

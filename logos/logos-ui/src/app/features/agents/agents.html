@@ -1,20 +1,25 @@
 <div class="agents">
   <h1 class="page-title">Agent Sessions</h1>
   <p class="page-subtitle">
-    Coding agents running in isolated containers on capacity Logos is not otherwise using.
-    Sessions act on the dev environment only, and every change arrives as a pull request.
+    Coding agents running in isolated containers on capacity Logos is not otherwise using. Sessions
+    act on the dev environment only, and every change arrives as a pull request.
   </p>
 
   <!-- ── Capacity banner ───────────────────────────────────────────────────── -->
   @if (capacity(); as cap) {
     <div class="capacity" [class.capacity--blocked]="!cap.may_start">
-      <div class="capacity__meter" role="img"
-           [attr.aria-label]="'Platform load ' + loadPercent() + ' percent'">
+      <div
+        class="capacity__meter"
+        role="img"
+        [attr.aria-label]="'Platform load ' + loadPercent() + ' percent'"
+      >
         <div class="capacity__fill" [style.width.%]="loadPercent()"></div>
       </div>
       <div class="capacity__facts">
         <span class="capacity__load">{{ loadPercent() }}% platform load</span>
-        <span class="capacity__slots">{{ cap.busy_slots }}/{{ cap.total_slots }} serving slots busy</span>
+        <span class="capacity__slots"
+          >{{ cap.busy_slots }}/{{ cap.total_slots }} serving slots busy</span
+        >
         <span class="capacity__sessions">
           {{ cap.sessions_running }} running · {{ cap.sessions_paused }} paused ·
           {{ cap.sessions_queued }} queued (max {{ cap.max_parallel }})
@@ -22,12 +27,37 @@
       </div>
       <p class="capacity__reason">
         @if (cap.may_start) {
-          <i class="pi pi-check-circle" aria-hidden="true"></i> Capacity available — {{ cap.reason }}
+          <i class="pi pi-check-circle" aria-hidden="true"></i> Capacity available —
+          {{ cap.reason }}
         } @else {
           <i class="pi pi-pause-circle" aria-hidden="true"></i> Holding — {{ cap.reason }}
         }
       </p>
     </div>
+  }
+
+  @if (capacity(); as cap) {
+    @if (!cap.models_local_only) {
+      <div class="alert alert--error" role="alert">
+        No session can start: {{ cap.models_detail }}
+      </div>
+    }
+  }
+
+  @if (triggers(); as trig) {
+    @if (trig.enabled) {
+      <p class="page-subtitle">
+        <i class="pi pi-bolt" aria-hidden="true"></i>
+        Reacting to the repository: issues and reviews labelled
+        <code>{{ trig.label }}</code> queue a session on their own ({{ trig.active_sessions }}/{{
+          trig.max_active_sessions
+        }}
+        active, {{ trig.queued_total }} queued since start).
+        @if (trig.last_error) {
+          <span class="field__hint">Last poll failed: {{ trig.last_error }}</span>
+        }
+      </p>
+    }
   }
 
   @if (error(); as message) {
@@ -72,14 +102,17 @@
           (ngModelChange)="newWorkspaceName.set($event)"
           aria-label="New workspace name"
         />
-        <button class="btn" (click)="createWorkspace()"
-                [disabled]="creatingWorkspace() || newWorkspaceName().trim().length === 0">
+        <button
+          class="btn"
+          (click)="createWorkspace()"
+          [disabled]="creatingWorkspace() || newWorkspaceName().trim().length === 0"
+        >
           Create workspace
         </button>
       </div>
       <p class="field__hint">
-        One workspace runs one session at a time — it is a single working copy on its own
-        volume. Add more workspaces to run more sessions in parallel.
+        One workspace runs one session at a time — it is a single working copy on its own volume.
+        Add more workspaces to run more sessions in parallel.
       </p>
 
       <label class="field">
@@ -94,7 +127,29 @@
       </label>
 
       <label class="field">
-        <span class="field__label">Screenshot paths <span class="field__optional">(optional)</span></span>
+        <span class="field__label">Model <span class="field__optional">(optional)</span></span>
+        @if (modelOptions().length > 0) {
+          <app-select
+            [options]="modelOptions()"
+            [value]="formModel()"
+            (valueChange)="selectModel($event ?? '')"
+            ariaLabel="Model"
+          />
+          <span class="field__hint">
+            {{ modelPlaceholder() }} — only models this platform serves itself are offered, because
+            agent work never bills a cloud provider.
+          </span>
+        } @else {
+          <p class="field__hint">
+            {{ models()?.detail ?? 'No locally served model is available.' }}
+          </p>
+        }
+      </label>
+
+      <label class="field">
+        <span class="field__label"
+          >Screenshot paths <span class="field__optional">(optional)</span></span
+        >
         <input
           class="input"
           type="text"
@@ -107,11 +162,19 @@
 
       <div class="checkboxes">
         <label class="checkbox">
-          <input type="checkbox" [ngModel]="formOpenPr()" (ngModelChange)="formOpenPr.set($event)" />
+          <input
+            type="checkbox"
+            [ngModel]="formOpenPr()"
+            (ngModelChange)="formOpenPr.set($event)"
+          />
           <span>Open a pull request when finished</span>
         </label>
         <label class="checkbox">
-          <input type="checkbox" [ngModel]="formDeploy()" (ngModelChange)="formDeploy.set($event)" />
+          <input
+            type="checkbox"
+            [ngModel]="formDeploy()"
+            (ngModelChange)="formDeploy.set($event)"
+          />
           <span>Deploy to the dev environment afterwards</span>
         </label>
       </div>
@@ -122,7 +185,11 @@
 
       <div class="form-actions">
         <button class="btn" (click)="closeForm()">Cancel</button>
-        <button class="btn btn--primary" (click)="submit()" [disabled]="!canSubmit() || submitting()">
+        <button
+          class="btn btn--primary"
+          (click)="submit()"
+          [disabled]="!canSubmit() || submitting()"
+        >
           {{ submitting() ? 'Queueing…' : 'Queue session' }}
         </button>
       </div>
@@ -157,8 +224,11 @@
   <!-- ── One session row, with its detail panel ────────────────────────────── -->
   <ng-template #sessionRow let-session>
     <li class="session" [class.session--open]="selectedId() === session.id">
-      <button class="session__head" (click)="select(session)"
-              [attr.aria-expanded]="selectedId() === session.id">
+      <button
+        class="session__head"
+        (click)="select(session)"
+        [attr.aria-expanded]="selectedId() === session.id"
+      >
         <span [class]="statusClass(session.status)">{{ statusLabel(session) }}</span>
         <span class="session__task">{{ taskPreview(session.task) }}</span>
         <span class="session__meta">
@@ -170,10 +240,27 @@
       @if (selectedId() === session.id) {
         <div class="session__detail">
           <dl class="facts">
-            <div><dt>Started by</dt><dd>{{ session.created_by }}</dd></div>
-            <div><dt>Model</dt><dd>{{ session.model ?? 'runner default' }}</dd></div>
-            <div><dt>Branch</dt><dd>{{ session.branch_name ?? '—' }}</dd></div>
-            <div><dt>Tokens</dt><dd>{{ session.tokens_in }} in / {{ session.tokens_out }} out</dd></div>
+            <div>
+              <dt>Started by</dt>
+              <dd>
+                {{ session.created_by }}
+                @if (session.trigger_ref; as ref) {
+                  <span class="field__hint">{{ originOf(session) }} ({{ ref }})</span>
+                }
+              </dd>
+            </div>
+            <div>
+              <dt>Model</dt>
+              <dd>{{ session.model ?? 'runner default' }}</dd>
+            </div>
+            <div>
+              <dt>Branch</dt>
+              <dd>{{ session.branch_name ?? '—' }}</dd>
+            </div>
+            <div>
+              <dt>Tokens</dt>
+              <dd>{{ session.tokens_in }} in / {{ session.tokens_out }} out</dd>
+            </div>
           </dl>
 
           @if (session.pr_url) {

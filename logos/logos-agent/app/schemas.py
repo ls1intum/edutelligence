@@ -151,6 +151,11 @@ class SessionSummary(BaseModel):
     tokens_out: int
     cost_eur: float
     screenshot_count: int = 0
+    # Set when the runner queued this session itself in response to the
+    # repository: what kind of event it was ('issue', 'review') and which one
+    # ('issue-812'). Null for sessions a person created.
+    trigger_kind: str | None = None
+    trigger_ref: str | None = None
 
 
 class SessionEvent(BaseModel):
@@ -173,3 +178,8 @@ class CapacityState(BaseModel):
     max_parallel: int
     may_start: bool
     reason: str
+    # Whether every model the runner's key can reach is served locally. False
+    # stops admission outright: agent work is paid for in idle GPU time, never
+    # in cloud tokens.
+    models_local_only: bool = False
+    models_detail: str = ""

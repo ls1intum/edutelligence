@@ -13,8 +13,10 @@ import { AgentService } from '../../core/services/agent.service';
 import {
   AgentCapacity,
   AgentEvent,
+  AgentModels,
   AgentSession,
   AgentSessionStatus,
+  AgentTriggers,
   AgentWorkspace,
   isActive,
 } from '../../shared/models/agent.model';
@@ -42,6 +44,8 @@ export class Agents implements OnInit {
   sessions = signal<AgentSession[]>([]);
   workspaces = signal<AgentWorkspace[]>([]);
   capacity = signal<AgentCapacity | null>(null);
+  models = signal<AgentModels | null>(null);
+  triggers = signal<AgentTriggers | null>(null);
   loading = signal(true);
   error = signal<string | null>(null);
 
@@ -59,6 +63,7 @@ export class Agents implements OnInit {
   showForm = signal(false);
   formWorkspaceId = signal<number | null>(null);
   formTask = signal('');
+  formModel = signal<string | null>(null);
   formOpenPr = signal(true);
   formDeploy = signal(false);
   formScreenshots = signal('');
@@ -76,6 +81,22 @@ export class Agents implements OnInit {
       label: w.active_sessions > 0 ? `${w.name} (busy)` : w.name,
     })),
   );
+
+  /**
+   * Only locally served models are offered: agent work runs on capacity the
+   * platform already pays for, never on cloud tokens. The runner refuses
+   * anything else anyway, so offering more would only invite a rejection.
+   */
+  readonly modelOptions = computed<AppSelectOption[]>(() =>
+    (this.models()?.models ?? []).map((name) => ({ value: name, label: name })),
+  );
+
+  readonly modelPlaceholder = computed(() => {
+    const models = this.models();
+    if (!models) return 'Runner default';
+    if (models.default) return `${models.default} (runner default)`;
+    return 'Pick a model';
+  });
 
   readonly canSubmit = computed(
     () => this.formWorkspaceId() !== null && this.formTask().trim().length >= 8,
@@ -121,6 +142,7 @@ export class Agents implements OnInit {
         this.formWorkspaceId.set(workspaces[0].id);
       }
       await this.loadCapacity();
+      if (!options.quiet) await this.loadModelsAndTriggers();
       if (this.selectedId() !== null) await this.loadEvents();
     } catch {
       this.error.set('Could not reach the agent runner.');
@@ -134,6 +156,21 @@ export class Agents implements OnInit {
       this.capacity.set(await this.agentService.getCapacity());
     } catch {
       this.capacity.set(null);
+    }
+  }
+
+  private async loadModelsAndTriggers(): Promise<void> {
+    // Both are small and change rarely, so they are read with the list
+    // rather than on every poll.
+    try {
+      this.models.set(await this.agentService.getModels());
+    } catch {
+      this.models.set(null);
+    }
+    try {
+      this.triggers.set(await this.agentService.getTriggers());
+    } catch {
+      this.triggers.set(null);
     }
   }
 
@@ -310,6 +347,9 @@ export class Agents implements OnInit {
       const session = await this.agentService.createSession({
         workspace_id: workspaceId,
         task: this.formTask().trim(),
+        // Left null when nothing was picked: the runner then uses its own
+        // default, which is the single local model where there is only one.
+        model: this.formModel(),
         open_pull_request: this.formOpenPr(),
         deploy_to_dev: this.formDeploy(),
         screenshot_paths: paths,
@@ -335,6 +375,17 @@ export class Agents implements OnInit {
 
   selectWorkspaceById(id: string): void {
     this.formWorkspaceId.set(Number(id));
+  }
+
+  selectModel(name: string): void {
+    this.formModel.set(name || null);
+  }
+
+  /** Where a session came from, for the list. */
+  originOf(session: AgentSession): string {
+    if (session.trigger_kind === 'issue') return 'from an issue';
+    if (session.trigger_kind === 'review') return 'from a review';
+    return session.created_by;
   }
 
   // ── presentation helpers ─────────────────────────────────────────────────

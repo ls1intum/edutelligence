@@ -265,14 +265,59 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
         run(["git", "reset", "--hard", f"origin/{base_branch}"], cwd=CHECKOUT)
         run(["git", "clean", "-fdx"], cwd=CHECKOUT, check=False)
 
-    run(["git", "config", "user.name", "Logos Agent"], cwd=CHECKOUT, quiet=True)
+    _configure_git_identity()
+    # -B so a retried session reuses its branch name instead of failing.
+    run(["git", "checkout", "-B", branch], cwd=CHECKOUT)
+
+
+def agent_login() -> str:
+    """The GitHub account this session's work belongs to."""
+    return (os.environ.get("LOGOS_AGENT_GITHUB_LOGIN") or "LogosOSSAgent").strip()
+
+
+def _configure_git_identity() -> None:
+    """Commit as the agent account, not as an anonymous 'Logos Agent'.
+
+    The account is the same one the token belongs to, so a commit's author
+    and the identity that pushed it agree — the history then shows one
+    revocable actor rather than a name that resembles the platform.
+    """
+    login = agent_login()
+    run(["git", "config", "user.name", login], cwd=CHECKOUT, quiet=True)
     run(
-        ["git", "config", "user.email", "logos-agent@users.noreply.github.com"],
+        ["git", "config", "user.email", f"{login}@users.noreply.github.com"],
         cwd=CHECKOUT,
         quiet=True,
     )
-    # -B so a retried session reuses its branch name instead of failing.
-    run(["git", "checkout", "-B", branch], cwd=CHECKOUT)
+
+
+def verify_token_identity(token: str) -> None:
+    """Refuse to push with a token that is not the agent account's.
+
+    The runner checks this at startup, but the container is where the push
+    actually happens, and it is the last place the check still helps: a
+    token swapped in the environment, or a runner that started before the
+    token was rotated, would otherwise commit and open pull requests under
+    a human contributor's name.
+    """
+    expected = agent_login().lower()
+    result = subprocess.run(
+        ["gh", "api", "user", "--jq", ".login"],
+        cwd=str(CHECKOUT) if CHECKOUT.is_dir() else None,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "GH_TOKEN": token, "GITHUB_TOKEN": token},
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"could not establish the identity of the push token: {result.stderr.strip()[:200]}")
+    login = (result.stdout or "").strip()
+    if login.lower() != expected:
+        raise RuntimeError(
+            f"the push token authenticates as '{login}', not as the agent account "
+            f"'{agent_login()}'; refusing to push agent work under another identity"
+        )
+    log(f"push token verified as {login}")
 
 
 def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) -> bool:
@@ -328,12 +373,7 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
     # Mixed reset: the index follows the branch, the working tree — the
     # agent's work — is left exactly as it stands.
     run(["git", "reset"], cwd=CHECKOUT, quiet=True)
-    run(["git", "config", "user.name", "Logos Agent"], cwd=CHECKOUT, quiet=True)
-    run(
-        ["git", "config", "user.email", "logos-agent@users.noreply.github.com"],
-        cwd=CHECKOUT,
-        quiet=True,
-    )
+    _configure_git_identity()
     return True
 
 
@@ -615,6 +655,10 @@ def run_finalize(result: Result) -> None:
     if not token:
         log("no GitHub token provided; leaving changes uncommitted in the workspace")
         return
+    # Whose work this is about to become. Checked before anything is
+    # committed or pushed, so a wrong token fails the session instead of
+    # putting agent commits under a contributor's name.
+    verify_token_identity(token)
 
     path = Path(os.environ.get("LOGOS_ARTIFACT_DIR", "/artifacts")) / "result.json"
     if path.is_file():

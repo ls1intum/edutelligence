@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 
@@ -35,6 +37,77 @@ _DEPLOY_REF = "main"
 
 class GitHubError(RuntimeError):
     pass
+
+
+class IdentityError(RuntimeError):
+    """A configured token does not belong to the agent's GitHub account."""
+
+
+async def token_login(token: str, *, timeout_s: float = 15.0) -> str:
+    """The account a token authenticates as.
+
+    Raises :class:`GitHubError` when the token cannot be resolved at all —
+    unreachable API, revoked token — which callers treat differently from a
+    token that resolves to the wrong account.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            response = await client.get(
+                f"{_API}/user",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+    except Exception as exc:
+        raise GitHubError(f"could not reach the GitHub API: {exc}") from exc
+    if response.status_code != 200:
+        raise GitHubError(f"token lookup failed ({response.status_code}): {response.text[:200]}")
+    login = response.json().get("login")
+    if not isinstance(login, str) or not login:
+        raise GitHubError("the GitHub API returned no login for this token")
+    return login
+
+
+async def verify_identities() -> list[str]:
+    """Check every configured token belongs to the agent account.
+
+    Returns the notes worth logging (which token resolved to what, or why a
+    check could not be made). Raises :class:`IdentityError` when a token
+    resolves to a *different* account: that is a misconfiguration which would
+    otherwise put agent commits, pull requests, and deploy dispatches under
+    somebody else's name, and it must stop the service rather than be
+    discovered afterwards in the repository's history.
+
+    An unreachable API is not a mismatch and does not stop anything: the
+    finalizer verifies the same thing inside the container before it pushes,
+    so a network blip at startup cannot smuggle work out under a wrong
+    identity.
+    """
+    expected = settings.github_login.strip().lower()
+    notes: list[str] = []
+    for label, token in (
+        ("LOGOS_AGENT_GITHUB_TOKEN", settings.github_token),
+        ("LOGOS_AGENT_SESSION_GITHUB_TOKEN", settings.session_github_token),
+    ):
+        if not token:
+            notes.append(f"{label} is not configured")
+            continue
+        try:
+            login = await token_login(token)
+        except GitHubError as exc:
+            notes.append(f"{label} could not be verified: {exc}")
+            continue
+        if login.strip().lower() != expected:
+            raise IdentityError(
+                f"{label} authenticates as '{login}', not as the configured agent "
+                f"account '{settings.github_login}'. Agent work must run under that "
+                f"account only — issue the token from it, or set "
+                f"LOGOS_AGENT_GITHUB_LOGIN to the account it belongs to."
+            )
+        notes.append(f"{label} authenticates as {login}")
+    return notes
 
 
 def _headers() -> dict[str, str]:
@@ -215,6 +288,123 @@ async def wait_for_pr_builds(
     except Exception as exc:
         logger.warning("waiting for the image build run failed: %s", exc)
         return "failed", f"could not observe the image build run: {exc}"
+
+
+async def _get(path: str, params: dict[str, Any] | None = None, *, timeout_s: float = 30.0) -> Any:
+    """One authenticated read of the repository. Raises on anything but 200."""
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        response = await client.get(f"{_API}{path}", headers=_headers(), params=params or {})
+    if response.status_code != 200:
+        raise GitHubError(f"GET {path} failed ({response.status_code}): {response.text[:200]}")
+    return response.json()
+
+
+# One page is 100 items — GitHub's maximum — and at most this many pages are
+# read for one listing. The bound exists so a pathological thread cannot turn
+# one poll into hundreds of requests; it is logged when it bites, because a
+# silently truncated listing is how a review goes unanswered forever.
+_PAGE_SIZE = 100
+_MAX_PAGES = 20
+
+
+async def _get_all(path: str, params: dict[str, Any] | None = None) -> list[Any]:
+    """Every page of a list endpoint, in the order GitHub returns them.
+
+    Paginating is not optional here. These endpoints answer oldest-first and
+    ignore a direction parameter, so a single page of a long thread contains
+    the *oldest* entries: on a pull request with more than a hundred reviews,
+    reading one page would miss every new one, permanently.
+    """
+    collected: list[Any] = []
+    for page in range(1, _MAX_PAGES + 1):
+        payload = await _get(path, {**(params or {}), "per_page": _PAGE_SIZE, "page": page})
+        if not isinstance(payload, list):
+            break
+        collected.extend(payload)
+        if len(payload) < _PAGE_SIZE:
+            return collected
+    logger.warning(
+        "listing %s hit the %s-page ceiling (%s items); newer entries beyond it were not read",
+        path,
+        _MAX_PAGES,
+        len(collected),
+    )
+    return collected
+
+
+async def labelled_issues(label: str, *, since: datetime) -> list[dict[str, Any]]:
+    """Open issues carrying ``label`` that were updated since ``since``.
+
+    Pull requests are issues to this endpoint and are filtered out here: a
+    pull request carrying the label is picked up through its reviews, not as
+    a fresh piece of work.
+    """
+    payload = await _get_all(
+        f"/repos/{settings.repo_slug}/issues",
+        {
+            "labels": label,
+            "state": "open",
+            "since": since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "sort": "created",
+            "direction": "desc",
+        },
+    )
+    return [item for item in payload if isinstance(item, dict) and "pull_request" not in item]
+
+
+async def labelled_pull_requests(label: str) -> list[dict[str, Any]]:
+    """Open pull requests carrying ``label``.
+
+    The issues endpoint is the one that filters by label, so pull requests
+    are read through it too — the entries it returns for them carry the
+    number, which is all the review lookup needs.
+    """
+    payload = await _get_all(
+        f"/repos/{settings.repo_slug}/issues",
+        {
+            "labels": label,
+            "state": "open",
+            "sort": "updated",
+            "direction": "desc",
+        },
+    )
+    return [item for item in payload if isinstance(item, dict) and "pull_request" in item]
+
+
+async def pull_request(number: int) -> dict[str, Any]:
+    """The full pull request, including its head branch and author."""
+    payload = await _get(f"/repos/{settings.repo_slug}/pulls/{number}")
+    return payload if isinstance(payload, dict) else {}
+
+
+async def reviews_since(number: int, since: datetime) -> list[dict[str, Any]]:
+    """Reviews submitted on a pull request after ``since``.
+
+    The reviews endpoint returns oldest first and ignores a direction
+    parameter, so every page is read and filtered here — asking for the last
+    few would return the *first* few, and on a long-running pull request the
+    newest review is on the last page, not the first.
+    """
+    payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews")
+    if not isinstance(payload, list):
+        return []
+    fresh: list[dict[str, Any]] = []
+    for review in payload:
+        if not isinstance(review, dict):
+            continue
+        submitted = _parse_time(review.get("submitted_at"))
+        if submitted is not None and submitted > since:
+            fresh.append(review)
+    return fresh
+
+
+def _parse_time(raw: object) -> datetime | None:
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def pr_number_from_url(pr_url: str | None) -> int | None:

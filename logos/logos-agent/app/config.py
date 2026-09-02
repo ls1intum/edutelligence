@@ -96,6 +96,11 @@ class Settings:
     # priority and a token budget so agent work never outranks a user at the
     # scheduler. It no longer enters a session container at all.
     agent_api_key: str = os.getenv("LOGOS_AGENT_API_KEY", "")
+    # Which model drives a session that does not name one. Optional: when it
+    # is unset and the key reaches exactly one locally served model, that one
+    # is the default — a single-model deployment then needs no model
+    # configuration at all. With several reachable, the session names one
+    # (the UI lists them) or the runner says which are available.
     default_model: str = os.getenv("LOGOS_AGENT_DEFAULT_MODEL", "")
 
     # --- container execution ---------------------------------------------
@@ -130,8 +135,11 @@ class Settings:
     helper_timeout_s: int = _int("LOGOS_AGENT_HELPER_TIMEOUT_S", 600)
 
     # --- concurrency and capacity ----------------------------------------
-    # Hard ceiling regardless of how idle the platform looks.
-    max_parallel_sessions: int = _int("LOGOS_AGENT_MAX_PARALLEL_SESSIONS", 4)
+    # Hard ceiling regardless of how idle the platform looks. Ten is what the
+    # platform is expected to carry when it is otherwise idle; the capacity
+    # thresholds below decide how many of them actually run at any moment,
+    # and each still needs a free workspace of its own.
+    max_parallel_sessions: int = _int("LOGOS_AGENT_MAX_PARALLEL_SESSIONS", 10)
     # A session may start only while the platform's busy share is below this.
     # Expressed as a fraction of reserved-to-total serving capacity.
     start_below_load: float = _float("LOGOS_AGENT_START_BELOW_LOAD", 0.60)
@@ -143,13 +151,27 @@ class Settings:
     # --- what a session may do -------------------------------------------
     repo_url: str = os.getenv("LOGOS_AGENT_REPO_URL", "https://github.com/ls1intum/edutelligence.git")
     repo_slug: str = os.getenv("LOGOS_AGENT_REPO_SLUG", "ls1intum/edutelligence")
+    # The GitHub account every token here must belong to. Agent work is
+    # supposed to be recognisable and revocable as one identity: one account
+    # whose pushes, pull requests, and comments are visibly the platform's
+    # own, whose access can be withdrawn in one place, and which owns nothing
+    # a human contributor owns. Both tokens are checked against it at
+    # startup, and the finalizer checks again inside the container before it
+    # pushes — a token belonging to a person would otherwise commit agent
+    # work under that person's name.
+    github_login: str = os.getenv("LOGOS_AGENT_GITHUB_LOGIN", "LogosOSSAgent")
     # Held by this service only. Needs `workflow` scope to dispatch the dev
     # deploy; it is never passed into a session container.
     github_token: str = os.getenv("LOGOS_AGENT_GITHUB_TOKEN", "")
-    # Handed to session containers. Should be scoped to this repository with
-    # contents and pull-request write only — no workflow scope, so a session
-    # cannot dispatch a deploy even if it tries.
-    session_github_token: str = os.getenv("LOGOS_AGENT_SESSION_GITHUB_TOKEN", "")
+    # Handed to session containers. Best issued as a second token of the same
+    # account without `workflow` scope, so a session cannot dispatch a deploy
+    # or edit a workflow file even if it tries. Falling back to the runner's
+    # token keeps a one-token deployment working — the runner says so at
+    # startup, because that fallback gives up the scope boundary between the
+    # two phases.
+    session_github_token: str = os.getenv("LOGOS_AGENT_SESSION_GITHUB_TOKEN", "") or os.getenv(
+        "LOGOS_AGENT_GITHUB_TOKEN", ""
+    )
     # Deploys are triggered by this service, never from inside a session
     # container: the container never holds a token that can reach production.
     deploy_workflow: str = os.getenv("LOGOS_AGENT_DEPLOY_WORKFLOW", "logos_deploy-dev.yml")
@@ -169,6 +191,17 @@ class Settings:
     protected_branches: tuple[str, ...] = field(
         default_factory=lambda: _csv("LOGOS_AGENT_PROTECTED_BRANCHES", ("main", "develop"))
     )
+
+    # --- reacting to the repository --------------------------------------
+    # Whether the runner queues sessions of its own when something happens on
+    # GitHub. This is the only knob the feature has: everything else about it
+    # — how often the repository is polled, how far back a restarted runner
+    # looks, how many self-queued sessions may be active at once — is a
+    # constant in `triggers.py`, derived where it depends on anything. An
+    # operator turns this on deliberately, because it is the difference
+    # between a tool that runs what it is told and one that decides for
+    # itself what to work on.
+    triggers_enabled: bool = _bool("LOGOS_AGENT_TRIGGERS_ENABLED", False)
 
     # --- storage ----------------------------------------------------------
     # Where session artefacts (logs, screenshots) are kept, on a volume shared

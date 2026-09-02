@@ -392,7 +392,7 @@ services:
       # Where sessions send model traffic: the gateway that exposes only the
       # orchestrator's /v1 model surface on the session network.
       LOGOS_AGENT_SESSION_MODEL_URL: "${LOGOS_AGENT_SESSION_MODEL_URL:-http://logos-agent-gateway}"
-      LOGOS_AGENT_MAX_PARALLEL_SESSIONS: "${LOGOS_AGENT_MAX_PARALLEL_SESSIONS:-4}"
+      LOGOS_AGENT_MAX_PARALLEL_SESSIONS: "${LOGOS_AGENT_MAX_PARALLEL_SESSIONS:-10}"
       LOGOS_AGENT_SESSION_MEMORY_MB: "${LOGOS_AGENT_SESSION_MEMORY_MB:-4096}"
       LOGOS_AGENT_SESSION_CPUS: "${LOGOS_AGENT_SESSION_CPUS:-2}"
       # The uid the session image runs as; the runner chowns the per-session
@@ -409,8 +409,15 @@ services:
       # session token below should carry contents + pull-request write only.
       LOGOS_AGENT_REPO_URL: "${LOGOS_AGENT_REPO_URL:-https://github.com/ls1intum/edutelligence.git}"
       LOGOS_AGENT_REPO_SLUG: "${LOGOS_AGENT_REPO_SLUG:-ls1intum/edutelligence}"
+      # The account every agent token must belong to. Both tokens are checked
+      # against it at startup, and the finalizer checks again before it pushes.
+      LOGOS_AGENT_GITHUB_LOGIN: "${LOGOS_AGENT_GITHUB_LOGIN:-LogosOSSAgent}"
       LOGOS_AGENT_GITHUB_TOKEN: "${LOGOS_AGENT_GITHUB_TOKEN:-}"
+      # Optional: a second token of the same account without 'workflow' scope,
+      # handed to session containers. Falls back to the token above.
       LOGOS_AGENT_SESSION_GITHUB_TOKEN: "${LOGOS_AGENT_SESSION_GITHUB_TOKEN:-}"
+      # Queue sessions in response to labelled issues and reviews.
+      LOGOS_AGENT_TRIGGERS_ENABLED: "${LOGOS_AGENT_TRIGGERS_ENABLED:-false}"
       LOGOS_AGENT_DEPLOY_ENABLED: "${LOGOS_AGENT_DEPLOY_ENABLED:-false}"
       LOGOS_AGENT_DEV_BASE_URL: "${LOGOS_AGENT_DEV_BASE_URL:-https://logos-dev.aet.cit.tum.de}"
     volumes:

@@ -19,7 +19,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
 
-from . import capacity, db, docker_engine, github
+from . import capacity, db, docker_engine, github, model_policy, triggers
 from .auth import Principal, require_agent_operator
 from .config import settings
 from .schemas import (
@@ -52,7 +52,26 @@ async def lifespan(_app: FastAPI):
             "LOGOS_AGENT_PAUSE_ABOVE_LOAD must exceed LOGOS_AGENT_START_BELOW_LOAD, "
             "otherwise sessions start and pause in a loop."
         )
+    # A token that belongs to somebody else would put agent commits and pull
+    # requests under their name, which no later check can undo — so it stops
+    # the service here.
+    for note in await github.verify_identities():
+        logger.info("github identity: %s", note)
+    # The local-only model policy does not stop startup: the UI has to come
+    # up to *show* the reason, and admission is gated on it anyway.
+    policy = await model_policy.refresh()
+    if not policy.ok:
+        logger.error("no session will start until the model policy is satisfied: %s", policy.detail)
+    if settings.session_github_token and settings.session_github_token == settings.github_token:
+        logger.warning(
+            "session containers get the runner's own GitHub token: it can dispatch "
+            "workflows and edit workflow files. Issue a second token of the same "
+            "account without 'workflow' scope as LOGOS_AGENT_SESSION_GITHUB_TOKEN to "
+            "keep that out of the agent's reach."
+        )
     await manager.start()
+    triggers.poller.on_queued = manager.scheduler_pass
+    await triggers.poller.start()
     logger.info(
         "agent runner ready: max %s parallel sessions, start below %.0f%% load, " "pause above %.0f%%",
         settings.max_parallel_sessions,
@@ -62,6 +81,7 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        await triggers.poller.stop()
         await manager.stop()
 
 
@@ -101,7 +121,16 @@ async def get_capacity(_: Principal = Depends(require_agent_operator)) -> Capaci
     running = counts.get(SessionStatus.RUNNING.value, 0)
     paused = counts.get(SessionStatus.PAUSED.value, 0)
     may_start, reason = capacity.start_decision(reading, running=running, paused=paused)
+    # The local-only model policy gates admission as hard as load does, so
+    # the page that explains why nothing starts has to show it too — an
+    # operator staring at an idle platform should not have to read the logs
+    # to learn that the agent key was granted a cloud provider.
+    policy = await model_policy.refresh()
+    if not policy.ok:
+        may_start, reason = False, policy.detail
     return CapacityState(
+        models_local_only=policy.ok,
+        models_detail=policy.detail,
         load=round(reading.load, 4),
         total_slots=reading.total_slots,
         busy_slots=reading.busy_slots,
@@ -112,6 +141,31 @@ async def get_capacity(_: Principal = Depends(require_agent_operator)) -> Capaci
         may_start=may_start,
         reason=reason,
     )
+
+
+@app.get("/models", tags=["capacity"])
+async def get_models(_: Principal = Depends(require_agent_operator)) -> dict[str, object]:
+    """The models a session may be driven by, and the default among them.
+
+    Only locally served ones are ever listed: this is the same policy that
+    gates admission, so what the form offers is exactly what will be
+    accepted.
+    """
+    policy = await model_policy.refresh()
+    return {
+        "models": list(policy.offered),
+        "default": policy.default_model,
+        "local_only": policy.ok,
+        "detail": policy.detail,
+    }
+
+
+@app.get("/triggers", tags=["capacity"])
+async def get_triggers(_: Principal = Depends(require_agent_operator)) -> dict[str, object]:
+    """Whether the runner reacts to the repository, and what it has done."""
+    status = triggers.poller.status()
+    status["active_sessions"] = await triggers.active_trigger_sessions()
+    return status
 
 
 # --- workspaces -----------------------------------------------------------
@@ -192,6 +246,13 @@ async def create_session(body: SessionCreate, principal: Principal = Depends(req
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="LOGOS_AGENT_API_KEY is not configured; sessions have no way to reach a model",
         )
+    # Refuse a model that is not served locally at the point where a person
+    # asks for it, rather than accepting the session and failing it later:
+    # agent work must never bill a cloud provider, and the operator finds out
+    # in the form they submitted.
+    policy = await model_policy.refresh()
+    if not policy.allows(body.model):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=policy.refusal(body.model))
 
     try:
         session_id = await db.create_session(

@@ -4,7 +4,9 @@ import { AgentService } from '../../core/services/agent.service';
 import {
   ACTIVE_SESSION_STATUSES,
   AgentCapacity,
+  AgentModels,
   AgentSession,
+  AgentTriggers,
   AgentWorkspace,
   isActive,
 } from '../../shared/models/agent.model';
@@ -37,6 +39,8 @@ const makeSession = (overrides: Partial<AgentSession> = {}): AgentSession => ({
   tokens_out: 0,
   cost_eur: 0,
   screenshot_count: 0,
+  trigger_kind: null,
+  trigger_ref: null,
   ...overrides,
 });
 
@@ -50,6 +54,8 @@ const CAPACITY: AgentCapacity = {
   max_parallel: 2,
   may_start: true,
   reason: 'ok',
+  models_local_only: true,
+  models_detail: 'one local model',
 };
 
 class FakeAgentService {
@@ -69,6 +75,29 @@ class FakeAgentService {
   async getCapacity(): Promise<AgentCapacity> {
     this.capacityCalls += 1;
     return CAPACITY;
+  }
+
+  async getModels(): Promise<AgentModels> {
+    return {
+      models: ['local-model'],
+      default: 'local-model',
+      local_only: true,
+      detail: 'one local model',
+    };
+  }
+
+  async getTriggers(): Promise<AgentTriggers> {
+    return {
+      enabled: false,
+      polling: false,
+      label: 'logos-agent',
+      poll_interval_s: 120,
+      max_active_sessions: 5,
+      active_sessions: 0,
+      last_pass: null,
+      queued_total: 0,
+      last_error: '',
+    };
   }
 }
 
@@ -118,8 +147,7 @@ describe('Agents', () => {
   describe('polling', () => {
     // tick() is private: the poll runs on an interval, and the tests drive
     // one tick directly instead of waiting for the timer.
-    const tick = (): Promise<void> =>
-      (component as unknown as { tick(): Promise<void> }).tick();
+    const tick = (): Promise<void> => (component as unknown as { tick(): Promise<void> }).tick();
 
     it('keeps refreshing while a finalizing session is the only live one', async () => {
       // With nothing selected, the page only refreshes while the active
