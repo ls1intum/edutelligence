@@ -355,7 +355,9 @@ def test_a_failure_in_the_post_agent_hook_still_reports_the_runs_usage():
         state.tokens.append(answer)
         raise RuntimeError("citations blew up")
 
-    pipeline._add_citations = spend_then_break
+    # Through a mock rather than a bare function: assigning one makes pylint infer the method
+    # as returning nothing, and the production call site then trips assignment-from-no-return.
+    pipeline._add_citations = MagicMock(side_effect=spend_then_break)
 
     _run_pipeline(pipeline, callback)
 
@@ -374,7 +376,7 @@ def test_a_run_that_dies_before_the_hook_reports_its_usage_too():
         state.tokens.append(answer)
         raise RuntimeError("agent blew up")
 
-    pipeline.execute_agent = spend_then_break
+    pipeline.execute_agent = MagicMock(side_effect=spend_then_break)
 
     _run_pipeline(pipeline, callback)
 
