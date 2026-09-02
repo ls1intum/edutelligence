@@ -363,8 +363,12 @@ def _sleepable_lane_replicas(cfg: AppConfig, lane_manager: LaneManager | None = 
     ``_lane_id_from_config``), and counting both would double its footprint.
     The live handle is authoritative when present (its ``vllm_config`` reflects
     what the spawned process actually honours), so a static lane whose id is
-    already live is skipped; the static config is used only for lanes not yet
-    applied (startup, before ``apply_lanes`` runs).
+    already live (or still pending) is skipped; the static config is used only
+    for lanes not yet applied (startup, before ``apply_lanes`` runs).
+
+    In-flight adds are counted too (``pending_lanes``): a lane being added is
+    not live yet, but its cache copy is admitted while it is pending, so its
+    sleeping footprint must be reserved before that copy is allowed to fit.
 
     Returns ``model -> replica_count``. ``LaneSetRequest`` allows multiple
     uniquely named lanes for the same model, and each sleeping vLLM process
@@ -372,20 +376,29 @@ def _sleepable_lane_replicas(cfg: AppConfig, lane_manager: LaneManager | None = 
     not per model name.
     """
     replicas: dict[str, int] = {}
-    live_lane_ids: set[str] = set()
+    accounted_lane_ids: set[str] = set()
     if lane_manager is not None:
         for lane_id in lane_manager.lane_ids:
             handle = lane_manager.get_handle(lane_id)
             if handle is None or handle.lane_config is None:
                 continue
-            live_lane_ids.add(lane_id)
+            accounted_lane_ids.add(lane_id)
             lane = handle.lane_config
             if _lane_can_sleep(cfg, lane):
                 replicas[lane.model] = replicas.get(lane.model, 0) + 1
+        # In-flight adds: the lane is absent from _handles until its spawn
+        # succeeds, but its cache copy is being admitted RIGHT NOW — its
+        # future sleeping footprint must already be in the reserve (see
+        # _add_lane_unlocked, which registers the pending entry and re-plans
+        # before wait_for_cached/ensure_cached).
+        for lane_id, lane in lane_manager.pending_lanes:
+            accounted_lane_ids.add(lane_id)
+            if _lane_can_sleep(cfg, lane):
+                replicas[lane.model] = replicas.get(lane.model, 0) + 1
     for sl in cfg.static_lanes:
-        if _lane_id_from_config(sl) in live_lane_ids:
-            # The live handle already accounts for this lane — counting the
-            # static config too would double its footprint.
+        if _lane_id_from_config(sl) in accounted_lane_ids:
+            # A live (or still-pending) handle already accounts for this lane
+            # — counting the static config too would double its footprint.
             continue
         if _lane_can_sleep(cfg, sl):
             replicas[sl.model] = replicas.get(sl.model, 0) + 1
@@ -670,9 +683,19 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     reserve_replicas = _sleepable_lane_replicas(cfg, lane_manager)
     candidates, _uncalibrated = _build_ram_cache_candidates(cfg, model_cache, model_profiles, caps, reserve_replicas)
     if not candidates:
-        # No calibrated capability models and no sleep-capable static/live lane
-        # models means an empty reserve and a plan that keeps exactly what it
-        # keeps — there is no arithmetic to re-run.
+        # No calibrated capability models and no sleep-capable static/live/
+        # pending lane models: the sleep reserve is zero. Still clear the
+        # previous pass's state — the last sleep-capable lane may have just
+        # gone, and its stale reserve must not linger in the host-RAM floor:
+        # a later on-demand lane calls ensure_cached BEFORE it becomes a
+        # candidate, and an obsolete floor would launch an otherwise-fitting
+        # model from disk for its lifetime. Zero the floor (no sleepable lane
+        # means nothing to reserve; _would_starve_host fails open at zero, as
+        # before the floor existed), drop every hold-down counter (no model
+        # is in the plan anymore), and keep what the cache holds — a no-op
+        # for cached entries, so wakes and on-demand lanes still find them.
+        model_cache.set_host_ram_floor_mb(0.0)
+        app.state.ram_cache_in_plan_ticks.clear()
         return
 
     host_memory = _build_host_memory_summary()

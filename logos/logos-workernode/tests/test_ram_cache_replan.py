@@ -24,6 +24,7 @@ import asyncio
 import inspect
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -88,6 +89,13 @@ class _FakeCache:
         self.floor_calls = 0
         self.reclaimed: list[list[str]] = []
         self.recache_calls: list[list[str]] = []
+        # tmpfs root for add-path tests: ModelRamCache serves the RAM-cache
+        # HF_HOME as _cache_hub.parent, so ensure_cached reports that parent.
+        self._cache_hub = Path("/fake/tmpfs/hub")
+        # Floor captured at copy-admission time (see ensure_cached) — the
+        # pending-lane reserve regression asserts the footprint was already
+        # in the floor when the copy was admitted.
+        self.floor_at_ensure_cached: float | None = None
 
     def model_size_bytes(self, name: str) -> int:
         return self._sizes.get(name, 0)
@@ -98,6 +106,16 @@ class _FakeCache:
     def set_host_ram_floor_mb(self, floor_mb: float) -> None:
         self.floor_mb = floor_mb
         self.floor_calls += 1
+
+    async def wait_for_cached(self, model: str) -> bool:  # noqa: ANN001
+        return True
+
+    async def ensure_cached(self, model: str) -> str:  # noqa: ANN001
+        # Admit from the tmpfs root (as ModelRamCache does) and record the
+        # floor at the moment of admission — the pending-lane reserve must
+        # already hold the lane's sleeping footprint by then.
+        self.floor_at_ensure_cached = self.floor_mb
+        return str(self._cache_hub.parent)
 
     async def reclaim(self, keep: set[str]) -> list[str]:
         # Same coordination as ModelRamCache.reclaim: a copy in flight is
@@ -162,9 +180,11 @@ class _FakeLaneManager:
         sleeping: set[str] | None = None,
         starting: set[str] | None = None,
         sleeping_counts: dict[str, int] | None = None,
+        pending: list[tuple[str, LaneConfig]] | None = None,
     ) -> None:
         self._handles = handles
         self._starting = set(starting or set())
+        self._pending = list(pending or [])
         # Per-model asleep replica counts. ``sleeping`` (a set of model names)
         # is the legacy shorthand for "one asleep replica of each"; pass
         # ``sleeping_counts`` to express several same-model replicas.
@@ -192,6 +212,11 @@ class _FakeLaneManager:
 
     def starting_models(self) -> frozenset[str]:
         return frozenset(self._starting)
+
+    @property
+    def pending_lanes(self) -> list[tuple[str, LaneConfig]]:
+        # Matches the real LaneManager: in-flight adds, as (lane_id, config).
+        return list(self._pending)
 
 
 def _host_memory(available_mb: float) -> HostMemorySummary:
@@ -709,7 +734,9 @@ def test_replan_triggered_on_lane_add_establishes_reserve_before_first_sleep(mon
     assert cache.floor_mb == pytest.approx(10_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
-def _restart_env(monkeypatch, model_old, model_new, sleeping_old, sleeping_new):  # noqa: ANN001
+def _restart_env(
+    monkeypatch, model_old, model_new, sleeping_old, sleeping_new, *, sizes=None, cached=None, available_mb=100_000.0
+):  # noqa: ANN001
     """Shared scaffolding for the restart-reserve regression tests.
 
     A live, awake, sleep-capable vLLM lane for ``model_old`` is seeded into a
@@ -720,9 +747,13 @@ def _restart_env(monkeypatch, model_old, model_new, sleeping_old, sleeping_new):
     (``reconfigure_lane`` and the ``apply_lanes`` Phase-2 reconfigure) funnel
     into the real ``_restart_lane_unlocked``, which is where the re-plan now
     fires; the tests only differ in how they drive that call.
+
+    ``sizes``/``cached``/``available_mb`` parameterize the host so a test can
+    make the replacement model's copy not fit under the post-restart reserve
+    (the restart-ordering regression needs that).
     """
     margin = worker_main._host_ram_safety_margin_mb(512_000.0)
-    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(available_mb))
 
     registry = _FakeRegistry(
         {
@@ -730,7 +761,7 @@ def _restart_env(monkeypatch, model_old, model_new, sleeping_old, sleeping_new):
             model_new: _FakeProfile(base_residency_mb=sleeping_new, sleeping_mb=sleeping_new),
         }
     )
-    cache = _FakeCache(sizes={model_old: _mb(8_000), model_new: _mb(8_000)})
+    cache = _FakeCache(sizes=sizes or {model_old: _mb(8_000), model_new: _mb(8_000)}, cached=cached or [])
 
     lane_id = "org_lane"
 
@@ -849,6 +880,49 @@ def test_replan_reserves_replacement_footprint_on_reconfigure_lane(monkeypatch) 
     assert cache.floor_mb == pytest.approx(30_000.0 + margin)
 
 
+def test_restart_replans_without_the_stale_startup_reservation(monkeypatch) -> None:
+    """Regression [high]: a model-swap restart must release the starting
+    reservation BEFORE its immediate re-plan.
+
+    The restart's replacement handle is source-backed (restarts receive no
+    tmpfs hf_home_override), so the re-plan running under a still-active
+    starting reservation would protect the replacement model's tmpfs entry on
+    the strength of the reservation alone — pinning an unused copy until the
+    60 s tick. Release the reservation before the notify so the immediate
+    re-plan sees the lane's real protection state and can reclaim the unused
+    copy right away.
+    """
+    env = _restart_env(
+        monkeypatch,
+        "org/model-a",
+        "org/model-b",
+        10_000.0,
+        50_000.0,
+        sizes={"org/model-a": _mb(8_000), "org/model-b": _mb(48_000)},
+        cached=["org/model-b"],
+        # Tight host: the pool (available + held, which is reclaimable) minus
+        # the replacement's 50_000 reserve and the margin leaves 33_400 —
+        # below the copy's 48_000, so the plan skips it and only protection
+        # can keep it.
+        available_mb=60_000.0,
+    )
+    manager, cache, lane_id, margin = env["manager"], env["cache"], env["lane_id"], env["margin"]
+
+    async def _run() -> None:
+        # Swap the lane to the larger model. model-b's tmpfs copy exists but
+        # the restarted handle is source-backed, so nothing reads it and a
+        # tight re-plan should reclaim it on the spot.
+        await manager.reconfigure_lane(lane_id, {"model": "org/model-b"})
+
+    asyncio.run(_run())
+
+    # The unused tmpfs copy is reclaimable immediately — no pin until the 60 s
+    # tick — and the floor moved to the replacement model's footprint.
+    assert cache.reclaimed[-1] == ["org/model-b"]
+    assert cache.is_cached("org/model-b") is False
+    assert cache.floor_mb == pytest.approx(50_000.0 + margin)
+
+
 def test_replan_reserves_replacement_footprint_on_apply_lanes_reconfigure(monkeypatch) -> None:
     """Same guarantee as the reconfigure_lane test, but via the declarative
     apply_lanes Phase-2 reconfigure path — the other of the two production
@@ -873,6 +947,148 @@ def test_replan_reserves_replacement_footprint_on_apply_lanes_reconfigure(monkey
     asyncio.run(_run())
 
     assert cache.floor_mb == pytest.approx(30_000.0 + margin)
+
+
+def test_replan_reserves_pending_lane_before_its_cache_copy_is_admitted(monkeypatch) -> None:
+    """Regression [high]: while a lane is being added it is still absent from
+    ``_handles``, so its future sleeping footprint is not in the host-RAM floor
+    when ``ensure_cached`` decides whether to admit its copy. On a tight host
+    the copy can fit under the old (smaller) floor; after registration the
+    live handle (launched from the RAM cache) protects it, making the
+    allocation unreclaimable and leaving the lane's first sleep short of host
+    RAM.
+
+    Drives the REAL add_lane path (process I/O stubbed) and asserts the floor
+    at the moment of copy admission already includes the pending lane's
+    sleeping footprint.
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+    registry = _FakeRegistry({"org/pending": _FakeProfile(base_residency_mb=30_000.0, sleeping_mb=30_000.0)})
+    cache = _FakeCache(sizes={"org/pending": _mb(8_000)})
+
+    class _AddHandle:
+        """A live vLLM handle for the spawned lane (no process I/O)."""
+
+        hf_home_override: str | None = None
+        launched_from_ram_cache: bool = False
+
+        def __init__(self, lane_id: str, port: int) -> None:
+            self.lane_id = lane_id
+            self.port = port
+            self.lane_config: LaneConfig | None = None
+
+        def status(self):
+            return SimpleNamespace(state=ProcessState.RUNNING)
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lane_config: LaneConfig):
+            self.lane_config = lane_config
+            return SimpleNamespace(state=ProcessState.RUNNING, return_code=None)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+        async def is_sleeping(self) -> bool:
+            return False
+
+    def _fake_create_handle(_lid, _port, _gcfg, _vcfg, lane_config, **_kw):  # noqa: ANN001
+        return _AddHandle(_lid, _port)
+
+    manager = LaneManager(
+        OllamaConfig(),
+        nvidia_smi_available=lambda: True,
+        model_cache=cache,
+        on_lane_added=lambda: worker_main._replan_ram_cache_once(app),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_port_alloc",
+        SimpleNamespace(allocate=lambda lid: 8801, get_port=lambda lid: 8801, release=lambda lid: None),
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config=AppConfig(logos=LogosConfig(capabilities_models=[]), static_lanes=[]),
+            model_cache=cache,
+            model_profiles=registry,
+            lane_manager=manager,
+            ram_cache_replan_lock=asyncio.Lock(),
+            ram_cache_in_plan_ticks={},
+        )
+    )
+    monkeypatch.setattr(lane_mod, "_create_handle", _fake_create_handle)
+    monkeypatch.setattr(manager, "_auto_tensor_parallel", lambda lc: lc)
+
+    async def _auto_place(_lid, lc):  # noqa: ANN001
+        return lc
+
+    monkeypatch.setattr(manager, "_auto_place_gpu_devices", _auto_place)
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=None))
+
+    lane = LaneConfig(
+        model="org/pending",
+        vllm=True,
+        lane_id="org_pending",
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    asyncio.run(manager.add_lane(lane))
+
+    margin = worker_main._host_ram_safety_margin_mb(512_000.0)
+    # The pending lane's footprint was already in the floor when the copy was
+    # admitted (no unreclaimable allocation, no first-sleep OOM window).
+    assert cache.floor_at_ensure_cached == pytest.approx(30_000.0 + margin)
+    # After registration the live handle takes over the accounting and the
+    # floor holds steady.
+    assert cache.floor_mb == pytest.approx(30_000.0 + margin)
+    # The copy was admitted from the tmpfs root, so the handle is RAM-cache-
+    # backed (which is exactly why the pre-admission reserve matters).
+    assert manager._handles["org_pending"].launched_from_ram_cache is True  # noqa: SLF001
+
+
+def test_replan_clears_stale_floor_and_hold_down_when_last_sleepable_lane_goes(monkeypatch) -> None:
+    """Regression [medium]: when the last sleep-capable lane disappears on an
+    empty-capabilities worker, the re-plan must not early-return with the
+    previous pass's sleep reserve still in the host-RAM floor and stale
+    hold-down counters retained — a later on-demand lane calls ensure_cached
+    BEFORE it becomes a candidate, so an obsolete floor would force an
+    otherwise-fitting model to launch from disk for its lifetime.
+
+    Asserts the empty-candidate path zeroes the floor, resets the hold-down
+    state, and leaves the cached contents untouched (a later on-demand lane
+    still finds its copy).
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    registry = _FakeRegistry({"org/m": _FakeProfile(base_residency_mb=20_000.0, sleeping_mb=20_000.0)})
+    sizes = {"org/m": _mb(8_000)}
+    cache = _FakeCache(cached=["org/m"], sizes=sizes)
+    lanes = _FakeLaneManager({"m": _FakeHandle("m", "org/m", ProcessState.RUNNING)})
+    app = _app(cache, registry, lanes, [])
+
+    margin = worker_main._host_ram_safety_margin_mb(512_000.0)
+    # Baseline: while the lane is up the floor holds its sleeping footprint.
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+    assert cache.floor_mb == pytest.approx(20_000.0 + margin)
+
+    # Plant a hold-down counter for a model outside the plan, then kill the
+    # last sleep-capable lane.
+    app.state.ram_cache_in_plan_ticks["org/stale"] = worker_main.RAM_CACHE_RECACHE_HOLD_TICKS
+    lanes._handles.clear()  # noqa: SLF001
+
+    reclaim_calls_before = len(cache.reclaimed)
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # The stale reserve is gone, the hold-down state is reset, and the cached
+    # contents are untouched.
+    assert cache.floor_mb == 0.0
+    assert app.state.ram_cache_in_plan_ticks == {}
+    assert cache.is_cached("org/m") is True
+    # The no-op path must not run the planner's reclaim at all.
+    assert len(cache.reclaimed) == reclaim_calls_before
 
 
 # ── _replan_ram_cache_once ───────────────────────────────────────────────────

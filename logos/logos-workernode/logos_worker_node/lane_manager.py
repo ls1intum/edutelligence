@@ -379,6 +379,21 @@ class LaneManager:
         # from its view the model is unprotected in that window — evicting it
         # would rmtree the directory a live spawn is reading weights from.
         self._starting_models: set[str] = set()
+        # Lanes whose add is in flight (HF_HOME selection, cache copy, spawn):
+        # lane_id -> lane_config. They are absent from _handles until the
+        # spawn succeeds, so the RAM-cache re-plan reads them here to reserve
+        # their sleeping footprint BEFORE their cache copy is admitted.
+        self._pending_lane_configs: dict[str, LaneConfig] = {}
+
+    @property
+    def pending_lanes(self) -> list[tuple[str, LaneConfig]]:
+        """In-flight lane adds as (lane_id, lane_config) pairs.
+
+        See _pending_lane_configs: a pending lane is not in _handles yet, so
+        only this view lets the re-plan account for it before its copy is
+        admitted (and before registration, when the live handle takes over).
+        """
+        return list(self._pending_lane_configs.items())
 
     def reserve_model_startup(self, model: str) -> None:
         """Protect ``model`` against RAM-cache eviction for a lane
@@ -2246,7 +2261,22 @@ class LaneManager:
         # cannot evict the directory the spawn is about to read from.
         starting_model = lane_config.model
         self.reserve_model_startup(starting_model)
+        # Register the lane as pending BEFORE its cache copy is admitted: while
+        # it is absent from _handles, only this view lets the re-plan reserve
+        # its future sleeping footprint first. On a tight host the copy could
+        # otherwise fit under the old (smaller) floor, after which the
+        # post-registration live-handle protection makes the allocation
+        # unreclaimable and the lane's first sleep lacks host RAM.
+        self._pending_lane_configs[lane_id] = lane_config
         try:
+            # Re-plan now that the pending lane is counted, BEFORE the wait or
+            # copy below: the floor must already hold this lane's sleeping
+            # footprint when its copy is admitted. The post-registration
+            # re-plan (add_lane / apply_lanes) still runs — the pending entry
+            # is dropped by then and the live handle takes over the accounting.
+            # Safe under self._lock: the re-plan's lane inspection takes no
+            # lock of its own (as in the apply_lanes add loop).
+            await self._notify_lane_added()
             # Ensure model is in RAM cache if available
             hf_home_override: str | None = None
             launched_from_ram_cache = False
@@ -2342,8 +2372,11 @@ class LaneManager:
         finally:
             # Registration above (or the cleanup in the except block) has
             # settled the model's fate: once the handle is in _handles the
-            # re-plan protects it there, and a failed startup must not leave
-            # the reservation behind.
+            # re-plan sees it there (no await between registration and this
+            # pop, so the lane is never pending and live at once), and a
+            # failed startup must not leave the reservation or the pending
+            # entry behind.
+            self._pending_lane_configs.pop(lane_id, None)
             self.release_model_startup(starting_model)
 
     async def _remove_lane_unlocked(self, lane_id: str) -> None:
@@ -2465,13 +2498,25 @@ class LaneManager:
             # that the new handle is registered, BEFORE the new model's first
             # sleep — the post-sleep hook only fires after its weights are
             # already in host RAM, and the periodic tick may not run in time.
+            #
+            # Release the starting reservation BEFORE the re-plan: the new
+            # handle is registered, so the re-plan sees the lane's real
+            # protection state — a source-backed restart (no tmpfs override)
+            # reads the source filesystem and must not pin its unused tmpfs
+            # copy. Releasing only in the finally left that copy protected by
+            # the still-active reservation during the immediate re-plan, and
+            # pinned until the 60 s tick (no re-plan ran after the release).
+            # The finally below keeps releasing for the failure path.
+            #
             # Safe under self._lock: the re-plan's lane inspection takes no
             # lock of its own (as in the add loop above). Crash/stuck recovery
             # restarts the same config, so the re-plan is a no-op there.
+            self.release_model_startup(starting_model)
             await self._notify_lane_added()
         finally:
-            # Registration (or the cleanup in the spawn-failure branch) has
-            # settled the model's fate — see _add_lane_unlocked.
+            # The success path above already released the reservation before
+            # its re-plan; this keeps the release for the spawn-failure
+            # branch (idempotent — see _add_lane_unlocked).
             self.release_model_startup(starting_model)
 
     def _detach_lane_unlocked(self, lane_id: str) -> tuple[ProcessHandle | None, int | None]:
