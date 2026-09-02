@@ -567,7 +567,8 @@ def is_local_api_base(base_url: str) -> bool:
 def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
     with DBManager() as db:
         rows = db.session.execute(
-            text("""
+            text(
+                """
                 SELECT
                     le.id,
                     le.request_id,
@@ -596,7 +597,8 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                 WHERE le.process_id = :pid
                   AND le.id > :start_id
                 ORDER BY le.id ASC
-                """),
+                """
+            ),
             {"pid": process_id, "start_id": start_log_id},
         ).fetchall()
 
