@@ -84,10 +84,10 @@ class TestScreenshotContainment:
 
     @staticmethod
     async def _body(response) -> bytes:
-        # Read the body the same way the ASGI layer does.
-        from starlette.concurrency import iterate_in_threadpool
-
-        return b"".join([chunk async for chunk in iterate_in_threadpool(response.body_iterator)])
+        # A StreamingResponse's body_iterator is already async; iterating it
+        # is what a client receives, so a response without a stream fails
+        # loudly here instead of passing with an empty body.
+        return b"".join([chunk async for chunk in response.body_iterator])
 
     async def test_a_regular_file_is_served(self, monkeypatch, tmp_path):
         from app.main import get_screenshot
@@ -104,6 +104,34 @@ class TestScreenshotContainment:
         assert response.media_type == "image/png"
         assert response.headers["content-length"] == str(len(payload))
         assert await self._body(response) == payload
+
+    async def test_a_regular_file_is_streamed_over_the_asgi_layer(self, monkeypatch, tmp_path):
+        # Through the real ASGI call path, not by iterating the attribute:
+        # a plain Response object sent by that path carries only its
+        # (empty) body — a route that "serves" a file that way would pass
+        # any test that reads body_iterator by hand and still ship zero
+        # bytes to the browser.
+        import httpx
+        from app.auth import require_agent_operator
+
+        self._patch_root(monkeypatch, tmp_path)
+        directory = tmp_path / "7" / "screenshots"
+        directory.mkdir(parents=True)
+        payload = b"\x89PNG real bytes for the asgi path"
+        (directory / "shot.png").write_bytes(payload)
+
+        main.app.dependency_overrides[require_agent_operator] = lambda: None
+        try:
+            transport = httpx.ASGITransport(app=main.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.get("/sessions/7/screenshots/shot.png")
+        finally:
+            main.app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        assert response.headers["content-length"] == str(len(payload))
+        assert response.content == payload
 
     async def test_a_symlinked_screenshots_directory_is_not_followed(self, monkeypatch, tmp_path):
         # The agent can replace the whole screenshots directory with a link

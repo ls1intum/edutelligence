@@ -161,14 +161,27 @@ async def wait_for_dev_deploy(
         return "failed", f"could not observe the dev deploy run: {exc}"
 
 
-async def wait_for_pr_builds(branch: str, *, timeout_s: float = 20 * 60, poll_s: float = 15.0) -> tuple[str, str]:
-    """Wait for the branch's image builds to reach a conclusion.
+async def wait_for_pr_builds(
+    branch: str,
+    head_sha: str,
+    *,
+    timeout_s: float = 20 * 60,
+    poll_s: float = 15.0,
+) -> tuple[str, str]:
+    """Wait for the build of ``head_sha`` on ``branch`` to reach a conclusion.
 
     The build workflow does not run on plain branch pushes: the session's
     code is only built and published when its pull request triggers it,
     under the ``pr-<number>`` tag and never ``latest``. Waiting here is what
     keeps a dev deploy from pulling the stale ``latest`` images that still
     point at main.
+
+    The run must be the build of the exact commit the finalizer pushed, not
+    merely of the branch: the branch is reused across retries, and a retried
+    session force-pushes a new commit onto it. Until GitHub queues the build
+    for the new head, the completed run of the earlier commit is still the
+    newest one on that branch — settling on it would pass a stale
+    ``pr-<number>`` image off as the one this commit produced.
 
     Returns ``(status, detail)``: status is ``"success"``, ``"failed"``, or
     ``"timeout"`` — the same shape as :func:`wait_for_dev_deploy`. As there,
@@ -179,25 +192,25 @@ async def wait_for_pr_builds(branch: str, *, timeout_s: float = 20 * 60, poll_s:
     params = {"per_page": 10}
     deadline = asyncio.get_running_loop().time() + timeout_s
 
-    async def latest_build_for_branch() -> dict | None:
+    async def build_for_head() -> dict | None:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=_headers(), params=params)
         if response.status_code != 200:
             raise GitHubError(f"build run lookup failed ({response.status_code})")
         for run in response.json().get("workflow_runs", []):
-            if run.get("head_branch") == branch:
+            if run.get("head_branch") == branch and run.get("head_sha") == head_sha:
                 return run
         return None
 
     try:
         while True:
-            run = await latest_build_for_branch()
+            run = await build_for_head()
             if run is not None and run.get("status") == "completed":
                 conclusion = run.get("conclusion") or "unknown"
                 status = "success" if conclusion == "success" else "failed"
                 return status, f"build {run.get('html_url')} ended: {conclusion}"
             if asyncio.get_running_loop().time() >= deadline:
-                return "timeout", f"image builds for '{branch}' still running after {timeout_s:.0f}s"
+                return "timeout", f"image builds for '{branch}' at {head_sha[:7]} still running after {timeout_s:.0f}s"
             await asyncio.sleep(poll_s)
     except Exception as exc:
         logger.warning("waiting for the image build run failed: %s", exc)

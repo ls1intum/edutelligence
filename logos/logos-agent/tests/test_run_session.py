@@ -29,11 +29,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "workspace"))
 
 from run_session import (  # noqa: E402
+    Result,
     _clear_checkout,
     _rebuild_git_metadata,
     _reset_agent_home,
     commit_and_push,
     finalize_checkout,
+    run_finalize,
 )
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
@@ -355,6 +357,67 @@ class TestFinalizer:
         remote_file = _git("--git-dir", str(origin), "show", f"{self.BRANCH}:app.py", cwd=workspace).stdout
         assert remote_file == "print('second run')\n"
         assert not marker.exists()
+
+    @staticmethod
+    def _patch_finalize_env(monkeypatch, tmp_path: Path, repo_url: str, branch: str) -> None:
+        monkeypatch.setenv("LOGOS_SESSION_BRANCH", branch)
+        monkeypatch.setenv("LOGOS_SESSION_TASK", "a long enough task description")
+        monkeypatch.setenv("LOGOS_REPO_URL", repo_url)
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp-test-token")
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path / "artifacts"))
+        monkeypatch.setenv("LOGOS_SESSION_OPEN_PR", "0")
+
+    def test_the_finalizer_records_the_commit_it_pushed(self, tmp_path, monkeypatch):
+        # The runner pins its build poll to this sha: it is the exact commit
+        # the push put on the remote branch, neither the branch name alone
+        # nor the base the branch was re-anchored on.
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = _make_origin(workspace)
+        checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        self._patch_finalize_env(monkeypatch, tmp_path, f"file://{origin}", self.BRANCH)
+
+        result = Result()
+        run_finalize(result)
+
+        assert result.data["committed"] is True
+        assert result.data["files_changed"] == 1
+        head = _git("rev-parse", "HEAD", cwd=checkout).stdout.strip()
+        tip = _git("--git-dir", str(origin), "rev-parse", self.BRANCH, cwd=workspace).stdout.strip()
+        assert result.data["pushed_sha"] == head == tip
+
+    def test_a_retried_run_without_new_work_pins_the_branch_tip(self, tmp_path, monkeypatch):
+        # A retried run in which the agent changed nothing: no commit is
+        # made this time, but the branch still carries the work of the first
+        # run — and that is the commit the runner has to build, not the base
+        # the re-anchored head now points at.
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = _make_origin(workspace)
+        checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        self._patch_finalize_env(monkeypatch, tmp_path, f"file://{origin}", self.BRANCH)
+
+        first = Result()
+        run_finalize(first)
+        assert first.data["committed"] is True
+
+        # Second run: the working copy goes back to the base content, so
+        # there is nothing to commit — the remote branch keeps the first
+        # run's commit. (The rebuild wiped the local main ref, so the base
+        # is fetched fresh into FETCH_HEAD.)
+        _git("fetch", "--quiet", "origin", "main", cwd=checkout)
+        _git("checkout", "FETCH_HEAD", "--", ".", cwd=checkout)
+        second = Result()
+        run_finalize(second)
+
+        assert second.data["committed"] is False
+        assert second.data["files_changed"] == 0
+        base = _git("--git-dir", str(origin), "rev-parse", "main", cwd=workspace).stdout.strip()
+        tip = _git("--git-dir", str(origin), "rev-parse", self.BRANCH, cwd=workspace).stdout.strip()
+        assert tip != base
+        assert second.data["pushed_sha"] == tip
 
     def test_a_checkout_replaced_by_a_link_has_no_work_to_finalize(self, tmp_path, monkeypatch):
         # The agent may have turned the checkout itself into a link: the

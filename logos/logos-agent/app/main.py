@@ -12,6 +12,7 @@ import logging
 import mimetypes
 import os
 import stat
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -340,11 +341,25 @@ def _serve_session_file(target: Path) -> Response | None:
         os.close(fd)
         return None
     file = os.fdopen(fd, "rb")
-    response = Response(status_code=200)
-    response.media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    response.headers["Content-Length"] = str(info.st_size)
-    response.body_iterator = file
-    return response
+
+    def stream() -> Iterator[bytes]:
+        # The response object must be what actually reads the descriptor:
+        # a plain Response sends its (empty) body and never touches
+        # body_iterator, which would advertise the file's length and then
+        # ship zero bytes. Owning the file here is what guarantees the
+        # descriptor is closed exactly once, when the stream ends.
+        try:
+            while chunk := file.read(65536):
+                yield chunk
+        finally:
+            file.close()
+
+    return StreamingResponse(
+        stream(),
+        status_code=200,
+        media_type=mimetypes.guess_type(target.name)[0] or "application/octet-stream",
+        headers={"Content-Length": str(info.st_size)},
+    )
 
 
 @app.get("/sessions/{session_id}/screenshots/{name}", tags=["sessions"])

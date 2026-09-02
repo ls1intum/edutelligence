@@ -83,13 +83,18 @@ async def test_wait_for_pr_builds_selects_the_branch_run(monkeypatch):
     calls: list = []
     run = {
         "head_branch": "agent/feature-work/session-7",
+        "head_sha": "a" * 40,
         "status": "completed",
         "conclusion": "success",
         "html_url": "https://github.com/ls1intum/edutelligence/actions/runs/1",
     }
-    fake_client(monkeypatch, calls, runs=[{"head_branch": "other-branch", "status": "completed"}, run])
+    fake_client(
+        monkeypatch,
+        calls,
+        runs=[{"head_branch": "other-branch", "head_sha": "a" * 40, "status": "completed"}, run],
+    )
 
-    status, detail = await github.wait_for_pr_builds("agent/feature-work/session-7")
+    status, detail = await github.wait_for_pr_builds("agent/feature-work/session-7", "a" * 40)
 
     assert status == "success"
     assert "actions/runs/1" in detail
@@ -101,6 +106,67 @@ async def test_wait_for_pr_builds_selects_the_branch_run(monkeypatch):
         "https://api.github.com/repos/ls1intum/edutelligence/actions/workflows/logos_build-and-push-docker.yml/runs"
     )
     assert "workflow_id" not in calls[0]["params"]
+
+
+async def test_wait_for_pr_builds_ignores_a_completed_run_of_an_earlier_commit(monkeypatch):
+    # A retried session force-pushed a new commit onto the same branch.
+    # Until GitHub queues the build for the new head, the completed run of
+    # the earlier commit is still the newest one on the branch — settling
+    # on it would pass the stale pr-<number> image off as the one this
+    # commit produced.
+    calls: list = []
+    branch = "agent/feature-work/session-7"
+    fake_client(
+        monkeypatch,
+        calls,
+        runs=[
+            {"head_branch": branch, "head_sha": "c" * 40, "status": "in_progress"},
+            {
+                "head_branch": branch,
+                "head_sha": "b" * 40,
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/ls1intum/edutelligence/actions/runs/1",
+            },
+        ],
+    )
+
+    status, detail = await github.wait_for_pr_builds(branch, "c" * 40, timeout_s=0.05, poll_s=0.01)
+
+    assert status == "timeout"
+    assert "still running" in detail
+
+
+async def test_wait_for_pr_builds_accepts_the_run_of_the_pushed_commit(monkeypatch):
+    # Both commits now have completed runs on the branch; only the one of
+    # the pushed sha ends the wait.
+    calls: list = []
+    branch = "agent/feature-work/session-7"
+    fake_client(
+        monkeypatch,
+        calls,
+        runs=[
+            {
+                "head_branch": branch,
+                "head_sha": "c" * 40,
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/ls1intum/edutelligence/actions/runs/2",
+            },
+            {
+                "head_branch": branch,
+                "head_sha": "b" * 40,
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/ls1intum/edutelligence/actions/runs/1",
+            },
+        ],
+    )
+
+    status, detail = await github.wait_for_pr_builds(branch, "c" * 40)
+
+    assert status == "success"
+    assert "actions/runs/2" in detail
 
 
 async def test_wait_for_dev_deploy_ignores_runs_on_session_branches(monkeypatch):
@@ -233,9 +299,13 @@ async def test_wait_for_pr_builds_times_out_when_no_build_ran(monkeypatch):
     # exists for the branch: the wait must time out, not hang, so the caller
     # records the deploy as failed instead of dispatching a stale image.
     calls: list = []
-    fake_client(monkeypatch, calls, runs=[{"head_branch": "other-branch", "status": "in_progress"}])
+    fake_client(
+        monkeypatch, calls, runs=[{"head_branch": "other-branch", "head_sha": "d" * 40, "status": "in_progress"}]
+    )
 
-    status, detail = await github.wait_for_pr_builds("agent/feature-work/session-7", timeout_s=0.05, poll_s=0.01)
+    status, detail = await github.wait_for_pr_builds(
+        "agent/feature-work/session-7", "d" * 40, timeout_s=0.05, poll_s=0.01
+    )
 
     assert status == "timeout"
     assert "still running" in detail

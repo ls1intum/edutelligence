@@ -9,8 +9,10 @@ One session runs in three phases of this image, selected by
   home.
 * ``agent`` — untrusted, no reusable credentials, and its only network peer
   is the credential-injecting model gateway: the coding agent does the work.
-* ``finalize`` — trusted, with the push token: commit, push, and open the
-  pull request, then update the result file.
+* ``finalize`` — trusted, with the push token: bring the agent-owned
+  checkout and home under trusted metadata again, install the transient
+  askpass helper, then commit, push, and open the pull request before
+  updating the result file.
 
 Progress goes to stdout, which the runner service collects as the session
 transcript; the machine-readable outcome goes to
@@ -443,6 +445,21 @@ def changed_files() -> list[str]:
     return [line[3:] for line in process.stdout.splitlines() if line.strip()]
 
 
+def _ref_sha(*refs: str) -> str | None:
+    """The commit a ref names, or None when none of them resolves.
+
+    ``--verify`` makes git fail on a ref that is really a literal string
+    rather than a name; ``--quiet`` keeps the failure silent, so a missing
+    ref reads as ``None`` instead of an exception.
+    """
+    for ref in refs:
+        process = run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=CHECKOUT, check=False, quiet=True)
+        sha = process.stdout.strip()
+        if process.returncode == 0 and sha:
+            return sha
+    return None
+
+
 def commit_and_push(branch: str, task: str) -> int:
     files = changed_files()
     if not files:
@@ -611,6 +628,13 @@ def run_finalize(result: Result) -> None:
     result.data["committed"] = count > 0
     if count and os.environ.get("LOGOS_SESSION_OPEN_PR") == "1":
         result.data["pr_url"] = open_pull_request(branch, base_branch, task)
+    # The exact commit the runner must build: this run's own commit, or —
+    # when the agent changed nothing this time — the tip the branch already
+    # carries. The runner pins its build poll to it. The branch is not a
+    # fresh ref: a retried session force-pushes a new commit onto it, and a
+    # completed run of the earlier commit would otherwise still be "the
+    # build of this branch".
+    result.data["pushed_sha"] = _ref_sha("HEAD") if count else _ref_sha(f"refs/remotes/origin/{branch}", "HEAD")
 
 
 def main() -> int:

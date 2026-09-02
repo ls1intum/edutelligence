@@ -823,6 +823,109 @@ class TestAgentPhaseIsolation:
         assert ("transition", SessionStatus.PAUSED) in order
         assert events == [(EventKind.STATUS, {"status": "succeeded", "exit_code": 0, "error": None})]
 
+    async def test_a_cancel_while_finalizing_stops_the_finalizer_helper(self, monkeypatch, tmp_path):
+        # A finalizing session still holds the credential-bearing helper
+        # container — the one committing, pushing, and opening the pull
+        # request with the scoped token. A cancel must stop that helper
+        # before it reports success: returning success while the helper
+        # keeps running would leave a container with the push token acting
+        # on a session the API already reported as cancelled. The helper is
+        # tracked per session (not read from a supervisor, which restart
+        # reconciliation does not run one), so the stop reaches it on both
+        # the supervised and the reconciled path.
+        from app import sessions
+        from app.schemas import can_transition
+
+        self._patch_base(monkeypatch, tmp_path)
+        # A fresh manager: the module singleton's locks bind to whichever
+        # loop first contended on them.
+        manager = sessions.SessionManager()
+
+        states = {7: "running"}
+        events: list = []
+        stopped: list = []
+        removed: list = []
+        created: list = []
+        wait_calls: list = []
+        helper_wait = asyncio.Event()
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_wait(cid, **_kwargs):
+            wait_calls.append(cid)
+            if cid == "cid-finalize":
+                await helper_wait.wait()
+                return 1
+            return 0
+
+        async def fake_stop(cid, **_kwargs):
+            stopped.append(cid)
+            if cid == "cid-finalize":
+                helper_wait.set()
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        async def fake_get_session(_sid):
+            return {**self.ROW, "status": states[7]}
+
+        async def fake_transition(sid, target, **_fields):
+            # A validated transition, like the database: only legal edges,
+            # and the row really moves.
+            if not can_transition(SessionStatus(states[sid]), target):
+                return False
+            states[sid] = target.value
+            return True
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_session", fake_get_session)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", self._async_value("/vol/data"))
+
+        settle = asyncio.create_task(manager._settle(7, exit_code=0, error=None))
+        try:
+            # Wait until the finalizer helper exists and is being awaited.
+            for _ in range(100):
+                if "cid-finalize" in wait_calls:
+                    break
+                await asyncio.sleep(0.01)
+            assert "cid-finalize" in wait_calls
+            assert manager._helpers.get(7) == "cid-finalize"
+
+            # Cancel while the helper is still running.
+            assert await manager.cancel(7) is True
+            # The success means the helper was already stopped: it held the
+            # push token, so it must not outlive the reported cancellation.
+            assert "cid-finalize" in stopped
+        finally:
+            helper_wait.set()
+            await settle
+
+        # The row is cancelled and stays there: the settlement that lost the
+        # race records nothing (no succeeded/failed event, no deploy), and
+        # the helper that ran it removed its own container on the way out.
+        assert states[7] == "cancelled"
+        assert [p["status"] for k, p in events if k == EventKind.STATUS] == ["cancelled"]
+        assert "cid-finalize" in removed
+        assert 7 not in manager._helpers
+        # The helper ran as a finalizer, not something else.
+        assert created and created[-1]["labels"] == {"logos.agent.helper": "finalize"}
+
 
 class TestOverlappingAdmission:
     """Admission under overlapping scheduler passes.
@@ -1116,13 +1219,18 @@ class TestScreenshotOrchestration:
         result = tmp_path / "7"
         result.mkdir(parents=True, exist_ok=True)
         (result / "result.json").write_text(
-            json.dumps({"pr_url": "https://github.com/ls1intum/edutelligence/pull/772"})
+            json.dumps(
+                {
+                    "pr_url": "https://github.com/ls1intum/edutelligence/pull/772",
+                    "pushed_sha": "f" * 40,
+                }
+            )
         )
         order: list = []
         created: list = []
         wait_calls: list = []
 
-        async def fake_build_wait(_branch, **_kwargs):
+        async def fake_build_wait(_branch, _sha, **_kwargs):
             return "success", "build ended: success"
 
         async def fake_marker():
@@ -1184,12 +1292,17 @@ class TestScreenshotOrchestration:
         result = tmp_path / "7"
         result.mkdir(parents=True, exist_ok=True)
         (result / "result.json").write_text(
-            json.dumps({"pr_url": "https://github.com/ls1intum/edutelligence/pull/772"})
+            json.dumps(
+                {
+                    "pr_url": "https://github.com/ls1intum/edutelligence/pull/772",
+                    "pushed_sha": "f" * 40,
+                }
+            )
         )
         events: list = []
         created: list = []
 
-        async def fake_build_wait(_branch, **_kwargs):
+        async def fake_build_wait(_branch, _sha, **_kwargs):
             return "success", "build ended: success"
 
         async def fake_marker():
@@ -1244,7 +1357,12 @@ class TestScreenshotOrchestration:
             directory = tmp_path / str(sid)
             directory.mkdir(parents=True, exist_ok=True)
             (directory / "result.json").write_text(
-                json.dumps({"pr_url": f"https://github.com/ls1intum/edutelligence/pull/{sid}"})
+                json.dumps(
+                    {
+                        "pr_url": f"https://github.com/ls1intum/edutelligence/pull/{sid}",
+                        "pushed_sha": "f" * 40,
+                    }
+                )
             )
         order: list = []
 
@@ -1257,7 +1375,7 @@ class TestScreenshotOrchestration:
                 "screenshot_paths": ["/dashboard"],
             }
 
-        async def fake_build_wait(_branch, **_kwargs):
+        async def fake_build_wait(_branch, _sha, **_kwargs):
             return "success", "build ended: success"
 
         async def fake_marker():
@@ -1333,7 +1451,7 @@ class TestScreenshotOrchestration:
         async def fake_dispatch(**kwargs):
             raise AssertionError("no image exists to dispatch a deploy of")
 
-        async def fake_build_wait(_branch, **_kwargs):
+        async def fake_build_wait(_branch, _sha, **_kwargs):
             raise AssertionError("no image exists to wait for")
 
         async def noop(*args, **kwargs):
@@ -1427,8 +1545,8 @@ class TestSettlementRaceAndDeployTag:
             dispatched.append(kwargs)
             return "https://github.com/ls1intum/edutelligence/actions/runs/1"
 
-        async def fake_build_wait(branch, **_kwargs):
-            build_waits.append(branch)
+        async def fake_build_wait(branch, sha, **_kwargs):
+            build_waits.append((branch, sha))
             return "success", "build ended: success"
 
         monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.SESSION_ROW))
@@ -1453,13 +1571,17 @@ class TestSettlementRaceAndDeployTag:
         # pr-<n> build to succeed and dispatch with exactly that tag — never
         # latest, which still points at main.
         sessions = self._patch_base(monkeypatch, tmp_path)
-        self._write_result(tmp_path, pr_url="https://github.com/ls1intum/edutelligence/pull/772")
+        self._write_result(
+            tmp_path,
+            pr_url="https://github.com/ls1intum/edutelligence/pull/772",
+            pushed_sha="f" * 40,
+        )
         order: list = []
         dispatched: list = []
         marker_at: list = []
 
-        async def fake_build_wait(branch, **_kwargs):
-            order.append(("build_wait", branch))
+        async def fake_build_wait(branch, sha, **_kwargs):
+            order.append(("build_wait", branch, sha))
             return "success", "build ended: success"
 
         async def fake_marker():
@@ -1493,14 +1615,20 @@ class TestSettlementRaceAndDeployTag:
         # the workflow runs on a fixed trusted ref, so the session's agent-editable
         # branch never reaches the dev host.
         assert dispatched == [{"image_tag": "pr-772"}]
+        # The build wait is handed the pushed commit, not just the branch:
+        # the branch is force-pushed across retries, and a completed run of
+        # an earlier commit on it is a stale image, not this session's.
+        assert ("build_wait", "agent/feature-work/session-7", "f" * 40) in order
         # The build wait happens first, then the pre-dispatch marker — the
         # marker must see the runs as they stood before this dispatch's own
         # run exists — and only then the dispatch; the dispatched event
         # records the tag the environment now serves.
-        build_idx = order.index(("build_wait", "agent/feature-work/session-7"))
+        build_idx = order.index(("build_wait", "agent/feature-work/session-7", "f" * 40))
         dispatch_idx = next(i for i, item in enumerate(order) if item[0] == "dispatch")
         assert build_idx < marker_at[0] <= dispatch_idx
-        deploy_events = [p for k, p in order if k == EventKind.DEPLOY and p.get("status") == "dispatched"]
+        deploy_events = [
+            item[1] for item in order if item[0] == EventKind.DEPLOY and item[1].get("status") == "dispatched"
+        ]
         assert deploy_events == [
             {
                 "status": "dispatched",
@@ -1515,11 +1643,15 @@ class TestSettlementRaceAndDeployTag:
         # in any image; dispatching would deploy the old revision, so the
         # deploy is recorded as failed and nothing is dispatched.
         sessions = self._patch_base(monkeypatch, tmp_path)
-        self._write_result(tmp_path, pr_url="https://github.com/ls1intum/edutelligence/pull/772")
+        self._write_result(
+            tmp_path,
+            pr_url="https://github.com/ls1intum/edutelligence/pull/772",
+            pushed_sha="f" * 40,
+        )
         dispatched: list = []
         events: list = []
 
-        async def fake_build_wait(_branch, **_kwargs):
+        async def fake_build_wait(_branch, _sha, **_kwargs):
             return "failed", "build ended: failure"
 
         async def fake_dispatch(**kwargs):
@@ -1586,6 +1718,47 @@ class TestSettlementRaceAndDeployTag:
         failed = [p for k, p in events if k == EventKind.DEPLOY and p.get("status") == "failed"]
         assert len(failed) == 1
         assert "no pull request" in failed[0]["error"]
+
+    async def test_deploy_is_refused_when_the_finalizer_recorded_no_pushed_commit(self, monkeypatch, tmp_path):
+        # The pull request exists but the finalizer recorded no commit the
+        # branch was pushed to. Without that sha the build could not be
+        # pinned to a revision — the branch may carry an earlier,
+        # already-built commit, and settling the wait on a run of it would
+        # deploy a stale image. Refuse instead of guessing.
+        sessions = self._patch_base(monkeypatch, tmp_path)
+        self._write_result(tmp_path, pr_url="https://github.com/ls1intum/edutelligence/pull/772")
+        events: list = []
+        dispatched: list = []
+        build_waits: list = []
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def fake_dispatch(**kwargs):
+            dispatched.append(kwargs)
+            return "https://github.com/ls1intum/edutelligence/actions/runs/1"
+
+        async def fake_build_wait(branch, sha, **_kwargs):
+            build_waits.append((branch, sha))
+            return "success", "build ended: success"
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.SESSION_ROW))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.github, "dispatch_dev_deploy", fake_dispatch)
+        monkeypatch.setattr(sessions.github, "wait_for_pr_builds", fake_build_wait)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert dispatched == []
+        assert build_waits == []
+        failed = [p for k, p in events if k == EventKind.DEPLOY and p.get("status") == "failed"]
+        assert len(failed) == 1
+        assert "no pushed commit" in failed[0]["error"]
 
 
 class TestRestartReconciliation:

@@ -84,6 +84,12 @@ def _give_to_session_user(path: Path) -> None:
 class SessionManager:
     def __init__(self) -> None:
         self._supervisors: dict[int, asyncio.Task] = {}
+        # The trusted helper container per session (prepare, finalize), while
+        # it is running. Unlike the supervisor task it survives restart
+        # reconciliation, where the finalizer runs without a supervisor at
+        # all — and a cancel must be able to reach the credential-bearing
+        # helper on that path too, not just the one the supervisor is in.
+        self._helpers: dict[int, str] = {}
         self._scheduler_task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
         # Serialises admission so two scheduler passes cannot both decide there
@@ -511,6 +517,7 @@ class SessionManager:
                 labels={"logos.agent.helper": phase},
             )
             await docker_engine.start_container(container_id)
+            self._helpers[session_id] = container_id
             code = await docker_engine.wait_container(container_id, timeout_s=settings.helper_timeout_s)
             if code is None:
                 logger.warning("helper %s for session %s timed out; stopping it", phase, session_id)
@@ -518,6 +525,7 @@ class SessionManager:
                 code = 124
             return code
         finally:
+            self._helpers.pop(session_id, None)
             if container_id:
                 try:
                     await docker_engine.remove_container(container_id)
@@ -876,7 +884,19 @@ class SessionManager:
                 },
             )
             return None
-        status, detail = await github.wait_for_pr_builds(branch)
+        pushed_sha = str(result.get("pushed_sha") or "").strip()
+        if not pushed_sha:
+            # Without the pushed commit the build could not be pinned to a
+            # revision: the branch may carry an earlier, already-built
+            # commit, and the run of that commit would be mistaken for the
+            # build of this session's work.
+            await db.add_event(
+                session_id,
+                EventKind.DEPLOY,
+                {"status": "failed", "error": "the finalizer recorded no pushed commit, so the build cannot be pinned"},
+            )
+            return None
+        status, detail = await github.wait_for_pr_builds(branch, pushed_sha)
         if status != "success":
             await db.add_event(
                 session_id,
@@ -1059,6 +1079,19 @@ class SessionManager:
             return False
 
         await db.add_event(session_id, EventKind.STATUS, {"status": "cancelled"})
+        # The credential-bearing helper first: a finalizer mid-push would
+        # otherwise keep committing, pushing, or opening a pull request after
+        # the API has already reported the session cancelled. It is tracked
+        # per session rather than read from the supervisor because restart
+        # reconciliation finalizes without one. Removal is left to the code
+        # that runs the helper — its cleanup removes the container either
+        # way; this only has to make it stop.
+        helper_id = self._helpers.pop(session_id, None)
+        if helper_id:
+            try:
+                await docker_engine.stop_container(helper_id, timeout_s=5)
+            except Exception:
+                logger.warning("could not stop the helper of cancelled session %s", session_id)
         task = self._supervisors.pop(session_id, None)
         if task:
             task.cancel()

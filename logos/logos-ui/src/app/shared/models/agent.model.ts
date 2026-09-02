@@ -84,6 +84,7 @@ export const ACTIVE_SESSION_STATUSES: readonly AgentSessionStatus[] = [
   'starting',
   'running',
   'paused',
+  'finalizing',
 ];
 
 export function isActive(status: AgentSessionStatus): boolean {
