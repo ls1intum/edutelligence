@@ -19,9 +19,9 @@ from __future__ import annotations
 import time
 
 import pytest
-from tests.unit.monitoring.test_recorder import _make_recorder, _patch_prom
 
 from logos.monitoring import recorder as recorder_module
+from tests.unit.monitoring.test_recorder import _make_recorder, _patch_prom
 
 
 @pytest.fixture(autouse=True)

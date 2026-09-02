@@ -5,14 +5,14 @@ where the calling API key and the raw payload are both in hand.
 """
 
 import pytest
+
+from logos import PipelineRequest, RequestPipeline
 from tests.unit.pipeline.test_pipeline_skip_classification import (
     _FakeContextResolver,
     _FakeMonitoring,
     _FakeScheduler,
     _RecordingClassifier,
 )
-
-from logos import PipelineRequest, RequestPipeline
 
 DEPLOYMENTS = [{"model_id": 27, "provider_id": 12, "type": "logosnode"}]
 

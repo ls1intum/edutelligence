@@ -19,10 +19,10 @@ from __future__ import annotations
 import random
 from collections import Counter
 
+from logos import EttftEstimate, ReadinessTier
+
 # Reuse the mock infrastructure from the existing scheduler tests
 from tests.unit.pipeline.test_correcting_scheduler import MockLogosNodeFacade, _make_scheduler
-
-from logos import EttftEstimate, ReadinessTier
 
 
 def _warm(score: float, provider_id: int, model_id: int = 1) -> tuple:
