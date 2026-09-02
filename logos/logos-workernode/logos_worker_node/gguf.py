@@ -262,6 +262,19 @@ def is_remote_gguf_file_ref(model: str) -> bool:
     return bool(_REMOTE_GGUF_FILE_RE.fullmatch(model))
 
 
+def is_local_gguf_file_ref(model: str) -> bool:
+    """Whether *model* names a local GGUF file (not a ``repo/file.gguf`` Hub reference).
+
+    Absolute (``/models/model.gguf``) and relative (``./models/model.gguf``,
+    ``../models/model.gguf``, bare ``model.gguf``) paths alike: any ``.gguf``
+    name that is not the strict ``org/name/file.gguf`` Hub form points at the
+    host filesystem, so its presence is an ``isfile`` fact — a download can
+    never satisfy it and no snapshot listing applies.
+    """
+    model = (model or "").strip()
+    return is_gguf_file_ref(model) and not is_remote_gguf_file_ref(model)
+
+
 def is_local_gguf_dir_ref(model: str) -> bool:
     """Whether *model* is a local-directory GGUF reference.
 
@@ -572,22 +585,29 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
       download still counts as missing so the idempotent prefetch completes
       it).
     - ``repo/file.gguf`` — the named file is cached; for a sharded name the
-      whole family in one directory, which the plugin's loader expands the
-      first shard to.
+      whole family in one directory AND of the requested declared total (a
+      2-shard request is not satisfied by the shards of a 3-shard family of
+      the same base name), which the plugin's loader expands the first shard
+      to.
 
-    A local directory reference is a filesystem fact, not a Hub cache: it is
-    True when the directory (the path without any ``:quant`` suffix) exists,
-    False when it does not — the embedded quant's files are validated by the
-    plugin at load time.
+    Local references are filesystem facts, not a Hub cache: a local GGUF
+    FILE is True when the file exists (absolute or relative path), and a
+    local DIRECTORY reference when the directory (the path without any
+    ``:quant`` suffix) exists — the embedded quant's files are validated by
+    the plugin at load time. The file form is checked first: a ``.gguf``
+    file inside a ``…-GGUF`` directory must not be read as a directory
+    reference (``isdir`` on a file is always False).
 
     Returns True when the snapshot proves the reference loadable, False when
     the active snapshot is present but lacks the quant or file (a partial
     cache of a different quant), and None when the local listing is
     unavailable (repo not cached, active revision unresolvable) or the model
-    is not a remote explicit reference — callers treat False and None alike
+    is not an explicit reference — callers treat False and None alike
     (missing), since only a prefetch can then (re)build the cache.
     """
     model = (model or "").strip()
+    if is_local_gguf_file_ref(model):
+        return os.path.isfile(model)
     if is_local_gguf_dir_ref(model):
         directory = local_dir_path_of(model)
         return directory is not None and os.path.isdir(directory)
@@ -628,22 +648,31 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
     if shard is None:
         # Membership check: the named file anywhere in the snapshot.
         return requested in {name.rsplit("/", 1)[-1].lower() for name, _ in listing}
-    key = _SHARD_INDEX_RE.sub("-of-", requested)
-    _, total = _shard_marker_parts(shard.group(0))
+    requested_total = _shard_marker_parts(shard.group(0))[1]
+    requested_family = _SHARD_INDEX_RE.sub("", requested)
     # The loader reads the family from the directory it finds the requested
-    # file in, so every index 1..total must sit in ONE directory — shards
-    # across paths or duplicate indices inflating a basename count do not
-    # make the model loadable.
-    indices_by_dir: dict[str, set[int]] = {}
+    # file in, so every index 1..total must sit in ONE directory of the
+    # requested family — and the DECLARED TOTAL is part of the family's
+    # identity (same rule as the repo:quant branch above): shards of a
+    # different-total family of the same base name (…-of-3 files for a
+    # …-of-2 request) are a different model and must not fill the requested
+    # family's index range, which would report an incomplete cache complete
+    # and suppress the prefetch.
+    indices_by_family: dict[tuple[str, str, int], set[int]] = {}
     for name, _ in listing:
         lowered = name.lower()
         base = lowered.rsplit("/", 1)[-1]
-        if _SHARD_INDEX_RE.sub("-of-", base) != key:
+        marker = _SHARD_INDEX_RE.search(base)
+        if marker is None:
             continue
-        index, _ = _shard_marker_parts(_SHARD_INDEX_RE.search(base).group(0))
+        index, entry_total = _shard_marker_parts(marker.group(0))
+        if entry_total != requested_total or _SHARD_INDEX_RE.sub("", base) != requested_family:
+            continue
         directory = lowered.rsplit("/", 1)[0] if "/" in lowered else ""
-        indices_by_dir.setdefault(directory, set()).add(index)
-    return any(all(index in indices for index in range(1, total + 1)) for indices in indices_by_dir.values())
+        indices_by_family.setdefault((directory, requested_family, entry_total), set()).add(index)
+    return any(
+        all(index in indices for index in range(1, total + 1)) for (_, _, total), indices in indices_by_family.items()
+    )
 
 
 def gguf_capability_target(
@@ -664,9 +693,10 @@ def gguf_capability_target(
       (unresolvable, or holding only auxiliary files):
       :func:`is_gguf_ref_cached` reports that as not cached, so the
       capability stays missing and the prefetch can (re)build it;
-    - a local directory reference → itself: :func:`is_gguf_ref_cached`
-      proves the directory (without the quant suffix) exists on the host,
-      which is the whole proof a local path can offer;
+    - a local reference (GGUF FILE or directory) → itself:
+      :func:`is_gguf_ref_cached` proves the file's or the directory's (the
+      path without any quant suffix) existence on the host, which is the
+      whole proof a local path can offer;
     - ``None`` when the model is not a GGUF concern (plain model, or a
       repository whose authoritative listing holds no GGUF files at all — the
       resolver serves that as a plain model) — the caller applies its regular
@@ -675,7 +705,7 @@ def gguf_capability_target(
     model = (model or "").strip()
     if is_remote_gguf_ref(model) or is_remote_gguf_file_ref(model):
         return model
-    if is_local_gguf_dir_ref(model):
+    if is_local_gguf_file_ref(model) or is_local_gguf_dir_ref(model):
         return model
     if not is_gguf_repo_name(model):
         return None
