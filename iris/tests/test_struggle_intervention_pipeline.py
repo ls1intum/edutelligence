@@ -819,13 +819,17 @@ def test_post_agent_hook_help_request_rejects_a_contract_violating_silent():
     that side, not a licence for this one to emit it.
     """
     pipeline, state = _hook_state(
-        '{"action":"silent","message":null,"confidence":0.4,"rationale":"already said"}',
+        '{"action":"silent","message":null,"confidence":0.4,"rationale":"already said",'
+        '"anchor":{"file":"src/A.java","line":50},"inlineHint":"still returns -1"}',
         "help_request",
     )
     out = pipeline.post_agent_hook(state)
 
     assert out == ""
     state.callback.finish.assert_not_called()
+    # The filled anchor and hint reach nothing: this intent refuses before the status mapping.
+    assert state.callback.status.anchor_file is None
+    assert state.callback.status.inline_hint is None
     args, kwargs = state.callback.fail.call_args
     assert "this intent forbids" in args[0]
     assert kwargs["tokens"] == ["tok"]
@@ -1025,3 +1029,36 @@ def test_a_crashing_run_still_reports_the_usage_it_accrued():
         pipeline(dto, variant, callback)
 
     assert callback.fail.call_args.kwargs["tokens"] == [spent]
+
+
+def test_a_silent_decision_carries_no_gutter_payload():
+    """
+    The anchor and the inline hint reach the student without a chat message: the client draws
+    them in the gutter of the file they are editing. A model that answers `silent` and fills
+    them anyway contradicts itself, and the decision has to win, or `silent` surfaces something.
+    """
+    g = parse_gate_result(
+        '{"action":"silent","confidence":0.4,"rationale":"too early",'
+        '"anchor":{"file":"src/A.java","line":50},"inlineHint":"still returns -1"}'
+    )
+    assert g.action == "silent"
+    assert g.anchor is None
+    assert g.inline_hint is None
+    # The rest of the decision survives; only the student-visible payload is dropped.
+    assert g.confidence == 0.4
+    assert g.rationale == "too early"
+
+
+def test_a_silent_decision_maps_no_gutter_payload_onto_the_status():
+    """post_agent_hook is what copies these onto the status DTO, so the guard has to hold there too."""
+    pipeline, state = _hook_state(
+        '{"action":"silent","confidence":0.4,'
+        '"anchor":{"file":"src/A.java","line":50},"inlineHint":"still returns -1"}',
+        "decide",
+    )
+    pipeline.post_agent_hook(state)
+
+    assert state.callback.status.action == "silent"
+    assert state.callback.status.anchor_file is None
+    assert state.callback.status.anchor_line is None
+    assert state.callback.status.inline_hint is None

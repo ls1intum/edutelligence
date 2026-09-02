@@ -161,24 +161,28 @@ def parse_gate_result(raw: Optional[str]) -> GateResult:
     if not isinstance(rationale, str):
         rationale = None
     anchor = None
-    raw_anchor = obj.get("anchor")
-    raw_line = raw_anchor.get("line") if isinstance(raw_anchor, dict) else None
-    # bool is a subclass of int in Python, so guard against `"line": true` masquerading as a line number.
-    if (
-        isinstance(raw_anchor, dict)
-        and isinstance(raw_anchor.get("file"), str)
-        and isinstance(raw_line, int)
-        and not isinstance(raw_line, bool)
-    ):
-        anchor = {"file": raw_anchor["file"], "line": raw_line}
-    inline_hint = obj.get("inlineHint")
-    if not isinstance(inline_hint, str):
-        inline_hint = None
-    else:
-        # The gutter draws this as plain text, so a backtick reaches the student as a backtick
-        # sitting next to their code. The prompt says so, but this field is rendered unfiltered
-        # and the prompt has already been wrong about it once, so strip rather than trust.
-        inline_hint = _clean_inline_hint(inline_hint)
+    inline_hint = None
+    # Silent means the student sees nothing at all, and the anchor and the inline hint are the
+    # two fields that reach them without a chat message: the client draws them in the gutter of
+    # the file they are editing. A model that answers `silent` and fills them anyway contradicts
+    # itself, so the decision wins and both are dropped here rather than put on the wire.
+    if action != "silent":
+        raw_anchor = obj.get("anchor")
+        raw_line = raw_anchor.get("line") if isinstance(raw_anchor, dict) else None
+        # bool is a subclass of int in Python, so guard against `"line": true` masquerading as a line number.
+        if (
+            isinstance(raw_anchor, dict)
+            and isinstance(raw_anchor.get("file"), str)
+            and isinstance(raw_line, int)
+            and not isinstance(raw_line, bool)
+        ):
+            anchor = {"file": raw_anchor["file"], "line": raw_line}
+        raw_inline_hint = obj.get("inlineHint")
+        if isinstance(raw_inline_hint, str):
+            # The gutter draws this as plain text, so a backtick reaches the student as a backtick
+            # sitting next to their code. The prompt says so, but this field is rendered unfiltered
+            # and the prompt has already been wrong about it once, so strip rather than trust.
+            inline_hint = _clean_inline_hint(raw_inline_hint)
     return GateResult(action, message, confidence, rationale, anchor, inline_hint)
 
 
