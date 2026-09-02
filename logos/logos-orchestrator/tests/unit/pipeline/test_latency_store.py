@@ -131,32 +131,34 @@ class TestPrior:
 class TestTtft:
     def test_returns_none_before_any_observation(self):
         store = make_store()
-        assert store.get_ttft_s("m") is None
+        assert store.get_ttft_s("m", 1) is None
 
     def test_first_observation_seeds_directly(self):
         store = make_store()
-        store.record_ttft("m", 1.5)
-        assert store.get_ttft_s("m") == pytest.approx(1.5)
+        store.record_ttft("m", 1, 1.5)
+        assert store.get_ttft_s("m", 1) == pytest.approx(1.5)
 
     def test_ewma_update(self):
         store = make_store(alpha=0.2)
-        store.record_ttft("m", 2.0)
-        store.record_ttft("m", 1.0)
+        store.record_ttft("m", 1, 2.0)
+        store.record_ttft("m", 1, 1.0)
         expected = 0.2 * 1.0 + 0.8 * 2.0  # 1.8
-        assert store.get_ttft_s("m") == pytest.approx(expected)
+        assert store.get_ttft_s("m", 1) == pytest.approx(expected)
 
     def test_below_min_plausible_ignored(self):
         store = make_store()
-        store.record_ttft("m", 2.0)
-        store.record_ttft("m", _MIN_PLAUSIBLE_S - 0.01)
-        assert store.get_ttft_s("m") == pytest.approx(2.0)
+        store.record_ttft("m", 1, 2.0)
+        store.record_ttft("m", 1, _MIN_PLAUSIBLE_S - 0.01)
+        assert store.get_ttft_s("m", 1) == pytest.approx(2.0)
 
-    def test_keyed_by_model_only(self):
+    def test_keyed_by_model_and_provider(self):
         store = make_store()
-        store.record_ttft("a", 1.0)
-        store.record_ttft("b", 3.0)
-        assert store.get_ttft_s("a") == pytest.approx(1.0)
-        assert store.get_ttft_s("b") == pytest.approx(3.0)
+        store.record_ttft("a", 1, 1.0)
+        store.record_ttft("b", 1, 3.0)
+        store.record_ttft("a", 2, 9.0)
+        assert store.get_ttft_s("a", 1) == pytest.approx(1.0)
+        assert store.get_ttft_s("b", 1) == pytest.approx(3.0)
+        assert store.get_ttft_s("a", 2) == pytest.approx(9.0)
 
 
 # ---------------------------------------------------------------------------
@@ -167,19 +169,26 @@ class TestTtft:
 class TestE2eLatency:
     def test_returns_none_before_any_observation(self):
         store = make_store()
-        assert store.get_e2e_latency_s("m") is None
+        assert store.get_e2e_latency_s("m", 1) is None
 
     def test_first_observation_seeds_directly(self):
         store = make_store()
-        store.record_e2e_latency("m", 5.0)
-        assert store.get_e2e_latency_s("m") == pytest.approx(5.0)
+        store.record_e2e_latency("m", 1, 5.0)
+        assert store.get_e2e_latency_s("m", 1) == pytest.approx(5.0)
 
     def test_ewma_update(self):
         store = make_store(alpha=0.2)
-        store.record_e2e_latency("m", 10.0)
-        store.record_e2e_latency("m", 5.0)
+        store.record_e2e_latency("m", 1, 10.0)
+        store.record_e2e_latency("m", 1, 5.0)
         expected = 0.2 * 5.0 + 0.8 * 10.0  # 9.0
-        assert store.get_e2e_latency_s("m") == pytest.approx(expected)
+        assert store.get_e2e_latency_s("m", 1) == pytest.approx(expected)
+
+    def test_keyed_by_model_and_provider(self):
+        store = make_store()
+        store.record_e2e_latency("m", 1, 5.0)
+        store.record_e2e_latency("m", 2, 12.0)
+        assert store.get_e2e_latency_s("m", 1) == pytest.approx(5.0)
+        assert store.get_e2e_latency_s("m", 2) == pytest.approx(12.0)
 
 
 # ---------------------------------------------------------------------------
@@ -210,16 +219,16 @@ class TestPersistence:
         assert store.get_observation_count("model-a", 1, ReadinessTier.COLD) == 5
 
     def test_loads_ttft_from_db_on_init(self):
-        rows = [("model-a", -1, "ttft", 1.5, 10)]
+        rows = [("model-a", 5, "ttft", 1.5, 10)]
         factory, _ = _make_db_factory(rows)
         store = LatencyStore(db_factory=factory)
-        assert store.get_ttft_s("model-a") == pytest.approx(1.5)
+        assert store.get_ttft_s("model-a", 5) == pytest.approx(1.5)
 
     def test_loads_e2e_from_db_on_init(self):
-        rows = [("model-a", -1, "e2e", 8.0, 3)]
+        rows = [("model-a", 5, "e2e", 8.0, 3)]
         factory, _ = _make_db_factory(rows)
         store = LatencyStore(db_factory=factory)
-        assert store.get_e2e_latency_s("model-a") == pytest.approx(8.0)
+        assert store.get_e2e_latency_s("model-a", 5) == pytest.approx(8.0)
 
     def test_unknown_tier_in_db_is_skipped(self):
         rows = [("model-a", 1, "unknown_tier_xyz", 99.0, 1)]
@@ -239,15 +248,15 @@ class TestPersistence:
         upsert = MagicMock()
         factory, _ = _make_db_factory(upsert_mock=upsert)
         store = LatencyStore(db_factory=factory)
-        store.record_ttft("m", 2.0)
-        upsert.assert_called_once_with("m", -1, "ttft", pytest.approx(2.0), 1)
+        store.record_ttft("m", 3, 2.0)
+        upsert.assert_called_once_with("m", 3, "ttft", pytest.approx(2.0), 1)
 
     def test_record_e2e_calls_upsert(self):
         upsert = MagicMock()
         factory, _ = _make_db_factory(upsert_mock=upsert)
         store = LatencyStore(db_factory=factory)
-        store.record_e2e_latency("m", 5.0)
-        upsert.assert_called_once_with("m", -1, "e2e", pytest.approx(5.0), 1)
+        store.record_e2e_latency("m", 3, 5.0)
+        upsert.assert_called_once_with("m", 3, "e2e", pytest.approx(5.0), 1)
 
     def test_no_db_factory_stays_in_memory(self):
         store = LatencyStore()  # no db_factory

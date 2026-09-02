@@ -418,10 +418,10 @@ class LogosNodeRuntimeRegistry:
             if isinstance(bm, dict):
                 ttft_p50 = _histogram_quantile(bm.get("ttft_histogram"), 0.50)
                 if ttft_p50 > 0.0:
-                    self._latency_store.record_ttft(model_name, ttft_p50)
+                    self._latency_store.record_ttft(model_name, provider_id, ttft_p50)
                 e2e_p50 = _lane_e2e_latency_p50_seconds(bm)
                 if e2e_p50 > 0.0:
-                    self._latency_store.record_e2e_latency(model_name, e2e_p50)
+                    self._latency_store.record_e2e_latency(model_name, provider_id, e2e_p50)
 
     def set_on_runtime_updated(self, callback: Callable[[int], None] | None) -> None:
         """Register the post-status hook. See ``_on_runtime_updated``."""

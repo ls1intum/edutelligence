@@ -14,9 +14,10 @@ because the same model loads at different speeds on different nodes (disk
 bandwidth, tensor-parallel shard count) and takes structurally different
 paths for each ReadinessTier.
 
-TTFT and e2e latency are keyed by model_name only: once the model is warm
-these values are hardware-independent (for homogeneous GPU fleets) and
-pooling observations across providers gives faster convergence.
+TTFT and e2e latency are keyed by (model_name, provider_id): queue-wait
+time is baked into the e2e histogram, and pooling observations across
+providers with different load levels would corrupt the per-provider
+queue estimate used in ETTFT scoring.
 
 Prior computation
 -----------------
@@ -39,9 +40,11 @@ writes back every EWMA update immediately (write-on-every-update, consistent
 with the rest of the codebase).  Without a factory the store is in-memory only
 and resets on restart.
 
-TTFT and e2e observations use ``provider_id = -1`` and ``tier = "ttft"`` /
-``tier = "e2e"`` in the DB so they share the same table and unique constraint
-as overhead rows.
+TTFT and e2e observations use ``tier = "ttft"`` / ``tier = "e2e"`` in the DB
+so they share the same table and unique constraint as overhead rows.
+The real provider_id is stored; the legacy sentinel -1 written by earlier
+versions is treated as an unknown provider and will be superseded by the
+first real observation.
 """
 
 from __future__ import annotations
@@ -65,9 +68,6 @@ DEFAULT_ALPHA: float = 0.2
 _MIN_PLAUSIBLE_S: float = 0.1
 
 _ZERO_TIERS = frozenset({ReadinessTier.WARM, ReadinessTier.BUSY})
-
-# Sentinel provider_id used in the DB for model-only metrics (TTFT / e2e).
-_MODEL_ONLY_PROVIDER_ID = -1
 
 _TIER_TTFT = "ttft"
 _TIER_E2E = "e2e"
@@ -94,10 +94,10 @@ class LatencyStore:
         self._lock = threading.Lock()
         # (model_name, provider_id, ReadinessTier) → EWMAState
         self._overhead: dict[tuple[str, int, ReadinessTier], _EWMAState] = {}
-        # model_name → EWMAState (seconds)
-        self._ttft: dict[str, _EWMAState] = {}
-        # model_name → EWMAState (seconds)
-        self._e2e_latency: dict[str, _EWMAState] = {}
+        # (model_name, provider_id) → EWMAState (seconds)
+        self._ttft: dict[tuple[str, int], _EWMAState] = {}
+        # (model_name, provider_id) → EWMAState (seconds)
+        self._e2e_latency: dict[tuple[str, int], _EWMAState] = {}
 
         if self._db_factory is not None:
             self._load_from_db()
@@ -129,33 +129,35 @@ class LatencyStore:
             state = self._overhead[key]
         self._persist_overhead(model_name, int(provider_id), tier, state)
 
-    def record_ttft(self, model_name: str, ttft_s: float) -> None:
-        """Record an observed TTFT sample for a model."""
+    def record_ttft(self, model_name: str, provider_id: int, ttft_s: float) -> None:
+        """Record an observed TTFT sample for a (model, provider)."""
         if ttft_s < _MIN_PLAUSIBLE_S:
             return
+        key = (model_name, int(provider_id))
         with self._lock:
-            state = self._ttft.get(model_name)
+            state = self._ttft.get(key)
             if state is None:
-                self._ttft[model_name] = _EWMAState(value=ttft_s)
+                self._ttft[key] = _EWMAState(value=ttft_s)
             else:
                 state.value = self._alpha * ttft_s + (1.0 - self._alpha) * state.value
                 state.n += 1
-            state = self._ttft[model_name]
-        self._persist_model_metric(model_name, _TIER_TTFT, state)
+            state = self._ttft[key]
+        self._persist_model_metric(model_name, int(provider_id), _TIER_TTFT, state)
 
-    def record_e2e_latency(self, model_name: str, e2e_s: float) -> None:
-        """Record an observed end-to-end request latency for a model."""
+    def record_e2e_latency(self, model_name: str, provider_id: int, e2e_s: float) -> None:
+        """Record an observed end-to-end request latency for a (model, provider)."""
         if e2e_s < _MIN_PLAUSIBLE_S:
             return
+        key = (model_name, int(provider_id))
         with self._lock:
-            state = self._e2e_latency.get(model_name)
+            state = self._e2e_latency.get(key)
             if state is None:
-                self._e2e_latency[model_name] = _EWMAState(value=e2e_s)
+                self._e2e_latency[key] = _EWMAState(value=e2e_s)
             else:
                 state.value = self._alpha * e2e_s + (1.0 - self._alpha) * state.value
                 state.n += 1
-            state = self._e2e_latency[model_name]
-        self._persist_model_metric(model_name, _TIER_E2E, state)
+            state = self._e2e_latency[key]
+        self._persist_model_metric(model_name, int(provider_id), _TIER_E2E, state)
 
     # ------------------------------------------------------------------
     # Reading
@@ -190,16 +192,16 @@ class LatencyStore:
 
         return self._compute_prior(tier, model_vram_mb=model_vram_mb, tp_size=tp_size)
 
-    def get_ttft_s(self, model_name: str) -> Optional[float]:
-        """Return the learned TTFT for a model, or None when unknown."""
+    def get_ttft_s(self, model_name: str, provider_id: int) -> Optional[float]:
+        """Return the learned TTFT for a (model, provider), or None when unknown."""
         with self._lock:
-            state = self._ttft.get(model_name)
+            state = self._ttft.get((model_name, int(provider_id)))
         return state.value if state is not None else None
 
-    def get_e2e_latency_s(self, model_name: str) -> Optional[float]:
-        """Return the learned e2e latency for a model, or None when unknown."""
+    def get_e2e_latency_s(self, model_name: str, provider_id: int) -> Optional[float]:
+        """Return the learned e2e latency for a (model, provider), or None when unknown."""
         with self._lock:
-            state = self._e2e_latency.get(model_name)
+            state = self._e2e_latency.get((model_name, int(provider_id)))
         return state.value if state is not None else None
 
     def get_observation_count(
@@ -234,9 +236,9 @@ class LatencyStore:
             for model_name, provider_id, tier_str, ewma_value, n in rows:
                 state = _EWMAState(value=ewma_value, n=n)
                 if tier_str == _TIER_TTFT:
-                    self._ttft[model_name] = state
+                    self._ttft[(model_name, provider_id)] = state
                 elif tier_str == _TIER_E2E:
-                    self._e2e_latency[model_name] = state
+                    self._e2e_latency[(model_name, provider_id)] = state
                 else:
                     try:
                         tier = ReadinessTier(tier_str)
@@ -267,12 +269,12 @@ class LatencyStore:
                 tier,
             )
 
-    def _persist_model_metric(self, model_name: str, tier_str: str, state: _EWMAState) -> None:
+    def _persist_model_metric(self, model_name: str, provider_id: int, tier_str: str, state: _EWMAState) -> None:
         if self._db_factory is None:
             return
         try:
             with self._db_factory() as db:
-                db.upsert_latency_observation(model_name, _MODEL_ONLY_PROVIDER_ID, tier_str, state.value, state.n)
+                db.upsert_latency_observation(model_name, provider_id, tier_str, state.value, state.n)
         except Exception:
             logger.exception("LatencyStore: failed to persist %s for %s", tier_str, model_name)
 

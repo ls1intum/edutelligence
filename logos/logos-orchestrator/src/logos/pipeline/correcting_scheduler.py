@@ -540,7 +540,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 # Replace the live e2e p50 with the learned value when the
                 # store has sufficient history (learned value is more stable
                 # across the session than a single-lane histogram p50).
-                learned_e2e = self._latency_store.get_e2e_latency_s(model_name_for_store)
+                learned_e2e = self._latency_store.get_e2e_latency_s(model_name_for_store, provider_id)
                 if learned_e2e is not None:
                     observed_e2e_p50_s = learned_e2e
 
