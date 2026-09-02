@@ -427,6 +427,14 @@ class VllmProcessHandle:
         self._prev_tpot_sum: float = 0.0
         self._prev_tpot_count: float = 0.0
         self._prev_prompt_tokens_total: float = 0.0
+
+        # Set by _add_lane_unlocked from the HF_HOME actually chosen at spawn
+        # time: True only when the process was launched from the tmpfs RAM
+        # cache (as opposed to the source HF_HOME). The RAM-cache re-plan reads
+        # this to protect a model's cache entry only for lanes that actually
+        # read it — a source-backed or restarted lane must not pin an unused
+        # copy under host-memory pressure.
+        self.launched_from_ram_cache: bool = False
         # Set by _maybe_prepare_sharded_checkpoint when a pre-sharded checkpoint
         # is used for a TP>1 lane; _build_cmd then serves this directory with
         # --load-format sharded_state instead of the full checkpoint.

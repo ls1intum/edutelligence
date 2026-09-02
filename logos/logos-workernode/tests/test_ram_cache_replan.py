@@ -9,7 +9,9 @@ follow. These tests cover the pieces the loop is built from:
   * ``_apply_ram_cache_plan`` — floor refresh + reclaim, with the protection
     of models a live lane still reads (including the corner where that
     protection blocks every eviction).
-  * ``_lane_models_with_live_processes`` — what "live lane" means here.
+  * ``_lane_models_with_live_processes`` — which live lanes protect a tmpfs
+    entry: only ones launched from the RAM cache (source-backed and restarted
+    lanes do not read the copy), plus the startup-transition reservations.
   * ``_host_ram_safety_margin_mb`` — the host-size-scaled safety margin.
   * ``_replan_ram_cache_once`` — end to end against fake app state: skipping
     a bad /proc/meminfo read, not double-reserving an already-asleep model,
@@ -131,6 +133,7 @@ class _FakeHandle:
         *,
         vllm: bool = True,
         sleep_capable: bool = True,
+        ram_cache: bool = True,
     ) -> None:
         self.lane_id = lane_id
         # A real LaneConfig always carries vllm + vllm_config once validated;
@@ -141,6 +144,11 @@ class _FakeHandle:
             vllm=vllm,
             vllm_config=SimpleNamespace(enable_sleep_mode=sleep_capable) if vllm else None,
         )
+        # Whether the lane was launched from the tmpfs RAM-cache HF_HOME — the
+        # re-plan protects its cache entry only for such lanes. Defaults to
+        # True: the pre-existing protection tests model a live lane that reads
+        # its weights from the cache.
+        self.launched_from_ram_cache = ram_cache
         self._state = state
 
     def status(self):
@@ -343,6 +351,27 @@ def test_live_processes_include_models_in_lane_startup() -> None:
 
     lanes._starting.discard("org/b")  # noqa: SLF001
     assert worker_main._lane_models_with_live_processes(lanes) == {"org/a"}
+
+
+def test_live_process_protection_follows_the_actual_hf_home_choice() -> None:
+    """A model mid-startup is protected conservatively — its HF_HOME (possibly
+    the tmpfs one) is chosen but the handle is not registered yet. Once the
+    handle is registered, protection must reflect the HF_HOME it ACTUALLY
+    launched from: a RAM-cache-backed lane protects its entry, a source-backed
+    one does not (its copy is unused and must be evictable)."""
+    # Startup transition: reserved, no registered handle yet — protected.
+    starting_only = _FakeLaneManager({}, starting={"org/b"})
+    assert worker_main._lane_models_with_live_processes(starting_only) == {"org/b"}
+
+    # Selection complete, handle registered from the tmpfs RAM cache — still
+    # protected, now on the strength of the handle's own flag.
+    ram_cache_backed = _FakeLaneManager({"b": _FakeHandle("b", "org/b", ProcessState.RUNNING, ram_cache=True)})
+    assert worker_main._lane_models_with_live_processes(ram_cache_backed) == {"org/b"}
+
+    # Selection complete, handle registered from the source HF_HOME — it does
+    # not read the tmpfs copy, so the entry is no longer protected.
+    source_backed = _FakeLaneManager({"b": _FakeHandle("b", "org/b", ProcessState.RUNNING, ram_cache=False)})
+    assert worker_main._lane_models_with_live_processes(source_backed) == set()
 
 
 def test_replan_reaches_plan_when_lane_ids_is_property(monkeypatch) -> None:
@@ -915,6 +944,66 @@ def test_replan_never_evicts_a_model_a_live_lane_reads(monkeypatch) -> None:
     # The big model's lane is awake and serving — its weights directory must
     # survive even though the plan skipped the model.
     lanes = _FakeLaneManager({"big": _FakeHandle("big", "org/big", ProcessState.RUNNING)})
+    app = _app(cache, registry, lanes, ["org/small", "org/big"])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    assert cache.reclaimed[-1] == []
+    assert cache.is_cached("org/big") is True
+
+
+def test_replan_evicts_the_unused_copy_of_a_source_backed_lane(monkeypatch) -> None:
+    """Regression [high]: a live lane launched from the SOURCE HF_HOME does not
+    read the model's tmpfs copy, so a tight re-plan must be free to evict that
+    (unused) entry. Protecting it on the strength of the live model name alone
+    would pin potentially tens of GB in tmpfs under host-memory pressure — the
+    exact window the dynamic re-plan exists to close.
+
+    Mirror of test_replan_never_evicts_a_model_a_live_lane_reads, but the big
+    lane is source-backed (ram_cache=False): same tight host, the plan still
+    skips big, yet big is now evictable because nothing reads its copy.
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
+
+    registry = _FakeRegistry(
+        {
+            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            "org/big": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
+        }
+    )
+    sizes = {"org/small": _mb(8_000), "org/big": _mb(48_000)}
+    cache = _FakeCache(cached=["org/small", "org/big"], sizes=sizes)
+    # The big lane is live but launched from the source HF_HOME (caching was
+    # unavailable), so it does not read the tmpfs copy.
+    lanes = _FakeLaneManager({"big": _FakeHandle("big", "org/big", ProcessState.RUNNING, ram_cache=False)})
+    app = _app(cache, registry, lanes, ["org/small", "org/big"])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # big's unused tmpfs copy is evicted — the source-backed lane does not pin it.
+    assert cache.reclaimed[-1] == ["org/big"]
+    assert cache.is_cached("org/big") is False
+    # small is still covered by the plan and untouched.
+    assert cache.is_cached("org/small") is True
+
+
+def test_replan_still_protects_the_copy_of_a_ram_cache_backed_lane(monkeypatch) -> None:
+    """The inverse of the source-backed case: a live lane that actually launched
+    from the tmpfs RAM cache reads the model's copy, so a tight re-plan must
+    still spare it — the fix must not evict a copy a live lane is reading."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
+
+    registry = _FakeRegistry(
+        {
+            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            "org/big": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
+        }
+    )
+    sizes = {"org/small": _mb(8_000), "org/big": _mb(48_000)}
+    cache = _FakeCache(cached=["org/small", "org/big"], sizes=sizes)
+    # The big lane is live AND launched from the tmpfs RAM cache, so it reads
+    # the copy — the re-plan must not evict it.
+    lanes = _FakeLaneManager({"big": _FakeHandle("big", "org/big", ProcessState.RUNNING, ram_cache=True)})
     app = _app(cache, registry, lanes, ["org/small", "org/big"])
 
     asyncio.run(worker_main._replan_ram_cache_once(app))
