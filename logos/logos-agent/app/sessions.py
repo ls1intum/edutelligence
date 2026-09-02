@@ -516,8 +516,15 @@ class SessionManager:
                 network=settings.session_egress_network,
                 labels={"logos.agent.helper": phase},
             )
-            await docker_engine.start_container(container_id)
+            # Registered before the start, not after it: the container holds
+            # the credential the moment it exists, and a cancel that lands
+            # inside the create-to-start window must find the id here and
+            # stop the container — not report a clean cancellation for a
+            # helper that is still starting. The assignment is synchronous,
+            # so no other coroutine can run between the create that returns
+            # the id and the registration that tracks it.
             self._helpers[session_id] = container_id
+            await docker_engine.start_container(container_id)
             code = await docker_engine.wait_container(container_id, timeout_s=settings.helper_timeout_s)
             if code is None:
                 logger.warning("helper %s for session %s timed out; stopping it", phase, session_id)

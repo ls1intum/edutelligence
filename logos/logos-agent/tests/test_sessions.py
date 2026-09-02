@@ -926,6 +926,111 @@ class TestAgentPhaseIsolation:
         # The helper ran as a finalizer, not something else.
         assert created and created[-1]["labels"] == {"logos.agent.helper": "finalize"}
 
+    async def test_a_cancel_inside_the_prepare_helper_start_window_stops_the_helper(self, monkeypatch, tmp_path):
+        # The prepare helper is the exposed path: while it runs, the row is
+        # still 'starting' with no persisted container id, and no
+        # supervisor exists yet. The helper container holds the push token
+        # from the moment it is created, so a cancel that lands inside its
+        # create-to-start window must find it in the helper map and stop
+        # it — the registration happens before the start returns, not
+        # after, and the launch that loses the race records nothing.
+        from app import sessions
+        from app.schemas import can_transition
+
+        self._patch_base(monkeypatch, tmp_path)
+        # A fresh manager: the module singleton's locks bind to whichever
+        # loop first contended on them.
+        manager = sessions.SessionManager()
+
+        states = {7: "starting"}
+        row = {**self.ROW, "status": "starting", "container_id": None}
+        events: list = []
+        stopped: list = []
+        removed: list = []
+        created: list = []
+        start_entered = asyncio.Event()
+        start_block = asyncio.Event()
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-prepare"
+
+        async def fake_start(cid):
+            if cid == "cid-prepare":
+                # A slow start: the window in which the container exists
+                # and is starting but the cancel is still allowed to land.
+                start_entered.set()
+                await start_block.wait()
+
+        async def fake_wait(cid, **_kwargs):
+            # The cancel stopped the helper: it exits non-zero.
+            if cid == "cid-prepare":
+                return 137
+            return 0
+
+        async def fake_stop(cid, **_kwargs):
+            stopped.append(cid)
+
+        async def fake_remove(cid, **_kwargs):
+            removed.append(cid)
+
+        async def fake_get_session(_sid):
+            return {**row, "status": states[7]}
+
+        async def fake_transition(sid, target, **_fields):
+            # A validated transition, like the database: only legal edges,
+            # and the row really moves.
+            if not can_transition(SessionStatus(states[sid]), target):
+                return False
+            states[sid] = target.value
+            return True
+
+        async def fake_event(_sid, kind, payload):
+            events.append((kind, payload))
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "get_session", fake_get_session)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+
+        launch = asyncio.create_task(manager._launch(self.SESSION))
+        try:
+            # The prepare helper's start is in flight: the container exists
+            # and is starting, the row is still 'starting' with no stored
+            # container id, and there is no supervisor.
+            await start_entered.wait()
+
+            # The fix itself: the helper is already tracked before its
+            # start returns, so the cancel that lands here has an id to
+            # stop.
+            assert manager._helpers.get(7) == "cid-prepare"
+
+            assert await manager.cancel(7) is True
+            # Success means the credential-bearing helper was stopped first.
+            assert "cid-prepare" in stopped
+        finally:
+            start_block.set()
+            with contextlib.suppress(Exception):
+                await launch
+
+        # The launch that lost the race to the cancel records nothing: no
+        # running status, no supervision of a cancelled session, and the
+        # helper that ran removed its own container.
+        assert states[7] == "cancelled"
+        assert [p["status"] for k, p in events if k == EventKind.STATUS] == ["cancelled"]
+        assert "cid-prepare" in removed
+        assert 7 not in manager._supervisors
+        assert created and created[0]["labels"] == {"logos.agent.helper": "prepare"}
+
 
 class TestOverlappingAdmission:
     """Admission under overlapping scheduler passes.
