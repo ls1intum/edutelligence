@@ -109,7 +109,7 @@ session's behaviour drift between builds.
 ## What a session may and may not do
 
 **May:** read and change the working copy, run tests and linters, push a branch
-under `agent/`, open a draft pull request, and — if enabled — have its result
+under `logos/agent/`, open a draft pull request, and — if enabled — have its result
 deployed to dev and screenshotted.
 
 **May not:** reach the Docker daemon, run as root, push to `main` or any
@@ -119,7 +119,8 @@ only for `logos_deploy-dev.yml`; any other workflow is refused in code.
 
 Branch names are derived from the session id, not chosen by the agent, so two
 sessions cannot collide and no workspace name can steer a push at a protected
-branch.
+branch. The exception is a pull request handed to it, which keeps its own
+branch — checked against the protected list all the same.
 
 ## Configuration
 
@@ -132,7 +133,7 @@ has a default that is right for this deployment.
 | `LOGOS_AGENT_GITHUB_TOKEN` | — | The agent account's token. **Required.** |
 | `LOGOS_AGENT_GITHUB_LOGIN` | `LogosOSSAgent` | The account every token must belong to |
 | `LOGOS_AGENT_DEFAULT_MODEL` | — | Model when a session does not name one. Optional: with exactly one local model reachable, that one is the default |
-| `LOGOS_AGENT_TRIGGERS_ENABLED` | `false` | React to labelled issues and reviews |
+| `LOGOS_AGENT_TRIGGERS_ENABLED` | `true` | Kill switch for reacting to the repository |
 | `LOGOS_AGENT_MAX_PARALLEL_SESSIONS` | `10` | Hard ceiling on concurrent sessions |
 | `LOGOS_AGENT_START_BELOW_LOAD` | `0.60` | Start only below this load |
 | `LOGOS_AGENT_PAUSE_ABOVE_LOAD` | `0.85` | Pause at or above this load |
@@ -205,38 +206,54 @@ are data, and a key can be granted a cloud provider at any time. A model that
 is served both locally and in the cloud counts as cloud — the scheduler may
 route to either.
 
-## Reacting to the repository
+## Working with it like a colleague
 
-With `LOGOS_AGENT_TRIGGERS_ENABLED`, the runner queues sessions of its own:
+The agent has a GitHub account (`LogosOSSAgent`), and the point is that you
+use it the way you use a person's:
 
-| What happens on GitHub | What the runner does |
+| What you do | What it does |
 |---|---|
-| an issue labelled `logos-agent` is opened or updated | queues a session to work on it and open a draft pull request |
-| a review asks a labelled pull request for changes | queues a session that updates that pull request's own branch |
+| assign it an issue | works on it and opens a draft pull request |
+| assign it a pull request | takes it over, on that pull request's own branch |
+| ask one of its pull requests for changes | addresses the review on that branch |
+| comment on a pull request it is responsible for | reads the thread and answers |
+| mention it anywhere by name | answers there; changes code only if that is what was asked |
 
-**Opt-in by label**, because the repository is shared with people who did not
-ask for an agent to answer their issue. **Polling, not webhooks** — every two
-minutes — because a webhook needs an endpoint GitHub can reach, and this
-service is deliberately reachable only from the stack's own network. **Idempotent
-by reference:** each session records what it reacted to (`issue-812`,
-`pr-772-review-5085681761`), and a poll that sees the same event again queues
-nothing. A pass that cannot take on everything it saw leaves its window where
-it was, so deferred work is picked up rather than lost.
+No labels and no separate vocabulary — the ordinary gestures. **Consent is
+per item:** nothing is picked up because it exists, only because somebody
+assigned it, reviewed its work, or asked it something by name. That is why
+this needs no service-wide opt-in to be safe; `LOGOS_AGENT_TRIGGERS_ENABLED`
+exists as a kill switch, not as a second consent.
 
-A review session works **on the pull request it answers**: the workspace is
-prepared from that branch, the session pushes to it, and no second pull
-request is opened. That only applies to pull requests the runner itself
-opened — a head in this repository, under the `agent/` prefix. A fork's branch
-is not ours to push, and a human's branch is exactly what the branch rules
-exist to keep agent pushes away from; a review on either is a person's to
-answer, and the runner says so in its log rather than quietly doing something
-else. The task carries the review's inline comments as well as its body, since
-most changes-requested reviews put everything in the former.
+**It says it heard you.** The moment a session is queued it reacts with 👀 on
+what triggered it, so a question does not sit there looking ignored while the
+platform waits for idle GPUs.
 
-The automation is bounded: at most half the parallel ceiling may be its own
-sessions, so an operator queueing work by hand always finds room. Workspaces
-are created on demand up to that ceiling, since a session the runner queued
-has nobody to prepare a working copy for it.
+**It can answer.** The agent phase holds no GitHub credential, so it writes
+its answer into its artefact directory and the runner posts it when the
+session settles — in the thread the question was asked in, inline if it was
+an inline question. The reply is produced by the untrusted phase; the posting
+is done by the trusted one.
+
+**Branches.** Work it starts itself goes on `logos/agent/…`. A pull request
+handed to it keeps its own branch name, because renaming it would abandon the
+pull request it belongs to. It never pushes to a fork (not ours to push) or
+to a protected branch.
+
+**Remembered forever.** Every reaction is recorded on the session as the
+thing it reacted to — `issue-812`, `pr-772-assigned`,
+`pr-772-review-5085681761`, `thread-772-3910035243`. A reference that already
+has a session is never queued again, so an issue that stays assigned does not
+produce a second pull request next week, and an answered question is not
+answered twice. Only the *newest* changes-requested review of a pull request
+counts as work; the older ones were answered by it. A session that failed is
+re-queued by a person, who can see why it failed.
+
+**Bounded.** At most half the parallel ceiling may be self-queued sessions,
+so an operator queueing work by hand always finds room. Bots are ignored:
+their findings reach the agent through the next review, not as a session per
+note. Workspaces are created on demand up to the ceiling, since a session the
+runner queued has nobody to prepare a working copy for it.
 
 ## Running it
 

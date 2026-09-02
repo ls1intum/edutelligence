@@ -48,8 +48,9 @@
     @if (trig.enabled) {
       <p class="page-subtitle">
         <i class="pi pi-bolt" aria-hidden="true"></i>
-        Reacting to the repository: issues and reviews labelled
-        <code>{{ trig.label }}</code> queue a session on their own ({{ trig.active_sessions }}/{{
+        Working as <code>{{ trig.account }}</code
+        >: assign it an issue or a pull request, review its work, or mention it in a comment, and it
+        queues a session on its own ({{ trig.active_sessions }}/{{
           trig.max_active_sessions
         }}
         active, {{ trig.queued_total }} queued since start).

@@ -185,23 +185,32 @@ class Settings:
     allowed_environment: str = os.getenv("LOGOS_AGENT_ALLOWED_ENVIRONMENT", "logos-dev")
     dev_base_url: str = os.getenv("LOGOS_AGENT_DEV_BASE_URL", "https://logos-dev.aet.cit.tum.de")
 
-    # Branch names a session may push. Anything outside this prefix is refused
-    # by the service before the container is even started.
-    branch_prefix: str = os.getenv("LOGOS_AGENT_BRANCH_PREFIX", "agent/")
+    # The prefix of branches this runner *creates*. Everything in this
+    # repository lives under `logos/`, and agent work is a subtree of that,
+    # so a glance at a branch name says both what it belongs to and who made
+    # it. A branch the runner did not create — a pull request handed to it by
+    # a person — keeps its own name: renaming it would abandon the pull
+    # request it belongs to.
+    branch_prefix: str = os.getenv("LOGOS_AGENT_BRANCH_PREFIX", "logos/agent/")
     protected_branches: tuple[str, ...] = field(
         default_factory=lambda: _csv("LOGOS_AGENT_PROTECTED_BRANCHES", ("main", "develop"))
     )
 
     # --- reacting to the repository --------------------------------------
     # Whether the runner queues sessions of its own when something happens on
-    # GitHub. This is the only knob the feature has: everything else about it
-    # — how often the repository is polled, how far back a restarted runner
-    # looks, how many self-queued sessions may be active at once — is a
-    # constant in `triggers.py`, derived where it depends on anything. An
-    # operator turns this on deliberately, because it is the difference
-    # between a tool that runs what it is told and one that decides for
-    # itself what to work on.
-    triggers_enabled: bool = _bool("LOGOS_AGENT_TRIGGERS_ENABLED", False)
+    # GitHub. On by default: starting this service at all is already the
+    # deliberate decision (it lives behind a compose profile), and the real
+    # consent is per item — an issue or pull request only becomes agent work
+    # by carrying the label or being assigned to the agent account. A second,
+    # invisible switch on top of those would only be a way to have the
+    # feature deployed and quietly not working. It remains configurable as a
+    # kill switch: turning it off stops the automation without taking the
+    # runner and its UI down with it.
+    #
+    # Everything else about the feature — poll interval, how far back a
+    # restarted runner looks, how many self-queued sessions may be active —
+    # is a constant in `triggers.py`, derived where it depends on anything.
+    triggers_enabled: bool = _bool("LOGOS_AGENT_TRIGGERS_ENABLED", True)
 
     # --- storage ----------------------------------------------------------
     # Where session artefacts (logs, screenshots) are kept, on a volume shared

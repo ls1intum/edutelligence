@@ -9,7 +9,6 @@ the wrong image tag.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
 
 import pytest
 from app import github
@@ -486,35 +485,46 @@ class TestListingPagination:
         monkeypatch.setattr(github, "settings", replace(github.settings, github_token="tok"))
         return requested
 
-    async def test_reviews_are_read_past_the_first_page(self, monkeypatch):
-        old = [{"id": i, "state": "COMMENTED", "submitted_at": "2020-01-01T00:00:00Z"} for i in range(100)]
-        newest = {"id": 999, "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-02T10:00:00Z"}
+    async def test_the_newest_review_is_found_past_the_first_page(self, monkeypatch):
+        # The endpoint answers oldest-first and ignores a direction
+        # parameter, so on a long-running pull request the review that
+        # matters is on the last page, not the first.
+        old = [
+            {"id": i, "state": "CHANGES_REQUESTED", "submitted_at": "2020-01-01T00:00:00Z", "user": {"login": "a"}}
+            for i in range(100)
+        ]
+        newest = {
+            "id": 999,
+            "state": "CHANGES_REQUESTED",
+            "submitted_at": "2026-09-02T10:00:00Z",
+            "user": {"login": "a"},
+        }
         requested = self._paged_client(monkeypatch, [old, [newest]])
 
-        fresh = await github.reviews_since(772, datetime(2026, 9, 1, tzinfo=timezone.utc))
+        review = await github.latest_changes_requested_review(772)
 
-        assert [r["id"] for r in fresh] == [999]
+        assert review["id"] == 999
         assert [p["page"] for p in requested] == [1, 2]
         assert all(p["per_page"] == 100 for p in requested)
 
-    async def test_a_short_thread_costs_one_request(self, monkeypatch):
+    async def test_an_approval_is_not_a_request_for_changes(self, monkeypatch):
         requested = self._paged_client(
             monkeypatch, [[{"id": 1, "state": "APPROVED", "submitted_at": "2026-09-02T10:00:00Z"}]]
         )
 
-        await github.reviews_since(772, datetime(2026, 9, 1, tzinfo=timezone.utc))
-
+        assert await github.latest_changes_requested_review(772) is None
         assert len(requested) == 1
 
-    async def test_labelled_issues_are_paginated_too(self, monkeypatch):
+    async def test_assigned_listings_are_paginated_too(self, monkeypatch):
         first = [{"number": i, "title": "t"} for i in range(100)]
         second = [{"number": 500, "title": "the newest"}]
         requested = self._paged_client(monkeypatch, [first, second])
 
-        issues = await github.labelled_issues("logos-agent", since=datetime(2026, 9, 1, tzinfo=timezone.utc))
+        issues = await github.assigned_issues("LogosOSSAgent")
 
         assert len(issues) == 101
         assert [p["page"] for p in requested] == [1, 2]
+        assert requested[0]["assignee"] == "LogosOSSAgent"
 
     async def test_pagination_stops_at_the_page_ceiling(self, monkeypatch):
         # A pathological thread must not turn one poll into hundreds of
@@ -522,6 +532,70 @@ class TestListingPagination:
         full_page = [{"id": i, "state": "COMMENTED", "submitted_at": "2020-01-01T00:00:00Z"} for i in range(100)]
         requested = self._paged_client(monkeypatch, [full_page] * (github._MAX_PAGES + 5))
 
-        await github.reviews_since(772, datetime(2026, 9, 1, tzinfo=timezone.utc))
+        await github.latest_changes_requested_review(772)
 
         assert len(requested) == github._MAX_PAGES
+
+
+class TestReactionsAndReplies:
+    """Saying "seen" and saying the answer.
+
+    Both are the runner's job: the agent phase holds no GitHub credential,
+    so the acknowledgement and the reply are posted by the process that
+    does.
+    """
+
+    @staticmethod
+    def _capture(monkeypatch, status=201, payload=None):
+        sent: list = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                sent.append({"url": url, "json": json})
+                return FakeResponse(status, payload or {"html_url": "https://github.com/x/y#c1"})
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(github, "settings", replace(github.settings, github_token="tok"))
+        return sent
+
+    async def test_an_issue_is_acknowledged_with_eyes(self, monkeypatch):
+        sent = self._capture(monkeypatch)
+
+        assert await github.react("/repos/ls1intum/edutelligence/issues/812") is True
+
+        assert sent[0]["url"].endswith("/issues/812/reactions")
+        assert sent[0]["json"] == {"content": "eyes"}
+
+    async def test_an_existing_reaction_counts_as_acknowledged(self, monkeypatch):
+        # GitHub answers 200 when the reaction is already there; the point
+        # is the state, not who created it.
+        self._capture(monkeypatch, status=200)
+        assert await github.react("/repos/ls1intum/edutelligence/issues/812") is True
+
+    async def test_an_answer_goes_to_the_thread_it_was_asked_in(self, monkeypatch):
+        sent = self._capture(monkeypatch)
+
+        url = await github.post_issue_comment(772, "the answer")
+
+        assert sent[0]["url"].endswith("/issues/772/comments")
+        assert sent[0]["json"] == {"body": "the answer"}
+        assert url.startswith("https://github.com/")
+
+    async def test_an_inline_question_is_answered_inline(self, monkeypatch):
+        # A line-specific question answered as a top-level comment would be
+        # an answer nobody finds.
+        sent = self._capture(monkeypatch)
+
+        await github.reply_to_review_comment(772, 3910035243, "the answer")
+
+        assert sent[0]["url"].endswith("/pulls/772/comments/3910035243/replies")
+        assert sent[0]["json"] == {"body": "the answer"}

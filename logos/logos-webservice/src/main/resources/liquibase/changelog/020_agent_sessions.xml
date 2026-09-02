@@ -175,4 +175,24 @@
         </rollback>
     </changeSet>
 
+    <!-- Where a session's answer is posted when it finishes. The agent
+         phase holds no GitHub credential, so it writes its reply into its
+         artefact directory and the runner posts it — this column is what
+         tells the runner where: 'issue:772' for a thread, or
+         'review_comment:772:3910035243' to answer inside an inline review
+         thread. Null for sessions nobody asked a question. -->
+    <changeSet id="020-agent-session-reply-target" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="reply_target"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_sessions ADD COLUMN reply_target TEXT;
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+                ALTER TABLE agent_sessions DROP COLUMN IF EXISTS reply_target;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>
