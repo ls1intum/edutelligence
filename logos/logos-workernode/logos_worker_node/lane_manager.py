@@ -2249,6 +2249,7 @@ class LaneManager:
         try:
             # Ensure model is in RAM cache if available
             hf_home_override: str | None = None
+            launched_from_ram_cache = False
             if self._model_cache is not None and getattr(self._model_cache, "enabled", False) and lane_config.vllm:
                 # Startup pre-population runs in the background — if the model
                 # is already being copied (or queued behind others), bump it to
@@ -2263,6 +2264,10 @@ class LaneManager:
                     is_tmpfs = hasattr(self._model_cache, "_cache_hub") and effective == str(
                         self._model_cache._cache_hub.parent
                     )
+                    # Remember which HF_HOME this lane actually launches with so
+                    # the RAM-cache re-plan can protect the tmpfs entry only for
+                    # lanes that read it (not for source-backed ones).
+                    launched_from_ram_cache = is_tmpfs
                     logger.info(
                         "Lane '%s' model=%s: HF_HOME=%s (%s)",
                         lane_id,
@@ -2300,6 +2305,7 @@ class LaneManager:
             )
             if hf_home_override and hasattr(handle, "hf_home_override"):
                 handle.hf_home_override = hf_home_override
+                handle.launched_from_ram_cache = launched_from_ram_cache
             try:
                 await handle.init()
                 status = await handle.spawn(lane_config)

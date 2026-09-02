@@ -550,17 +550,28 @@ async def _apply_ram_cache_plan(
 
 
 def _lane_models_with_live_processes(lane_manager: LaneManager) -> set[str]:
-    """Models whose lane process is (or is becoming) live.
+    """Models whose live lane process actually reads the RAM-cache copy.
 
     These are exactly the models the cache must not evict — see
     ``_apply_ram_cache_plan``. ``status()`` only checks the child process's
     return code, so this costs nothing the heartbeat does not already pay.
 
+    Only a lane that was launched from the tmpfs RAM-cache HF_HOME reads that
+    model's cache entry, so only it protects it (``launched_from_ram_cache``,
+    set from the HF_HOME really chosen at spawn). A lane ``ensure_cached``
+    launched from the source HF_HOME (caching unavailable) and a restarted
+    lane (which receives no tmpfs override) read the source filesystem —
+    pinning the entry on their strength of the live model name alone would
+    keep potentially tens of GB in tmpfs that nothing reads under host-
+    memory pressure, the very window the dynamic re-plan is meant to close.
+
     Also unions the startup-transition reservations: a model whose lane is
     being spawned has no registered handle yet (the handle lands in
-    ``_handles`` only once the spawn succeeds) but its spawn is already
-    reading its — possibly tmpfs — model directory, so evicting it mid-
-    startup would rmtree the tree out from under the process.
+    ``_handles`` only once the spawn succeeds) but its HF_HOME — possibly the
+    tmpfs one — is already chosen and its spawn is reading that directory, so
+    evicting it mid-startup would rmtree the tree out from under the process.
+    That conservative protection ends once the handle is registered, where the
+    per-handle flag above takes over.
     """
     protected: set[str] = set()
     for lane_id in lane_manager.lane_ids:
@@ -568,7 +579,11 @@ def _lane_models_with_live_processes(lane_manager: LaneManager) -> set[str]:
         if handle is None or handle.lane_config is None:
             continue
         if handle.status().state in {ProcessState.RUNNING, ProcessState.STARTING}:
-            protected.add(handle.lane_config.model)
+            # Protect the entry only for a lane that actually launched from
+            # the tmpfs RAM cache (see _add_lane_unlocked). Source-backed and
+            # restarted lanes do not read the copy and must not pin it.
+            if getattr(handle, "launched_from_ram_cache", False):
+                protected.add(handle.lane_config.model)
     protected |= lane_manager.starting_models()
     return protected
 
