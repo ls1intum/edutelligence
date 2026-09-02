@@ -475,11 +475,6 @@ class ChatRunCallback(StatusCallback):
         arrives to the run's trace without deduplicating it, so an entry sent twice is
         billed twice. The counter only advances after a delivered POST, which is what
         carries the usage of a failed send forward to the next one.
-
-        This removes the deterministic duplicate, not every duplicate: the counter tracks
-        what this client saw succeed, so a response lost after Artemis processed the request
-        lets the retry report the same block again. Delivery stays at-least-once until the
-        protocol carries an idempotency key.
         """
         if len(tokens) < self._delivered_token_count:
             # Someone passed a partial list instead of the run's cumulative one. Sending it
