@@ -771,6 +771,30 @@ def parse_gpu_indices(gpu_devices: str) -> list[int] | None:
     return [int(x.strip()) for x in gd.split(",") if x.strip().isdigit()]
 
 
+def extract_revision_arg(extra_args: list[str] | None) -> str | None:
+    """The ``--revision`` vLLM will actually load, if pinned via
+    ``extra_args`` (``--revision X`` or ``--revision=X``) — HF metadata
+    must be fetched from this same revision, or a precheck against the
+    unrelated default branch can use weights/config from a checkpoint the
+    plan never serves, permanently misclassifying a model pinned to an
+    older or smaller commit. Last occurrence wins, matching argparse."""
+    if not extra_args:
+        return None
+    revision: str | None = None
+    args = [str(a) for a in extra_args]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--revision" and i + 1 < len(args):
+            revision = args[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--revision="):
+            revision = arg.split("=", 1)[1]
+        i += 1
+    return revision or None
+
+
 # ---------------------------------------------------------------------------
 # vLLM registry introspection
 # ---------------------------------------------------------------------------

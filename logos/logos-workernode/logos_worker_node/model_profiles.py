@@ -115,6 +115,12 @@ class ModelProfileRecord:
     min_gpu_memory_utilization_to_load: float | None = None
     tensor_parallel_size: int | None = None
     kv_per_token_bytes: int | None = None  # manual override or HF precheck
+    # KV heads in the whole model (config's own dtype geometry) — kv_per_token_bytes
+    # above is the WHOLE-MODEL footprint (every head), but vLLM's TP shards KV heads
+    # across ranks (max(1, heads // tp)), so a per-rank budget needs this to scale
+    # kv_per_token_bytes down for the selected tp. None on legacy profiles that
+    # predate this field, or when HF config.json didn't expose enough to derive it.
+    num_key_value_heads: int | None = None
     max_context_length: int | None = None  # manual override or HF precheck
     # Smallest share of this model's own context length a lane here may serve,
     # as a fraction in [0, 1]. Operator-set per model under
@@ -261,6 +267,7 @@ class ModelProfileRecord:
             "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,
             "tensor_parallel_size": self.tensor_parallel_size,
             "kv_per_token_bytes": self.kv_per_token_bytes,
+            "num_key_value_heads": self.num_key_value_heads,
             "max_context_length": self.max_context_length,
             "min_context_fraction": self.min_context_fraction,
             "measurement_count": self.measurement_count,
@@ -824,6 +831,7 @@ class ModelProfileRegistry:
         disk_size_bytes: int | None = None,
         base_residency_mb: float | None = None,
         kv_per_token_bytes: int | None = None,
+        num_key_value_heads: int | None = None,
         max_context_length: int | None = None,
     ) -> bool:
         """Persist HF-derived compatibility-precheck estimates.
@@ -836,6 +844,12 @@ class ModelProfileRegistry:
         kv_per_token_bytes/max_context_length/disk_size_bytes have no
         higher-priority writer to conflict with, so they're set unconditionally
         (subject only to the manual-override check).
+
+        ``num_key_value_heads`` has no manual-override key of its own — it is
+        pure geometry, not a tunable — so it is set unconditionally whenever
+        HF provides it. The master's capacity planner needs it alongside
+        kv_per_token_bytes to derive a per-rank KV budget for the selected
+        tp; kv_per_token_bytes alone is the whole-model (every-head) figure.
         """
         with self._lock:
             # Read under the lock too — add_overrides also runs under it, and
@@ -854,6 +868,9 @@ class ModelProfileRegistry:
                 and profile.kv_per_token_bytes != kv_per_token_bytes
             ):
                 profile.kv_per_token_bytes = kv_per_token_bytes
+                changed = True
+            if num_key_value_heads and profile.num_key_value_heads != num_key_value_heads:
+                profile.num_key_value_heads = num_key_value_heads
                 changed = True
             if (
                 "max_context_length" not in overrides
@@ -962,6 +979,7 @@ class ModelProfileRegistry:
                     min_gpu_memory_utilization_to_load=profile_data.get("min_gpu_memory_utilization_to_load"),
                     tensor_parallel_size=profile_data.get("tensor_parallel_size"),
                     kv_per_token_bytes=profile_data.get("kv_per_token_bytes"),
+                    num_key_value_heads=profile_data.get("num_key_value_heads"),
                     max_context_length=profile_data.get("max_context_length"),
                     min_context_fraction=profile_data.get("min_context_fraction"),
                     measurement_count=int(profile_data.get("measurement_count", 0) or 0),

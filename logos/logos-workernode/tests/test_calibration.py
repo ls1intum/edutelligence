@@ -45,6 +45,7 @@ from logos_worker_node.calibration import (
     calibrate_model,
     calibrate_with_tp_escalation,
     calibration_gpu_slice,
+    extract_revision_arg,
     is_model_unsupported,
     load_existing_profiles,
     merge_profile,
@@ -327,6 +328,30 @@ def test_parse_gpu_indices_all():
 
 def test_parse_gpu_indices_empty():
     assert parse_gpu_indices("") is None
+
+
+def test_extract_revision_arg_space_separated():
+    assert extract_revision_arg(["--dtype", "auto", "--revision", "abc123"]) == "abc123"
+
+
+def test_extract_revision_arg_equals_form():
+    assert extract_revision_arg(["--revision=abc123"]) == "abc123"
+
+
+def test_extract_revision_arg_last_occurrence_wins():
+    # Matches argparse: a repeated store-action flag keeps the last value.
+    assert extract_revision_arg(["--revision", "old", "--revision=new"]) == "new"
+
+
+def test_extract_revision_arg_absent():
+    assert extract_revision_arg(["--dtype", "auto"]) is None
+    assert extract_revision_arg([]) is None
+    assert extract_revision_arg(None) is None
+
+
+def test_extract_revision_arg_dangling_flag_ignored():
+    # No value follows --revision — nothing to extract, not a crash.
+    assert extract_revision_arg(["--revision"]) is None
 
 
 def test_result_to_profile_dict_sets_calibrated_source():

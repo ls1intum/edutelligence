@@ -174,7 +174,9 @@ def _resolve_checkpoint_weight_bytes(siblings: list[Any], index_json: dict[str, 
     return None  # zero, or 2+ files with no index to disambiguate them
 
 
-def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> HfModelMetadata:
+def _fetch_uncached(
+    model_name: str, *, token: str | None, timeout_s: float, revision: str | None = None
+) -> HfModelMetadata:
     try:
         from huggingface_hub import HfApi, hf_hub_download
         from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
@@ -187,13 +189,15 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
     gated = False
     weight_bytes: int | None = None
     try:
-        info = HfApi().model_info(model_name, token=token, files_metadata=True, timeout=timeout_s)
+        info = HfApi().model_info(model_name, revision=revision, token=token, files_metadata=True, timeout=timeout_s)
         siblings = info.siblings or []
         index_names = [s.rfilename for s in siblings if s.rfilename.endswith(".safetensors.index.json")]
         index_json: dict[str, Any] | None = None
         if len(index_names) == 1:
             try:
-                index_path = hf_hub_download(model_name, filename=index_names[0], token=token, etag_timeout=timeout_s)
+                index_path = hf_hub_download(
+                    model_name, filename=index_names[0], revision=revision, token=token, etag_timeout=timeout_s
+                )
                 with open(index_path, encoding="utf-8") as f:
                     index_json = json.load(f)
             except Exception:  # noqa: BLE001
@@ -221,7 +225,9 @@ def _fetch_uncached(model_name: str, *, token: str | None, timeout_s: float) -> 
     try:
         # etag_timeout only bounds the existence check, not the (tiny)
         # config.json transfer itself — hf_hub_download has no knob for that.
-        config_path = hf_hub_download(model_name, filename="config.json", token=token, etag_timeout=timeout_s)
+        config_path = hf_hub_download(
+            model_name, filename="config.json", revision=revision, token=token, etag_timeout=timeout_s
+        )
         with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
         kv_per_token_bytes = _derive_kv_per_token_bytes(config, None)
@@ -343,28 +349,60 @@ class HfModelInfoCache:
                 logger.debug("[HF precheck] could not persist cache at %s", self._path, exc_info=True)
 
 
+def _cache_key(model_name: str, revision: str | None) -> str:
+    # A revision pin changes which weights/config get fetched — caching it
+    # under the bare model_name would let a session that later drops (or
+    # changes) the pin read back another revision's stale estimate.
+    return f"{model_name}@{revision}" if revision else model_name
+
+
 def fetch_hf_model_metadata(
     model_name: str,
     *,
     token: str | None,
     cache: HfModelInfoCache | None = None,
     timeout_s: float = 15.0,
+    revision: str | None = None,
 ) -> HfModelMetadata:
-    """Best-effort HF metadata lookup. Never raises."""
+    """Best-effort HF metadata lookup. Never raises.
+
+    ``revision`` must be the exact ref vLLM will serve (its own
+    ``--revision``, if the plan pins one) — the Hub calls otherwise default
+    to the repo's main branch, which can be a different checkpoint than
+    the one actually loaded.
+    """
+    cache_key = _cache_key(model_name, revision)
     if cache is not None:
-        cached = cache.get(model_name)
+        cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
     try:
-        meta = _fetch_uncached(model_name, token=token, timeout_s=timeout_s)
+        meta = _fetch_uncached(model_name, token=token, timeout_s=timeout_s, revision=revision)
     except Exception as exc:  # noqa: BLE001
         logger.debug("[HF precheck] unexpected failure for %s", model_name, exc_info=True)
         meta = HfModelMetadata(source="error:unexpected", error=str(exc))
 
     if cache is not None:
-        cache.put(model_name, meta)
+        cache.put(cache_key, meta)
     return meta
+
+
+def _fits_at_tp(
+    weight_bytes: int,
+    per_gpu_free_mb: float,
+    tp: int,
+    *,
+    safety_ratio: float,
+    min_kv_mb: float,
+    num_key_value_heads: int | None,
+) -> bool:
+    per_gpu_weight_mb = (weight_bytes / (1024 * 1024)) / tp
+    per_gpu_kv_mb = min_kv_mb
+    if num_key_value_heads and num_key_value_heads > 0:
+        heads_per_rank = max(1, num_key_value_heads // tp)
+        per_gpu_kv_mb = min_kv_mb * heads_per_rank / num_key_value_heads
+    return per_gpu_weight_mb + per_gpu_kv_mb <= per_gpu_free_mb * safety_ratio
 
 
 def min_feasible_tp(
@@ -375,19 +413,36 @@ def min_feasible_tp(
     safety_ratio: float = 0.9,
     min_kv_mb: float = 0.0,
     num_key_value_heads: int | None = None,
+    configured_tp: int | None = None,
 ) -> int | None:
-    """Smallest power-of-2 TP where weight+KV fit per GPU. min_kv_mb is the
-    whole-model KV footprint; num_key_value_heads lets it scale per rank via
-    vLLM's own head-sharding (max(1, heads // tp)) instead of being charged
-    unchanged to every TP. None if infeasible even at hardware_max_tp."""
+    """Smallest feasible TP where weight+KV fit per GPU, searched over the
+    power-of-2 ladder up to ``hardware_max_tp`` plus ``configured_tp`` (an
+    operator's explicit, possibly non-power-of-2 pin — e.g. 3 GPUs with a
+    head count that only divides evenly at 3, not at the rounded-down
+    power of 2). calibrate_with_tp_escalation tries a pinned tp directly
+    regardless of parity; this precheck must check the same candidate
+    before persisting a permanent unsupported verdict, or a model that
+    only fits at that pinned tp gets excluded before its valid
+    configuration is ever tried. min_kv_mb is the whole-model KV
+    footprint; num_key_value_heads lets it scale per rank via vLLM's own
+    head-sharding (max(1, heads // tp)) instead of being charged
+    unchanged to every TP. None if infeasible at every candidate."""
+    candidates: list[int] = []
     tp = 1
     while tp <= hardware_max_tp:
-        per_gpu_weight_mb = (weight_bytes / (1024 * 1024)) / tp
-        per_gpu_kv_mb = min_kv_mb
-        if num_key_value_heads and num_key_value_heads > 0:
-            heads_per_rank = max(1, num_key_value_heads // tp)
-            per_gpu_kv_mb = min_kv_mb * heads_per_rank / num_key_value_heads
-        if per_gpu_weight_mb + per_gpu_kv_mb <= per_gpu_free_mb * safety_ratio:
-            return tp
+        candidates.append(tp)
         tp *= 2
+    if configured_tp and configured_tp >= 1 and configured_tp not in candidates:
+        candidates.append(configured_tp)
+
+    for tp in sorted(candidates):
+        if _fits_at_tp(
+            weight_bytes,
+            per_gpu_free_mb,
+            tp,
+            safety_ratio=safety_ratio,
+            min_kv_mb=min_kv_mb,
+            num_key_value_heads=num_key_value_heads,
+        ):
+            return tp
     return None

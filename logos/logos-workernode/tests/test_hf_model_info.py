@@ -379,6 +379,46 @@ def test_fetch_hf_model_metadata_uses_cache_without_refetching(tmp_path):
     assert meta.weight_bytes == 999
 
 
+def test_fetch_hf_model_metadata_forwards_revision_to_hub_calls():
+    """A plan pinned via --revision must be looked up at that exact
+    revision — the Hub calls default to the main branch otherwise, which
+    can be a different (and differently sized) checkpoint entirely."""
+    fake_info = MagicMock()
+    fake_info.siblings = [_fake_sibling("model.safetensors", 1_000_000_000)]
+    fake_api = MagicMock()
+    fake_api.model_info.return_value = fake_info
+
+    with (
+        patch("huggingface_hub.HfApi", return_value=fake_api),
+        patch("huggingface_hub.hf_hub_download", side_effect=RuntimeError("no config.json")) as fake_download,
+    ):
+        fetch_hf_model_metadata("org/model", token=None, revision="v1.0-small")
+
+    assert fake_api.model_info.call_args.kwargs["revision"] == "v1.0-small"
+    assert fake_download.call_args.kwargs["revision"] == "v1.0-small"
+
+
+def test_fetch_hf_model_metadata_cache_keys_by_revision():
+    """The same model pinned to two different revisions must not read
+    back each other's cached estimate — a session that later drops (or
+    changes) the pin would otherwise see a stale, unrelated checkpoint's
+    numbers instead of triggering a fresh fetch."""
+    cache = HfModelInfoCache(None)
+    cache.put("org/model", HfModelMetadata(weight_bytes=999, source="hf"))
+
+    fake_api = MagicMock()
+    fake_api.model_info.return_value = MagicMock(siblings=[_fake_sibling("model.safetensors", 5_000_000_000)])
+
+    with (
+        patch("huggingface_hub.HfApi", return_value=fake_api),
+        patch("huggingface_hub.hf_hub_download", side_effect=RuntimeError("no config.json")),
+    ):
+        meta = fetch_hf_model_metadata("org/model", token=None, cache=cache, revision="v2.0-big")
+
+    assert meta.weight_bytes == 5_000_000_000  # freshly fetched, not the v1 cache entry
+    fake_api.model_info.assert_called_once()
+
+
 def test_min_feasible_tp():
     gb = 1024 * 1024 * 1024
     # Fits at tp=1 on plenty of VRAM.
@@ -413,6 +453,26 @@ def test_min_feasible_tp_shards_kv_cache_across_tp_ranks():
         == 8
     )
     assert min_feasible_tp(8_000_000, per_gpu_free_mb=1600.0, hardware_max_tp=8, min_kv_mb=8000.0) is None
+
+
+def test_min_feasible_tp_checks_configured_non_power_of_two_tp():
+    """Regression: an operator-pinned tp (e.g. 3 GPUs) is not a power of
+    2, so hardware_max_tp itself is rounded down to 2 and the power-of-2
+    ladder alone never reaches 3 — calibrate_with_tp_escalation probes a
+    pinned tp directly regardless of parity, and the precheck must check
+    the same candidate before a permanent unsupported verdict."""
+    gb = 1024 * 1024 * 1024
+    # 30 GB weights: doesn't fit at tp=1 (30 GB/GPU) or tp=2 (15 GB/GPU)
+    # in a 12 GB budget, but does at tp=3 (10 GB/GPU) — untested without
+    # configured_tp, since hardware_max_tp=2 caps the power-of-2 ladder.
+    assert min_feasible_tp(30 * gb, per_gpu_free_mb=12000.0, hardware_max_tp=2) is None
+    assert min_feasible_tp(30 * gb, per_gpu_free_mb=12000.0, hardware_max_tp=2, configured_tp=3) == 3
+
+    # Already covered by the power-of-2 ladder (redundant, not double-counted).
+    assert min_feasible_tp(4 * gb, per_gpu_free_mb=20000.0, hardware_max_tp=8, configured_tp=4) == 1
+
+    # Still infeasible even at the configured tp.
+    assert min_feasible_tp(500 * gb, per_gpu_free_mb=20000.0, hardware_max_tp=2, configured_tp=3) is None
 
 
 def test_min_feasible_tp_kv_replication_does_not_over_shrink_past_head_count():

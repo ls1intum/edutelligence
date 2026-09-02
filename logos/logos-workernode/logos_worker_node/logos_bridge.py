@@ -832,7 +832,14 @@ class LogosBridgeClient:
         )
 
     async def _run_hf_compatibility_precheck(
-        self, model_name: str, *, persist: bool = True, gpu_devices: str = "", kv_cache_dtype: str = ""
+        self,
+        model_name: str,
+        *,
+        persist: bool = True,
+        gpu_devices: str = "",
+        kv_cache_dtype: str = "",
+        revision: str = "",
+        tensor_parallel_size: int = 1,
     ) -> dict[str, Any]:
         """Best-effort HF compatibility check for one model on this node.
 
@@ -858,6 +865,21 @@ class LogosBridgeClient:
         any — the HF-derived KV estimate otherwise uses the model's own
         torch_dtype, which can be double a configured fp8 KV cache's real
         footprint and falsely fail the min-KV check near the VRAM edge.
+
+        ``revision`` is the plan's ``--revision`` pin, if any (see
+        calibration.extract_revision_arg). The Hub calls otherwise default
+        to the repo's main branch — a plan pinned to a smaller/older commit
+        would then be judged on an unrelated revision's weights and config,
+        and could be permanently marked unsupported on a false basis.
+
+        ``tensor_parallel_size`` is the plan's configured tp. The feasibility
+        search otherwise only tries the power-of-2 ladder up to the
+        rounded-down hardware max (e.g. 3 GPUs → only tp=1,2 tried, never
+        3) — same as calibrate_with_tp_escalation's own hardware_max_tp,
+        which is why that function separately widens to ``max(hw_max,
+        original_tp)`` before probing. A model that only fits at a pinned,
+        non-power-of-2 tp must be checked at that exact tp too, or it gets
+        permanently excluded before its valid configuration is ever tried.
 
         ``persist=False`` skips the model_profiles write. Never raises.
         """
@@ -889,6 +911,7 @@ class LogosBridgeClient:
                 model_name,
                 token=os.environ.get("HF_TOKEN") or None,
                 cache=self._get_hf_info_cache(),
+                revision=revision.strip() or None,
             )
         except Exception:  # noqa: BLE001
             hf_meta = None
@@ -990,6 +1013,15 @@ class LogosBridgeClient:
         per_gpu_free_mb = min(v["free_mb"] for v in relevant_snap.values())
         hardware_max_tp = _max_tp_for_plan({"model": model_name, "gpu_devices": gpu_devices}, len(gpu_snap))
 
+        # calibrate_with_tp_escalation probes a pinned tp directly even when
+        # it isn't a power of 2 (max(hw_max, original_tp)) — the search here
+        # must consider the same candidate, or a model that only fits at
+        # that pinned tp gets excluded before it's ever actually tried.
+        # Bounded to the GPUs this plan actually uses: a stale/impossible
+        # pin (more GPUs configured than are in the relevant selection)
+        # must never widen the search beyond what's physically available.
+        configured_tp = tensor_parallel_size if 1 <= tensor_parallel_size <= len(relevant_snap) else None
+
         # kv_per_token_bytes is cached under the model's own dtype; a plan's
         # --kv-cache-dtype override must be applied here, or the min-KV
         # check uses double the real footprint. "auto" means "use the
@@ -1006,7 +1038,9 @@ class LogosBridgeClient:
             min_kv_mb = (kv_per_token_bytes * MIN_VIABLE_CONTEXT_TOKENS) / (1024 * 1024)
 
         unsupported_reason: str | None = None
-        weights_only_tp_idle = min_feasible_tp(hf_meta.weight_bytes, per_gpu_total_mb, hardware_max_tp)
+        weights_only_tp_idle = min_feasible_tp(
+            hf_meta.weight_bytes, per_gpu_total_mb, hardware_max_tp, configured_tp=configured_tp
+        )
         fit_tp_idle: int | None = None
         if weights_only_tp_idle is None:
             unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
@@ -1017,6 +1051,7 @@ class LogosBridgeClient:
                 hardware_max_tp,
                 min_kv_mb=min_kv_mb,
                 num_key_value_heads=hf_meta.num_key_value_heads,
+                configured_tp=configured_tp,
             )
             if fit_tp_idle is None:
                 unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
@@ -1027,6 +1062,7 @@ class LogosBridgeClient:
             hardware_max_tp,
             min_kv_mb=min_kv_mb,
             num_key_value_heads=hf_meta.num_key_value_heads,
+            configured_tp=configured_tp,
         )
 
         result.update(
@@ -1046,6 +1082,7 @@ class LogosBridgeClient:
                 disk_size_bytes=hf_meta.weight_bytes,
                 base_residency_mb=hf_meta.weight_bytes / (1024 * 1024),
                 kv_per_token_bytes=kv_per_token_bytes,  # effective (dtype-adjusted), not hf_meta's raw value
+                num_key_value_heads=hf_meta.num_key_value_heads,
                 max_context_length=hf_meta.max_context_length,
             )
             if unsupported_reason is not None:
@@ -1090,6 +1127,8 @@ class LogosBridgeClient:
         """RPC handler for an on-demand compatibility check, callable any
         time — including outside the nightly maintenance window — since it
         never touches vLLM or lanes."""
+        from logos_worker_node.calibration import extract_revision_arg  # noqa: PLC0415
+
         model_name = str(params.get("model", "")).strip()
         if not model_name:
             return {"ok": False, "error": "'model' is required"}
@@ -1098,6 +1137,8 @@ class LogosBridgeClient:
             model_name,
             gpu_devices=str(plan.get("gpu_devices") or ""),
             kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
+            revision=extract_revision_arg(plan.get("extra_args")) or "",
+            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
         )
         return {"ok": True, **result}
 
@@ -1408,6 +1449,7 @@ class LogosBridgeClient:
                 _READY_TIMEOUT_S,
                 ProfileStoreUnreadableError,
                 calibrate_with_tp_escalation,
+                extract_revision_arg,
                 is_model_unsupported,
                 load_existing_profiles,
                 merge_profile,
@@ -1529,6 +1571,8 @@ class LogosBridgeClient:
                     model_name,
                     gpu_devices=str(plan.get("gpu_devices") or ""),
                     kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
+                    revision=extract_revision_arg(plan.get("extra_args")) or "",
+                    tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
                 )
                 if precheck["unsupported_reason"] is not None:
                     logger.warning(

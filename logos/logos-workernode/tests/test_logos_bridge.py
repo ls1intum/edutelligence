@@ -1847,7 +1847,15 @@ async def test_run_compatibility_precheck_rpc_uses_configured_gpu_devices(tmp_pa
     monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
     monkeypatch.setattr(
         "logos_worker_node.calibration.plans_from_config",
-        lambda _p: [{"model": "org/model", "gpu_devices": "1,2,3", "kv_cache_dtype": "fp8"}],
+        lambda _p: [
+            {
+                "model": "org/model",
+                "gpu_devices": "1,2,3",
+                "kv_cache_dtype": "fp8",
+                "extra_args": ["--revision", "abc123"],
+                "tensor_parallel_size": 3,
+            }
+        ],
     )
     monkeypatch.setattr(
         "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
@@ -1884,6 +1892,8 @@ async def test_run_compatibility_precheck_rpc_uses_configured_gpu_devices(tmp_pa
     assert response["per_gpu_total_mb"] == 24000.0
     assert calls[0]["gpu_devices"] == "1,2,3"
     assert calls[0]["kv_cache_dtype"] == "fp8"
+    assert calls[0]["revision"] == "abc123"
+    assert calls[0]["tensor_parallel_size"] == 3
 
 
 @pytest.mark.asyncio
@@ -1933,6 +1943,83 @@ async def test_run_compatibility_precheck_applies_kv_cache_dtype_override(tmp_pa
     await client._run_hf_compatibility_precheck("org/model", kv_cache_dtype="fp8")  # noqa: SLF001
     profile = app.state.model_profiles.get_profile("org/model")
     assert profile.kv_per_token_bytes == 2 * 32 * 8 * 128 * 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_forwards_revision_to_hf_fetch(tmp_path, monkeypatch):
+    """A plan pinned via extra_args=['--revision', ...] must be looked up
+    at that exact revision, not the repo's default branch — otherwise the
+    precheck can judge a model against an unrelated checkpoint's weights
+    and config, permanently excluding it (or wrongly clearing it) on a
+    false basis."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    calls: list[dict] = []
+
+    def _fake_fetch(*args, **kwargs):
+        calls.append(kwargs)
+        return HfModelMetadata(weight_bytes=1024, source="hf")
+
+    monkeypatch.setattr("logos_worker_node.hf_model_info.fetch_hf_model_metadata", _fake_fetch)
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    await client._run_hf_compatibility_precheck("org/model", persist=False, revision="v1.0-small")  # noqa: SLF001
+
+    assert calls[0]["revision"] == "v1.0-small"
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_checks_configured_non_power_of_two_tp(tmp_path, monkeypatch):
+    """Regression: 3 pinned GPUs round down to a power-of-2 hardware max
+    of tp=2, so the automatic search alone never tries tp=3 — even though
+    calibrate_with_tp_escalation probes an operator-pinned tp directly
+    regardless of parity. Without threading tensor_parallel_size through,
+    a model that only fits at tp=3 gets permanently marked unsupported
+    before its valid configuration is ever tried."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    # 30 GB weights: 15 GB/GPU at tp=2 doesn't fit a 12 GB budget; 10
+    # GB/GPU at tp=3 does.
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=30 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 12000.0, "used_mb": 0.0, "free_mb": 12000.0},
+            1: {"total_mb": 12000.0, "used_mb": 0.0, "free_mb": 12000.0},
+            2: {"total_mb": 12000.0, "used_mb": 0.0, "free_mb": 12000.0},
+        },
+    )
+
+    # Without the pinned tp, only tp=1,2 are tried — falsely unsupported.
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, gpu_devices="0,1,2"
+    )
+    assert response["unsupported_reason"] is not None
+
+    # With the pinned tp=3 checked too, it's recognized as feasible.
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, gpu_devices="0,1,2", tensor_parallel_size=3
+    )
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 3
 
 
 @pytest.mark.asyncio

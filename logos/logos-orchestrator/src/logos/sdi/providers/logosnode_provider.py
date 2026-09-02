@@ -645,6 +645,7 @@ class LogosNodeDataProvider:
                 tensor_parallel_size=data.get("tensor_parallel_size"),
                 enforce_eager_at_calibration=data.get("enforce_eager_at_calibration"),
                 kv_per_token_bytes=data.get("kv_per_token_bytes"),
+                num_key_value_heads=data.get("num_key_value_heads"),
                 max_context_length=data.get("max_context_length"),
                 min_context_fraction=data.get("min_context_fraction"),
                 measurement_count=int(data.get("measurement_count", 0) or 0),
