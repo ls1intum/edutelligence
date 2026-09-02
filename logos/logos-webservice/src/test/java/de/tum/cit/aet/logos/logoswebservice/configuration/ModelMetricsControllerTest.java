@@ -25,6 +25,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -51,6 +52,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
@@ -58,6 +62,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequ
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TokenPriceRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TokenTypeRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelMetricsService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
@@ -89,6 +95,16 @@ class ModelMetricsControllerTest {
     JdbcTemplate jdbc;
     @Autowired
     DataSource dataSource;
+    // Dependencies of the real PriceUpdaterService instance the in-flight
+    // catalogue refresh test constructs (the context bean is mocked).
+    @Autowired
+    ObjectMapper objectMapper;
+    @Autowired
+    TokenTypeRepository tokenTypeRepository;
+    @Autowired
+    TokenPriceRepository tokenPriceRepository;
+    @Autowired
+    TransactionTemplate transactionTemplate;
     // Spied (not replaced) so one test can make a single guarded weight
     // update fail and prove the whole weight phase rolls back.
     @MockitoSpyBean
@@ -515,6 +531,52 @@ class ModelMetricsControllerTest {
         assertThat(jdbc.queryForObject(
             "SELECT COUNT(*) FROM token_prices WHERE provider_id = 6101 AND valid_to IS NULL",
             Integer.class)).isZero();
+    }
+
+    @Test
+    void inFlightCatalogueRefresh_cannotReopenClosedGenerationAfterTypeChange() throws Exception {
+        // Previous tests may have left stubs behind (the price refresh
+        // installs rows, the weight-update and lock spies replay SQL); the
+        // real post-fetch price write under test must run against clean
+        // beans.
+        reset(priceUpdaterService);
+        reset(modelRepository);
+        reset(modelProviderRepository);
+        reset(providerRepository);
+        awaitQuiescent(new int[][]{{5101, 6101}, {5102, 6101}});
+        modelMetricsService.deriveAllMetrics();
+        assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.015"));
+
+        // A real price updater (the context bean is mocked), so the
+        // post-fetch write path runs for real: type revalidation under the
+        // provider lock, then the inserts.
+        PriceUpdaterService staleRefresh = new PriceUpdaterService(
+            objectMapper, modelRepository, modelProviderRepository, providerRepository,
+            tokenTypeRepository, tokenPriceRepository, transactionTemplate);
+
+        // Switch the cloud type (openai -> anthropic) while an old-type
+        // catalogue refresh is "in flight": its fetch happened under openai
+        // before the change, its write only lands after the change committed.
+        providerService.updateProvider(
+            new UpdateProviderRequestDTO(6101, null, null, null, null, null, null, "anthropic", null));
+        staleRefresh.storeFetchedCataloguePrices(5101, 6101, "openai",
+            Map.of("input_cost_per_token", 2e-8, "output_cost_per_token", 4e-8));
+        staleRefresh.storeFetchedCataloguePrices(5102, 6101, "openai",
+            Map.of("input_cost_per_token", 3e-8, "output_cost_per_token", 6e-8));
+
+        // The stale pages are discarded: no new open row for the previous
+        // type, and the historical rows are intact for billing.
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM token_prices WHERE provider_id = 6101 AND valid_to IS NULL",
+            Integer.class)).isZero();
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM token_prices WHERE provider_id = 6101", Integer.class)).isEqualTo(4);
+
+        // So the next derivation has no current price to read and cannot
+        // resurrect the old catalogue cost.
+        modelMetricsService.deriveAllMetrics();
+        assertThat(costOf(5101, 6101)).isNull();
+        assertThat(costOf(5102, 6101)).isNull();
     }
 
     @Test

@@ -89,9 +89,17 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  * write) runs in a single transaction that first takes the provider's
  * transaction-scoped advisory lock ({@code pg_advisory_xact_lock}), and a
  * provider type change takes the same lock before invalidating the pairs'
- * costs. The two operations serialize on it, so an in-flight old-type
- * derivation can neither observe a half-applied type change nor resurrect an
- * old-unit cost after the invalidation committed.
+ * costs and closing the open catalogue price rows. The three operations
+ * serialize on it, so an in-flight old-type derivation can neither observe a
+ * half-applied type change nor resurrect an old-unit cost after the
+ * invalidation committed.
+ *
+ * The catalogue price write takes the same lock as well, revalidating the
+ * provider's type after taking it: a refresh that fetched the previous type's
+ * catalogue while the change was in flight is either closed out by the
+ * change's price close (it committed first) or discards its stale page (the
+ * revalidation sees the new type), so the closed price generation cannot be
+ * re-opened.
  */
 @Service
 public class ModelMetricsService {

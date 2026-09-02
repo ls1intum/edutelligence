@@ -15,9 +15,9 @@ public interface ProviderRepository extends JpaRepository<Provider, Integer> {
     /**
      * Acquires a transaction-scoped advisory lock on the given key, blocking
      * until any other holder's transaction commits or rolls back. Provider
-     * type changes and the in-flight cost derivations of the same provider
-     * both take its lock, so the two serialize; released automatically with
-     * the surrounding transaction.
+     * type changes, the in-flight cost derivations of the same provider, and
+     * the catalogue price writes for it all take its lock, so the three
+     * serialize; released automatically with the surrounding transaction.
      */
     @Query(value = "SELECT pg_advisory_xact_lock(:key)", nativeQuery = true)
     void lockProviderDerivation(@Param("key") long key);
