@@ -598,11 +598,15 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
         return None
     if is_remote_gguf_ref(model):
         quant = model.rsplit(":", 1)[1].upper()
-        # The loader reads a sharded quant from one directory, so every
-        # index 1..total must sit in a single path — shards scattered across
-        # directories (or duplicate indices filling a count) do not load.
-        indices_by_dir: dict[str, set[int]] = {}
-        shard_total = 0
+        # The loader reads a sharded quant from ONE family in ONE directory,
+        # so every index 1..total must sit in a single (directory, family,
+        # total) group — family being the base name with the shard index and
+        # total stripped. Shards scattered across directories, duplicate
+        # indices filling a count, or DIFFERENT families of the same quant
+        # (A-…-00001-of-00002 + B-…-00002-of-00002) completing each other do
+        # not load: merging their indices would report a partial cache
+        # complete and suppress the prefetch that repairs it.
+        indices_by_family: dict[tuple[str, str, int], set[int]] = {}
         for name, _ in listing:
             base = name.rsplit("/", 1)[-1]
             if "mmproj" in base.lower() or quant_from_filename(base) != quant:
@@ -611,10 +615,14 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
             if shard is None:
                 # A non-sharded file of the quant is a complete model.
                 return True
-            index, shard_total = _shard_marker_parts(shard.group(0))
+            index, total = _shard_marker_parts(shard.group(0))
             directory = name.rsplit("/", 1)[0] if "/" in name else ""
-            indices_by_dir.setdefault(directory, set()).add(index)
-        return any(all(index in indices for index in range(1, shard_total + 1)) for indices in indices_by_dir.values())
+            family = _SHARD_INDEX_RE.sub("", base)
+            indices_by_family.setdefault((directory, family, total), set()).add(index)
+        return any(
+            all(index in indices for index in range(1, total + 1))
+            for (_, _, total), indices in indices_by_family.items()
+        )
     requested = model.rsplit("/", 1)[1].lower()
     shard = _SHARD_INDEX_RE.search(requested)
     if shard is None:
