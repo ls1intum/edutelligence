@@ -27,8 +27,10 @@ def _make_request(headers: dict | None = None):
 class DummyDB:
     """Minimal DBManager stub used via monkeypatch."""
 
-    def __init__(self, models=None):
+    def __init__(self, models=None, historic=None):
         self._models = models if models is not None else []
+        # Model name -> widest context ever reported (model_profiles high-water mark).
+        self._historic = historic if historic is not None else {}
 
     def __enter__(self):
         return self
@@ -41,6 +43,9 @@ class DummyDB:
 
     def get_model_for_api_key(self, _api_key_id: int, model_name: str):
         return next((m for m in self._models if m["name"] == model_name), None)
+
+    def get_historic_max_context_by_model(self):
+        return self._historic
 
 
 # ---------------------------------------------------------------------------
@@ -264,10 +269,10 @@ def _vllm_lane(model, max_model_len=0, context_length=4096):
     }
 
 
-async def _list_ids_to_entries(monkeypatch, models, registry):
+async def _list_ids_to_entries(monkeypatch, models, registry, historic=None):
     import json
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models))
+    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models, historic=historic))
     monkeypatch.setattr(main, "_logosnode_registry", registry)
     with patch("logos.main.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
@@ -378,3 +383,109 @@ async def test_retrieve_model_includes_served_context_window(monkeypatch):
         response = await main.retrieve_model("qwen-14b", _make_request())
 
     assert json.loads(response.body)["max_model_len"] == 40960
+
+
+@pytest.mark.asyncio
+async def test_list_models_reports_best_and_native_next_to_the_minimum(monkeypatch):
+    """Three figures, because one number cannot serve every client.
+
+    ``max_model_len_current_min`` is the smallest window being served (holds
+    whichever deployment answers) and ``max_model_len`` repeats it under the
+    name vLLM uses. A client that would rather advertise the ceiling gets
+    ``max_model_len_current_max`` (widest served right now) and
+    ``max_model_len_overall`` (the widest it is ever served with).
+    """
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry(
+        {
+            7: _snapshot(
+                [_vllm_lane("qwen-27b", max_model_len=262144)],
+                model_profiles={"qwen-27b": {"max_context_length": 262144}},
+            ),
+            8: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)]),
+        }
+    )
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert entries["qwen-27b"]["max_model_len"] == 33000
+    assert entries["qwen-27b"]["max_model_len_current_min"] == 33000
+    assert entries["qwen-27b"]["max_model_len_current_max"] == 262144
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_native_length_without_a_live_lane(monkeypatch):
+    """A model with a profile but nothing loaded still reports its own limit.
+
+    That is the number a config file has to be written from, and it does not
+    depend on what happens to be running at the time the page is opened.
+    """
+    models = [{"id": 1, "name": "cold-model", "description": None}]
+    registry = DummyRegistry({7: _snapshot([], model_profiles={"cold-model": {"max_context_length": 131072}})})
+
+    entries = await _list_ids_to_entries(monkeypatch, models, registry)
+
+    assert entries["cold-model"]["max_model_len_overall"] == 131072
+    assert "max_model_len" not in entries["cold-model"]
+    assert "max_model_len_current_min" not in entries["cold-model"]
+    assert "max_model_len_current_max" not in entries["cold-model"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_omits_every_context_field_when_unknown(monkeypatch):
+    """Cloud models keep the exact object they had before these fields existed."""
+    models = [{"id": 1, "name": "gpt-4o", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}))
+
+    assert set(entries["gpt-4o"]) == {"id", "object", "created", "owned_by"}
+
+
+# ---------------------------------------------------------------------------
+# Historic maximum from the database — the all-workernodes-offline fallback (#829)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_models_reports_historic_max_when_all_workernodes_offline(monkeypatch):
+    """With no node connected, the historic maximum the database keeps is what
+    /v1/models can still promise (#829).
+
+    Only ``max_model_len_overall`` comes back: no lane is up that would make
+    any of the current_* figures true, and claiming one would size the client
+    against a window nothing actually serves. The claude-logos wrapper's
+    cascade (current_max → current_min → overall) is built for exactly this:
+    it now lands on the historic max instead of its blind fallback constant.
+    """
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), historic={"qwen-27b": 262144})
+
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+    assert "max_model_len" not in entries["qwen-27b"]
+    assert "max_model_len_current_min" not in entries["qwen-27b"]
+    assert "max_model_len_current_max" not in entries["qwen-27b"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_historic_max_tops_up_a_narrower_live_overall(monkeypatch):
+    """A re-calibration on a node with less VRAM reports a narrower window than
+    an earlier calibration on a bigger node. The live profile says 33000, but
+    the model has been served at 262144 before — that is what "overall" means,
+    so the historic mark stands."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry({7: _snapshot([], model_profiles={"qwen-27b": {"max_context_length": 33000}})})
+    entries = await _list_ids_to_entries(monkeypatch, models, registry, historic={"qwen-27b": 262144})
+
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+    assert "max_model_len" not in entries["qwen-27b"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_historic_max_never_shrinks_a_live_overall(monkeypatch):
+    """The top-up only ever raises: a live figure the nodes report now is never
+    lowered by a stale historic one."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry({7: _snapshot([], model_profiles={"qwen-27b": {"max_context_length": 262144}})})
+    entries = await _list_ids_to_entries(monkeypatch, models, registry, historic={"qwen-27b": 33000})
+
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144

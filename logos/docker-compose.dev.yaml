@@ -78,11 +78,14 @@ services:
       LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
       ECCS_DECISION_LOG: "${ECCS_DECISION_LOG:-/tmp/eccs_decisions.jsonl}"
+      # Kill switch for prefix-cache-aware placement (see
+      # logos-orchestrator/docs/ettft-scheduling.md §11).
+      LOGOS_PREFIX_AFFINITY_ENABLED: "${LOGOS_PREFIX_AFFINITY_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "true"
       LOGOSNODE_INFER_TIMEOUT_SECONDS: "1200"
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "1200"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
-      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-logos-local-internal-secret}"
     expose:
       - "8080"
     ports:
@@ -172,7 +175,7 @@ services:
       DB_USER: postgres
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
-      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-logos-local-internal-secret}"
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
       KEYCLOAK_ISSUER_URI: "${KEYCLOAK_ISSUER_URI:-http://localhost:8085/realms/tum}"
       KEYCLOAK_JWKS_URI: "${KEYCLOAK_JWKS_URI:-http://keycloak:8080/realms/tum/protocol/openid-connect/certs}"
@@ -221,8 +224,11 @@ services:
       - "traefik.http.routers.webservice-config.middlewares=strip-api"
       - "traefik.http.routers.webservice-config.priority=200"
 
-      # === Routing: /api/logosdb/providers/logosnode/calibrate_uncalibrated and /lanes/delete ===
-      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`)"
+      # === Routing: the operator-facing logosnode admin actions ===
+      # Exact paths in front of the orchestrator's logosnode catch-all (201), so
+      # every action added to the UI has to be named here too — see the prod
+      # compose for what happens when one is missed.
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
       - "traefik.http.routers.webservice-logosnode-admin.entrypoints=web8080"
       - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
       - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api"

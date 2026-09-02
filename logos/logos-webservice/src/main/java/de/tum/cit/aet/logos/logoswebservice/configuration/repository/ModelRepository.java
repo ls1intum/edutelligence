@@ -10,9 +10,17 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 
 public interface ModelRepository extends JpaRepository<Model, Integer> {
 
+    boolean existsByNameIgnoreCase(String name);
+
+    List<Model> findByNameIgnoreCase(String name);
+
     @Query(value = """
         SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
-               m.weight_quality, m.tags, m.parallel, m.description,
+               m.weight_quality, m.tags, m.description,
+               (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                FROM model_aliases a
+                WHERE a.model_id = m.id
+               ) AS aliases,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
@@ -24,7 +32,11 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
                   AND tt.name = 'completion_tokens' AND tp.valid_from <= NOW()
                 ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
-               ) AS output_usd_per_million
+               ) AS output_usd_per_million,
+               (SELECT MAX(le.timestamp_request)
+                FROM log_entry le
+                WHERE le.model_id = m.id
+               ) AS last_used_at
         FROM models m ORDER BY m.id
         """, nativeQuery = true)
     List<ModelWithPriceProjection> findAllWithPricing();
@@ -46,8 +58,15 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
             JOIN api_key_provider_permissions akpp ON akpp.api_key_id = ak.id AND akpp.provider_id = mp.provider_id
             WHERE ak.user_id = :userId AND ak.is_active = true AND ak.use_custom_permissions = true
         )
+        -- last_used_at is deliberately not computed here: it is only exposed to
+        -- Logos admins (see ModelService), so the per-model MAX subselect would
+        -- be wasted work on every other model list request.
         SELECT DISTINCT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
-               m.weight_quality, m.tags, m.parallel, m.description,
+               m.weight_quality, m.tags, m.description,
+               (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                FROM model_aliases a
+                WHERE a.model_id = m.id
+               ) AS aliases,
                (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)

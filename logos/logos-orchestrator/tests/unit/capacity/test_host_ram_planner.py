@@ -9,7 +9,7 @@ It is a pure gate — it does not stop existing lanes.
 from __future__ import annotations
 
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 # Prometheus stub (matches test_planner_concurrency.py).
@@ -155,3 +155,73 @@ def test_lane_host_ram_from_snapshot_returns_measured_value():
     assert p._lane_host_ram_from_snapshot(1, "planner-foo") == 12_345.0
     assert p._lane_host_ram_from_snapshot(1, "planner-bar") == 6_789.0
     assert p._lane_host_ram_from_snapshot(1, "planner-missing") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Sleeping costs host RAM for as long as it lasts
+#
+# sleep_l1 relocates a lane's weights to host RAM rather than dropping them,
+# so the memory is spoken for until the lane wakes or is stopped. Only the
+# transient peak *during* the call was ever checked, which answers "can this
+# sleep complete" and nothing about what it leaves behind — so a worker could
+# pass the check for lane after lane and still end up with its RAM gone.
+# ---------------------------------------------------------------------------
+
+
+def _profile(**kwargs) -> SimpleNamespace:
+    base = {
+        "sleep_l1_transient_host_ram_mb": None,
+        "sleep_l2_transient_host_ram_mb": None,
+        "host_ram_residual_mb": None,
+        "disk_size_bytes": None,
+    }
+    base.update(kwargs)
+    return SimpleNamespace(**base)
+
+
+def test_sleep_precheck_counts_what_the_sleep_leaves_behind():
+    """A cheap transfer with an expensive resting footprint: 2 GB moves, 40 GB
+    stays. Judging it on the transient alone waves it through and the host is
+    40 GB poorer with nothing recording it."""
+    p = _bare_planner(_snapshot_with_host_memory(30_000.0))
+
+    ok, _eff, required = p._check_host_ram_headroom_for_sleep(
+        1, 1, _profile(sleep_l1_transient_host_ram_mb=2_000.0, host_ram_residual_mb=40_000.0)
+    )
+
+    assert ok is False
+    assert required >= 40_000.0
+
+
+def test_sleep_precheck_still_denies_on_the_transient_alone():
+    """The original guard: the peak during the call has to fit too, whatever
+    the lane settles at afterwards."""
+    p = _bare_planner(_snapshot_with_host_memory(10_000.0))
+
+    ok, _eff, required = p._check_host_ram_headroom_for_sleep(
+        1, 2, _profile(sleep_l2_transient_host_ram_mb=60_000.0, host_ram_residual_mb=1_000.0)
+    )
+
+    assert ok is False
+    assert required >= 60_000.0
+
+
+def test_sleep_precheck_passes_when_the_host_can_afford_a_resident_sleeper():
+    p = _bare_planner(_snapshot_with_host_memory(200_000.0))
+
+    ok, _eff, _required = p._check_host_ram_headroom_for_sleep(
+        1, 1, _profile(sleep_l1_transient_host_ram_mb=2_000.0, host_ram_residual_mb=40_000.0)
+    )
+
+    assert ok is True
+
+
+def test_sleep_precheck_without_a_residency_measurement_is_unchanged():
+    """Workers that predate the field, and models that have never slept here,
+    keep the transient-only behaviour rather than being blocked."""
+    p = _bare_planner(_snapshot_with_host_memory(30_000.0))
+
+    ok, _eff, required = p._check_host_ram_headroom_for_sleep(1, 1, _profile(sleep_l1_transient_host_ram_mb=2_000.0))
+
+    assert ok is True
+    assert required == p.HOST_RAM_SAFETY_MARGIN_MB + 2_000.0

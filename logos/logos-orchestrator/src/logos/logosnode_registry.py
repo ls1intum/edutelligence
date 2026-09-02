@@ -6,6 +6,7 @@ import asyncio
 import base64
 import logging
 import secrets
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from typing import Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
+from logos.monitoring import prometheus_metrics as prom
 from logos.terminal_logging import (
     BOLD,
     CYAN,
@@ -149,6 +151,7 @@ def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
     if cache_pressure is None:
         cache_pressure = backend_metrics.get("gpu_cache_usage_perc")
     prefix_hit = lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
+    mtp_accept = lane_metric_float(backend_metrics.get("mtp_acceptance_rate"))
     ttft_p95 = _lane_ttft_p95_seconds(backend_metrics)
 
     return {
@@ -162,6 +165,7 @@ def _lane_log_snapshot(lane: dict[str, Any]) -> dict[str, Any]:
         "requests_running": (round(requests_running, 1) if requests_running is not None else None),
         "gpu_cache_usage_percent": (round(float(cache_pressure), 1) if cache_pressure is not None else None),
         "prefix_cache_hit_rate": (round(prefix_hit, 3) if prefix_hit is not None else None),
+        "mtp_acceptance_rate": (round(mtp_accept, 3) if mtp_accept is not None else None),
         "ttft_p95_seconds": round(ttft_p95, 3) if ttft_p95 is not None else None,
         "gpu_devices": _lane_gpu_devices(lane),
     }
@@ -181,12 +185,14 @@ def _render_lane_summary(snapshot: dict[str, Any], *, indent: str = "    ") -> l
     ttft_text = _format_optional_float(snapshot.get("ttft_p95_seconds"), "s")
     prefix_hit_raw = snapshot.get("prefix_cache_hit_rate")
     prefix_text = _format_optional_float(round(prefix_hit_raw * 100, 1) if prefix_hit_raw is not None else None, "%")
+    mtp_raw = snapshot.get("mtp_acceptance_rate")
+    mtp_text = _format_optional_float(round(mtp_raw * 100, 1) if mtp_raw is not None else None, "%")
 
     lines = wrap_plain(f"model: {snapshot['model']}", indent=indent)
     lines.append(f"{indent}state={state_text} mem={snapshot['effective_vram_mb']:.0f}MB gpus={snapshot['gpu_devices']}")
     lines.append(
         f"{indent}waiting={queue_text} running={running_text} "
-        f"kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text}"
+        f"kv_cache={cache_text} ttft_p95={ttft_text} prefix_hit={prefix_text} mtp_accept={mtp_text}"
     )
     return lines
 
@@ -258,6 +264,26 @@ CALIBRATION_SESSION_STARTED_EVENT = "calibration_session_started"
 START_CALIBRATION_SESSION_ACTION = "start_calibration_session"
 TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
+# How long the optimistic mark set when start_calibration_session is dispatched
+# survives a worker status that reports no session. The worker activates the
+# session inside its RPC handler, before it answers, so every snapshot built
+# after the reply already reports it — this window only has to cover a status
+# message that was already in flight when the command went out. It is bounded
+# because an unbounded wait is the failure being fixed: a start that never
+# materialises must not latch the provider out of lane placement forever.
+CALIBRATION_START_GRACE = timedelta(seconds=60)
+
+# Worker bridge action that aborts one in-flight command (infer or
+# infer_stream). Workers that predate it do not list it in their hello and
+# are left alone, keeping the previous behaviour.
+CANCEL_COMMAND_ACTION = "cancel_command"
+
+# How long to wait for a worker to acknowledge a cancellation. Short on
+# purpose: the answer only tells us whether the stream was still running, and
+# nothing downstream waits on it. The abort itself happens worker-side the
+# moment the command is handled.
+CANCEL_COMMAND_TIMEOUT_SECONDS = 10
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -277,6 +303,7 @@ class ProviderSession:
     provider_id: int
     worker_id: str
     websocket: WebSocket
+    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     capabilities_models: set[str] = field(default_factory=set)
     # Full set of models the worker is configured to serve, including those
     # without a valid profile yet. Used by the calibration orchestrator to
@@ -293,12 +320,25 @@ class ProviderSession:
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
     max_lanes: int = 0  # 0 = unlimited (reported by worker in hello)
-    # True between the worker's calibration_session_started event and its
-    # terminal event, and seeded from the worker's hello so a reconnect
-    # mid-session is correct before the first status arrives. A calibrating
+    # Bumped once per absorbed runtime status. `last_heartbeat` cannot serve
+    # as a "new measurement" marker: stream chunks and command results bump
+    # it too, so under streaming load it changes constantly while the lane
+    # signals stay put.
+    runtime_revision: int = 0
+    # Bridge actions the worker advertised in its hello. Used to feature-gate
+    # commands a worker may not know yet — an unrecognised action comes back
+    # as "Unsupported bridge command", so it is cheaper to ask first.
+    actions: set[str] = field(default_factory=set)
+    # True while the worker is running a calibration session, seeded from its
+    # hello and then reconciled against every status it sends. A calibrating
     # worker has freed all VRAM for its probes, so its idle lanes and free
     # VRAM are reserved rather than available.
     calibrating: bool = False
+    # Set when start_calibration_session is dispatched: until it passes, a
+    # status reporting no session is treated as a snapshot that predates the
+    # command rather than as proof the session ended. See
+    # CALIBRATION_START_GRACE.
+    optimistic_calibration_until: datetime | None = None
 
     def is_stale(self, stale_after_seconds: int) -> bool:
         return (_utc_now() - self.last_heartbeat) > timedelta(seconds=stale_after_seconds)
@@ -320,6 +360,11 @@ class LogosNodeRuntimeRegistry:
         # Lanes pre-marked as cold by the capacity planner — excluded from
         # scheduling so new requests don't route to lanes about to be stopped.
         self._cold_marked_lanes: set[tuple[int, str]] = set()
+        # provider_id -> monotonic timestamp of the last live-session drop.
+        # A worker that went down a moment ago is mid-reboot, not dead: the
+        # request path uses this to extend the startup grace period past the
+        # orchestrator's own boot, so its models don't 404 while it comes back.
+        self._recently_disconnected: dict[int, float] = {}
         # Optional callback invoked when a worker's capabilities_models change.
         # Signature: (provider_id, sorted_model_names) -> None
         self._on_capabilities_changed = on_capabilities_changed
@@ -327,6 +372,27 @@ class LogosNodeRuntimeRegistry:
         # orchestrator uses this to react to terminal session events
         # without polling. Signature: (provider_id, event_dict) -> None
         self._event_subscribers: list[Callable[[int, dict[str, Any]], None]] = []
+        # Called after every worker status is absorbed. The scheduler uses it
+        # to reconsider requests it is holding: the forwarding gate spends a
+        # per-snapshot budget, so a fresh report is what restores it, and
+        # without a wake-up here a held request would wait for the next
+        # completion instead — which on a ramp from idle has not happened yet.
+        self._on_runtime_updated: Callable[[int], None] | None = None
+        # In-flight stream cancellations. Held only so the loop keeps a strong
+        # reference to fire-and-forget tasks until they complete.
+        self._cancellation_tasks: set[asyncio.Task] = set()
+
+    def set_on_runtime_updated(self, callback: Callable[[int], None] | None) -> None:
+        """Register the post-status hook. See ``_on_runtime_updated``."""
+        self._on_runtime_updated = callback
+
+    def _fire_runtime_updated(self, provider_id: int) -> None:
+        if self._on_runtime_updated is None:
+            return
+        try:
+            self._on_runtime_updated(provider_id)
+        except Exception:  # noqa: BLE001 — a status must never fail on this
+            logger.exception("on_runtime_updated callback failed for provider=%s", provider_id)
 
     def _fire_capabilities_changed(self, provider_id: int, model_names: list[str]) -> None:
         if self._on_capabilities_changed is not None:
@@ -512,9 +578,10 @@ class LogosNodeRuntimeRegistry:
                     accent=GREEN,
                 )
             )
-        # Sync announced capabilities to DB on session attach
-        if session.capabilities_models:
-            self._fire_capabilities_changed(ticket.provider_id, sorted(session.capabilities_models))
+        # Sync announced capabilities to DB on session attach. An empty list
+        # is a real state ("this worker serves nothing right now") — it must
+        # fire so stale model_provider links from earlier sessions get pruned.
+        self._fire_capabilities_changed(ticket.provider_id, sorted(session.capabilities_models))
         return session
 
     async def get_conflicting_session(
@@ -541,6 +608,7 @@ class LogosNodeRuntimeRegistry:
             if websocket is not None and session.websocket is not websocket:
                 return
             self._sessions.pop(provider_id, None)
+            self._recently_disconnected[int(provider_id)] = time.monotonic()
         pending_cmds = len(session.pending_commands)
         pending_streams = len(session.pending_streams)
         logger.warning(
@@ -585,6 +653,7 @@ class LogosNodeRuntimeRegistry:
         max_lanes: int = 0,
         configured_models: list[str] | None = None,
         calibrating: bool | None = None,
+        actions: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -592,13 +661,20 @@ class LogosNodeRuntimeRegistry:
         session.worker_id = worker_id or session.worker_id
         session.last_heartbeat = _utc_now()
         session.max_lanes = max_lanes
+        if actions is not None:
+            session.actions = {a for a in actions if isinstance(a, str) and a.strip()}
         # Hello arrives before the first status, so this settles `calibrating`
         # before `_is_plannable` can ever say yes for this session. Without it
         # a reconnect mid-session would open a placement window: the fresh
         # session starts non-calibrating and the event replay that would mark
         # it only arrives after the first status. None = worker predates the
         # field; leave the replay as the only source in that case.
+        #
+        # A hello is a fresh connection, so it also retires any pending
+        # optimistic mark: whatever command was in flight against the previous
+        # connection cannot be answered on this one.
         if calibrating is not None:
+            session.optimistic_calibration_until = None
             self._set_calibrating(session, bool(calibrating), "hello")
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
@@ -614,17 +690,23 @@ class LogosNodeRuntimeRegistry:
         runtime: dict[str, Any],
         capabilities_models: list[str] | None = None,
         configured_models: list[str] | None = None,
+        calibrating: bool | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
             return
         old_runtime = session.latest_runtime
         session.latest_runtime = runtime if isinstance(runtime, dict) else {}
+        session.runtime_revision += 1
         was_first = not session.first_status_received
         session.first_status_received = True
         session.last_heartbeat = _utc_now()
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
+        # None = worker predates the field; the lifecycle events stay the only
+        # source in that case.
+        if calibrating is not None:
+            self._reconcile_calibrating_from_status(session, bool(calibrating))
 
         # Detect node-health transitions and log loudly on the master side
         # so operators see the condition in the logos-orchestrator container
@@ -711,6 +793,10 @@ class LogosNodeRuntimeRegistry:
                 )
             )
 
+        # Fresh measurements are in: whatever the scheduler was holding back
+        # against the previous ones can be reconsidered now.
+        self._fire_runtime_updated(provider_id)
+
     async def record_runtime_sample(self, provider_id: int, sample: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)
         if session is None or not isinstance(sample, dict):
@@ -784,9 +870,44 @@ class LogosNodeRuntimeRegistry:
         """
         event_name = str(event.get("event", "")).strip()
         if event_name == CALIBRATION_SESSION_STARTED_EVENT:
+            session.optimistic_calibration_until = None
             self._set_calibrating(session, True, event_name)
         elif event_name in TERMINAL_CALIBRATION_SESSION_EVENTS:
+            session.optimistic_calibration_until = None
             self._set_calibrating(session, False, event_name)
+
+    def _reconcile_calibrating_from_status(self, session: ProviderSession, calibrating: bool) -> None:
+        """Settle ``session.calibrating`` from the worker's own status snapshot.
+
+        The lifecycle events are one-shot signals, which makes the flag they
+        drive a latch: a terminal event that never lands as a live event — the
+        post-connect replay filter drops it, the connection it belonged to is
+        gone — leaves the provider excluded from lane placement with nothing
+        left to release it, and the only recovery is restarting the worker.
+
+        Every status carries the worker's current session state, so this
+        converges within one status interval no matter which event was lost.
+        The events stay useful: they act within the same second, while the
+        status is the periodic ground truth behind them.
+        """
+        if calibrating:
+            session.optimistic_calibration_until = None
+            self._set_calibrating(session, True, "worker status")
+            return
+
+        deadline = session.optimistic_calibration_until
+        if deadline is not None:
+            if _utc_now() < deadline:
+                # A start we just dispatched; this snapshot may predate it.
+                return
+            session.optimistic_calibration_until = None
+            logger.warning(
+                "provider=%s reported no calibration session %ds after "
+                "start_calibration_session was dispatched — releasing it for lane placement",
+                session.worker_id or str(session.provider_id),
+                int(CALIBRATION_START_GRACE.total_seconds()),
+            )
+        self._set_calibrating(session, False, "worker status")
 
     def _set_calibrating(self, session: ProviderSession, calibrating: bool, source: str) -> None:
         """Set ``session.calibrating``, logging only actual transitions."""
@@ -928,14 +1049,20 @@ class LogosNodeRuntimeRegistry:
         # own events remain the authority for the rest of the session.
         calibration_start = action == START_CALIBRATION_SESSION_ACTION
         was_calibrating = session.calibrating
+        prior_optimistic_until = session.optimistic_calibration_until
         if calibration_start:
             self._set_calibrating(session, True, "start_calibration_session dispatched")
+            # A status built before this command is still in flight and would
+            # report no session; hold it off until the worker has had time to
+            # report the one we just asked for.
+            session.optimistic_calibration_until = _utc_now() + CALIBRATION_START_GRACE
 
         def _undo_optimistic_calibration_mark() -> None:
             # Restore rather than clear: the worker refuses a start while a
             # session is already running, and clearing would then release a
             # live session for lane placement.
             if calibration_start:
+                session.optimistic_calibration_until = prior_optimistic_until
                 self._set_calibrating(session, was_calibrating, "start_calibration_session refused")
 
         try:
@@ -948,6 +1075,16 @@ class LogosNodeRuntimeRegistry:
 
         try:
             result = await asyncio.wait_for(fut, timeout=max(1, timeout_seconds))
+        except asyncio.CancelledError:
+            # The caller went away — typically a client that disconnected
+            # mid-request. Dropping the future only stops us from reading the
+            # answer; the worker is still producing it, so tell it to stop.
+            # Guarded against recursion: a cancel command cancelling itself
+            # would loop.
+            session.pending_commands.pop(cmd_id, None)
+            if action != CANCEL_COMMAND_ACTION:
+                self._request_command_cancellation(session, cmd_id)
+            raise
         except asyncio.TimeoutError as exc:
             session.pending_commands.pop(cmd_id, None)
             self._emit_session_diagnostic(
@@ -963,8 +1100,8 @@ class LogosNodeRuntimeRegistry:
             )
             # Deliberately not undone here: a timeout leaves it unknown whether
             # the session started, and releasing a running one is the failure
-            # this guard exists to prevent. The worker's terminal event, or its
-            # hello on the next connect, settles the flag either way.
+            # this guard exists to prevent. The worker's own status settles it
+            # once the optimistic window passes — no event or reconnect needed.
             raise LogosNodeOfflineError("Command timeout waiting for worker response") from exc
 
         if not bool(result.get("success", False)):
@@ -1010,6 +1147,10 @@ class LogosNodeRuntimeRegistry:
             session.pending_streams.pop(cmd_id, None)
             raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
 
+        # Whether the worker told us the stream is over. False means we are
+        # unwinding early — the consumer went away — and the worker is still
+        # generating unless we say otherwise.
+        stream_finished = False
         try:
             while True:
                 try:
@@ -1027,16 +1168,90 @@ class LogosNodeRuntimeRegistry:
                         yield chunk.encode("utf-8")
                     continue
                 if event_type == "stream_end":
+                    stream_finished = True
                     if not bool(event.get("success", False)):
                         raise LogosNodeCommandError(str(event.get("error", "unknown worker stream error")))
                     break
         finally:
             session.pending_streams.pop(cmd_id, None)
+            if not stream_finished:
+                self._request_command_cancellation(session, cmd_id)
+
+    def _request_command_cancellation(self, session: ProviderSession, cmd_id: str) -> None:
+        """Tell the worker to abort the in-flight command behind ``cmd_id``.
+
+        Dropping the local queue or future only stops *us* from reading.
+        Unlike the HTTP path — where closing the httpx context closes the
+        connection and vLLM aborts the sequence by itself — every request to a
+        worker shares one WebSocket, so there is no per-request connection
+        whose close carries the signal. Without this the lane keeps generating
+        a response nobody will read, holding a KV slot for the full length of
+        the generation. Under a retry storm that is self-reinforcing: each
+        abandoned attempt keeps consuming the capacity its own retry needs.
+
+        Fire-and-forget on purpose: this runs while a cancelled caller unwinds,
+        and that unwind must not block on the worker answering.
+        """
+        if CANCEL_COMMAND_ACTION not in session.actions:
+            logger.debug(
+                "Worker %s does not support %s; abandoned command %s runs to completion",
+                session.worker_id,
+                CANCEL_COMMAND_ACTION,
+                cmd_id[:8],
+            )
+            prom.WORKER_CANCELLATIONS_TOTAL.labels(result="unsupported").inc()
+            return
+
+        async def _send() -> None:
+            try:
+                result = await self.send_command(
+                    provider_id=session.provider_id,
+                    action=CANCEL_COMMAND_ACTION,
+                    params={"target_cmd_id": cmd_id},
+                    timeout_seconds=CANCEL_COMMAND_TIMEOUT_SECONDS,
+                )
+                if isinstance(result, dict) and result.get("cancelled"):
+                    logger.info(
+                        "Aborted abandoned request %s on worker %s",
+                        cmd_id[:8],
+                        session.worker_id,
+                    )
+                    prom.WORKER_CANCELLATIONS_TOTAL.labels(result="aborted").inc()
+                else:
+                    # It had already finished — the cancel simply raced it.
+                    logger.debug(
+                        "Nothing to abort for %s on worker %s",
+                        cmd_id[:8],
+                        session.worker_id,
+                    )
+                    prom.WORKER_CANCELLATIONS_TOTAL.labels(result="already_done").inc()
+            except Exception as exc:  # noqa: BLE001
+                # A worker that has gone away drops its lanes anyway; nothing
+                # here is worth escalating past debug.
+                logger.debug(
+                    "Could not abort request %s on worker %s: %s",
+                    cmd_id[:8],
+                    session.worker_id,
+                    exc,
+                )
+                prom.WORKER_CANCELLATIONS_TOTAL.labels(result="failed").inc()
+
+        try:
+            task = asyncio.get_running_loop().create_task(
+                _send(),
+                name=f"cancel-command-{cmd_id[:8]}",
+            )
+        except RuntimeError:  # pragma: no cover — no running loop during teardown
+            return
+        # Hold a reference so the task is not garbage-collected mid-flight.
+        self._cancellation_tasks.add(task)
+        task.add_done_callback(self._cancellation_tasks.discard)
 
     async def get_runtime_snapshot(self, provider_id: int, stale_after_seconds: int = 30) -> dict[str, Any]:
         session = await self._get_active_session(provider_id, stale_after_seconds)
         return {
             "provider_id": session.provider_id,
+            "session_id": session.session_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
             "configured_models": sorted(session.configured_models),
@@ -1056,6 +1271,7 @@ class LogosNodeRuntimeRegistry:
             return None
         return {
             "provider_id": session.provider_id,
+            "session_id": session.session_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
             "configured_models": sorted(session.configured_models),
@@ -1064,6 +1280,7 @@ class LogosNodeRuntimeRegistry:
             "runtime": session.latest_runtime,
             "events": list(session.latest_events),
             "max_lanes": session.max_lanes,
+            "runtime_revision": session.runtime_revision,
         }
 
     def has_received_first_status(self, provider_id: int) -> bool:
@@ -1084,6 +1301,20 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return False
         return not session.is_stale(stale_after_seconds)
+
+    def disconnect_grace_remaining_s(self, provider_id: int, grace_period_s: float) -> float:
+        """Seconds left until a recently dropped worker's reconnect grace expires.
+
+        0.0 when the provider's worker never dropped a live session, or the
+        drop is older than ``grace_period_s``. Mirrors the orchestrator's
+        startup window, anchored to the drop instead of the server boot, so a
+        worker that reboots (or is redeployed on its own) gets the same
+        "wait, don't 404" treatment for its models as a fresh orchestrator.
+        """
+        dropped_at = self._recently_disconnected.get(int(provider_id))
+        if dropped_at is None:
+            return 0.0
+        return max(0.0, grace_period_s - (time.monotonic() - dropped_at))
 
     def get_desired_lane_set(self, provider_id: int) -> list[dict[str, Any]]:
         """Return the server's last-intended lane configuration for a provider."""

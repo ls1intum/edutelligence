@@ -63,6 +63,12 @@
   flex-wrap: wrap;
 }
 
+.capability-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .wchip {
   display: inline-flex;
   align-items: center;
@@ -87,6 +93,17 @@
     background: transparent;
     color: rgb(var(--color-typography-700));
     .wchip-val { color: inherit; font-weight: var(--font-weight-normal); }
+  }
+}
+
+// Last used: models without recent traffic are deprecation candidates.
+.last-used {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-700));
+  white-space: nowrap;
+
+  &--stale {
+    color: rgb(var(--color-warning));
   }
 }
 

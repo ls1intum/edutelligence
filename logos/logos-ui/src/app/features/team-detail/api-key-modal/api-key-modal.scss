@@ -30,14 +30,12 @@
 }
 
 .key-value-row {
+  @include glass-surface;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 12px 14px;
-  border-radius: 8px;
-  border: 1px solid rgb(var(--color-outline-200));
-  background: rgb(var(--glass-fill)  / var(--opacity-muted));
   margin-bottom: 14px;
   margin-top: 4px;
 }
@@ -104,10 +102,8 @@
 }
 
 .rotate-confirm-box {
-  border: 1px solid rgb(var(--color-outline-200));
-  border-radius: 8px;
+  @include glass-surface;
   padding: 12px 14px;
-  background: rgb(var(--glass-fill) / var(--opacity-muted));
   margin-bottom: 14px;
 }
 
@@ -323,9 +319,7 @@
 }
 
 .perm-list {
-  border-radius: 8px;
-  border: 1px solid rgb(var(--color-outline-200));
-  background: rgb(var(--glass-fill)  / var(--opacity-muted));
+  @include glass-surface;
   max-height: 220px;
   overflow-y: auto;
 }

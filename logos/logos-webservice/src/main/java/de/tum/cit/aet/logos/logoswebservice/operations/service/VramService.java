@@ -190,6 +190,8 @@ public class VramService {
             provider.put("connected", status.get("connected"));
             provider.put("connection_state", status.get("connection_state"));
             provider.put("last_heartbeat", status.get("last_heartbeat"));
+            provider.put("calibrating",
+                Boolean.TRUE.equals(status.get("calibrating")) ? Boolean.TRUE : null);
         }
         return new ArrayList<>(providersData.values());
     }

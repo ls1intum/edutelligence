@@ -9,12 +9,14 @@ import {
 import { FormsModule } from '@angular/forms';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
-import { ModelManagementService } from '../../core/services/model-management.service';
+import { ModelManagementService, ModelCapability } from '../../core/services/model-management.service';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { AuthService } from '../../core/auth/services/auth.service';
 import { Router } from '@angular/router';
+import { daysSince, formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
 
 @Component({
   selector: 'app-models',
@@ -33,13 +35,29 @@ import { Router } from '@angular/router';
 })
 export class Models implements OnInit {
   private modelService = inject(ModelManagementService);
+  readonly role = inject(AuthService).role;
   private router = inject(Router);
+
+  /**
+   * A model without a single logged request for this long is highlighted as a
+   * deprecation candidate.
+   */
+  private static readonly STALE_AFTER_DAYS = 30;
 
   // ── List state ──────────────────────────────────────────────────────────
   models = signal<Model[]>([]);
+  capabilities = signal<Record<number, ModelCapability>>({});
   loading = signal(true);
   search = signal('');
   loadError = signal(false);
+  /** Sort of the last-used column: unsorted, oldest first or newest first. */
+  lastUsedSort = signal<'none' | 'asc' | 'desc'>('none');
+
+  /** Sort direction for the table header; null while unsorted. */
+  get lastUsedSortDirection(): 'asc' | 'desc' | null {
+    const dir = this.lastUsedSort();
+    return dir === 'asc' || dir === 'desc' ? dir : null;
+  }
 
   // ── Delete modal ────────────────────────────────────────────────────────
   deleteTarget = signal<Model | null>(null);
@@ -51,7 +69,7 @@ export class Models implements OnInit {
   addName = signal('');
   addDesc = signal('');
   addTags = signal('');
-  addParallel = signal('');
+  addAliases = signal('');
   addWtLatency = signal('');
   addWtAccuracy = signal('');
   addWtCost = signal('');
@@ -64,7 +82,7 @@ export class Models implements OnInit {
   editName = signal('');
   editDesc = signal('');
   editTags = signal('');
-  editParallel = signal('');
+  editAliases = signal('');
   editWtLatency = signal('');
   editWtAccuracy = signal('');
   editWtCost = signal('');
@@ -75,36 +93,97 @@ export class Models implements OnInit {
   // ── Computed ─────────────────────────────────────────────────────────────
   filteredModels = computed(() => {
     const q = this.search().toLowerCase().trim();
-    if (!q) return this.models();
-    return this.models().filter(
-      (m) =>
-        m.name.toLowerCase().includes(q) ||
-        (m.description ?? '').toLowerCase().includes(q) ||
-        (m.tags ?? '').toLowerCase().includes(q),
+    const list = q
+      ? this.models().filter(
+          (m) =>
+            m.name.toLowerCase().includes(q) ||
+            (m.description ?? '').toLowerCase().includes(q) ||
+            (m.tags ?? '').toLowerCase().includes(q) ||
+            (m.aliases ?? '').toLowerCase().includes(q),
+        )
+      : this.models();
+    const dir = this.lastUsedSort();
+    if (dir === 'none') return list;
+    // ISO-8601 UTC timestamps sort lexicographically; the empty string (never
+    // used) lands first in ascending order, surfacing the quietest models.
+    return [...list].sort((a, b) =>
+      dir === 'asc'
+        ? (a.last_used_at ?? '').localeCompare(b.last_used_at ?? '')
+        : (b.last_used_at ?? '').localeCompare(a.last_used_at ?? ''),
     );
   });
 
   addValid = computed(() => this.addName().trim().length > 0);
+
+  /**
+   * Splits the comma-separated alias input into a clean list. Aliases are
+   * trimmed, de-duplicated case-insensitively, and empty entries are dropped.
+   */
+  private parseAliases(text: string): string[] {
+    const seen = new Set<string>();
+    const aliases: string[] = [];
+    for (const raw of text.split(',')) {
+      const alias = raw.trim();
+      if (!alias) continue;
+      const key = alias.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      aliases.push(alias);
+    }
+    return aliases;
+  }
 
   ngOnInit(): void {
     this.fetchModels();
   }
 
   async fetchModels(): Promise<void> {
-    this.loading.set(true);
-    this.loadError.set(false);
-    try {
-      const models = await this.modelService.getModels();
-      this.models.set(models);
-    } catch {
-      this.loadError.set(true);
-    } finally {
-      this.loading.set(false);
-    }
+  this.loading.set(true);
+  this.loadError.set(false);
+
+  try {
+    const models = await this.modelService.getModels();
+    this.models.set(models);
+
+    const capabilities = await this.modelService.getModelCapabilities(
+      models.map((model) => model.id),
+    );
+
+    this.capabilities.set(capabilities);
+  } catch {
+    this.loadError.set(true);
+  } finally {
+    this.loading.set(false);
+  }
+}
+      
+  getCapabilities(modelId: number): ModelCapability | undefined {
+    return this.capabilities()[modelId];
+  }
+
+  // ── Last used ─────────────────────────────────────────────────────────────
+  /** Cycles unsorted → oldest first (deprecation candidates) → newest first. */
+  toggleLastUsedSort(): void {
+    this.lastUsedSort.update((dir) => (dir === 'none' ? 'asc' : dir === 'asc' ? 'desc' : 'none'));
+  }
+
+  formatLastUsed(iso: string | null | undefined): string {
+    return formatLastUsedLabel(iso);
+  }
+
+  isStaleModel(iso: string | null | undefined): boolean {
+    return iso == null || daysSince(iso) >= Models.STALE_AFTER_DAYS;
+  }
+
+  /** Tooltip explaining why the model is highlighted; null while it is fresh. */
+  lastUsedTooltip(iso: string | null | undefined): string | null {
+    if (!this.isStaleModel(iso)) return null;
+    if (iso == null) return 'Never used';
+    return `Not used for ${daysSince(iso)} days`;
   }
 
   openReport(model: Model): void {
-    this.router.navigate(['/models', model.id, 'errors']);
+    this.router.navigate(['/models', model.id, 'details']);
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────
@@ -139,7 +218,7 @@ export class Models implements OnInit {
     this.addName.set('');
     this.addDesc.set('');
     this.addTags.set('');
-    this.addParallel.set('');
+    this.addAliases.set('');
     this.addWtLatency.set('');
     this.addWtAccuracy.set('');
     this.addWtCost.set('');
@@ -162,7 +241,7 @@ export class Models implements OnInit {
       name: this.addName().trim(),
       description: this.addDesc().trim() || undefined,
       tags: this.addTags().trim() || undefined,
-      parallel: this.addParallel() ? Number(this.addParallel()) : undefined,
+      aliases: this.parseAliases(this.addAliases()),
     };
 
     const wtLatency = this.addWtLatency() ? Number(this.addWtLatency()) : undefined;
@@ -198,7 +277,7 @@ export class Models implements OnInit {
     this.editName.set(model.name ?? '');
     this.editDesc.set(model.description ?? '');
     this.editTags.set(model.tags ?? '');
-    this.editParallel.set(model.parallel != null ? String(model.parallel) : '');
+    this.editAliases.set(model.aliases ?? '');
     this.editWtLatency.set(model.weight_latency != null ? String(model.weight_latency) : '');
     this.editWtAccuracy.set(model.weight_accuracy != null ? String(model.weight_accuracy) : '');
     this.editWtCost.set(model.weight_cost != null ? String(model.weight_cost) : '');
@@ -221,7 +300,7 @@ export class Models implements OnInit {
       name: this.editName().trim() || undefined,
       description: this.editDesc().trim() || undefined,
       tags: this.editTags().trim() || undefined,
-      parallel: this.editParallel() ? Number(this.editParallel()) : undefined,
+      aliases: this.parseAliases(this.editAliases()),
       weight_latency: this.editWtLatency() ? Number(this.editWtLatency()) : undefined,
       weight_accuracy: this.editWtAccuracy() ? Number(this.editWtAccuracy()) : undefined,
       weight_cost: this.editWtCost() ? Number(this.editWtCost()) : undefined,
@@ -237,7 +316,7 @@ export class Models implements OnInit {
                 name: payload.name ?? m.name,
                 description: payload.description ?? m.description,
                 tags: payload.tags ?? m.tags,
-                parallel: payload.parallel ?? m.parallel,
+                aliases: payload.aliases ? payload.aliases.join(', ') : m.aliases,
                 weight_latency: payload.weight_latency ?? m.weight_latency,
                 weight_accuracy: payload.weight_accuracy ?? m.weight_accuracy,
                 weight_cost: payload.weight_cost ?? m.weight_cost,

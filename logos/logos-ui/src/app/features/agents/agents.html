@@ -1,0 +1,325 @@
+<div class="agents">
+  <h1 class="page-title">Agent Sessions</h1>
+  <p class="page-subtitle">
+    Coding agents running in isolated containers on capacity Logos is not otherwise using. Sessions
+    act on the dev environment only, and every change arrives as a pull request.
+  </p>
+
+  <!-- ── Capacity banner ───────────────────────────────────────────────────── -->
+  @if (capacity(); as cap) {
+    <div class="capacity" [class.capacity--blocked]="!cap.may_start">
+      <div
+        class="capacity__meter"
+        role="img"
+        [attr.aria-label]="'Platform load ' + loadPercent() + ' percent'"
+      >
+        <div class="capacity__fill" [style.width.%]="loadPercent()"></div>
+      </div>
+      <div class="capacity__facts">
+        <span class="capacity__load">{{ loadPercent() }}% platform load</span>
+        <span class="capacity__slots"
+          >{{ cap.busy_slots }}/{{ cap.total_slots }} serving slots busy</span
+        >
+        <span class="capacity__sessions">
+          {{ cap.sessions_running }} running · {{ cap.sessions_paused }} paused ·
+          {{ cap.sessions_queued }} queued (max {{ cap.max_parallel }})
+        </span>
+      </div>
+      <p class="capacity__reason">
+        @if (cap.may_start) {
+          <i class="pi pi-check-circle" aria-hidden="true"></i> Capacity available —
+          {{ cap.reason }}
+        } @else {
+          <i class="pi pi-pause-circle" aria-hidden="true"></i> Holding — {{ cap.reason }}
+        }
+      </p>
+    </div>
+  }
+
+  @if (capacity(); as cap) {
+    @if (!cap.models_local_only) {
+      <div class="alert alert--error" role="alert">
+        No session can start: {{ cap.models_detail }}
+      </div>
+    }
+  }
+
+  @if (triggers(); as trig) {
+    @if (trig.enabled) {
+      <p class="page-subtitle">
+        <i class="pi pi-bolt" aria-hidden="true"></i>
+        Reacting to the repository: issues and reviews labelled
+        <code>{{ trig.label }}</code> queue a session on their own ({{ trig.active_sessions }}/{{
+          trig.max_active_sessions
+        }}
+        active, {{ trig.queued_total }} queued since start).
+        @if (trig.last_error) {
+          <span class="field__hint">Last poll failed: {{ trig.last_error }}</span>
+        }
+      </p>
+    }
+  }
+
+  @if (error(); as message) {
+    <div class="alert alert--error" role="alert">{{ message }}</div>
+  }
+
+  <!-- ── Actions ───────────────────────────────────────────────────────────── -->
+  <div class="toolbar">
+    <button class="btn btn--primary" (click)="openForm()" [disabled]="showForm()">
+      <i class="pi pi-plus" aria-hidden="true"></i> New session
+    </button>
+    <button class="btn" (click)="refresh()" [disabled]="loading()">
+      <i class="pi pi-refresh" aria-hidden="true"></i> Refresh
+    </button>
+  </div>
+
+  <!-- ── New session form ──────────────────────────────────────────────────── -->
+  @if (showForm()) {
+    <section class="card form-card">
+      <h2 class="card__title">Start a session</h2>
+
+      <label class="field">
+        <span class="field__label">Workspace</span>
+        @if (workspaceOptions().length > 0) {
+          <app-select
+            [options]="workspaceOptions()"
+            [value]="formWorkspaceId() !== null ? String(formWorkspaceId()) : null"
+            (valueChange)="selectWorkspaceById($event ?? '')"
+            ariaLabel="Workspace"
+          />
+        } @else {
+          <p class="field__hint">No workspaces yet — create one below.</p>
+        }
+      </label>
+
+      <div class="field field--inline">
+        <input
+          class="input"
+          type="text"
+          placeholder="new workspace name"
+          [ngModel]="newWorkspaceName()"
+          (ngModelChange)="newWorkspaceName.set($event)"
+          aria-label="New workspace name"
+        />
+        <button
+          class="btn"
+          (click)="createWorkspace()"
+          [disabled]="creatingWorkspace() || newWorkspaceName().trim().length === 0"
+        >
+          Create workspace
+        </button>
+      </div>
+      <p class="field__hint">
+        One workspace runs one session at a time — it is a single working copy on its own volume.
+        Add more workspaces to run more sessions in parallel.
+      </p>
+
+      <label class="field">
+        <span class="field__label">Task</span>
+        <textarea
+          class="input textarea"
+          rows="6"
+          placeholder="Describe the change you want. The agent works unattended, so state the goal and any constraints it cannot ask you about."
+          [ngModel]="formTask()"
+          (ngModelChange)="formTask.set($event)"
+        ></textarea>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Model <span class="field__optional">(optional)</span></span>
+        @if (modelOptions().length > 0) {
+          <app-select
+            [options]="modelOptions()"
+            [value]="formModel()"
+            (valueChange)="selectModel($event ?? '')"
+            ariaLabel="Model"
+          />
+          <span class="field__hint">
+            {{ modelPlaceholder() }} — only models this platform serves itself are offered, because
+            agent work never bills a cloud provider.
+          </span>
+        } @else {
+          <p class="field__hint">
+            {{ models()?.detail ?? 'No locally served model is available.' }}
+          </p>
+        }
+      </label>
+
+      <label class="field">
+        <span class="field__label"
+          >Screenshot paths <span class="field__optional">(optional)</span></span
+        >
+        <input
+          class="input"
+          type="text"
+          placeholder="/dashboard /models"
+          [ngModel]="formScreenshots()"
+          (ngModelChange)="formScreenshots.set($event)"
+        />
+        <span class="field__hint">Pages on the dev environment to capture after deploying.</span>
+      </label>
+
+      <div class="checkboxes">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            [ngModel]="formOpenPr()"
+            (ngModelChange)="formOpenPr.set($event)"
+          />
+          <span>Open a pull request when finished</span>
+        </label>
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            [ngModel]="formDeploy()"
+            (ngModelChange)="formDeploy.set($event)"
+          />
+          <span>Deploy to the dev environment afterwards</span>
+        </label>
+      </div>
+
+      @if (formError(); as message) {
+        <div class="alert alert--error" role="alert">{{ message }}</div>
+      }
+
+      <div class="form-actions">
+        <button class="btn" (click)="closeForm()">Cancel</button>
+        <button
+          class="btn btn--primary"
+          (click)="submit()"
+          [disabled]="!canSubmit() || submitting()"
+        >
+          {{ submitting() ? 'Queueing…' : 'Queue session' }}
+        </button>
+      </div>
+    </section>
+  }
+
+  <!-- ── Sessions ──────────────────────────────────────────────────────────── -->
+  @if (loading() && sessions().length === 0) {
+    <p class="empty">Loading sessions…</p>
+  } @else if (sessions().length === 0) {
+    <p class="empty">No sessions yet. Start one to put idle capacity to work.</p>
+  }
+
+  @if (activeSessions().length > 0) {
+    <h2 class="section-title">Active</h2>
+    <ul class="session-list">
+      @for (session of activeSessions(); track session.id) {
+        <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+      }
+    </ul>
+  }
+
+  @if (finishedSessions().length > 0) {
+    <h2 class="section-title">Finished</h2>
+    <ul class="session-list">
+      @for (session of finishedSessions(); track session.id) {
+        <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+      }
+    </ul>
+  }
+
+  <!-- ── One session row, with its detail panel ────────────────────────────── -->
+  <ng-template #sessionRow let-session>
+    <li class="session" [class.session--open]="selectedId() === session.id">
+      <button
+        class="session__head"
+        (click)="select(session)"
+        [attr.aria-expanded]="selectedId() === session.id"
+      >
+        <span [class]="statusClass(session.status)">{{ statusLabel(session) }}</span>
+        <span class="session__task">{{ taskPreview(session.task) }}</span>
+        <span class="session__meta">
+          <span class="session__workspace">{{ session.workspace_name }}</span>
+          <span class="session__duration">{{ duration(session) }}</span>
+        </span>
+      </button>
+
+      @if (selectedId() === session.id) {
+        <div class="session__detail">
+          <dl class="facts">
+            <div>
+              <dt>Started by</dt>
+              <dd>
+                {{ session.created_by }}
+                @if (session.trigger_ref; as ref) {
+                  <span class="field__hint">{{ originOf(session) }} ({{ ref }})</span>
+                }
+              </dd>
+            </div>
+            <div>
+              <dt>Model</dt>
+              <dd>{{ session.model ?? 'runner default' }}</dd>
+            </div>
+            <div>
+              <dt>Branch</dt>
+              <dd>{{ session.branch_name ?? '—' }}</dd>
+            </div>
+            <div>
+              <dt>Tokens</dt>
+              <dd>{{ session.tokens_in }} in / {{ session.tokens_out }} out</dd>
+            </div>
+          </dl>
+
+          @if (session.pr_url) {
+            <a class="btn btn--link" [href]="session.pr_url" target="_blank" rel="noopener">
+              <i class="pi pi-github" aria-hidden="true"></i> Open pull request
+            </a>
+          }
+          @if (
+            session.status === 'queued' ||
+            session.status === 'running' ||
+            session.status === 'paused' ||
+            session.status === 'starting' ||
+            session.status === 'finalizing'
+          ) {
+            <button class="btn btn--danger" (click)="cancel(session)">Cancel session</button>
+          }
+
+          @if (session.error) {
+            <div class="alert alert--error" role="alert">{{ session.error }}</div>
+          }
+
+          <h3 class="detail-title">Transcript</h3>
+          @if (logLines().length === 0) {
+            <p class="empty empty--small">No output yet.</p>
+          } @else {
+            <pre class="transcript">{{ transcriptText() }}</pre>
+          }
+
+          @if (screenshots().length > 0) {
+            <h3 class="detail-title">Screenshots</h3>
+            <div class="screenshots">
+              @for (shot of screenshots(); track shot.name) {
+                <a [href]="shot.url" target="_blank" rel="noopener" class="screenshot">
+                  <img [src]="shot.url" [alt]="'Screenshot ' + shot.name" loading="lazy" />
+                  <span>{{ shot.name }}</span>
+                </a>
+              }
+            </div>
+          }
+        </div>
+      }
+    </li>
+  </ng-template>
+
+  <!-- ── Workspaces ────────────────────────────────────────────────────────── -->
+  @if (workspaces().length > 0) {
+    <h2 class="section-title">Workspaces</h2>
+    <ul class="workspace-list">
+      @for (workspace of workspaces(); track workspace.id) {
+        <li class="workspace">
+          <span class="workspace__name">{{ workspace.name }}</span>
+          <span class="workspace__branch">from {{ workspace.base_branch }}</span>
+          @if (workspace.active_sessions > 0) {
+            <span class="workspace__busy">busy</span>
+          } @else {
+            <button class="btn btn--ghost" (click)="deleteWorkspace(workspace)">Delete</button>
+          }
+        </li>
+      }
+    </ul>
+  }
+</div>

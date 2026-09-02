@@ -1,0 +1,256 @@
+@use 'styles/glass' as *;
+
+// ── Tab shell ─────────────────────────────────────────────────────────────────
+// Same shape as the other tabs: the tab-content container owns the padding, so
+// this only lays its own sections out.
+.activity-tab {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+.ac-note {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+}
+
+.ac-note--quiet {
+  margin-top: 12px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+}
+
+.ac-error {
+  margin-top: 12px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-error));
+}
+
+// ── Section heads ─────────────────────────────────────────────────────────────
+
+.ac-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  margin-bottom: 12px;
+}
+
+// Extra room where a section follows a table rather than the tab's top edge.
+.ac-section-head--spaced {
+  margin-top: 28px;
+}
+
+.ac-section-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+  margin: 0;
+}
+
+.ac-section-note {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+}
+
+.ac-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+// Capped: requester names run long, and a select sized by its longest entry
+// would push the pager off the row.
+.ac-control {
+  min-width: 0;
+  max-width: 240px;
+}
+
+// The export acts on the whole list, not on one filter, so it sits at the end
+// of the toolbar wherever the count line wraps.
+.ac-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+// ── Live tiles ────────────────────────────────────────────────────────────────
+
+.ac-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.ac-tile {
+  @include glass-surface;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+// Only while something is actually in flight, so the colour means "look here"
+// rather than being permanent decoration on a quiet cluster.
+.ac-tile--active {
+  border-color: rgb(var(--color-accent-cyan) / var(--opacity-strong));
+
+  .ac-tile__value {
+    color: rgb(var(--color-accent-cyan));
+  }
+}
+
+.ac-tile--bad .ac-tile__value {
+  color: rgb(var(--color-error));
+}
+
+.ac-tile__value {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+  font-variant-numeric: tabular-nums;
+}
+
+.ac-tile__label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-100));
+}
+
+.ac-tile__note {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+}
+
+// ── Usage total ───────────────────────────────────────────────────────────────
+
+.ac-total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.ac-total__value {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-accent-cyan));
+  font-variant-numeric: tabular-nums;
+}
+
+.ac-total__label {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+}
+
+// ── Tables ────────────────────────────────────────────────────────────────────
+
+.ac-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+
+  th {
+    text-align: left;
+    padding: 6px 12px 6px 0;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: var(--letter-spacing-wider);
+    color: rgb(var(--color-typography-500));
+    border-bottom: 1px solid rgb(var(--glass-stroke) / 0.2);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 8px 12px 8px 0;
+    color: rgb(var(--color-typography-100));
+    border-bottom: 1px solid rgb(var(--glass-stroke) / 0.1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+  }
+}
+
+.ac-table__num {
+  text-align: right;
+  padding-right: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ac-table__muted {
+  color: rgb(var(--color-typography-500));
+}
+
+.ac-table__strong {
+  font-weight: var(--font-weight-medium);
+}
+
+// ── Badges ────────────────────────────────────────────────────────────────────
+
+.ac-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-wider);
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  color: rgb(var(--color-typography-300));
+}
+
+.ac-badge--queued,
+.ac-badge--running {
+  background: rgb(var(--color-accent-cyan) / var(--opacity-soft));
+  color: rgb(var(--color-accent-cyan));
+}
+
+// ── Pager ─────────────────────────────────────────────────────────────────────
+
+.ac-pager__count {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  white-space: nowrap;
+
+  strong {
+    color: rgb(var(--color-typography-100));
+    font-weight: var(--font-weight-semibold);
+  }
+}
+
+.ac-pager__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  // Fixed box so the two buttons never move relative to each other, whatever
+  // the count line next to them says.
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-accent-cyan));
+  background: transparent;
+  border: 1px solid rgb(var(--color-accent-cyan) / var(--opacity-strong));
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-accent-cyan) / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}

@@ -38,6 +38,8 @@ export type RequestLogStats = {
     warmStarts: number;
     avgQueueSeconds: number | null;
     avgRunSeconds: number | null;
+    totalTokens: number | null;
+    cloudCostMicroCents: number | null;
   };
   statusCounts: Record<string, number>;
   modelBreakdown: Array<{
@@ -106,45 +108,31 @@ export type LaneSignalData = {
   vllm: boolean;
   runtime_state: string; // "running"|"loaded"|"sleeping"|"starting"|"cold"|"stopped"|"error"
   sleep_state: string | null;
+  gpu_devices: string | null;
+  effective_gpu_devices: string | null;
+  /**
+   * Worker-reported concurrency. vLLM lanes: full-context KV budget parsed
+   * from the startup log (guaranteed minimum; 0 until the log is parsed).
+   * Ollama lanes: static slot count (legacy — the UI ignores it).
+   */
+  num_parallel: number | null;
   active_requests: number;
   effective_vram_mb: number;
   gpu_cache_usage_percent: number | null;
   ttft_p95_seconds: number | null;
   queue_waiting: number | null;
   requests_running: number | null;
-};
-
-// PaginatedRequestItem from logos-ui-old/components/statistics/types.ts
-export type PaginatedRequestItem = {
-  request_id: string;
-  model_name: string;
-  provider_name: string;
-  is_cloud: boolean;
-  status: string;
-  timestamp: string | null;
-  duration: number | null;
-  cold_start: boolean | null;
-  enqueue_ts: string | null;
-  scheduled_ts: string | null;
-  request_complete_ts: string | null;
-  queue_seconds: number | null;
-  total_seconds: number | null;
-  initial_priority: string | null;
-  priority_when_scheduled: string | null;
-  queue_depth_at_enqueue: number | null;
-  error_message: string | null;
-  team_name: string | null;
-  username: string | null;
-  environment: string | null;
-};
-
-// PaginatedRequestResponse from logos-ui-old/components/statistics/types.ts
-export type PaginatedRequestResponse = {
-  requests: PaginatedRequestItem[];
-  total: number;
-  page: number;
-  per_page: number;
-  total_pages: number;
+  prefix_cache_hit_rate: number | null;
+  mtp_acceptance_rate: number | null;
+  /**
+   * Context window this lane is serving at, in tokens.
+   *
+   * Per lane rather than per model on purpose: the planner sizes each lane
+   * against the KV cache it could get, so the same model runs at 262,144 on one
+   * worker and a fraction of that on another. Null when the worker reports
+   * nothing to derive it from.
+   */
+  max_model_len: number | null;
 };
 
 // VramV2Sample from logos-ui-old/hooks/use-stats-websocket-v2.ts
@@ -264,6 +252,7 @@ export type VramProviderMeta = {
   runtime_modes?: string[];
   transport_connected?: boolean;
   last_heartbeat?: string | null;
+  calibrating?: boolean;
 };
 
 // VramProviderPayload from logos-ui-old/app/statistics.tsx lines 68-108
@@ -284,6 +273,7 @@ export interface RequestItem {
   request_id: string;
   model_name: string;
   provider_name: string;
+  is_cloud: boolean | null;
   status: string; // 'success', 'error', 'timeout', 'pending'
   timestamp: string | null;
   duration: number | null; // seconds (exec only)
@@ -297,4 +287,47 @@ export interface RequestItem {
   priority_when_scheduled: string | null;
   queue_depth_at_enqueue: number | null;
   error_message: string | null;
+  team_name: string | null;
+  username: string | null;
+  full_name: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  cost_microcents: number | null;
+  /**
+   * Generation rate of a request that is still streaming, from the
+   * orchestrator's in-flight view. Measured from the first token rather than
+   * from arrival, so queueing does not drag it down. Null once the request has
+   * finished, and while it is still waiting for its first token.
+   */
+  tokens_per_second?: number | null;
+  /**
+   * The token counts above are this request's live figures, not its settled
+   * ones. Prompt tokens are exact either way; the completion count is the
+   * orchestrator's running tally and moves until the request completes.
+   */
+  streaming?: boolean;
+  /**
+   * The prompt figure is the estimate the context routing computed from the
+   * body — the request has not reached a point where the upstream states the
+   * real size yet (it still queues). Shown as an estimate, not a fact.
+   */
+  prompt_estimated?: boolean;
+}
+
+/**
+ * One entry of the team / requester dropdowns that scope the page, as
+ * `request_log_scope_options` returns it.
+ *
+ * Lives here rather than with the request feed: the filter used to be part of
+ * that toolbar, and now narrows every request-derived panel on the page.
+ *
+ * `requestCount` is what picking this entry would select in the current range.
+ * It is shown in the option label, because the list is only useful if it says
+ * which of its entries hold anything.
+ */
+export interface FeedFilterOption {
+  id: number;
+  label: string;
+  requestCount: number;
 }

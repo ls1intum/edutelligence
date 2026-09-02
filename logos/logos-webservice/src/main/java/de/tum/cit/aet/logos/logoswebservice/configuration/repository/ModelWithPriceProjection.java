@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.repository;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 
 public interface ModelWithPriceProjection {
     Integer getId();
@@ -10,8 +11,9 @@ public interface ModelWithPriceProjection {
     Integer getWeightCost();
     Integer getWeightQuality();
     String getTags();
-    Integer getParallel();
+    String getAliases();
     String getDescription();
     BigDecimal getInputUsdPerMillion();
     BigDecimal getOutputUsdPerMillion();
+    Instant getLastUsedAt();
 }

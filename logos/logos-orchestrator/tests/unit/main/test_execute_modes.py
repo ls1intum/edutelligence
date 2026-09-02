@@ -70,8 +70,62 @@ async def test_execute_resource_mode_failure_records_error(monkeypatch):
     assert exc.value.status_code == 503
 
 
+async def test_execute_resource_mode_forwards_api_key_priority_to_pipeline(monkeypatch):
+    """The authenticated key's default_priority reaches the PipelineRequest."""
+
+    captured = {}
+
+    class Result:
+        success = False
+        error = "boom"
+        execution_context = None
+        provider_id = None
+        model_id = None
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-1"}
+
+    async def fake_process(pipeline_req):
+        captured["request"] = pipeline_req
+        return Result()
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type("P", (), {"process": fake_process, "record_completion": lambda *a, **k: None}),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main._execute_resource_mode(
+            deployments=[{"model_id": 10, "provider_id": 1}],
+            body={},
+            headers={"h": "v"},
+            auth=MagicMock(key_value="lg-test", api_key_id=1, default_priority=10),
+            log_id=1,
+            is_async_job=False,
+        )
+    assert exc.value.status_code == 503
+    assert captured["request"].default_priority == 10
+
+
 async def test_execute_resource_mode_uses_sync_response_for_resolved_whisper_alias(monkeypatch):
     """A client alias resolving to Whisper must not be framed as SSE."""
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_team(self, team_id):
+            return None
+
+        def get_api_key_budget_limit(self, api_key_id):
+            return None
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
 
     class Result:
         success = True
@@ -138,6 +192,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         request_path=None,
         skip_laura=False,
         priority=1,
+        required_provider_id=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -195,6 +250,7 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
         request_path=None,
         skip_laura=False,
         priority=1,
+        required_provider_id=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -222,12 +278,116 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
     assert called["allowed_models_override"] == [32]
 
 
+async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
+    """A request pinned to an alt tag routes to the model carrying it."""
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get_models_info(api_key_id=None):
+            return [{"id": 32, "name": "llama-3.1-70b", "aliases": ["local-most-powerful"]}]
+
+    called = {}
+
+    async def fake_resource_mode(  # noqa: ARG001
+        deployments,
+        body,
+        headers,
+        auth,
+        log_id,
+        is_async_job,
+        allowed_models_override=None,
+        request_id=None,
+        request_path=None,
+        skip_laura=False,
+        priority=1,
+        required_provider_id=None,
+    ):
+        called["deployments"] = deployments
+        called["body"] = body
+        called["allowed_models_override"] = allowed_models_override
+        return {"status": "resource"}
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
+
+    result = await main._execute_proxy_mode(
+        body={"model": "local-most-powerful", "stream": True},
+        headers={"Authorization": "Bearer x"},
+        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        deployments=[
+            {"model_id": 32, "provider_id": 13},
+            {"model_id": 99, "provider_id": 1},
+        ],
+        log_id=None,
+        is_async_job=False,
+    )
+
+    assert result == {"status": "resource"}
+    assert called["deployments"] == [{"model_id": 32, "provider_id": 13}]
+    # The payload is rewritten to the canonical model name the provider expects.
+    assert called["body"]["model"] == "llama-3.1-70b"
+    assert called["allowed_models_override"] == [32]
+
+
+async def test_execute_proxy_mode_resolves_model_name_case_insensitively(monkeypatch):
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get_models_info(api_key_id=None):
+            return [{"id": 27, "name": "gemma2:2b", "aliases": []}]
+
+    called = {}
+
+    async def fake_resource_mode(  # noqa: ARG001
+        deployments,
+        body,
+        headers,
+        auth,
+        log_id,
+        is_async_job,
+        allowed_models_override=None,
+        request_id=None,
+        request_path=None,
+        skip_laura=False,
+        priority=1,
+        required_provider_id=None,
+    ):
+        called["body"] = body
+        return {"status": "resource"}
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
+
+    result = await main._execute_proxy_mode(
+        body={"model": "GEMMA2:2B", "stream": False},
+        headers={"Authorization": "Bearer x"},
+        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        deployments=[{"model_id": 27, "provider_id": 12}],
+        log_id=None,
+        is_async_job=False,
+    )
+
+    assert result == {"status": "resource"}
+    assert called["body"]["model"] == "gemma2:2b"
+
+
 async def test_pipeline_releases_capacity_when_context_resolution_fails():
     """A scheduled reservation is released if context resolution fails afterwards."""
 
     class FakeClassifier:
         def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
-            return [(27, 1.0, 1, 1)]
+            return [(27, 1.0, 1)]
 
     class FakeScheduler:
         def __init__(self):
@@ -282,12 +442,72 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
     assert scheduler.released[0][0:3] == (27, 12, "cloud")
 
 
+async def test_pipeline_rejects_scheduler_result_from_wrong_required_provider():
+    class FakeClassifier:
+        def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
+            return [(27, 1.0, 1)]
+
+    class FakeScheduler:
+        def __init__(self):
+            self.released = []
+
+        async def schedule(self, request):
+            assert request.required_provider_id == 20
+            return SchedulingResult(
+                model_id=27,
+                provider_id=10,
+                provider_type="logosnode",
+                queue_entry_id=None,
+                was_queued=False,
+                queue_depth_at_schedule=0,
+            )
+
+        def release(self, model_id, provider_id, provider_type, request_id):
+            self.released.append((model_id, provider_id, provider_type, request_id))
+
+        def get_total_queue_depth(self):
+            return 0
+
+        def update_provider_stats(self, model_id, provider_id, headers):  # noqa: ARG002
+            return None
+
+    context_resolver = MagicMock()
+    scheduler = FakeScheduler()
+    pipeline = RequestPipeline(
+        classifier=FakeClassifier(),
+        scheduler=scheduler,
+        executor=MagicMock(),
+        context_resolver=context_resolver,
+        monitoring=MagicMock(),
+    )
+
+    result = await pipeline.process(
+        PipelineRequest(
+            payload={"messages": [{"role": "user", "content": "hi"}]},
+            headers={},
+            allowed_models=[27],
+            deployments=[
+                {"model_id": 27, "provider_id": 10, "type": "logosnode"},
+                {"model_id": 27, "provider_id": 20, "type": "logosnode"},
+            ],
+            policy=None,
+            request_id="benchmark-1",
+            required_provider_id=20,
+        )
+    )
+
+    assert result.success is False
+    assert result.error == "Required provider affinity could not be satisfied"
+    assert scheduler.released == [(27, 10, "logosnode", "benchmark-1")]
+    context_resolver.resolve_context.assert_not_called()
+
+
 async def test_pipeline_releases_capacity_when_context_resolution_raises():
     """A scheduled reservation is released if context resolution raises."""
 
     class FakeClassifier:
         def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
-            return [(27, 1.0, 1, 1)]
+            return [(27, 1.0, 1)]
 
     class FakeScheduler:
         def __init__(self):

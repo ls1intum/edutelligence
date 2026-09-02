@@ -1,0 +1,213 @@
+"""Tests that the application actually assembles.
+
+The unit tests around capacity and the state machine never import `main`, so a
+route declared in a way FastAPI rejects — a 204 with a response model, a
+duplicated path — would pass every one of them and then crash on startup. These
+tests import the app and inspect what it built.
+"""
+
+from __future__ import annotations
+
+import pytest
+from app import main
+from fastapi.routing import APIRoute
+from starlette.status import HTTP_204_NO_CONTENT
+
+
+@pytest.fixture(scope="module")
+def routes() -> list[APIRoute]:
+    return [r for r in main.app.routes if isinstance(r, APIRoute)]
+
+
+def test_app_imports_and_builds_its_routes(routes):
+    # Importing `main` is itself the assertion: FastAPI validates every route
+    # at decoration time, so an invalid one raises here rather than in prod.
+    assert len(routes) > 10
+
+
+def test_no_route_returns_a_body_with_204(routes):
+    for route in routes:
+        if route.status_code == HTTP_204_NO_CONTENT:
+            assert route.response_model is None, (
+                f"{route.path} returns 204 but declares a response model; " "FastAPI refuses to start the app"
+            )
+
+
+def test_every_route_has_a_unique_method_and_path(routes):
+    seen: set[tuple[str, str]] = set()
+    for route in routes:
+        for method in route.methods or set():
+            key = (method, route.path)
+            assert key not in seen, f"duplicate route {method} {route.path}"
+            seen.add(key)
+
+
+def test_only_health_is_unauthenticated(routes):
+    """Every route but the health check must require the operator role.
+
+    A new endpoint added without the dependency would otherwise expose session
+    control — including cancelling other people's work — to any caller.
+    """
+    open_paths = {"/health", "/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}
+    for route in routes:
+        if route.path in open_paths:
+            continue
+        dependency_names = {getattr(d.call, "__name__", "") for d in route.dependant.dependencies}
+        assert "require_agent_operator" in dependency_names, f"{route.path} does not require the operator role"
+
+
+def test_openapi_schema_generates(routes):
+    # Schema generation exercises every response model; a bad annotation shows
+    # up here rather than the first time someone opens /docs.
+    schema = main.app.openapi()
+    assert schema["info"]["title"] == "Logos Agent Runner"
+    assert "/sessions" in schema["paths"]
+
+
+class TestScreenshotContainment:
+    """What the screenshot route may hand out.
+
+    The screenshots are written by the session itself, which runs
+    unprivileged: it can leave a link named like a screenshot pointing at
+    anything the runner can read — the runner's own /proc/self included.
+    The route must serve only regular files inside the session's own
+    artefact directory, verified without following links.
+    """
+
+    @staticmethod
+    def _patch_root(monkeypatch, tmp_path):
+        from dataclasses import replace
+
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+
+    @staticmethod
+    async def _body(response) -> bytes:
+        # A StreamingResponse's body_iterator is already async; iterating it
+        # is what a client receives, so a response without a stream fails
+        # loudly here instead of passing with an empty body.
+        return b"".join([chunk async for chunk in response.body_iterator])
+
+    async def test_a_regular_file_is_served(self, monkeypatch, tmp_path):
+        from app.main import get_screenshot
+
+        self._patch_root(monkeypatch, tmp_path)
+        directory = tmp_path / "7" / "screenshots"
+        directory.mkdir(parents=True)
+        payload = b"\x89PNG fake bytes"
+        (directory / "shot.png").write_bytes(payload)
+
+        response = await get_screenshot(session_id=7, name="shot.png", _=None)
+
+        assert response.status_code == 200
+        assert response.media_type == "image/png"
+        assert response.headers["content-length"] == str(len(payload))
+        assert await self._body(response) == payload
+
+    async def test_a_regular_file_is_streamed_over_the_asgi_layer(self, monkeypatch, tmp_path):
+        # Through the real ASGI call path, not by iterating the attribute:
+        # a plain Response object sent by that path carries only its
+        # (empty) body — a route that "serves" a file that way would pass
+        # any test that reads body_iterator by hand and still ship zero
+        # bytes to the browser.
+        import httpx
+        from app.auth import require_agent_operator
+
+        self._patch_root(monkeypatch, tmp_path)
+        directory = tmp_path / "7" / "screenshots"
+        directory.mkdir(parents=True)
+        payload = b"\x89PNG real bytes for the asgi path"
+        (directory / "shot.png").write_bytes(payload)
+
+        main.app.dependency_overrides[require_agent_operator] = lambda: None
+        try:
+            transport = httpx.ASGITransport(app=main.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.get("/sessions/7/screenshots/shot.png")
+        finally:
+            main.app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        assert response.headers["content-length"] == str(len(payload))
+        assert response.content == payload
+
+    async def test_a_symlinked_screenshots_directory_is_not_followed(self, monkeypatch, tmp_path):
+        # The agent can replace the whole screenshots directory with a link
+        # into runner space (its own /proc/self included): resolving such a
+        # link as the trusted root would make every file under it pass the
+        # containment check and be served.
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "environ").write_text("GITHUB_TOKEN=must-not-leave")
+        directory = tmp_path / "7"
+        directory.mkdir(parents=True)
+        (directory / "screenshots").symlink_to(outside)
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="environ", _=None)
+
+        assert exc.value.status_code == 404
+        # The target was never opened and stays untouched.
+        assert (outside / "environ").exists()
+
+    async def test_a_symlinked_file_is_not_served(self, monkeypatch, tmp_path):
+        # The same trick one level down: a link named like a screenshot,
+        # into a file outside the session's artefact directory.
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.png").write_bytes(b"runner file")
+        directory = tmp_path / "7" / "screenshots"
+        directory.mkdir(parents=True)
+        (directory / "shot.png").symlink_to(outside / "secret.png")
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="shot.png", _=None)
+
+        assert exc.value.status_code == 404
+
+    async def test_a_dangling_symlink_file_is_not_served(self, monkeypatch, tmp_path):
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+        directory = tmp_path / "7" / "screenshots"
+        directory.mkdir(parents=True)
+        (directory / "shot.png").symlink_to(tmp_path / "never-created")
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="shot.png", _=None)
+
+        assert exc.value.status_code == 404
+
+    async def test_a_traversal_name_is_refused(self, monkeypatch, tmp_path):
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="../secret.png", _=None)
+
+        assert exc.value.status_code == 400
+
+    async def test_a_missing_file_is_not_found(self, monkeypatch, tmp_path):
+        from app.main import get_screenshot
+        from fastapi import HTTPException
+
+        self._patch_root(monkeypatch, tmp_path)
+        (tmp_path / "7" / "screenshots").mkdir(parents=True)
+
+        with pytest.raises(HTTPException) as exc:
+            await get_screenshot(session_id=7, name="nope.png", _=None)
+
+        assert exc.value.status_code == 404

@@ -1,4 +1,6 @@
 import json
+import logging
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -7,6 +9,7 @@ import pytest
 import logos as main
 from logos import ExecutionResult
 from logos.errors import UpstreamStreamError
+from logos.terminal_logging import strip_ansi
 
 
 def _make_dummy_db(cost_micro_cents=None):
@@ -188,9 +191,136 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
             "result_status": "success",
             "error_message": None,
             "cold_start": False,
+            "usage_tokens": {
+                "prompt_tokens": 3,
+                "completion_tokens": 5,
+                "total_tokens": 8,
+            },
         }
     ]
     assert release_calls == [(27, 12, "logosnode", "req-stream")]
+
+
+@pytest.mark.asyncio
+async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
+    # vLLM lanes report usage.prompt_tokens_details.cached_tokens (the worker
+    # starts them with --enable-prompt-tokens-details); the orchestrator must
+    # relay it to the application and log it the same way as the cloud
+    # provider's cached count (#813).
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def fake_send_stream_command(**kwargs):  # noqa: ARG001
+        chunks = [
+            b'data: {"id":"chunk-1","choices":[{"delta":{"content":"hi"}}]}\n\n',
+            b'data: {"id":"chunk-1","choices":[],"usage":{"prompt_tokens":10,'
+            b'"completion_tokens":4,"total_tokens":14,'
+            b'"prompt_tokens_details":{"cached_tokens":6}}}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+        for chunk in chunks:
+            yield chunk
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=fake_send_stream_command),
+        raising=False,
+    )
+
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        43,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-cached",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    body = await _read_stream_response(response)
+
+    # The client sees the provider's usage verbatim, details included.
+    assert '"prompt_tokens_details":{"cached_tokens":6}' in body
+    assert dummy_db.payload_calls[0]["usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+        "prompt_cached_tokens": 6,
+    }
+
+
+@pytest.mark.asyncio
+async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
+    # The lane's usage.prompt_tokens_details must reach the application in
+    # the response and land in the request log as prompt_cached_tokens,
+    # mirroring the cloud path (#813).
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def send_command(**kwargs):  # noqa: ARG001
+        return {
+            "status_code": 200,
+            "body": {
+                "id": "cmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "total_tokens": 14,
+                    "prompt_tokens_details": {"cached_tokens": 6},
+                },
+            },
+            "headers": {"content-type": "application/json"},
+        }
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_command=send_command),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="local-model"),
+        {"model": "local-model", "messages": [{"role": "user", "content": "hi"}]},
+        44,
+        12,
+        27,
+        -1,
+        {"classified": True},
+        scheduling_stats={
+            "request_id": "req-sync-cached",
+            "provider_type": "logosnode",
+        },
+    )
+
+    content = json.loads(response.body)
+    assert content["usage"]["prompt_tokens_details"]["cached_tokens"] == 6
+    assert dummy_db.payload_calls[0]["usage"]["prompt_cached_tokens"] == 6
 
 
 @pytest.mark.asyncio
@@ -230,7 +360,7 @@ async def test_cloud_streaming_response_returns_eur_cost_in_terminal_usage(monke
         json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: {") and '"usage"' in line
     )
     assert usage_event["usage"]["cost"] == 0.00000375
-    assert usage_event["usage"]["cost_currency"] == "EUR"
+    assert usage_event["usage"]["cost_currency"] == "USD"
     assert dummy_db.payload_calls[0]["payload"]["usage"]["cost"] == 0.00000375
 
 
@@ -272,7 +402,7 @@ async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
 
     body = json.loads(response.body)
     assert body["usage"]["cost"] == 0.00012345
-    assert body["usage"]["cost_currency"] == "EUR"
+    assert body["usage"]["cost_currency"] == "USD"
     assert dummy_db.payload_calls[0]["usage"] == {
         "prompt_tokens": 10,
         "completion_tokens": 5,
@@ -471,6 +601,8 @@ async def test_http_streaming_terminal_error_is_recorded(monkeypatch, terminal_e
             "result_status": "error",
             "error_message": terminal_error,
             "cold_start": False,
+            # The stream carried no usage chunk, so nothing was extracted.
+            "usage_tokens": {},
         }
     ]
     assert completion_logs[0]["status"] == "error"
@@ -668,6 +800,8 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
             "result_status": "error",
             "error_message": "bad request",
             "cold_start": False,
+            # An error body carries no usage, so nothing was extracted.
+            "usage_tokens": {},
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-sync-error")]
@@ -735,6 +869,11 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
             "result_status": "success",
             "error_message": None,
             "cold_start": True,
+            "usage_tokens": {
+                "prompt_tokens": 11,
+                "completion_tokens": 13,
+                "total_tokens": 24,
+            },
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-job")]
@@ -1160,3 +1299,68 @@ async def test_proxy_sync_response_logs_status_and_skips_ttft_on_error(monkeypat
             "error_message": "proxy failed",
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# _log_request_completion — prefix-cache hit rate field (issue 748)
+# ---------------------------------------------------------------------------
+
+
+def _completion_log_line(monkeypatch, caplog, usage, status="success"):
+    """Run _log_request_completion and return the emitted INFO line (ANSI-stripped)."""
+    monkeypatch.setattr(main, "model_name_cache", {"get": lambda model_id: "test-model"})
+    with caplog.at_level(logging.INFO, logger="LogosLogger"):
+        main._log_request_completion(
+            model_id=1,
+            request_id="req-1",
+            start_time=time.perf_counter() - 1.0,
+            usage=usage,
+            status=status,
+            is_streaming=False,
+        )
+    lines = [record.getMessage() for record in caplog.records if "done " in record.getMessage()]
+    return strip_ansi(lines[-1]) if lines else ""
+
+
+def test_log_request_completion_includes_prefix_hit_rate(monkeypatch, caplog):
+    """Flattened usage (prompt_cached_tokens) → prefix_hit=NN% on the log line."""
+    line = _completion_log_line(
+        monkeypatch,
+        caplog,
+        {"prompt_tokens": 1000, "completion_tokens": 100, "prompt_cached_tokens": 420},
+    )
+    assert "prefix_hit=42%" in line
+
+
+def test_log_request_completion_includes_prefix_hit_rate_from_nested_details(monkeypatch, caplog):
+    """Raw streaming usage (prompt_tokens_details.cached_tokens) is also reported."""
+    line = _completion_log_line(
+        monkeypatch,
+        caplog,
+        {
+            "prompt_tokens": 1000,
+            "completion_tokens": 100,
+            "prompt_tokens_details": {"cached_tokens": 750},
+        },
+    )
+    assert "prefix_hit=75%" in line
+
+
+def test_log_request_completion_includes_zero_prefix_hit(monkeypatch, caplog):
+    """An explicit cached_tokens=0 is a real 0% hit, not 'not reported'."""
+    line = _completion_log_line(
+        monkeypatch,
+        caplog,
+        {"prompt_tokens": 1000, "completion_tokens": 100, "prompt_cached_tokens": 0},
+    )
+    assert "prefix_hit=0%" in line
+
+
+def test_log_request_completion_omits_prefix_hit_when_unreported(monkeypatch, caplog):
+    """Providers that do not report cached tokens add no prefix_hit field."""
+    line = _completion_log_line(
+        monkeypatch,
+        caplog,
+        {"prompt_tokens": 1000, "completion_tokens": 100},
+    )
+    assert "prefix_hit" not in line
