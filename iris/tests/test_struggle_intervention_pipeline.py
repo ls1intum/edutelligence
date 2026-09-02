@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.struggle.episode_dto import EpisodeDTO, EpisodeHintDTO
@@ -984,3 +984,44 @@ def test_parse_gate_result_rejects_boolean_confidence():
         ).confidence
         == 0.87
     )
+
+
+def test_a_crashing_run_still_reports_the_usage_it_accrued():
+    """
+    The outer catch in __call__ is the one failure path that runs outside the agent's execution
+    state, so it can only reach self.tokens. The base pipeline binds that name to the run's token
+    list; without it a crashed run reports an empty list, Artemis books nothing, and the spend of
+    every LLM call the run made before the crash disappears from the accounting.
+    """
+    pipeline = StruggleInterventionPipeline.__new__(StruggleInterventionPipeline)
+    pipeline.tokens = []
+    spent = SimpleNamespace(num_input_tokens=120, num_output_tokens=40)
+
+    def crash_after_spending(state):
+        state.tokens.append(spent)
+        raise RuntimeError("model call blew up mid-run")
+
+    # Everything before the agent loop is stubbed out; the same approach as
+    # test_chat_latency_ordering.py, which runs the shared __call__ without an LLM or a database.
+    pipeline.prepare_state = lambda state: None
+    pipeline.build_system_message = lambda state: "system prompt"
+    pipeline.get_tools = lambda state: []
+    pipeline.create_tracing_context = lambda dto, variant: None
+    pipeline.should_stream_agent_response = lambda state: False
+    pipeline.execute_agent = crash_after_spending
+
+    callback = MagicMock()
+    variant = MagicMock()
+    variant.id = "default"
+    variant.model.return_value = "some-model-id"
+    dto = SimpleNamespace(chat_history=[], settings=None, intent="decide")
+
+    with (
+        patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
+        patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
+        patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
+        patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel"),
+    ):
+        pipeline(dto, variant, callback)
+
+    assert callback.fail.call_args.kwargs["tokens"] == [spent]
