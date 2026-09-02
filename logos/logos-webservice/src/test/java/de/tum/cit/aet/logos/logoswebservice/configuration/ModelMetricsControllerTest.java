@@ -777,15 +777,21 @@ class ModelMetricsControllerTest {
      * Waits until the derived stamps of the given pairs stop changing for
      * 300 ms: re-derivations triggered by previous tests share the async
      * executor and are not quiesced between tests, so a test that races a
-     * type change first drains any in-flight derivation.
+     * type change first drains any in-flight derivation. Bounded like
+     * {@link #awaitUntil}: stamps that keep moving for 10 s fail the test
+     * instead of hanging the build.
      */
     private void awaitQuiescent(int[][] pairs) throws InterruptedException {
         Timestamp[] stamps = new Timestamp[pairs.length];
         for (int i = 0; i < pairs.length; i++) {
             stamps[i] = pairStamp(pairs[i][0], pairs[i][1]);
         }
+        long deadline = System.currentTimeMillis() + 10_000;
         long stableFor = 0;
         while (stableFor < 300) {
+            if (System.currentTimeMillis() > deadline) {
+                throw new AssertionError("pairs did not become quiescent within 10 s");
+            }
             Thread.sleep(50);
             boolean changed = false;
             for (int i = 0; i < pairs.length; i++) {
