@@ -546,6 +546,28 @@ def test_is_gguf_ref_cached_sharded_quant_family_must_be_in_one_path(tmp_path: P
     assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
 
 
+def test_is_gguf_ref_cached_sharded_quant_families_do_not_complete_each_other(tmp_path: Path) -> None:
+    model = "unsloth/Qwen3-8B-GGUF"
+    # Different filename families of the same quant must not complete each
+    # other: A-…-00001-of-00002 + B-…-00002-of-00002 in the same directory
+    # hold indices {1,2}, but NEITHER family is loadable. Merging their
+    # indices reported the partial cache complete and suppressed the
+    # prefetch that repairs it.
+    cross_family = tmp_path / "cross_family"
+    _write_gguf(cross_family, model, ["A-Q4_K_M-00001-of-00002.gguf", "B-Q4_K_M-00002-of-00002.gguf"])
+    assert gguf.is_gguf_ref_cached(str(cross_family), f"{model}:Q4_K_M") is False
+    # The declared total is part of the family key too: one shard of a
+    # 2-shard family plus one shard of a 3-shard family of the same base
+    # name are still two incomplete models.
+    cross_total = tmp_path / "cross_total"
+    _write_gguf(cross_total, model, ["A-Q4_K_M-00001-of-00002.gguf", "A-Q4_K_M-00002-of-00003.gguf"])
+    assert gguf.is_gguf_ref_cached(str(cross_total), f"{model}:Q4_K_M") is False
+    # A single complete family stays available.
+    complete = tmp_path / "complete"
+    _write_gguf(complete, model, ["A-Q4_K_M-00001-of-00002.gguf", "A-Q4_K_M-00002-of-00002.gguf"])
+    assert gguf.is_gguf_ref_cached(str(complete), f"{model}:Q4_K_M") is True
+
+
 def test_is_gguf_ref_cached_local_dir_ref_checks_the_directory(tmp_path: Path) -> None:
     # A local dir:quant reference is a filesystem fact, not a Hub cache: the
     # check targets the directory WITHOUT the quant suffix (no path ever
