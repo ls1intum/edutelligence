@@ -2452,6 +2452,17 @@ class LaneManager:
                 port,
                 new_config.num_parallel,
             )
+
+            # A model-swap restart (apply_lanes reconfigure, reconfigure_lane)
+            # changes the sleep reserve: the replacement model may sleep with a
+            # larger host-RAM footprint than the one it replaced. Re-plan now
+            # that the new handle is registered, BEFORE the new model's first
+            # sleep — the post-sleep hook only fires after its weights are
+            # already in host RAM, and the periodic tick may not run in time.
+            # Safe under self._lock: the re-plan's lane inspection takes no
+            # lock of its own (as in the add loop above). Crash/stuck recovery
+            # restarts the same config, so the re-plan is a no-op there.
+            await self._notify_lane_added()
         finally:
             # Registration (or the cleanup in the spawn-failure branch) has
             # settled the model's fate — see _add_lane_unlocked.
