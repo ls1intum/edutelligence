@@ -547,6 +547,33 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 if learned_e2e is not None:
                     observed_e2e_p50_s = learned_e2e
 
+            # For RECLAIM tiers the eviction candidate may itself be busy:
+            # compute the minimum queue_wait across loaded sibling lanes so the
+            # scheduler knows how long it must wait before eviction can start.
+            # We take the minimum (optimal: evict the lane that drains fastest).
+            reclaim_queue_wait_s = 0.0
+            if all_provider_lanes:
+                candidate_waits = []
+                for lane in all_provider_lanes:
+                    if lane.model_name == (view.model_name or ""):
+                        continue
+                    if lane.runtime_state not in ("loaded", "running"):
+                        continue
+                    qw = float(lane.queue_waiting or 0.0)
+                    if qw <= 0.0:
+                        continue
+                    # Use the lane's own e2e p50 if available; fall back to
+                    # the learned value for that model or the global constant.
+                    e2e = float(lane.e2e_latency_p50_seconds or 0.0)
+                    if e2e <= 0.0 and self._latency_store is not None:
+                        learned = self._latency_store.get_e2e_latency_s(lane.model_name)
+                        e2e = learned if learned is not None else DEFAULT_GENERATION_TIME_S
+                    if e2e <= 0.0:
+                        e2e = DEFAULT_GENERATION_TIME_S
+                    candidate_waits.append(qw * e2e)
+                if candidate_waits:
+                    reclaim_queue_wait_s = min(candidate_waits)
+
             return estimate_ettft_local(
                 view,
                 effective_parallel=effective_parallel,
@@ -558,6 +585,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 observed_e2e_p50_s=observed_e2e_p50_s,
                 all_provider_lanes=all_provider_lanes,
                 overhead_overrides=overhead_overrides,
+                reclaim_queue_wait_s=reclaim_queue_wait_s,
             )
 
         if provider_type == "azure":

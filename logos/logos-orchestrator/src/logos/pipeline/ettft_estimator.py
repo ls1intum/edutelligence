@@ -272,6 +272,7 @@ def estimate_ettft_local(
     observed_e2e_p50_s: float = 0.0,
     all_provider_lanes: Optional[List[LaneSchedulerSignals]] = None,
     overhead_overrides: Optional[dict] = None,
+    reclaim_queue_wait_s: float = 0.0,
 ) -> EttftEstimate:
     """Estimate ETTFT for a local (logosnode) model from its scheduler view.
 
@@ -283,6 +284,12 @@ def estimate_ettft_local(
     whether eviction targets are idle (fast, ~3s) or busy (slow, ~30s).
     Queue wait uses the observed e2e latency p50 as service time when available,
     falling back to a configured constant.
+
+    For *_RECLAIM tiers an additional ``reclaim_queue_wait_s`` is included: the
+    eviction-candidate model may itself be busy, so the scheduler must wait for
+    its queue to drain before eviction can happen.  This is computed by the
+    caller using the same formula as the BUSY queue_wait
+    (queue_waiting × e2e_latency_p50) applied to the eviction candidate.
 
     ``overhead_overrides`` is an optional dict mapping ReadinessTier → float
     (seconds) produced by a LatencyStore.  When provided, learned values
@@ -371,7 +378,7 @@ def estimate_ettft_local(
             reclaim_s = 0.0
             reason = f"Best lane state is '{best_state}', cold-start ~{overhead:.0f}s"
 
-        expected = overhead + reclaim_s + queue_wait_s
+        expected = overhead + reclaim_s + queue_wait_s + (reclaim_queue_wait_s if needs_reclaim else 0.0)
         reason += queue_suffix
 
         return EttftEstimate(
@@ -414,7 +421,7 @@ def estimate_ettft_local(
             reclaim_s = 0.0
             reason = f"Best lane is sleeping, wake ~{overhead:.1f}s"
 
-        expected = overhead + reclaim_s + queue_wait_s
+        expected = overhead + reclaim_s + queue_wait_s + (reclaim_queue_wait_s if needs_reclaim else 0.0)
         reason += queue_suffix
 
         return EttftEstimate(

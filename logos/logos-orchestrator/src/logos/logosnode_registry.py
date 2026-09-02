@@ -11,13 +11,14 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator, Callable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
 from logos.monitoring import prometheus_metrics as prom
-from logos.pipeline.latency_store import LatencyStore
-from logos.pipeline.ettft_estimator import ReadinessTier
+
+if TYPE_CHECKING:
+    from logos.pipeline.latency_store import LatencyStore
 from logos.terminal_logging import (
     BOLD,
     CYAN,
@@ -390,6 +391,10 @@ class LogosNodeRuntimeRegistry:
         """Extract timing observations from a worker status update and feed them
         to the LatencyStore so the scheduler can use learned values."""
         assert self._latency_store is not None
+        # Lazy import to avoid a circular dependency at module load time:
+        # logosnode_registry ← latency_store ← ettft_estimator ← sdi.models
+        #   ← sdi.providers.logosnode_provider ← logosnode_registry
+        from logos.pipeline.ettft_estimator import ReadinessTier  # noqa: PLC0415
         for lane in runtime.get("lanes") or []:
             if not isinstance(lane, dict):
                 continue
