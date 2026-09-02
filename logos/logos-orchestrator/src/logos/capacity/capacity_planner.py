@@ -3407,6 +3407,28 @@ class CapacityPlanner:
             f"≥ floor={self.BALANCE_WAKE_QUEUE_FLOOR}; VRAM free"
         )
 
+    def _provider_serves_model(self, provider_id: int, model_name: str) -> bool:
+        """True while the provider holds an awake lane for the model.
+
+        Same "active" predicate the demand pass applies to the worker it is
+        planning for: loaded/running and not asleep. The best-first gate
+        uses it to tell a winner that only wants a speculative additional
+        lane (scale-out) from one that still needs its first — an awake
+        winner can only plan scale-out for the model, a non-awake winner
+        plans a first lane of its own and best-first keeps deciding between
+        the two.
+        """
+        try:
+            provider_lanes = self._facade.get_all_provider_lane_signals(provider_id)
+        except Exception:
+            return False
+        return any(
+            lane.model_name == model_name
+            and lane.runtime_state in ("loaded", "running")
+            and lane.sleep_state != "sleeping"
+            for lane in provider_lanes
+        )
+
     def _compute_demand_actions(
         self,
         provider_id: int,
@@ -3526,6 +3548,18 @@ class CapacityPlanner:
         for model_name, score in candidates:
             if capabilities and model_name not in capabilities:
                 continue
+            # An awake, live lane for this model on this worker — i.e. the
+            # model is already served here. The negation (a first lane) is
+            # what both suppression exceptions below compare against: a
+            # first lane is demand-driven — it is the difference between
+            # serving and queueing — while a plan on a worker that already
+            # serves the model is only speculative scale-out.
+            first_lane_here = not any(
+                lane.model_name == model_name
+                and lane.runtime_state in ("loaded", "running")
+                and lane.sleep_state != "sleeping"
+                for lane in lanes_by_model.get(model_name, [])
+            )
             # Phase 1.3: skip a model that another provider already planned a
             # wake/load for in this same cycle. Prevents two providers from
             # racing to cold-load the same model when both have capability.
@@ -3536,12 +3570,6 @@ class CapacityPlanner:
             # extra copy is opportunistic, so the necessary action must not
             # be displaced by the optional one.
             if self._cross_provider_dedup and cycle_planned_models is not None and model_name in cycle_planned_models:
-                first_lane_here = not any(
-                    lane.model_name == model_name
-                    and lane.runtime_state in ("loaded", "running")
-                    and lane.sleep_state != "sleeping"
-                    for lane in lanes_by_model.get(model_name, [])
-                )
                 if not (
                     first_lane_here
                     and cycle_planned_additional_models is not None
@@ -3559,13 +3587,29 @@ class CapacityPlanner:
             # the winner can serve it (wake on a sleeping lane beats a cold
             # load on a different worker even when both have capability).
             #
-            # Exception: balance wake. The ranker's cost model answers
+            # Exception 1: balance wake. The ranker's cost model answers
             # "which worker is cheapest to make able to serve" — an awake
             # lane costs 0.0s and always wins over a 2.0s wake, so a
             # sleeping standby replica of a hot model is skipped forever
             # while the awake incumbent's queue grows. When the winner is
             # saturated, fall through so the WAKE branch can spread the
             # load (wake path only, never evicts — enforced below).
+            #
+            # Exception 2: a queued first lane against a serving winner.
+            # An awake winner costs 0.0, so it always wins the ranking —
+            # but a winner that already serves the model can only plan a
+            # speculative *additional* lane this cycle (scale-out), while
+            # this worker's first lane is the demand-driven action:
+            # requests are queued for it here and the replication pass
+            # cannot compensate (it never evicts, and it needs sustained
+            # demand the queued request may not yet produce). The optional
+            # copy must not veto the necessary one. Queued demand is the
+            # deliberate trigger: a mere speculative score keeps the
+            # ranker's decision (a cold load for score alone is a
+            # replication decision, not a demand one). The inverse stays
+            # suppressed: a winner without an awake lane plans a first
+            # lane of its own (wake or cold load), and best-first keeps
+            # deciding between two first lanes.
             balance_wake_reason: Optional[str] = None
             if (
                 self._cross_provider_best_first
@@ -3581,13 +3625,25 @@ class CapacityPlanner:
                     cycle_balance_wake_models,
                 )
                 if balance_wake_reason is None:
-                    logger.info(
-                        "Skipping demand action for worker=%s model=%s: best-first" " ranker picked worker=%s",
-                        self._facade.get_provider_name(provider_id) or provider_id,
-                        model_name,
-                        self._facade.get_provider_name(winner_pid) or winner_pid,
-                    )
-                    continue
+                    queued_here = self._get_queue_depth_for_model(provider_id, model_name, lanes)
+                    if first_lane_here and queued_here > 0 and self._provider_serves_model(winner_pid, model_name):
+                        logger.info(
+                            "Allowing first lane for worker=%s model=%s: best-first"
+                            " winner worker=%s already serves the model (it only plans an"
+                            " additional lane) and %d request(s) are queued here",
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                            model_name,
+                            self._facade.get_provider_name(winner_pid) or winner_pid,
+                            queued_here,
+                        )
+                    else:
+                        logger.info(
+                            "Skipping demand action for worker=%s model=%s: best-first" " ranker picked worker=%s",
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                            model_name,
+                            self._facade.get_provider_name(winner_pid) or winner_pid,
+                        )
+                        continue
             model_lanes = lanes_by_model.get(model_name, [])
             # Phase 3.4: per-lane VRAM ledger gate — under v2, only skip this
             # model when an in-flight reservation overlaps the GPUs its target

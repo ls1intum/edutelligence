@@ -941,6 +941,88 @@ class TestCycleDedupAdditionalLanes:
         # B's first lane is the necessary action — it proceeds.
         assert ("load", 2, "planner-X") in [(a.action, a.provider_id, a.lane_id) for a in empty_actions]
 
+    def test_first_lane_not_vetoed_by_a_serving_winner_with_queued_demand(self):
+        """Integrated cycle with the default settings (dedup + best-first):
+        worker A already runs X, so the pre-cycle ranker picks it at cost
+        zero, and A's pass plans the speculative X-2. Worker B has no X
+        lane, has a request queued for X, and can only load X by evicting
+        another model's lane. B's first lane is the necessary action —
+        without the best-first first-lane exception, A (the pre-cycle
+        winner) vetoes it, and the replication pass cannot compensate
+        because it never evicts: B's queued request would go unserved
+        while the optional scale-out wins."""
+        host = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        # B holds another model's lane and has no headroom for X: its
+        # first load needs the eviction set.
+        needy = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[_lane("planner-other", "other", "running")],
+            capabilities=["X", "other"],
+            available_vram_mb=5_000,
+            profiles={"X": _profile(), "other": _profile()},
+        )
+        host_planner = _planner(host, score=2.5, replicate=True)
+        needy_planner = _planner(needy, score=2.5, replicate=True)
+        host_planner._cross_provider_dedup = True
+        needy_planner._cross_provider_dedup = True
+        # B's planner must see A: the first-lane exception checks the
+        # winner's lanes through the facade.
+        needy_planner._facade = _MockFacade([host, needy])
+        # The request waiting for X on B sits in the scheduler queue.
+        needy_planner._facade.get_scheduler_queue_depth_by_model_name = lambda model_name, provider_id: (
+            1 if (provider_id, model_name) == (2, "X") else 0
+        )
+        # Pre-cycle best-first ranking: A runs X awake → cost 0.0 → winner.
+        best = {"X": 1}
+        cycle_planned_models: set = set()
+        cycle_planned_additional_models: set = set()
+        cluster = {"X": 1}
+        balance: set = set()
+
+        # A's pass: the additional lane clears the scale-out gate and
+        # lifts X into both cycle sets.
+        host_actions = host_planner._compute_demand_actions(
+            1,
+            host.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            best_provider_for_model=best,
+            cluster_lanes_by_model=cluster,
+            cycle_balance_wake_models=balance,
+        )
+        assert ("load", 1, "planner-X-2") in [(a.action, a.provider_id, a.lane_id) for a in host_actions]
+        assert "X" in cycle_planned_models
+        assert "X" in cycle_planned_additional_models
+
+        # B's pass: a request is queued for X and the only feasible
+        # placement evicts "other".
+        needy_planner._pick_cold_load_placement = lambda *a, **k: (
+            frozenset({0}),
+            [(_lane("planner-other", "other", "running"), "stop", 0.0)],
+        )
+        needy_actions = needy_planner._compute_demand_actions(
+            2,
+            needy.lanes,
+            cycle_planned_models=cycle_planned_models,
+            cycle_planned_additional_models=cycle_planned_additional_models,
+            best_provider_for_model=best,
+            cluster_lanes_by_model=cluster,
+            cycle_balance_wake_models=balance,
+        )
+        kinds = [(a.action, a.provider_id, a.lane_id) for a in needy_actions]
+        # B's first lane is planned — together with its eviction — not
+        # vetoed by the serving winner.
+        assert ("stop", 2, "planner-other") in kinds
+        assert ("load", 2, "planner-X") in kinds
+
     def test_first_lane_planned_elsewhere_still_suppresses(self):
         """The dedup itself still works: worker A plans the first lane, so
         worker B's second first lane for the same model is skipped —
