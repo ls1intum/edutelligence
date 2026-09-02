@@ -594,3 +594,23 @@ class StruggleInterventionCallback(StatusCallback):
             run_id,
             StruggleInterventionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
+        self._trailing_finish_seen = False
+
+    def _reject_after_terminal(self, operation: str) -> None:
+        """Absorb the one trailing finish this pipeline's shape produces.
+
+        post_agent_hook owns the terminal frame here: it finishes the decision itself, or fails
+        a help request that came back unusable. AbstractAgentPipeline then closes every run with
+        a finish of its own, which arrives after that and is rejected. It is structural, not an
+        anomaly, so it must not reach Sentry on every single run. Exactly one is absorbed; a
+        second one, and every rejected fail or update, stays an anomaly and is reported.
+        """
+        if operation == "finish" and not self._trailing_finish_seen:
+            self._trailing_finish_seen = True
+            logger.debug(
+                "Absorbed the trailing finish for run %s; the pipeline had already sent its "
+                "terminal frame",
+                self.run_id,
+            )
+            return
+        super()._reject_after_terminal(operation)
