@@ -688,3 +688,118 @@ def test_no_floor_configured_leaves_the_decision_to_tmpfs(ram_cache_env, monkeyp
 
     cache.set_host_ram_floor_mb(0.0)
     assert cache._would_starve_host(10**15) == (False, 0)
+
+
+# ---------------------------------------------------------------------------
+# The floor is re-checked for entries that are ALREADY in the cache
+#
+# The copy path checks the host-RAM floor before admitting NEW bytes, but an
+# entry that is already resident in tmpfs is handed out without a copy, so the
+# floor was never re-checked for it. That leaves two windows where a lane can
+# be launched from an entry the current sleep reserve no longer fits: one
+# cached under an earlier, smaller floor (e.g. a startup pre-population), and
+# one whose in-flight copy was admitted under that older floor and has since
+# finished. Both land on the same already-cached branch of ensure_cached.
+# ---------------------------------------------------------------------------
+
+
+def _prime_cached_entry(cache, model: str, monkeypatch) -> None:
+    """Copy *model* into the cache under a floor of 0 (as a startup
+    pre-population would), so the tests can then raise the floor and re-check
+    the already-resident entry."""
+    cache.set_host_ram_floor_mb(0.0)
+    monkeypatch.setattr(
+        "logos_worker_node.model_cache._host_ram_available_bytes",
+        lambda: 400_000 * 1024 * 1024,
+    )
+    assert cache.ensure_cached_sync(model) == str(cache._cache_hub.parent)
+    assert model in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_already_cached_entry_is_served_from_disk_when_the_floor_rises_past_it(ram_cache_env, monkeypatch):
+    """Regression: an entry already in tmpfs is now re-checked against the live
+    floor before it is handed to a lane. Once the re-plan has raised the sleep
+    reserve past it (the host is already below the floor with the entry in
+    place), the lane loads from the source HF_HOME instead of the tmpfs entry —
+    serving it from the entry would protect the entry (the lane reads it) and
+    leave the lane's first sleep short of planned host RAM."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _prime_cached_entry(cache, model, monkeypatch)
+
+    # The re-plan has since raised the sleep reserve; the host is now under it
+    # with the (12 MB) entry resident.
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: 50 * 1024 * 1024)
+
+    result = await cache.ensure_cached(model)
+
+    # Served from the source HF_HOME, not the over-floor tmpfs entry.
+    assert result == str(Path(ram_cache_env["source_hf"]).parent)
+    # Nothing evicted the entry — it is still in the cache, and is now
+    # evictable because the lane did not launch from it.
+    assert model in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_already_cached_entry_served_from_cache_when_host_above_floor(ram_cache_env, monkeypatch):
+    """The re-check must not over-reject: it gates on the host being BELOW the
+    floor, not on the entry's size. A host at or above the floor still serves
+    the already-cached model from the tmpfs cache."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _prime_cached_entry(cache, model, monkeypatch)
+
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr(
+        "logos_worker_node.model_cache._host_ram_available_bytes",
+        lambda: 150_000 * 1024 * 1024,
+    )
+
+    assert await cache.ensure_cached(model) == str(Path(ram_cache_env["tmpfs"]))
+
+
+@pytest.mark.asyncio
+async def test_already_cached_entry_floor_check_fails_open_without_meminfo(ram_cache_env, monkeypatch):
+    """Like the copy path, the already-cached re-check fails open: a set floor
+    with no /proc/meminfo read leaves the entry to be served from the cache,
+    exactly as before the floor existed."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _prime_cached_entry(cache, model, monkeypatch)
+
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: None)
+
+    assert await cache.ensure_cached(model) == str(Path(ram_cache_env["tmpfs"]))
+
+
+def test_ensure_cached_sync_rechecks_the_floor_for_an_already_cached_entry(ram_cache_env, monkeypatch):
+    """The sync path (used by calibration) applies the same re-check to an
+    already-resident entry."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _prime_cached_entry(cache, model, monkeypatch)
+
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: 50 * 1024 * 1024)
+
+    assert cache.ensure_cached_sync(model) == str(Path(ram_cache_env["source_hf"]).parent)
+    assert model in cache.cached_models()

@@ -297,6 +297,30 @@ class ModelRamCache:
             if model_name in self._cached_models:
                 cached = self._cache_hub / _hf_model_dir_name(model_name)
                 if cached.exists():
+                    # The copy path below re-checks the floor before admitting
+                    # NEW bytes, but this entry is already resident in tmpfs —
+                    # it was cached under an earlier, smaller floor (or its
+                    # in-flight copy finished under one) and the re-plan may
+                    # since have raised the sleep reserve past it. The right
+                    # question is whether the host is ALREADY below the floor
+                    # with the entry in place (size 0: nothing to add), not
+                    # whether adding it would be. Serving the lane from an
+                    # over-floor entry would protect it (the lane reads it) and
+                    # leave the lane's first sleep short of planned host RAM,
+                    # so when the host is under the floor serve from disk
+                    # instead — which also leaves the entry evictable by the
+                    # re-plan.
+                    starves, host_available = self._would_starve_host(0)
+                    if starves:
+                        logger.warning(
+                            "Model %s: already cached but host RAM (%d MB) is below the "
+                            "%d MB sleep reserve — loading from disk so the lane's "
+                            "first sleep has planned host RAM",
+                            model_name,
+                            host_available // (1024 * 1024),
+                            self._host_ram_floor_bytes // (1024 * 1024),
+                        )
+                        return str(self._source_hub.parent)
                     logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                     return str(self._cache_hub.parent)
                 self._cached_models.discard(model_name)
@@ -363,6 +387,21 @@ class ModelRamCache:
         if model_name in self._cached_models:
             cached = self._cache_hub / _hf_model_dir_name(model_name)
             if cached.exists():
+                # Same floor re-check as the async path: an entry resident
+                # under an earlier, smaller floor must not be served once the
+                # re-plan has raised the sleep reserve past it (see
+                # ensure_cached).
+                starves, host_available = self._would_starve_host(0)
+                if starves:
+                    logger.warning(
+                        "Model %s: already cached but host RAM (%d MB) is below the "
+                        "%d MB sleep reserve — loading from disk so the lane's "
+                        "first sleep has planned host RAM",
+                        model_name,
+                        host_available // (1024 * 1024),
+                        self._host_ram_floor_bytes // (1024 * 1024),
+                    )
+                    return str(self._source_hub.parent)
                 logger.info("Model %s: already in tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
             self._cached_models.discard(model_name)
