@@ -2714,3 +2714,46 @@ async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeyp
     assert handle._sharded_model_dir is None, "the lane must serve the full checkpoint"
     # The record is still on disk — it was not consumed into the handle.
     assert sc.rejection_state(target, current_version="0.8.0") == "skip"
+
+
+def test_sharded_rejection_reason_uses_the_loader_line() -> None:
+    """The recorded reason is the log line that identified the checkpoint as
+    the problem, so a later reader of the sidecar sees why it was rejected."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(
+        [
+            "Engine core initialization failed.",
+            'File ".../vllm/model_executor/model_loader/sharded_state_loader.py", line 154, in load_weights',
+        ]
+    )
+    assert "sharded_state_loader.py" in handle._sharded_rejection_reason()
+
+
+def test_sharded_rejection_reason_falls_back_when_nothing_matches() -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(["torch.OutOfMemoryError: CUDA out of memory.", "some unrelated line"])
+    assert handle._sharded_rejection_reason() == "vLLM rejected the pre-sharded checkpoint"
+
+
+def test_invalidate_sharded_checkpoint_records_the_version(monkeypatch, tmp_path) -> None:
+    """The handle's invalidation records a *version-scoped* rejection, not just
+    a bare rmtree — this is what makes the record survive a worker restart and
+    get retired when the vLLM version changes."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    lane = LaneConfig(model="org/Model-A", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+    handle._sharded_model_dir = str(target)
+    handle._recent_logs.extend(['File ".../sharded_state_loader.py", line 154, in load_weights'])
+
+    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.8.0")
+    assert handle._invalidate_sharded_checkpoint(lane) is True
+
+    rec = sc.read_rejection(target)
+    assert rec is not None
+    assert rec["vllm_version"] == "0.8.0"
+    assert "sharded_state_loader.py" in rec["reason"]

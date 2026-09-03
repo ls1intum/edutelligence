@@ -403,3 +403,23 @@ def test_rejection_survives_a_worker_restart(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(sc, "_run_conversion_subprocess", _boom)
     result = sc.ensure_sharded_checkpoint(model="org/Model-A", tensor_parallel_size=2, cache_root=str(tmp_path))
     assert result is None
+
+
+def test_current_vllm_version_reports_the_installed_version(monkeypatch) -> None:
+    import importlib.metadata as md
+
+    monkeypatch.setattr(md, "version", lambda _pkg: "1.2.3")
+    assert sc.current_vllm_version() == "1.2.3"
+
+
+def test_current_vllm_version_is_empty_when_vllm_is_absent(monkeypatch) -> None:
+    # The record is keyed on this, and the "unknown" path is what keeps the
+    # comparison conservative — so the fallback to "" is the behaviour that
+    # matters, not just the happy path.
+    import importlib.metadata as md
+
+    def _missing(_pkg):
+        raise md.PackageNotFoundError("vllm")
+
+    monkeypatch.setattr(md, "version", _missing)
+    assert sc.current_vllm_version() == ""
