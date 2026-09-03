@@ -3,8 +3,8 @@
 ``LectureRetrieval.fetch_context_content`` looks up the exact slide page chunks
 and transcription segments referenced by the student's current position so they
 can be pasted directly into the prompt, independently of the RAG lecture tool.
-That prompt context stays descriptive only; inline citation handles are reserved
-for actual lecture/FAQ retrieval tool results.
+This content is also stored so it can be cited without the agent calling the
+lecture retrieval tool.
 """
 
 # pylint: skip-file
@@ -117,8 +117,8 @@ def test_fetch_context_content_suppresses_unreleased_unit():
     pipeline._fetch_transcriptions_by_timestamp.assert_not_called()
 
 
-def test_current_view_content_is_stored_without_inline_citation_ids():
-    """Current-view content stays available without inflating the initial prompt."""
+def test_current_view_content_is_stored_with_inline_citation_ids():
+    """Current-view content must remain citable without the retrieval tool."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
     page_chunk = _make_page_chunk(3, "Page 3 content")
@@ -149,10 +149,10 @@ def test_current_view_content_is_stored_without_inline_citation_ids():
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). "
         "The content of this slide:"
-        "\n---\nPage 3 content\n---",
+        "\n---\nPage 3 content\nCitation id: [cite:1]\n---",
         "The student is currently at 50.0 seconds in the lecture video of the "
         "lecture unit Test Unit (lecture unit ID: 1). "
-        "The transcript at this point:\n---\nTranscript 45-55\n---",
+        "The transcript at this point:\n---\nTranscript 45-55\nCitation id: [cite:2]\n---",
     ]
     stored = state.lecture_content_storage["current_view"]
     assert stored.lecture_unit_page_chunks == [page_chunk]
@@ -188,7 +188,7 @@ def test_multiple_chunks_on_same_page_share_one_block():
         "The student is currently viewing page 2 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). "
         "The content of this slide:"
-        "\n---\nFirst half\nSecond half\n---"
+        "\n---\nFirst half\nCitation id: [cite:1]\nSecond half\nCitation id: [cite:2]\n---"
     ]
 
 
@@ -251,12 +251,12 @@ def test_only_ingested_positions_are_described():
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). "
         "The content of this slide:"
-        "\n---\nPage 3 content\n---",
+        "\n---\nPage 3 content\nCitation id: [cite:1]\n---",
     ]
 
 
 def test_each_viewed_position_remains_separately_described():
-    """Two viewed pages remain separate prompt blocks without inline ids."""
+    """Two viewed pages remain separate prompt blocks with distinct ids."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
     retriever = MagicMock()
@@ -281,5 +281,5 @@ def test_each_viewed_position_remains_separately_described():
 
     blocks = pipeline._build_current_view(state)
 
-    assert "Citation id:" not in blocks[0]
-    assert "Citation id:" not in blocks[1]
+    assert "Citation id: [cite:1]" in blocks[0]
+    assert "Citation id: [cite:2]" in blocks[1]

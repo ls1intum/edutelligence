@@ -30,6 +30,7 @@ def _base_context() -> dict:
         "chat_mode": "COURSE_CHAT",
         "allow_lecture_tool": False,
         "allow_faq_tool": False,
+        "allow_inline_citations": False,
         "allow_memiris_tool": False,
         "has_chat_history": False,
         "has_exercises": False,
@@ -156,12 +157,13 @@ def test_system_prompt_keeps_volatile_date_and_current_view_near_end():
     assert "Current slide context that changes as the student navigates." in rendered
 
 
-def test_current_view_alone_does_not_enable_citation_instructions():
+def test_current_view_citations_enable_citation_instructions():
     context = _minimal_course_chat_context()
     context["current_view_blocks"] = [
-        "Current slide context that changes as the student navigates.",
+        "Current slide context that changes as the student navigates. Citation id: [cite:1]",
     ]
+    context["allow_inline_citations"] = True
 
     rendered = _render_template("chat_system_prompt.j2", context)
 
-    assert "## CITATIONS" not in rendered
+    assert "## CITATIONS" in rendered

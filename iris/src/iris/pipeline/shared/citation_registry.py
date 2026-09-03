@@ -175,6 +175,11 @@ class CitationRegistry:
         self._closed = False
         self.tokens: list[TokenUsageDTO] = []
 
+    @property
+    def has_sources(self) -> bool:
+        with self._lock:
+            return bool(self._sources)
+
     # -- registration ----------------------------------------------------
 
     def register(

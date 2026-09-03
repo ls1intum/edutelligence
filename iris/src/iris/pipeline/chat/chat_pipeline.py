@@ -482,6 +482,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             getattr(ctx, "type", None) == "combinedView"
             for ctx in getattr(state, "lecture_contexts", []) or []
         )
+        current_view_has_citations = state.citation_registry.has_sources
 
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
@@ -495,6 +496,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "course_name": dto.course.name,
             "allow_lecture_tool": state.allow_lecture_tool,
             "allow_faq_tool": state.allow_faq_tool,
+            "allow_inline_citations": (
+                state.allow_lecture_tool
+                or state.allow_faq_tool
+                or current_view_has_citations
+            ),
             "allow_memiris_tool": state.allow_memiris_tool,
             "has_chat_history": bool(state.message_history),
             "has_exercises": bool(dto.course.exercises),
@@ -662,8 +668,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         }
 
         # Store the content so other consumers can still see what the student is
-        # looking at. Inline citation handles are reserved for actual retrieval
-        # tool output to keep the initial prompt closer to main.
+        # looking at.
         state.lecture_content_storage["current_view"] = LectureRetrievalDTO(
             lecture_unit_segments=[],
             lecture_transcriptions=list(transcriptions),
@@ -679,6 +684,31 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             ).append(chunk)
 
         blocks: list[str] = []
+
+        def _page_chunk_text(chunk) -> str:
+            text = chunk.page_text_content
+            handle = state.citation_registry.register(
+                "L",
+                chunk.lecture_unit_id,
+                text,
+                page=chunk.page_number,
+                dedup_key=str(chunk.uuid),
+            )
+            return f"{text}\nCitation id: {handle}"
+
+        def _transcription_text(transcription) -> str:
+            text = transcription.segment_text
+            handle = state.citation_registry.register(
+                "L",
+                transcription.lecture_unit_id,
+                text,
+                page=transcription.page_number,
+                start=int(transcription.segment_start_time),
+                end=int(transcription.segment_end_time),
+                dedup_key=str(transcription.uuid),
+            )
+            return f"{text}\nCitation id: {handle}"
+
         # One block per viewed position: position description first, then the
         # corresponding lecture material directly below it.
         for p in context_pages:
@@ -687,7 +717,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             chunks = chunks_by_page.get((unit_id, page))
             if not chunks:
                 continue
-            text = "\n".join(chunk.page_text_content for chunk in chunks)
+            text = "\n".join(_page_chunk_text(chunk) for chunk in chunks)
             blocks.append(
                 f"The student is currently viewing page {page} of the lecture "
                 f"slides of the lecture unit {names[unit_id]} "
@@ -705,7 +735,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             ]
             if not segments:
                 continue
-            text = "\n".join(tr.segment_text for tr in segments)
+            text = "\n".join(_transcription_text(tr) for tr in segments)
             blocks.append(
                 f"The student is currently at {timestamp} seconds in the "
                 f"lecture video of the lecture unit {names[unit_id]} "
