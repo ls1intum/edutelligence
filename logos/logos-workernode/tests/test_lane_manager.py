@@ -2571,6 +2571,52 @@ def test_model_overrides_can_set_chat_template() -> None:
     assert merged.vllm_config.chat_template == "qwen3-tools.jinja"
 
 
+def test_model_overrides_can_disable_sharded_checkpoint_per_model() -> None:
+    """sharded_checkpoint_enabled is a per-model engine key, not a profile key.
+
+    It must merge into vllm_config (so the spawner serves that one model from
+    the full checkpoint) rather than being routed to the model profile registry.
+    """
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(
+            model_overrides={"org/mxfp4-model": {"sharded_checkpoint_enabled": False}}
+        ),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(
+        model="org/mxfp4-model",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None
+    assert merged.vllm_config.sharded_checkpoint_enabled is False
+
+
+def test_model_overrides_default_keeps_sharded_checkpoint_unset() -> None:
+    """With no per-model override the field stays None (follow the worker)."""
+    manager = LaneManager(
+        OllamaConfig(),
+        VllmEngineConfig(model_overrides={"org/model": {"enable_sleep_mode": False}}),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(
+        model="org/model",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None
+    assert merged.vllm_config.sharded_checkpoint_enabled is None
+
+
 def test_model_overrides_profile_keys_are_routed_to_registry() -> None:
     """A profile-level key in model_overrides must not fail lane creation.
 

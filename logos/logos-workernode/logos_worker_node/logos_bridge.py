@@ -1380,6 +1380,12 @@ class LogosBridgeClient:
             vc_engine = cfg.engines.vllm if cfg.engines else None
             if vc_engine is None or not getattr(vc_engine, "sharded_checkpoint_enabled", True):
                 return
+            # Per-model opt-out (engines.vllm.model_overrides): the lane
+            # spawner honors the same setting, so converting here would only
+            # build a cache the lane never reads.
+            per_model_ov = (getattr(vc_engine, "model_overrides", None) or {}).get(model_name) or {}
+            if "sharded_checkpoint_enabled" in per_model_ov and not per_model_ov["sharded_checkpoint_enabled"]:
+                return
             tp = int(getattr(result, "tensor_parallel_size", 1) or 1)
             min_tp = max(2, int(getattr(vc_engine, "sharded_checkpoint_min_tensor_parallel_size", 2)))
             if tp < min_tp:
@@ -1391,6 +1397,18 @@ class LogosBridgeClient:
                 return
             target = sc.sharded_checkpoint_dir(cache_root, model_name, tp)
             if sc.is_sharded_checkpoint_ready(target):
+                return
+            if sc.is_sharded_checkpoint_rejected(target):
+                # The loader refused this (model, tp) conversion and the engine
+                # build is unchanged since — converting again would only
+                # reproduce the same unusable shards. Skip rather than record a
+                # spurious sharded_conversion_failed event.
+                logger.info(
+                    "[Calibration] sharded checkpoint for %s (tp=%d) was rejected by the vLLM "
+                    "loader under the current engine build — skipping conversion",
+                    model_name,
+                    tp,
+                )
                 return
 
             import os as _os  # noqa: PLC0415

@@ -59,7 +59,14 @@ engines:
     # with --load-format sharded_state. Conversion runs right after calibration
     # when the calibrated TP is >1, or lazily before a TP>1 lane is spawned if
     # not yet converted. Checkpoints live under
-    # <cache_root>/.sharded_cache/<model>/tp<N>/.
+    # <cache_root>/.sharded_cache/<model>/tp<N>/. A single model can be opted
+    # out (or in) via engines.vllm.model_overrides.<model>.sharded_checkpoint_enabled.
+    # If the vLLM loader refuses a converted checkpoint (e.g. a quantized
+    # layout that does not survive the sharded_state round trip), the worker
+    # discards it, serves the model from the full checkpoint, and records the
+    # rejection under <cache_root>/.sharded_cache/<model>/.logos_sharded_rejected.json —
+    # it will not re-convert the same (model, TP) while the vLLM/torch build is
+    # unchanged. Delete that file to force a retry.
     sharded_checkpoint_enabled: true
     # Allow the lazy, spawn-time fallback conversion (set false to only use
     # checkpoints converted by the post-calibration trigger, so a lane spawn

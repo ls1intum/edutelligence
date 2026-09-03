@@ -1617,7 +1617,19 @@ class VllmProcessHandle:
             )
             return
         ec = self._vllm_engine_config
-        if not getattr(ec, "sharded_checkpoint_enabled", True):
+        # A per-model setting (the lane's vllm_config, which by this point also
+        # carries engines.vllm.model_overrides merged in) wins over the
+        # worker-wide switch: one model whose quantized layout does not survive
+        # the sharded_state round trip can be served from the full checkpoint
+        # without disabling the optimization for every other model on the node.
+        per_model = getattr(vc, "sharded_checkpoint_enabled", None)
+        sharded_enabled = per_model if per_model is not None else getattr(ec, "sharded_checkpoint_enabled", True)
+        if not sharded_enabled:
+            logger.info(
+                "[%s] sharded checkpoint disabled for %s — serving the full checkpoint",
+                self.lane_id,
+                lane_config.model,
+            )
             return
         if _speculative_decoding_requested(vc):
             # vLLM loads the draft model with the same --load-format as the main
@@ -1656,6 +1668,20 @@ class VllmProcessHandle:
                 lane_config.model,
                 tp,
                 target,
+            )
+            return
+        if sc.is_sharded_checkpoint_rejected(target):
+            # A conversion for this (model, tp) was refused by the vLLM loader
+            # and the engine build is unchanged since. The verdict is recorded
+            # persistently, so this — not just the in-memory
+            # _skip_sharded_checkpoint flag that spawn() resets — is what keeps
+            # a worker restart from paying for the same broken conversion.
+            logger.info(
+                "[%s] sharded checkpoint for %s (tp=%d) was rejected by the vLLM loader under "
+                "the current engine build — serving the full checkpoint",
+                self.lane_id,
+                lane_config.model,
+                tp,
             )
             return
 

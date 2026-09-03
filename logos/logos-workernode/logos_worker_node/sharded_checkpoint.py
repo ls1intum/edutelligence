@@ -12,6 +12,9 @@ This module owns:
     a sharded checkpoint is only valid for the exact TP it was produced for),
   * a readiness check (a completion marker written only after a fully-copied,
     successful conversion — so an interrupted run is never mistaken for done),
+  * a rejection record (a per-model marker written when the vLLM loader
+    refuses a converted checkpoint — so the same unusable conversion is not
+    re-run on every spawn while the engine build is unchanged),
   * the conversion itself, run as a subprocess against the vLLM-equipped
     interpreter via the standalone :mod:`logos_worker_node._sharded_convert`
     entrypoint.
@@ -30,6 +33,8 @@ checkpoint already exists it is returned immediately. On any failure it returns
 
 from __future__ import annotations
 
+import importlib.metadata
+import json
 import logging
 import os
 import shutil
@@ -44,6 +49,12 @@ logger = logging.getLogger("logos_worker_node.sharded_checkpoint")
 
 _SHARDED_CACHE_SUBDIR = ".sharded_cache"
 _COMPLETION_MARKER = ".logos_sharded_complete"
+# Per-model record of conversions the vLLM loader refused to load. Lives next
+# to (not inside) the tp directories: the rejected checkpoint is deleted by
+# the time the rejection is recorded, and the record must survive an operator
+# deleting the tp directory manually — the very action that previously just
+# triggered a re-conversion of the same unusable output.
+_REJECTED_MARKER = ".logos_sharded_rejected.json"
 DEFAULT_MAX_FILE_SIZE_BYTES = 5 * 1024**3
 
 _CONVERT_ENTRYPOINT = Path(__file__).with_name("_sharded_convert.py")
@@ -93,8 +104,11 @@ def invalidate_sharded_checkpoint(directory: Path) -> bool:
     weight layout does not survive the round trip (a tensor comes back a
     factor of the packing width too small). Nothing in the produced files says
     so; only a lane trying to serve them finds out. Removing the directory
-    puts the model back on the full checkpoint and lets a later conversion,
-    against a newer vLLM, try again.
+    puts the model back on the full checkpoint; the rejection is also recorded
+    (see :func:`is_sharded_checkpoint_rejected`) so that a later conversion
+    against a newer vLLM, or a forced retry via deleting the record, is what
+    re-arms the conversion — not every spawn re-running it and reproducing
+    the same unusable shards.
 
     Returns True when something was removed.
     """
@@ -108,7 +122,104 @@ def invalidate_sharded_checkpoint(directory: Path) -> bool:
             logger.error("[sharded] could not fully remove %s — it still looks ready", directory)
             return False
         logger.warning("[sharded] discarded unusable sharded checkpoint: %s", directory)
+        _record_sharded_rejection(directory)
         return True
+
+
+def _sharded_rejected_marker(directory: Path) -> Path:
+    """The per-model rejection record next to ``directory`` (a tp dir)."""
+    return directory.parent / _REJECTED_MARKER
+
+
+def _current_engine_versions() -> dict[str, str]:
+    """vLLM/torch versions of the worker venv, best effort.
+
+    The rejection verdict is pinned to the engine build that produced the
+    unusable shards: a different build may round-trip a layout the old one
+    could not. A package that is not importable here is simply omitted — the
+    comparison then only sees the fields that could be read.
+    """
+    versions: dict[str, str] = {}
+    for pkg in ("vllm", "torch"):
+        try:
+            versions[pkg] = importlib.metadata.version(pkg)
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    return versions
+
+
+def _record_sharded_rejection(directory: Path) -> None:
+    """Record that the vLLM loader refused the converted checkpoint at ``directory``.
+
+    Best effort: failing to record only loses the "do not re-convert" memory,
+    never the lane (which already falls back to the full checkpoint).
+    """
+    path = _sharded_rejected_marker(directory)
+    try:
+        record: dict = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    record = loaded
+            except (OSError, ValueError):
+                logger.warning("[sharded] unreadable rejection record %s — replacing", path)
+        entry: dict[str, str] = dict(_current_engine_versions())
+        entry["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        record[directory.name] = entry
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+        logger.info(
+            "[sharded] recorded that the vLLM loader rejected %s (engine: %s); re-conversion "
+            "is skipped while that build is unchanged — delete %s to force a retry",
+            directory,
+            ", ".join(f"{k}={v}" for k, v in sorted(entry.items()) if k != "at") or "unknown",
+            path,
+        )
+    except OSError:
+        logger.warning("[sharded] could not record rejection for %s", directory, exc_info=True)
+
+
+def is_sharded_checkpoint_rejected(directory: Path) -> bool:
+    """True when the vLLM loader refused this (model, tp) conversion and the
+    engine build is unchanged since.
+
+    A conversion can report success — shards written, marker placed — and
+    still emit something the loader rejects (a quantized weight layout that
+    does not survive the sharded_state round trip). The rejection is recorded
+    in the per-model marker (see :func:`_record_sharded_rejection`), so the
+    verdict survives both the discarded tp directory and worker restarts.
+    While the recorded vLLM/torch versions still match the worker's,
+    re-converting would only reproduce the same unusable shards, so the
+    conversion is skipped and the lane serves the full checkpoint. A recorded
+    version that differs from the current one clears the verdict — the newer
+    build may round-trip the layout. A version that cannot be resolved on
+    either side cannot prove the build changed, so the rejection stands (the
+    lane still comes up, just on the slower full-checkpoint load).
+
+    Deleting the marker (or the whole per-model cache directory) forces a
+    conversion attempt on the next trigger.
+    """
+    path = _sharded_rejected_marker(directory)
+    try:
+        if not path.is_file():
+            return False
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(record, dict):
+        return False
+    entry = record.get(directory.name)
+    if not isinstance(entry, dict):
+        return False
+    current = _current_engine_versions()
+    for key, recorded in entry.items():
+        if key == "at":
+            continue
+        current_value = current.get(key)
+        if current_value is not None and str(recorded) != str(current_value):
+            return False
+    return True
 
 
 def _lock_for(directory: Path) -> threading.Lock:
@@ -307,6 +418,16 @@ def ensure_sharded_checkpoint(
     target = sharded_checkpoint_dir(cache_root, model, tp)
     if is_sharded_checkpoint_ready(target):
         return target
+    if is_sharded_checkpoint_rejected(target):
+        logger.info(
+            "[sharded] conversion for %s (tp=%d) was already rejected by the vLLM loader under "
+            "the current engine build — serving the full checkpoint instead of re-converting; "
+            "delete %s to force a retry",
+            model,
+            tp,
+            _sharded_rejected_marker(target),
+        )
+        return None
 
     if not _CONVERT_ENTRYPOINT.is_file():
         logger.error("[sharded] converter entrypoint missing: %s", _CONVERT_ENTRYPOINT)
