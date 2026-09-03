@@ -384,36 +384,16 @@ async def stream_events(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     async def generate():
-        cursor = after_id
-        idle_ticks = 0
-        while True:
-            events = await db.list_events(session_id, after_id=cursor, limit=200)
-            for event in events:
-                cursor = event["id"]
-                payload = {
-                    "id": event["id"],
-                    "ts": event["ts"].isoformat(),
-                    "kind": event["kind"],
-                    "payload": event["payload"],
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
-            if events:
-                idle_ticks = 0
-            else:
-                idle_ticks += 1
-                # Keep the connection alive through proxies during quiet spells.
-                yield ": keep-alive\n\n"
-
-            session = await db.get_session(session_id)
-            if session and session["status"] in (
-                SessionStatus.SUCCEEDED,
-                SessionStatus.FAILED,
-                SessionStatus.CANCELLED,
-            ):
-                # Drain whatever landed after the terminal transition, then end
-                # the stream so the browser stops reconnecting.
-                remaining = await db.list_events(session_id, after_id=cursor, limit=200)
-                for event in remaining:
+        # Registered for as long as this response lives, so the write side
+        # has somebody to nudge — and so nothing is left behind when the
+        # browser disconnects mid-stream, which is the ordinary ending.
+        async with pulse.watching(session_id):
+            cursor = after_id
+            idle_ticks = 0
+            while True:
+                events = await db.list_events(session_id, after_id=cursor, limit=200)
+                for event in events:
+                    cursor = event["id"]
                     payload = {
                         "id": event["id"],
                         "ts": event["ts"].isoformat(),
@@ -421,16 +401,39 @@ async def stream_events(
                         "payload": event["payload"],
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
-                yield "event: end\ndata: {}\n\n"
-                pulse.forget(session_id)
-                return
-            if idle_ticks > 600:  # ~20 minutes of nothing; let the client reconnect
-                return
-            # Woken by the write side rather than by the clock: watching an
-            # agent work is the one thing here that a person does in real
-            # time, and a fixed tick puts a floor under how live it can be.
-            # The timeout is the fallback, not the mechanism.
-            await pulse.wait(session_id, timeout=2.0)
+                if events:
+                    idle_ticks = 0
+                else:
+                    idle_ticks += 1
+                    # Keep the connection alive through proxies during quiet spells.
+                    yield ": keep-alive\n\n"
+
+                session = await db.get_session(session_id)
+                if session and session["status"] in (
+                    SessionStatus.SUCCEEDED,
+                    SessionStatus.FAILED,
+                    SessionStatus.CANCELLED,
+                ):
+                    # Drain whatever landed after the terminal transition, then end
+                    # the stream so the browser stops reconnecting.
+                    remaining = await db.list_events(session_id, after_id=cursor, limit=200)
+                    for event in remaining:
+                        payload = {
+                            "id": event["id"],
+                            "ts": event["ts"].isoformat(),
+                            "kind": event["kind"],
+                            "payload": event["payload"],
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+                    yield "event: end\ndata: {}\n\n"
+                    return
+                if idle_ticks > 600:  # ~20 minutes of nothing; let the client reconnect
+                    return
+                # Woken by the write side rather than by the clock: watching an
+                # agent work is the one thing here that a person does in real
+                # time, and a fixed tick puts a floor under how live it can be.
+                # The timeout is the fallback, not the mechanism.
+                await pulse.wait(session_id, timeout=2.0)
 
     return StreamingResponse(
         generate(),

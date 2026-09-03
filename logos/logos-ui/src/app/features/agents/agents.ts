@@ -321,6 +321,11 @@ export class Agents implements OnInit {
     this.stopStream();
     this.resetScreenshots();
     await this.loadEvents();
+    // The load is asynchronous, and the selection may have moved on while
+    // it ran. Opening the stream anyway would leave a connection nobody
+    // holds the handle to — untracked, unabortable, and read by the server
+    // for as long as it stays open.
+    if (this.selectedId() !== session.id) return;
     this.startStream(session.id);
   }
 
@@ -334,6 +339,9 @@ export class Agents implements OnInit {
    * response degrades to what it did before rather than to nothing.
    */
   private startStream(sessionId: number): void {
+    // Whatever was streaming stops first: two controllers in `this.stream`
+    // would leave the older connection with no way to abort it.
+    this.stopStream();
     const controller = new AbortController();
     this.stream = controller;
     void (async () => {
