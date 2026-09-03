@@ -15,6 +15,7 @@ from typing import Any, Sequence
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+from . import pulse
 from .config import settings
 from .schemas import ACTIVE_STATUSES, TERMINAL_STATUSES, EventKind, SessionStatus
 
@@ -175,17 +176,25 @@ async def set_controls(
                 """
                 INSERT INTO agent_controls (id, mode, mode_reason, max_parallel, updated_by, updated_at)
                 VALUES (1, COALESCE(:mode, 'running'), :mode_reason,
-                        CASE WHEN :clear THEN NULL ELSE :max_parallel END, :updated_by, :now)
+                        CASE WHEN CAST(:clear AS BOOLEAN) THEN NULL
+                             ELSE CAST(:max_parallel AS INTEGER) END,
+                        :updated_by, :now)
                 ON CONFLICT (id) DO UPDATE SET
                     mode = COALESCE(:mode, agent_controls.mode),
                     mode_reason = CASE
                         WHEN :mode IS NULL THEN agent_controls.mode_reason
                         ELSE :mode_reason
                     END,
+                    -- The casts are not decoration: both branches of a CASE
+                    -- over bare parameters are untyped, so PostgreSQL
+                    -- resolves the whole expression to text and refuses to
+                    -- write it into an integer column. Without them this
+                    -- statement fails for every value, including the ones
+                    -- that look obviously fine.
                     max_parallel = CASE
-                        WHEN :clear THEN NULL
-                        WHEN :max_parallel IS NULL THEN agent_controls.max_parallel
-                        ELSE :max_parallel
+                        WHEN CAST(:clear AS BOOLEAN) THEN NULL
+                        WHEN CAST(:max_parallel AS INTEGER) IS NULL THEN agent_controls.max_parallel
+                        ELSE CAST(:max_parallel AS INTEGER)
                     END,
                     updated_by = :updated_by,
                     updated_at = :now
@@ -577,23 +586,47 @@ async def create_session(
     return int(session_id)
 
 
+# How often a trigger may be taken up again after a session that never got
+# as far as running. Enough to survive a host that is missing an image or a
+# Docker daemon that was restarting; few enough that a request which cannot
+# be launched at all stops being retried and is left to a person.
+LAUNCH_ATTEMPTS = 3
+
+
 async def handled_trigger_refs(refs: Sequence[str]) -> set[str]:
-    """Which of these GitHub events already have a session — ever.
+    """Which of these GitHub events are dealt with — ever.
 
     Deliberately without a time window. A reference names one thing that
     happened once: an issue was assigned, a review was submitted, somebody
     asked a question. Answering it a second time a week later would be a
     duplicate pull request or a duplicate answer, not a retry — and an issue
-    that simply stays assigned would produce one every week. A session that
-    failed is re-queued by a person, who can see why it failed.
+    that simply stays assigned would produce one every week.
+
+    With one exception, learned in production: a session that failed *before
+    its agent ever started* did no work and answered nothing, and must not
+    consume the request. A host missing the session image failed sixteen
+    launches in as many seconds, and every one of those assignments and
+    questions was then permanently invisible to the poller — the only way
+    back was editing the database by hand. Such a request is taken up again,
+    at most ``LAUNCH_ATTEMPTS`` times, so a launch that can never work stops
+    rather than loops.
     """
     if not refs:
         return set()
     async with sessionmaker()() as db:
         rows = (
             await db.execute(
-                text("SELECT DISTINCT trigger_ref FROM agent_sessions WHERE trigger_ref = ANY(:refs)"),
-                {"refs": list(refs)},
+                text(
+                    """
+                    SELECT trigger_ref
+                      FROM agent_sessions
+                     WHERE trigger_ref = ANY(:refs)
+                     GROUP BY trigger_ref
+                    HAVING bool_or(status <> 'failed' OR started_at IS NOT NULL)
+                        OR count(*) >= CAST(:attempts AS INTEGER)
+                    """
+                ),
+                {"refs": list(refs), "attempts": LAUNCH_ATTEMPTS},
             )
         ).all()
     return {row[0] for row in rows}
@@ -659,6 +692,71 @@ async def record_reply_attempt(session_id: int, *, delivered: bool) -> None:
                 """
             ),
             {"id": session_id, "delivered": delivered, "now": _now()},
+        )
+        await db.commit()
+
+
+async def last_session_branch(workspace_id: int, *, before_session_id: int) -> str | None:
+    """The branch the previous session in this workspace worked on.
+
+    What decides whether the next session continues that conversation or
+    starts a new one: the same branch is the same piece of work — an issue
+    that became a pull request, and every review round after it.
+    """
+    async with sessionmaker()() as db:
+        return (
+            await db.execute(
+                text(
+                    """
+                    SELECT branch_name
+                      FROM agent_sessions
+                     WHERE workspace_id = :workspace_id
+                       AND id < :session_id
+                       AND branch_name IS NOT NULL
+                     ORDER BY id DESC
+                     LIMIT 1
+                    """
+                ),
+                {"workspace_id": workspace_id, "session_id": before_session_id},
+            )
+        ).scalar_one_or_none()
+
+
+async def update_session_usage(session_id: int, *, tokens_in: int, tokens_out: int) -> None:
+    """Record what a running session has spent so far.
+
+    Only ever upwards: the counters are a running total, and a batch of
+    output that arrives out of order must not make the number go backwards.
+    Settlement overwrites both with the authoritative totals from the
+    result file.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                UPDATE agent_sessions
+                   SET tokens_in = GREATEST(COALESCE(tokens_in, 0), CAST(:tokens_in AS INTEGER)),
+                       tokens_out = GREATEST(COALESCE(tokens_out, 0), CAST(:tokens_out AS INTEGER))
+                 WHERE id = :id
+                """
+            ),
+            {"id": session_id, "tokens_in": tokens_in, "tokens_out": tokens_out},
+        )
+        await db.commit()
+
+
+async def abandon_reply(session_id: int, *, attempts: int) -> None:
+    """Stop owing an answer that can never be written.
+
+    A settled session's artefacts are final: if it wrote no answer, no later
+    pass will find one. Without this the sweep asks again every few seconds
+    for the life of the deployment. The target stays on the row for the
+    record; only the sweep lets go.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text("UPDATE agent_sessions SET reply_attempts = GREATEST(reply_attempts, :attempts) WHERE id = :id"),
+            {"id": session_id, "attempts": attempts},
         )
         await db.commit()
 
@@ -732,6 +830,49 @@ async def list_sessions(
             .all()
         )
     return [dict(r) for r in rows]
+
+
+async def next_queued_session() -> dict[str, Any] | None:
+    """The session a claim would take next, without taking it.
+
+    Admission decides against a capacity reading, and the reading has to be
+    of the lane *this* session would be served by: a queued session on a
+    saturated model must not be let in on an idle model's figure. Read under
+    the same lock the claim runs in, and in the same order, so what is
+    measured is what is then claimed.
+    """
+    async with sessionmaker()() as db:
+        row = (
+            (
+                await db.execute(
+                    text(
+                        """
+                    SELECT s.id, s.model, s.workspace_id
+                      FROM agent_sessions s
+                     WHERE s.status = 'queued'
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions busy
+                              WHERE busy.workspace_id = s.workspace_id
+                                AND busy.status = ANY(:occupying)
+                           )
+                     ORDER BY s.priority DESC, s.created_at
+                     LIMIT 1
+                    """
+                    ),
+                    {
+                        "occupying": [
+                            SessionStatus.STARTING.value,
+                            SessionStatus.RUNNING.value,
+                            SessionStatus.PAUSED.value,
+                            SessionStatus.FINALIZING.value,
+                        ]
+                    },
+                )
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row else None
 
 
 async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
@@ -910,6 +1051,9 @@ async def add_event(session_id: int, kind: EventKind, payload: dict[str, Any]) -
             {"sid": session_id, "kind": kind.value, "payload": json.dumps(payload)},
         )
         await db.commit()
+    # Committed first, then announced: a watcher woken by this reads the
+    # event it was woken for, not the transaction that has not landed yet.
+    pulse.ring(session_id)
 
 
 async def list_events(session_id: int, *, after_id: int = 0, limit: int = 500) -> list[dict[str, Any]]:

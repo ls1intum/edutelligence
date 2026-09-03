@@ -342,6 +342,11 @@ services:
   logos-agent:
     image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent:${IMAGE_TAG:-latest}
     container_name: logos-agent
+    # Long enough to freeze every running session before the process is
+    # killed. A deploy restarts this service and the model gateway together;
+    # a session frozen first survives that, one left talking to a gateway
+    # being replaced loses the turn it was in the middle of.
+    stop_grace_period: 30s
     restart: unless-stopped
     # Opt-in: the service does nothing until a profile enables it, so an
     # existing deployment that does not want agent sessions is unchanged by

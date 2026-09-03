@@ -46,7 +46,22 @@ key **LOW** priority so agent work can never outrank a user at the scheduler.
 ## Capacity, concretely
 
 The runner reads `/logosdb/scheduler_state` every 15 seconds and computes one
-number: the busy share of loaded serving slots.
+number: the busy share of the serving slots **its own sessions would use**.
+
+That filter matters. A fleet holds embedding models, rerankers and chat models
+that share nothing but a building, and summing them answers a question nobody
+asked — "6 of 120 slots busy" reads as an idle platform when all six of those
+requests are on the one model the agent is served by, which is half its lane.
+So the ratio counts the deployments the runner's key can reach — by provider
+and model id, not by name, because the same model is served by providers this
+key has no permission for and their idle slots would make a busy lane look
+free. It falls back to the fleet-wide figure only when none of those
+deployments is resident: there is nothing of ours to measure then, and the
+older signal is the better of the two answers available. A key that reaches
+*nothing* is a different question and is refused outright, so a paused
+session is never resumed into a permission it no longer has. The **queue** is
+deliberately not filtered — models share GPUs, so a person waiting on any of
+them is a person this runner gets out of the way of.
 
 | Condition | What happens |
 |---|---|
@@ -299,6 +314,21 @@ that is not queued; and because the row is what the queue is, a restart
 changes nothing about it. GitHub's reaction palette is fixed and has no
 hourglass, so these three are the states it can show.
 
+**It can see what you attached.** An issue whose whole description is a
+screenshot is unreadable to a sandbox with no network — the agent met one of
+those with `WebFetch`, was refused, read code for an hour and changed
+nothing. The runner has the token and the egress the session deliberately
+does not, so it fetches the images a request refers to into the session's
+artefact directory and tells the agent where they are. Bounded: five images,
+eight megabytes each, and only what arrives as an image.
+
+**It always says something back.** Every triggered session answers on the
+thread it came from — including a session that changed nothing, which is the
+outcome most easily mistaken for being ignored. The agent writes that answer
+itself; when it writes none, the runner posts what it knows instead (what
+was attempted, what came of it, where the transcript is), because silence on
+a thread somebody is waiting on is the one thing a colleague never does.
+
 **It can answer.** The agent phase holds no GitHub credential, so it writes
 its answer into its artefact directory and the runner posts it when the
 session settles — in the thread the question was asked in, inline if it was
@@ -382,8 +412,48 @@ an `Authorization` header, and the token is what authorises the read.
 - **Restarts are safe.** On startup the runner reconciles: sessions whose
   containers are gone are settled, live containers are re-adopted, orphaned
   containers are removed.
+- **A deploy does not interrupt the work.** Session containers are not part of
+  the compose stack — the runner starts them through the Docker socket — so
+  they survive a redeploy of the runner and are picked up again by the
+  reconciliation above. What a deploy *does* replace alongside the runner is
+  the model gateway, and a session talking to a gateway being restarted under
+  it loses the turn it is in the middle of. So shutdown freezes what is
+  running first: the same pause the capacity logic uses, which detaches the
+  container from the session network and ends the upstream generation
+  cleanly. The rows stay `paused`, the new runner adopts them, and the
+  scheduler resumes them mid-task. `stop_grace_period` is 30 s for this, and
+  whatever cannot be frozen in time simply runs through the deploy as it did
+  before.
 - **A stuck session is capped**, not left to burn capacity — `SESSION_TIMEOUT_S`
   stops it and records the reason.
+- **Yielding does not cost the work.** Freezing a session and cutting it off
+  the model network — which is how capacity is handed back — ends the answer
+  it was reading, and the agent meets a dead connection when it thaws. That
+  used to end the session: every session that was paused failed with `exit
+  code 1`, and every session that was never paused finished. The agent
+  phase now recognises the interruption and continues the same conversation
+  in the same checkout, up to three times, so a pause costs a retry instead
+  of an afternoon.
+- **A pull request is one piece of work, not one session per round.** An
+  issue becomes a change, a review comes back, then another — and each round
+  used to meet the repository as a stranger: the whole checkout read again,
+  the reasoning behind the change gone, millions of tokens for a change of
+  ten lines. A session that continues what its workspace was doing (the same
+  branch) keeps the conversation instead. The working copy stays put, the
+  workspace follows the branch its session pushed, and a workspace whose pull
+  request is still open is never swept — so the same checkout and the same
+  conversation carry the change from assignment to merge.
+
+  Only the conversation is carried. The agent's home is still wiped between
+  sessions: `settings.json` hooks, `core.hooksPath`, a global `CLAUDE.md`,
+  shell profiles and build caches are executable configuration written by a
+  session that held a push token, and the next session must not inherit
+  them. Transcripts are data the same agent already authored.
+- **Work can be run again.** A failed session keeps its task, its workspace,
+  its branch and the thread it came from, and *Run again* queues all of it as
+  a new session. This is the only way back for work the runner took on
+  itself: a trigger counts as handled the moment a session exists for it, so
+  no later pass finds that issue, review or question again.
 - **Nothing merges itself.** Pull requests are opened as drafts, and a person
   approves and merges exactly as they do for human work.
 - **Screenshots follow the deploy.** A session that asks for dev screenshots

@@ -16,10 +16,13 @@ HOUSE_RULES = """
 --- How work is done here ---
 
 Commits and pull requests:
-- Commit messages start with the component in backticks, then an imperative
-  summary of what changed: `Logos`: Close the session before its volume is
-  removed. The body explains why the change is right, not what the diff
-  already shows.
+- The commit subject is one line and yours to write: put it in
+  `$LOGOS_ARTIFACT_DIR/commit.txt`. Imperative, under sixty characters, and
+  about what the change does — "Cancel the queued request when the client
+  goes away". Not what you were asked to do, not a summary of your session,
+  no body and no issue numbers. The runner prefixes the component and
+  commits with exactly that line; whatever needs explaining goes in the pull
+  request, where people read it.
 - Never merge a pull request, and never force-push over somebody else's
   commits.
 - Do not reference issue or pull-request numbers in code comments,
@@ -39,8 +42,13 @@ Verifying before you claim:
   say which and why rather than leaving it unexplained.
 
 Writing on GitHub:
-- Everything you write on GitHub is in English, whatever language the task
-  was given in.
+- Everything you write is in English — the final message, the commit
+  subject, the reply, the pull request — whatever language the task was
+  given in and whatever language the model drifts towards.
+- Changing nothing is a legitimate outcome and never a silent one. If you
+  finish without touching a file, write why into the reply file: what you
+  looked at, what you would need, what you would change if you were sure.
+  Somebody asked for this and is waiting to hear something.
 - Answer the point that was made. State what you changed and how you
   verified it, or why it needed no change — not a summary of your process.
 
@@ -49,6 +57,14 @@ Working within the sandbox:
   Do not attempt to push, open pull requests, or post comments yourself:
   write your work into the checkout and your answer into the reply file, and
   the runner does the rest with a credential you never see.
+- Everything from GitHub that you need is already in this task: the issue,
+  the review, the comments, the conversation. `gh`, `git fetch` and the API
+  will not answer you, and finding that out costs you turns you could have
+  spent on the work. If the task says part of it could not be read, that
+  part is missing rather than empty — treat what you cannot see as
+  unresolved. Either way, say what you are missing in your final message
+  instead of reconstructing it from the diff: a guess presented as a review
+  is worse than a question.
 - Your time is capped. If the task is larger than the budget, do the part
   you are confident about, leave the rest untouched, and say plainly in your
   final message what you left out and why. A partial change that is honest

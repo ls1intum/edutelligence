@@ -162,3 +162,29 @@ async def test_a_create_that_wins_the_race_keeps_its_session_from_the_delete(mon
     # The accepted session survived: still queued, still in its workspace.
     assert model.sessions == [{"id": session_id, "workspace_id": 1, "status": "queued"}]
     assert model.workspaces == {1: dict(WORKSPACE)}
+
+
+class TestStatementTypes:
+    """Guards on typing the database cannot infer for us.
+
+    PostgreSQL resolves a CASE over bare parameters to text, and then
+    refuses to write it into an integer column. It cost a production runner
+    its session limit: every attempt failed with "column max_parallel is of
+    type integer but expression is of type text", for every value, and the
+    unit tests could not see it because they never speak to a database.
+    """
+
+    def test_the_session_limit_is_written_as_a_number(self):
+        import inspect
+
+        source = inspect.getsource(db.set_controls)
+
+        assert "CAST(:max_parallel AS INTEGER)" in source
+        assert "CASE WHEN :clear THEN NULL ELSE :max_parallel END" not in source
+
+    def test_the_retry_bound_is_written_as_a_number(self):
+        import inspect
+
+        source = inspect.getsource(db.handled_trigger_refs)
+
+        assert "CAST(:attempts AS INTEGER)" in source
