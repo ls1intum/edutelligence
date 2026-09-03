@@ -6,6 +6,7 @@ import pytest
 
 from logos import AzureCapacity, LaneSchedulerSignals, ModelSchedulerView, ReadinessTier, SchedulingRequest
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.latency_store import LatencyStore
 from logos.queue import PriorityQueueManager
 
 
@@ -338,18 +339,14 @@ def test_estimate_ettft_no_lane_uses_latency_store_cold_overhead():
     """When no lane is visible, the learned cold overhead from the latency store
     must replace the static OVERHEAD_COLD_S so that provider-specific history
     still influences cold-provider selection after a lane is removed."""
-    from logos.pipeline.latency_store import LatencyStore
-    from logos.pipeline.ettft_estimator import ReadinessTier
-
     store = LatencyStore()
     store.record_overhead("model-x", 10, ReadinessTier.COLD, 120.0)
 
     logosnode = MockLogosNodeFacade()
     logosnode.set_model_name(1, 10, "model-x")
 
-    queue_mgr = __import__("logos.queue", fromlist=["PriorityQueueManager"]).PriorityQueueManager()
     scheduler = ClassificationCorrectingScheduler(
-        queue_manager=queue_mgr,
+        queue_manager=PriorityQueueManager(),
         logosnode_facade=logosnode,
         azure_facade=MockAzureFacade(),
         latency_store=store,
@@ -364,13 +361,8 @@ def test_estimate_ettft_no_lane_uses_latency_store_cold_overhead():
 def test_estimate_ettft_no_lane_uses_prior_when_no_learned_value():
     """When no lane is visible and the store has no learned value, the
     size-derived prior (or static constant) is used — not the hardcoded 45 s."""
-    from logos.pipeline.latency_store import LatencyStore
-
     store = LatencyStore(io_bandwidth_mb_s=500.0)
     # No observations — store will compute a prior.
-
-    logosnode = MockLogosNodeFacade()
-    logosnode.set_model_name(1, 10, "model-y")
 
     class _MockFacadeWithProfile(MockLogosNodeFacade):
         def get_model_profiles(self, provider_id):
@@ -383,9 +375,8 @@ def test_estimate_ettft_no_lane_uses_prior_when_no_learned_value():
         def get_model_name(self, model_id, provider_id):
             return "model-y"
 
-    queue_mgr = __import__("logos.queue", fromlist=["PriorityQueueManager"]).PriorityQueueManager()
     scheduler = ClassificationCorrectingScheduler(
-        queue_manager=queue_mgr,
+        queue_manager=PriorityQueueManager(),
         logosnode_facade=_MockFacadeWithProfile(),
         azure_facade=MockAzureFacade(),
         latency_store=store,
