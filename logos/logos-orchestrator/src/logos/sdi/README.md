@@ -51,7 +51,7 @@ SDI provides a **pure data interface** for accessing real-time scheduling inform
 
 *Data Models:*
 - **ModelStatus**: Common model status (used by both provider types)
-- **WorkerCapacity**: VRAM capacity info (legacy class name — holds worker capacity)
+- **WorkerCapacity**: VRAM capacity info (formerly OllamaCapacity)
 - **AzureCapacity**: Per-deployment rate limit info
 - **LaneSchedulerSignals**: Per-lane engine signals (KV pressure, TTFT, concurrency)
 - **ModelSchedulerView**: Aggregated per-model view across a provider's lanes
