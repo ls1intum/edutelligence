@@ -1185,15 +1185,26 @@ vllm:gpu_prefix_cache_hits{model_name="m"} 10
 
 @pytest.mark.asyncio
 async def test_get_backend_metrics_emits_prefill_delta_fields() -> None:
-    """last_prefill_s and last_prefill_tokens are derived from per-poll deltas
-    of the cumulative _sum/_count Prometheus counters."""
+    """last_prefill_s is TTFT − TPOT (genuine prefill-only, not raw TTFT).
 
-    def _make_response(ttft_sum: float, ttft_count: float, prompt_tokens: float) -> object:
+    Both cumulative counter pairs must show a positive delta for an observation
+    to be emitted; the third poll (no new completions) must produce None.
+    """
+
+    def _make_response(
+        ttft_sum: float,
+        ttft_count: float,
+        tpot_sum: float,
+        tpot_count: float,
+        prompt_tokens: float,
+    ) -> object:
         class DummyResponse:
             status_code = 200
             text = (
                 f'vllm:time_to_first_token_seconds_sum{{model_name="m"}} {ttft_sum}\n'
                 f'vllm:time_to_first_token_seconds_count{{model_name="m"}} {ttft_count}\n'
+                f'vllm:time_per_output_token_seconds_sum{{model_name="m"}} {tpot_sum}\n'
+                f'vllm:time_per_output_token_seconds_count{{model_name="m"}} {tpot_count}\n'
                 f'vllm:prompt_tokens_total{{model_name="m"}} {prompt_tokens}\n'
                 f'vllm:num_requests_running{{model_name="m"}} 1\n'
             )
@@ -1209,20 +1220,20 @@ async def test_get_backend_metrics_emits_prefill_delta_fields() -> None:
     handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
     handle._http = DummyClient()  # type: ignore[assignment]
 
-    # First poll: cumulative counters since process start (2 requests, 10s total, 1000 tokens).
-    responses.append(_make_response(ttft_sum=10.0, ttft_count=2.0, prompt_tokens=1000.0))
+    # First poll: 2 requests, avg_ttft=5.0s, avg_tpot=0.1s → prefill=4.9s, 500 tok.
+    responses.append(_make_response(ttft_sum=10.0, ttft_count=2.0, tpot_sum=2.0, tpot_count=20.0, prompt_tokens=1000.0))
     m1 = await handle.get_backend_metrics()
-    assert m1["last_prefill_s"] == pytest.approx(5.0)   # 10/2
-    assert m1["last_prefill_tokens"] == pytest.approx(500.0)  # 1000/2
+    assert m1["last_prefill_s"] == pytest.approx(4.9)  # 5.0 - 0.1
+    assert m1["last_prefill_tokens"] == pytest.approx(500.0)  # 1000 / 2
 
-    # Second poll: one new request (sum +5s, count +1, tokens +400).
-    responses.append(_make_response(ttft_sum=15.0, ttft_count=3.0, prompt_tokens=1400.0))
+    # Second poll: +1 request, avg_ttft=5.0s, avg_tpot=0.1s → prefill=4.9s, 400 tok.
+    responses.append(_make_response(ttft_sum=15.0, ttft_count=3.0, tpot_sum=3.0, tpot_count=30.0, prompt_tokens=1400.0))
     m2 = await handle.get_backend_metrics()
-    assert m2["last_prefill_s"] == pytest.approx(5.0)   # 5/1
-    assert m2["last_prefill_tokens"] == pytest.approx(400.0)  # 400/1
+    assert m2["last_prefill_s"] == pytest.approx(4.9)  # avg_ttft=5.0 - avg_tpot=0.1
+    assert m2["last_prefill_tokens"] == pytest.approx(400.0)  # 400 / 1
 
-    # Third poll: no new requests — delta_count == 0, fields stay None.
-    responses.append(_make_response(ttft_sum=15.0, ttft_count=3.0, prompt_tokens=1400.0))
+    # Third poll: no new completions → delta_count == 0, both fields stay None.
+    responses.append(_make_response(ttft_sum=15.0, ttft_count=3.0, tpot_sum=3.0, tpot_count=30.0, prompt_tokens=1400.0))
     m3 = await handle.get_backend_metrics()
     assert m3["last_prefill_s"] is None
     assert m3["last_prefill_tokens"] is None

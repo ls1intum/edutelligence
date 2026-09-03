@@ -521,3 +521,32 @@ def test_reclaim_busy_no_e2e_falls_back_to_generation_constant():
     expected_drain = 3.0 * DEFAULT_GENERATION_TIME_S
     cost = _estimate_reclaim_overhead_s([lane], "target")
     assert cost == pytest.approx(expected_drain + RECLAIM_IDLE_EVICT_S)
+
+
+def test_reclaim_set_cover_selects_multiple_victims_when_needed():
+    """When one victim's VRAM is insufficient, cheaper additional victims are added.
+
+    _make_lane defaults to effective_vram_mb=8 000 MB per lane.  A deficit of
+    10 000 MB exceeds any single lane, so both idle lanes must be selected.
+    """
+    lane_a = _make_lane(model_name="model-a", runtime_state="loaded", active_requests=0)
+    lane_b = _make_lane(model_name="model-b", runtime_state="loaded", active_requests=0)
+    cost = _estimate_reclaim_overhead_s([lane_a, lane_b], "target", vram_deficit_mb=10_000.0)
+    assert cost == pytest.approx(2 * RECLAIM_IDLE_EVICT_S)
+
+
+def test_reclaim_set_cover_stops_early_when_deficit_covered():
+    """Greedy selection stops as soon as freed VRAM covers the deficit."""
+    idle = _make_lane(model_name="idle-model", runtime_state="loaded", active_requests=0)
+    busy = _make_lane(
+        model_name="busy-model",
+        runtime_state="running",
+        active_requests=2,
+        queue_waiting=10.0,
+        requests_running=2.0,
+        e2e_latency_p50_seconds=5.0,
+        num_parallel=2,
+    )
+    # idle has 8 000 MB which already covers a 5 000 MB deficit → busy lane not needed.
+    cost = _estimate_reclaim_overhead_s([idle, busy], "target", vram_deficit_mb=5_000.0)
+    assert cost == pytest.approx(RECLAIM_IDLE_EVICT_S)

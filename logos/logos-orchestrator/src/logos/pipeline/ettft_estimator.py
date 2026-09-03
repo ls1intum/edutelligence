@@ -240,23 +240,29 @@ def _estimate_drain_time_s(
 def _estimate_reclaim_overhead_s(
     sibling_lanes: List[LaneSchedulerSignals],
     target_model_name: str,
+    vram_deficit_mb: float = 0.0,
 ) -> float:
     """Estimate VRAM reclaim cost based on what sibling lanes are doing.
 
     For each potential eviction victim (any lane not serving target_model_name)
-    the cost is:
+    the per-lane cost is:
       - idle / sleeping lane  → RECLAIM_IDLE_EVICT_S  (just the unload operation)
       - busy lane             → drain_time + RECLAIM_IDLE_EVICT_S
-        where drain_time = _estimate_queue_wait_s using the lane's own queue
-        depth and observed e2e latency (same formula as ETTFT queue wait).
+        where drain_time = _estimate_drain_time_s using the lane's own queue
+        depth and observed e2e latency.
 
-    The scheduler would evict whichever victim is cheapest, so we return the
-    minimum cost across all candidates.  Cold / stopped / error lanes are not
-    useful eviction targets and are skipped.
+    When vram_deficit_mb > 0, victims are selected greedily by cost (cheapest first)
+    until their combined effective_vram_mb covers the deficit.  The returned cost is
+    the SUM of the selected set — evictions are sequential so every chosen lane
+    contributes its full cost.
 
+    When vram_deficit_mb <= 0 (deficit unknown), the minimum cost across all
+    candidates is returned (single cheapest victim, legacy behaviour).
+
+    Cold / stopped / error lanes are not useful eviction targets and are skipped.
     Returns RECLAIM_IDLE_EVICT_S when no candidate lanes are visible.
     """
-    best_cost: Optional[float] = None
+    candidates: list[tuple[float, float]] = []  # (cost_s, vram_freed_mb)
 
     for lane in sibling_lanes:
         if lane.model_name == target_model_name:
@@ -279,10 +285,25 @@ def _estimate_reclaim_overhead_s(
             # cold / starting / stopped / error — not a useful eviction target
             continue
 
-        if best_cost is None or cost < best_cost:
-            best_cost = cost
+        candidates.append((cost, max(0.0, lane.effective_vram_mb)))
 
-    return best_cost if best_cost is not None else RECLAIM_IDLE_EVICT_S
+    if not candidates:
+        return RECLAIM_IDLE_EVICT_S
+
+    if vram_deficit_mb <= 0:
+        # Deficit unknown: return the cheapest single candidate (legacy behaviour).
+        return min(cost for cost, _ in candidates)
+
+    # Greedy set cover: sort by cost ascending, accumulate until deficit is covered.
+    candidates.sort(key=lambda item: item[0])
+    total_cost = 0.0
+    freed_mb = 0.0
+    for cost, vram in candidates:
+        total_cost += cost
+        freed_mb += vram
+        if freed_mb >= vram_deficit_mb:
+            break
+    return total_cost
 
 
 # ── Local (logosnode) estimation ───────────────────────────────────────
@@ -400,6 +421,7 @@ def estimate_ettft_local(
                 reclaim_s = _estimate_reclaim_overhead_s(
                     all_provider_lanes or [],
                     view.model_name,
+                    vram_deficit_mb=max(0.0, model_vram_mb - available_vram_mb),
                 )
                 overhead = _overrides.get(ReadinessTier.COLD, OVERHEAD_COLD_S)
                 reason = (
@@ -443,6 +465,7 @@ def estimate_ettft_local(
                 reclaim_s = _estimate_reclaim_overhead_s(
                     all_provider_lanes or [],
                     view.model_name,
+                    vram_deficit_mb=max(0.0, kv_budget_mb - available_vram_mb),
                 )
                 overhead = _overrides.get(ReadinessTier.SLEEPING, OVERHEAD_SLEEPING_S)
                 reason = (

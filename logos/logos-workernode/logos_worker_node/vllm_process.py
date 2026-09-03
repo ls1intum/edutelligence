@@ -420,8 +420,12 @@ class VllmProcessHandle:
         self._last_wake_from_sleep_s: float | None = None
         # Cumulative vLLM Prometheus counters from the previous poll; used to
         # compute per-interval deltas for the prefill EWMA in the orchestrator.
+        # TTFT includes prefill; TPOT (time-per-output-token) is decode-only.
+        # Genuine prefill = avg_TTFT − avg_TPOT avoids double-counting.
         self._prev_ttft_sum: float = 0.0
         self._prev_ttft_count: float = 0.0
+        self._prev_tpot_sum: float = 0.0
+        self._prev_tpot_count: float = 0.0
         self._prev_prompt_tokens_total: float = 0.0
         # Set by _maybe_prepare_sharded_checkpoint when a pre-sharded checkpoint
         # is used for a TP>1 lane; _build_cmd then serves this directory with
@@ -1315,6 +1319,7 @@ class VllmProcessHandle:
             "prompt_tokens_total": None,
             "generation_tokens_total": None,
             "ttft_histogram": {},
+            "tpot_histogram": {},
             "e2e_latency_histogram": {},
             "last_prefill_s": None,
             "last_prefill_tokens": None,
@@ -1331,6 +1336,8 @@ class VllmProcessHandle:
             _spec_accepted_tokens_total: float = 0.0
             _ttft_sum: float = self._prev_ttft_sum
             _ttft_count: float = self._prev_ttft_count
+            _tpot_sum: float = self._prev_tpot_sum
+            _tpot_count: float = self._prev_tpot_count
             for raw_line in resp.text.splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -1396,6 +1403,15 @@ class VllmProcessHandle:
                     _ttft_sum = value
                 elif metric_name.endswith("time_to_first_token_seconds_count"):
                     _ttft_count = value
+                elif "time_per_output_token_seconds_bucket" in metric_name:
+                    bucket = "unknown"
+                    if 'le="' in name:
+                        bucket = name.split('le="', 1)[1].split('"', 1)[0]
+                    metrics["tpot_histogram"][bucket] = value
+                elif metric_name.endswith("time_per_output_token_seconds_sum"):
+                    _tpot_sum = value
+                elif metric_name.endswith("time_per_output_token_seconds_count"):
+                    _tpot_count = value
                 elif "e2e_request_latency_seconds_bucket" in metric_name:
                     bucket = "unknown"
                     if 'le="' in name:
@@ -1415,19 +1431,24 @@ class VllmProcessHandle:
                 # token-weighted aggregation in the orchestrator).
                 metrics["mtp_draft_tokens_total"] = _spec_draft_tokens_total
                 metrics["mtp_accepted_tokens_total"] = _spec_accepted_tokens_total
-            # Compute per-poll deltas for the prefill EWMA. Positive delta_count
-            # means new requests completed since the last poll; negative means the
-            # vLLM process restarted and counters reset, so we skip that poll.
-            delta_count = _ttft_count - self._prev_ttft_count
-            if delta_count > 0:
-                delta_sum = _ttft_sum - self._prev_ttft_sum
+            # Compute genuine prefill duration as TTFT − TPOT.
+            # Both require positive deltas; a negative delta means the vLLM process
+            # restarted and counters reset — skip that poll to avoid wrong estimates.
+            delta_ttft_count = _ttft_count - self._prev_ttft_count
+            delta_tpot_count = _tpot_count - self._prev_tpot_count
+            if delta_ttft_count > 0 and delta_tpot_count > 0:
+                avg_ttft = (_ttft_sum - self._prev_ttft_sum) / delta_ttft_count
+                avg_tpot = (_tpot_sum - self._prev_tpot_sum) / delta_tpot_count
+                prefill_s = max(0.0, avg_ttft - avg_tpot)
                 delta_tokens = (metrics["prompt_tokens_total"] or 0.0) - self._prev_prompt_tokens_total
-                if delta_sum > 0:
-                    metrics["last_prefill_s"] = delta_sum / delta_count
+                if prefill_s > 0.0:
+                    metrics["last_prefill_s"] = prefill_s
                 if delta_tokens > 0:
-                    metrics["last_prefill_tokens"] = delta_tokens / delta_count
+                    metrics["last_prefill_tokens"] = delta_tokens / delta_ttft_count
             self._prev_ttft_sum = _ttft_sum
             self._prev_ttft_count = _ttft_count
+            self._prev_tpot_sum = _tpot_sum
+            self._prev_tpot_count = _tpot_count
             self._prev_prompt_tokens_total = metrics["prompt_tokens_total"] or 0.0
         except httpx.HTTPError:
             return metrics

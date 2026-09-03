@@ -417,9 +417,9 @@ class LogosNodeRuntimeRegistry:
             # TTFT and e2e latency from vLLM Prometheus histograms.
             bm = lane.get("backend_metrics")
             if isinstance(bm, dict):
-                ttft_p50 = _histogram_quantile(bm.get("ttft_histogram"), 0.50)
-                if ttft_p50 > 0.0:
-                    self._latency_store.record_ttft(model_name, provider_id, ttft_p50)
+                tpot_p50 = _histogram_quantile(bm.get("tpot_histogram"), 0.50)
+                if tpot_p50 > 0.0:
+                    self._latency_store.record_ttft(model_name, provider_id, tpot_p50)
                 e2e_p50 = _lane_e2e_latency_p50_seconds(bm)
                 if e2e_p50 > 0.0:
                     self._latency_store.record_e2e_latency(model_name, provider_id, e2e_p50)
