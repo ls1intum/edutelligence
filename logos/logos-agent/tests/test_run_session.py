@@ -750,3 +750,64 @@ class TestCarryingTheConversation:
 
         assert run_session._save_conversation() == 0
         assert run_session._restore_conversation() == 0
+
+
+class TestCommitSubjects:
+    """One line, and about the change rather than about the request.
+
+    The first agent commit in production read `Logos`: Pull request #851
+    ('`Logos`: Serve short queued requests first and answer queue-wait tim —
+    the task's own first line, cut mid-word, with the whole task repeated
+    underneath it.
+    """
+
+    def test_the_agent_writes_it(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        (tmp_path / "commit.txt").write_text("Cancel the queued request when the client goes away\n")
+
+        assert (
+            run_session._commit_subject("some long task text")
+            == "`Logos`: Cancel the queued request when the client goes away"
+        )
+
+    def test_it_stays_one_line(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        (tmp_path / "commit.txt").write_text("Cancel the queued request\n\nAnd here is why, at length.\n")
+
+        assert run_session._commit_subject("task") == "`Logos`: Cancel the queued request"
+
+    def test_a_long_line_is_cut_on_a_word(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        (tmp_path / "commit.txt").write_text(
+            "Cancel the queued request when the client goes away before the scheduler admits it"
+        )
+
+        subject = run_session._commit_subject("task")
+
+        assert len(subject) <= run_session._SUBJECT_LIMIT
+        assert not subject.endswith(("-", ",", ";", ":"))
+        # Cut between words, not through one.
+        assert subject.split()[-1] in "Cancel the queued request when the client goes away before".split()
+
+    def test_a_repeated_prefix_is_not_doubled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        (tmp_path / "commit.txt").write_text("`Logos`: Cancel the queued request")
+
+        assert run_session._commit_subject("task") == "`Logos`: Cancel the queued request"
+
+    def test_the_runner_s_sentence_is_the_fallback(self, tmp_path, monkeypatch):
+        # Nothing written: what the session was for beats the task's first
+        # line, which for a handover is "Pull request #851 … has been
+        # assigned to you".
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        monkeypatch.setenv("LOGOS_SESSION_SUBJECT", "Address the review on #858")
+
+        assert run_session._commit_subject("Pull request #851 ('…') has been assigned to you: …") == (
+            "`Logos`: Address the review on #858"
+        )
+
+    def test_something_is_always_committed(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        monkeypatch.delenv("LOGOS_SESSION_SUBJECT", raising=False)
+
+        assert run_session._commit_subject("") == "`Logos`: Update from an agent session"

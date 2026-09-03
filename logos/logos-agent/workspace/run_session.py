@@ -41,6 +41,11 @@ from pathlib import Path
 WORKSPACE = Path("/workspace")
 CHECKOUT = WORKSPACE / "repo"
 
+# The one line the agent writes about what it changed, in its artefact
+# directory. The finalizer commits with it. Kept in step with the runner's
+# own COMMIT_FILE, which is how it reaches the prompt.
+COMMIT_FILE = "commit.txt"
+
 
 def log(message: str) -> None:
     print(f"[session] {message}", flush=True)
@@ -474,6 +479,11 @@ def build_prompt(task: str) -> str:
         "- Work only inside the current checkout.\n"
         "- Do not run git commit, git push, or gh: the harness commits and "
         "opens the pull request for you after you finish.\n"
+        f"- Write the commit subject to $LOGOS_ARTIFACT_DIR/{COMMIT_FILE}: "
+        "ONE line, imperative, under 60 characters, saying what the change "
+        "does — 'Cancel the queued request when the client goes away', not "
+        "'Fixed stuff' and not a description of the task you were given. No "
+        "body, no bullet points, no issue numbers.\n"
         "- Run the project's tests or linters for the code you touch, and fix "
         "what you break.\n"
         "- If the task turns out to be impossible or already done, say so "
@@ -765,32 +775,69 @@ def commit_and_push(branch: str, task: str) -> int:
 
     log(f"committing {len(files)} changed file(s)")
     run(["git", "add", "-A"], cwd=CHECKOUT)
-    subject = _commit_subject(task)
-    message = (
-        f"{subject}\n\n"
-        f"Produced by an unattended Logos agent session "
-        f"({os.environ.get('LOGOS_SESSION_ID', '?')}).\n\n"
-        f"Task:\n{task.strip()[:2000]}\n"
-    )
-    run(["git", "commit", "-m", message], cwd=CHECKOUT)
+    # One line, and nothing else. What the change is belongs in the subject;
+    # why it was made belongs in the pull request, where people read it.
+    run(["git", "commit", "-m", _commit_subject(task)], cwd=CHECKOUT)
     run(["git", "push", "--force-with-lease", "origin", branch], cwd=CHECKOUT)
     return len(files)
 
 
-def _commit_subject(task: str) -> str:
-    """Derive a commit subject that satisfies the repository's title policy.
+# What a subject may be. Fifty is the git convention and seventy-two the
+# point at which tools start wrapping; with the `Logos`: prefix counted, this
+# leaves a summary that fits on one line in every viewer.
+_SUBJECT_LIMIT = 72
 
-    The repo requires `` `Logos`: Capitalised … `` on pull requests, and CI
-    enforces it. Producing it here rather than asking the agent for it means a
-    session cannot fail review on a formatting rule.
+
+def _commit_subject(task: str) -> str:
+    """One line saying what changed.
+
+    The agent writes it, because it is the only one that knows: a subject
+    derived from the task describes the *request*, and for a handover that
+    reads "Pull request #851 ('…') has been assigned to you" — which is not
+    what the commit did. What it writes is trimmed to one line and given the
+    `` `Logos`: `` prefix the repository requires, so a session cannot fail
+    review on a formatting rule either.
     """
-    first_line = task.strip().splitlines()[0] if task.strip() else "Agent session"
+    return (
+        _as_subject(_written_subject())
+        or _as_subject(os.environ.get("LOGOS_SESSION_SUBJECT", ""))
+        or "`Logos`: Update from an agent session"
+    )
+
+
+def _written_subject() -> str:
+    """What the agent said about its own change, if it said anything."""
+    path = Path(os.environ.get("LOGOS_ARTIFACT_DIR", "/artifacts")) / COMMIT_FILE
+    try:
+        return path.read_text()
+    except OSError:
+        return ""
+
+
+def _as_subject(text: str) -> str:
+    """One clean line, or nothing."""
+    first_line = next((line for line in (text or "").splitlines() if line.strip()), "")
     cleaned = re.sub(r"\s+", " ", first_line).strip().rstrip(".")
     cleaned = re.sub(r"^`?logos`?\s*:\s*", "", cleaned, flags=re.IGNORECASE)
     if not cleaned:
-        cleaned = "Agent session"
+        return ""
     cleaned = cleaned[0].upper() + cleaned[1:]
-    return f"`Logos`: {cleaned[:88]}"
+    room = _SUBJECT_LIMIT - len("`Logos`: ")
+    if len(cleaned) > room:
+        # Cut on a word rather than mid-word, and without a trailing ellipsis:
+        # a subject is a sentence, not a preview of one.
+        cleaned = cleaned[:room].rsplit(" ", 1)[0].rstrip(",;:-")
+    return f"`Logos`: {cleaned}"
+
+
+def _asked_for(task: str) -> str:
+    """The request, without the standing conventions appended to every task.
+
+    The house rules are the same in every session; repeating them in every
+    pull request buries the one part that differs.
+    """
+    body = task.split("--- How work is done here ---", 1)[0].strip()
+    return (body or task.strip())[:4000]
 
 
 def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
@@ -805,7 +852,7 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
         "Opened by an unattended Logos agent session running on spare platform "
         "capacity. **Nothing here has been reviewed by a human yet.**\n\n"
         "## Task given to the agent\n\n"
-        f"```\n{task.strip()[:4000]}\n```\n\n"
+        f"```\n{_asked_for(task)}\n```\n\n"
         "## Steps for Testing\n\n"
         "1. Read the diff — this is the first point a person sees this work.\n"
         "2. Check that the tests the agent ran actually cover the change.\n\n"

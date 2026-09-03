@@ -89,6 +89,27 @@ def container_name(session_id: int) -> str:
     return f"{_CONTAINER_PREFIX}{session_id}"
 
 
+def _fallback_subject(session: dict[str, Any]) -> str:
+    """A serviceable commit subject for a session that wrote none.
+
+    Says what the session was for, in a sentence — the agent's own line is
+    better and is preferred, but a commit should never be titled after the
+    first line of the task it was handed.
+    """
+    ref = str(session.get("trigger_ref") or "")
+    match = re.match(r"^(issue|pr|thread)-(\d+)", ref)
+    if not match:
+        return ""
+    kind, number = match.group(1), match.group(2)
+    if kind == "issue":
+        return f"Work on issue #{number}"
+    if kind == "thread":
+        return f"Answer the question on #{number}"
+    if "-review-" in ref:
+        return f"Address the review on #{number}"
+    return f"Carry on with pull request #{number}"
+
+
 def branch_for(session_id: int, workspace_name: str) -> str:
     """The only branch a session is permitted to push.
 
@@ -1084,6 +1105,10 @@ class SessionManager:
             # a workflow file the agent wrote would otherwise run with the
             # repository's secrets as soon as its pull request opened.
             "LOGOS_AGENT_WORKFLOW_CHANGES": ("deny" if settings.session_token_is_runner_token else "allow"),
+            # Only used when the agent wrote no subject of its own: a plain
+            # sentence about the request beats a commit titled after the
+            # first line of its task.
+            "LOGOS_SESSION_SUBJECT": _fallback_subject(session),
         }
         if settings.session_github_token:
             env["GITHUB_TOKEN"] = settings.session_github_token

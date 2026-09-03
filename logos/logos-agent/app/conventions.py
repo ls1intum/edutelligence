@@ -16,10 +16,13 @@ HOUSE_RULES = """
 --- How work is done here ---
 
 Commits and pull requests:
-- Commit messages start with the component in backticks, then an imperative
-  summary of what changed: `Logos`: Close the session before its volume is
-  removed. The body explains why the change is right, not what the diff
-  already shows.
+- The commit subject is one line and yours to write: put it in
+  `$LOGOS_ARTIFACT_DIR/commit.txt`. Imperative, under sixty characters, and
+  about what the change does — "Cancel the queued request when the client
+  goes away". Not what you were asked to do, not a summary of your session,
+  no body and no issue numbers. The runner prefixes the component and
+  commits with exactly that line; whatever needs explaining goes in the pull
+  request, where people read it.
 - Never merge a pull request, and never force-push over somebody else's
   commits.
 - Do not reference issue or pull-request numbers in code comments,
