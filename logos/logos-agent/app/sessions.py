@@ -30,11 +30,32 @@ from typing import Any
 
 import httpx
 
-from . import capacity, controls, db, docker_engine, github, model_policy
+from . import attachments, capacity, controls, db, docker_engine, github, model_policy
 from .config import REPLY_FILE, settings
 from .schemas import EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
+
+# How long output may wait before it is written, and how much of it goes into
+# one row. Half a second is below what a person notices between the agent
+# printing a line and the line appearing; twenty lines keeps a burst from
+# writing a row each.
+LOG_FLUSH_S = 0.5
+LOG_BATCH_LINES = 20
+# How many lines may wait to be written before the reader is made to wait.
+# Twenty flushes' worth: enough to absorb a burst, small enough that a
+# runaway session cannot grow it into a memory problem.
+LOG_QUEUE_MAX = 2000
+
+# How long shutdown may spend freezing running sessions. Below the stop
+# grace period the compose file gives this service, so the work finishes
+# before Docker stops waiting.
+STAND_DOWN_S = 20.0
+
+# What the agent phase prints when it wants its spending known — the only
+# channel it has, holding no credential and reaching nothing but the model
+# gateway.
+_USAGE_LINE = re.compile(r"^\[usage\]\s+in=(?P<tin>\d+)\s+out=(?P<tout>\d+)")
 
 # Container names must be unique and stable so a restarted service can find
 # the container belonging to a session again.
@@ -66,6 +87,58 @@ _WORKSPACE_IDLE_GRACE = timedelta(minutes=10)
 
 def container_name(session_id: int) -> str:
     return f"{_CONTAINER_PREFIX}{session_id}"
+
+
+def _report_without_the_agent(session: dict[str, Any]) -> str:
+    """What to say on a thread whose session said nothing.
+
+    Not an apology and not a summary of the runner's internals: what was
+    attempted, what came of it, and how to see the rest. Written here
+    because the alternative — saying nothing — reads exactly like being
+    ignored, whatever the session's status says.
+    """
+    status = str(session.get("status") or "finished")
+    error = str(session.get("error") or "").strip()
+    pr_url = str(session.get("pr_url") or "").strip()
+    lines = []
+    if pr_url:
+        lines.append(f"I have opened {pr_url} for this.")
+    elif status == SessionStatus.SUCCEEDED.value:
+        lines.append(
+            "I worked through this and did not change anything — and I did not "
+            "leave a note saying why, which I should have. Nothing here is a "
+            "verdict on the request: read it as 'not done', not as 'nothing to do'."
+        )
+    else:
+        lines.append(f"I did not get through this one: the session {status}.")
+        if error:
+            lines.append(f"\n> {error[:500]}")
+    lines.append(
+        "\nThe transcript is in the Logos agent page under session "
+        f"{session.get('id', '?')}, and this can be run again from there."
+    )
+    return "\n".join(lines)
+
+
+def _fallback_subject(session: dict[str, Any]) -> str:
+    """A serviceable commit subject for a session that wrote none.
+
+    Says what the session was for, in a sentence — the agent's own line is
+    better and is preferred, but a commit should never be titled after the
+    first line of the task it was handed.
+    """
+    ref = str(session.get("trigger_ref") or "")
+    match = re.match(r"^(issue|pr|thread)-(\d+)", ref)
+    if not match:
+        return ""
+    kind, number = match.group(1), match.group(2)
+    if kind == "issue":
+        return f"Work on issue #{number}"
+    if kind == "thread":
+        return f"Answer the question on #{number}"
+    if "-review-" in ref:
+        return f"Address the review on #{number}"
+    return f"Carry on with pull request #{number}"
 
 
 def branch_for(session_id: int, workspace_name: str) -> str:
@@ -191,9 +264,87 @@ class SessionManager:
                 await self._scheduler_task
             except asyncio.CancelledError:
                 pass
+        await self._stand_down()
         for task in list(self._supervisors.values()):
             task.cancel()
         await db.dispose()
+
+    async def _stand_down(self) -> None:
+        """Freeze what is running before this process goes away.
+
+        A deploy replaces the runner and the model gateway together, and a
+        session left running keeps talking to a gateway that is being
+        restarted underneath it — losing the turn it was in the middle of.
+        Frozen first it loses nothing: the container survives the deploy
+        (sessions are not part of the compose stack), the row stays paused,
+        the new runner adopts it, and the scheduler resumes it as soon as
+        there is capacity. Pausing is not cancelling; the work continues
+        mid-task.
+
+        Bounded by the grace period Docker gives us. Whatever cannot be
+        frozen in time is left running, which is exactly what happened
+        before this existed.
+
+        What is running is asked of the database rather than of this
+        process's own bookkeeping: a launch cancelled between starting its
+        container and registering a supervisor leaves nothing in memory and
+        a live agent on the host — the very case the starting half of this
+        exists for.
+        """
+        try:
+            await asyncio.wait_for(self._freeze_running(), timeout=STAND_DOWN_S)
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("ran out of time pausing sessions; the rest keep running through the restart")
+        except Exception as exc:
+            # Shutdown continues whatever happens here. A session that could
+            # not be frozen is a session that runs through the restart,
+            # which is what it did before this existed.
+            logger.warning("could not stand down cleanly: %s", exc)
+
+    async def _freeze_running(self) -> None:
+        running = await db.sessions_in_status(SessionStatus.RUNNING)
+        if running:
+            logger.info("standing down: pausing %s running session(s)", len(running))
+            await asyncio.gather(
+                *(self._pause(session, "the runner is restarting") for session in running),
+                return_exceptions=True,
+            )
+        await self._freeze_starting()
+
+    async def _freeze_starting(self) -> None:
+        """Freeze containers whose row has not caught up with them yet.
+
+        A launch stores the container id as part of the move to running, so
+        between the start and that move there is a live agent the row knows
+        nothing about — and `_pause` cannot help, because a starting row may
+        not become paused. The container is frozen anyway, without touching
+        the row: the restart reconciliation already knows this shape (a
+        paused container under a starting row) and normalizes it through
+        running, so the session resumes rather than losing its turn to the
+        gateway being replaced.
+        """
+        starting = {int(session["id"]) for session in await db.sessions_in_status(SessionStatus.STARTING)}
+        if not starting:
+            return
+        try:
+            containers = await docker_engine.list_managed_containers()
+        except Exception as exc:
+            logger.warning("could not look for starting containers before shutting down: %s", exc)
+            return
+        for container in containers:
+            labels = container.get("Labels") or {}
+            if labels.get("logos.agent.helper"):
+                continue
+            label = labels.get("logos.agent.session") or ""
+            if not label.isdigit() or int(label) not in starting:
+                continue
+            if (container.get("State") or "").lower() != "running":
+                continue
+            try:
+                await docker_engine.pause_container(container.get("Id", ""))
+                logger.info("froze the container of starting session %s for the restart", label)
+            except Exception as exc:
+                logger.warning("could not freeze the container of starting session %s: %s", label, exc)
 
     async def _reconcile(self) -> None:
         """Re-attach to reality after a restart.
@@ -384,7 +535,15 @@ class SessionManager:
                 pass
 
     async def scheduler_pass(self) -> None:
-        reading = await capacity.read_load()
+        # Permissions first, then the measurement they describe: a key moved
+        # to another model — or stripped of its local one while a session was
+        # paused — must not have its old lane decide whether that session is
+        # resumed.
+        policy = await model_policy.refresh()
+        # Measured on the lane these sessions are served by, not on the
+        # whole fleet: an embedding model being idle says nothing about
+        # whether another agent session is safe to start.
+        reading = await capacity.read_load(lane=policy.lane())
         self._last_reading = reading
         # What an operator has asked for right now — the kill switch and the
         # ceiling they set — read before anything is decided.
@@ -433,7 +592,7 @@ class SessionManager:
                         break
                     await self._resume(session, why)
                     live += 1
-                    reading = await capacity.read_load()
+                    reading = await capacity.read_load(lane=model_policy.current().lane())
                     self._last_reading = reading
                     if not capacity.resume_decision(reading)[0]:
                         break
@@ -450,15 +609,26 @@ class SessionManager:
         #    under the lock makes every claim pay for its own observation;
         #    the backlog drains at one fresh reading per admission.
         async with self._admission_lock:
-            reading = await capacity.read_load()
-            self._last_reading = reading
             # Permissions are data: the agent key can be granted a cloud
             # provider long after this service started, so the local-only
             # policy is re-established on the pass that would spend it, not
-            # once at startup.
-            policy = await model_policy.refresh()
-            if not policy.ok:
+            # once at startup. Re-established *before* the load is read,
+            # because the policy is what says which lane to read: a key
+            # moved from one local model to another would otherwise be
+            # admitted against the load of the model it no longer uses.
+            admission_policy = await model_policy.refresh()
+            if not admission_policy.ok:
                 return
+            # Whose lane to measure: the session that would be claimed next.
+            # Admitting it against another model's load is how a queued
+            # session enters a full lane on an idle one's figure — the
+            # launch checks permission afterwards, never capacity.
+            candidate = await db.next_queued_session()
+            if candidate is None:
+                return
+            wanted = admission_policy.resolve(candidate.get("model"))
+            reading = await capacity.read_load(lane=admission_policy.lane(wanted))
+            self._last_reading = reading
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
             blocked = control.admission_block()
@@ -637,6 +807,10 @@ class SessionManager:
             directory = artifact_dir(sid)
             directory.mkdir(parents=True, exist_ok=True)
             _give_to_session_user(directory)
+            # The pictures a request carries, fetched by the side that has a
+            # token and a network. An issue whose whole description is a
+            # screenshot is unreadable to the sandbox otherwise.
+            images = await self._collect_attachments(sid, str(session.get("task") or ""))
             artifact_host_path = str(Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(sid))
 
             # Boundary: the next step hands a GitHub token to a container.
@@ -655,7 +829,8 @@ class SessionManager:
             # container with egress and the scoped push token. The agent
             # phase that follows has neither — it runs on the internal
             # network with no credentials at all.
-            await self._prepare_checkout(session, workspace, branch, artifact_host_path)
+            continuing = await self._continues_earlier_work(session, branch)
+            await self._prepare_checkout(session, workspace, branch, artifact_host_path, continuing=continuing)
 
             # Boundary: the agent container is next. A cancel during the
             # prepare helper stops that helper; the launch must not go on to
@@ -667,7 +842,7 @@ class SessionManager:
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
                 image=settings.workspace_image,
-                env=self._session_env(session, branch),
+                env=self._session_env(session, branch, continuing=continuing, images=images),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
                 session_id=sid,
@@ -755,7 +930,53 @@ class SessionManager:
         """Whether the row is still the 'starting' one this launch claimed."""
         return await db.session_is_starting(session_id)
 
-    def _session_env(self, session: dict[str, Any], branch: str) -> dict[str, str]:
+    @staticmethod
+    async def _collect_attachments(session_id: int, task: str) -> list[str]:
+        """Fetch the images this request refers to. Returns their paths in the container.
+
+        Best effort throughout: a picture that cannot be had is a picture the
+        agent works without, which is where it was before. It is not worth
+        failing a session over, and it is not worth retrying either — the
+        agent is told what it has, not what it should have had.
+        """
+        urls = attachments.urls_in(task)
+        if not urls:
+            return []
+        target = attachments.directory(artifact_dir(session_id))
+        paths: list[str] = []
+        for index, url in enumerate(urls, start=1):
+            try:
+                fetched = await github.fetch_image(url, max_bytes=attachments.MAX_BYTES)
+            except Exception as exc:
+                logger.info("could not fetch the attachment %s of session %s: %s", url, session_id, exc)
+                continue
+            if fetched is None:
+                continue
+            body, content_type = fetched
+            if not attachments.is_image(content_type):
+                logger.info("attachment %s is %s, not an image; leaving it", url, content_type or "untyped")
+                continue
+            name = attachments.name_for(index, content_type)
+            if not name:
+                continue
+            target.mkdir(parents=True, exist_ok=True)
+            _give_to_session_user(target)
+            path = target / name
+            path.write_bytes(body)
+            _give_to_session_user(path)
+            paths.append(f"/artifacts/attachments/{name}")
+        if paths:
+            logger.info("session %s was given %s image(s) from its request", session_id, len(paths))
+        return paths
+
+    def _session_env(
+        self,
+        session: dict[str, Any],
+        branch: str,
+        *,
+        continuing: bool = False,
+        images: list[str] | None = None,
+    ) -> dict[str, str]:
         """The environment the untrusted agent phase runs with.
 
         Nothing reusable: no GitHub token (the helper phases do the
@@ -769,6 +990,13 @@ class SessionManager:
         model = model_policy.current().resolve(session.get("model"))
         env = {
             "LOGOS_SESSION_PHASE": "agent",
+            # Set when the preparation restored this workspace's earlier
+            # conversation: the agent continues it rather than meeting the
+            # repository as a stranger again.
+            "LOGOS_SESSION_CONTINUE": "1" if continuing else "",
+            # Where the pictures from the request are. The sandbox cannot
+            # fetch them; it can read them.
+            "LOGOS_SESSION_IMAGES": ",".join(images or []),
             # The agent's model traffic goes to Logos itself, so it is
             # authenticated, policy-checked, and billed like any other
             # caller. It is pointed at the gateway, not at the orchestrator:
@@ -874,12 +1102,44 @@ class SessionManager:
                 except Exception:
                     logger.warning("could not remove %s helper container for session %s", phase, session_id)
 
+    @staticmethod
+    async def _continues_earlier_work(session: dict[str, Any], branch: str) -> bool:
+        """Whether this session carries on what this workspace was doing.
+
+        The same branch is the same piece of work: an issue that became a
+        pull request, the review on it, the review after that. Continuing
+        means the agent keeps the conversation it already had instead of
+        reading the repository from scratch — the difference between a
+        feedback round costing a few thousand tokens and a few million.
+
+        A workspace pointed at something else starts clean, and so does a
+        session with no branch of its own to compare.
+        """
+        if not branch:
+            return False
+        try:
+            previous = await db.last_session_branch(int(session["workspace_id"]), before_session_id=int(session["id"]))
+        except Exception as exc:
+            logger.info("could not establish what session %s continues: %s", session["id"], exc)
+            return False
+        return bool(previous) and previous == branch
+
     async def _prepare_checkout(
-        self, session: dict[str, Any], workspace: dict[str, Any], branch: str, artifact_host_path: str
+        self,
+        session: dict[str, Any],
+        workspace: dict[str, Any],
+        branch: str,
+        artifact_host_path: str,
+        *,
+        continuing: bool = False,
     ) -> None:
         """Phase one: the helper that makes the working copy trustworthy."""
         env = {
             "LOGOS_SESSION_PHASE": "prepare",
+            # Carries the conversation across the home wipe, and nothing
+            # else: transcripts are data the same agent wrote, hooks and
+            # configuration are not.
+            "LOGOS_SESSION_CONTINUE": "1" if continuing else "",
             "LOGOS_SESSION_ID": str(session["id"]),
             "LOGOS_SESSION_BRANCH": branch,
             "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
@@ -937,6 +1197,10 @@ class SessionManager:
             # a workflow file the agent wrote would otherwise run with the
             # repository's secrets as soon as its pull request opened.
             "LOGOS_AGENT_WORKFLOW_CHANGES": ("deny" if settings.session_token_is_runner_token else "allow"),
+            # Only used when the agent wrote no subject of its own: a plain
+            # sentence about the request beats a commit titled after the
+            # first line of its task.
+            "LOGOS_SESSION_SUBJECT": _fallback_subject(session),
         }
         if settings.session_github_token:
             env["GITHUB_TOKEN"] = settings.session_github_token
@@ -1015,22 +1279,103 @@ class SessionManager:
         await self._settle(session_id, exit_code=exit_code, error=None)
 
     async def _collect_logs(self, session_id: int, container_id: str) -> None:
-        """Persist the container's output as events so the UI can replay it."""
+        """Persist the container's output as events so the UI can follow it.
+
+        Batched by size *and* by time. Size alone was the bug worth naming:
+        an agent that prints a handful of lines a minute — which is what
+        reading code and running tests looks like — filled a batch of twenty
+        only after several minutes, so a session that was working perfectly
+        well looked like a session that had hung. Whatever has arrived is
+        written within a couple of seconds, and a chatty agent still gets
+        one row per twenty lines rather than one per line.
+        """
+        # Bounded: a session that prints faster than the database accepts
+        # rows must slow its reader down, not grow a queue until the runner
+        # runs out of memory. The reader blocking is the backpressure — the
+        # container's own log buffer is where the surplus waits, which is
+        # what it is for.
+        lines: asyncio.Queue[str | None] = asyncio.Queue(maxsize=LOG_QUEUE_MAX)
+
+        reader_done = asyncio.Event()
+
+        async def read() -> None:
+            # The stream is followed in its own task so the writer below can
+            # wake on a timeout: awaiting the iterator directly would block
+            # until the next line, which is exactly the line that is late.
+            try:
+                async for line in docker_engine.stream_logs(container_id, follow=True):
+                    await lines.put(line)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("log collection for session %s stopped: %s", session_id, exc)
+            finally:
+                # Never blocking on a full queue: the end-of-stream marker
+                # is what lets the writer finish, and waiting for room in a
+                # queue nobody is draining any more would hang the task
+                # that is trying to end. The flag is what the writer really
+                # goes by, because a full queue drops the marker.
+                reader_done.set()
+                try:
+                    lines.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
+
+        reader = asyncio.create_task(read())
+        batch: list[str] = []
+
+        async def flush() -> None:
+            nonlocal batch
+            if not batch:
+                return
+            await db.add_event(session_id, EventKind.LOG, {"lines": batch})
+            await self._note_usage(session_id, batch)
+            batch = []
+
         try:
-            batch: list[str] = []
-            async for line in docker_engine.stream_logs(container_id, follow=True):
+            while True:
+                try:
+                    line = await asyncio.wait_for(lines.get(), timeout=LOG_FLUSH_S)
+                except (TimeoutError, asyncio.TimeoutError):
+                    await flush()
+                    if reader_done.is_set() and lines.empty():
+                        # The stream ended and everything it produced has
+                        # been written. Waiting for a marker that a full
+                        # queue swallowed would wait forever.
+                        return
+                    continue
+                if line is None:
+                    await flush()
+                    return
                 batch.append(line)
-                # Batching keeps a chatty agent from writing one row per line
-                # while still surfacing progress within a couple of seconds.
-                if len(batch) >= 20:
-                    await db.add_event(session_id, EventKind.LOG, {"lines": batch})
-                    batch = []
-            if batch:
-                await db.add_event(session_id, EventKind.LOG, {"lines": batch})
+                if len(batch) >= LOG_BATCH_LINES:
+                    await flush()
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.warning("log collection for session %s stopped: %s", session_id, exc)
+        finally:
+            reader.cancel()
+
+    async def _note_usage(self, session_id: int, lines: list[str]) -> None:
+        """Carry the usage the agent reports into the session row.
+
+        The authoritative numbers arrive with the result file at the end. A
+        session that runs for an hour should not show zero for that hour, so
+        the agent reports what it has spent so far on its own transcript and
+        the newest of those lines updates the row as it goes.
+        """
+        for line in reversed(lines):
+            match = _USAGE_LINE.match(line)
+            if match is None:
+                continue
+            try:
+                await db.update_session_usage(
+                    session_id,
+                    tokens_in=int(match.group("tin")),
+                    tokens_out=int(match.group("tout")),
+                )
+            except Exception as exc:
+                logger.debug("could not record the usage of session %s: %s", session_id, exc)
+            return
 
     # --- settlement -------------------------------------------------------
 
@@ -1135,15 +1480,27 @@ class SessionManager:
                 "error": fields.get("error"),
             },
         )
+        session_row = (await db.get_session(session_id)) or {}
 
         if result.get("pr_url"):
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
+
+        workspace_id, settled_branch = session_row.get("workspace_id"), session_row.get("branch_name")
+        if succeeded and workspace_id and settled_branch:
+            # The workspace now belongs to this branch. That is what lets a
+            # review on the pull request find this working copy again — and
+            # with it the conversation that produced the change — instead of
+            # starting somewhere else from main.
+            try:
+                await db.set_workspace_base_branch(int(workspace_id), str(settled_branch))
+            except Exception as exc:
+                logger.info("could not point workspace %s at its branch: %s", workspace_id, exc)
 
         if not succeeded:
             # Somebody is looking at a thread that has been marked as picked
             # up and started. Saying that it did not work out belongs there
             # too — an answer that never comes is the worst of the three.
-            await self._react(await db.get_session(session_id), github.REACTION_FAILED)
+            await self._react(session_row, github.REACTION_FAILED)
 
         # Somebody asked this session a question. The agent phase holds no
         # GitHub credential, so it wrote the answer into its artefact
@@ -1172,6 +1529,37 @@ class SessionManager:
         else:
             await self._cleanup_container(session_id)
 
+    @staticmethod
+    async def _still_wanted(workspace: dict[str, Any]) -> bool:
+        """Whether a workspace belongs to work that is not finished yet.
+
+        A pull request that is still open is still being worked on, however
+        long its checkout has been idle: the next review continues it, and
+        removing the volume would take the conversation with it — the whole
+        history of the change, re-read from scratch on the next round.
+
+        A branch whose pull request cannot be looked up is kept: losing a
+        working copy because GitHub was briefly unreachable is the more
+        expensive mistake.
+        """
+        branch = str(workspace.get("base_branch") or "")
+        if not branch or branch in settings.protected_branches:
+            return False
+        try:
+            pull = await github.open_pull_request_for(branch)
+        except Exception:
+            logger.info("keeping workspace '%s': its pull request could not be looked up", workspace.get("name"))
+            return True
+        if pull is None:
+            return False
+        logger.debug(
+            "keeping workspace '%s': pull request #%s on '%s' is still open",
+            workspace.get("name"),
+            pull.get("number"),
+            branch,
+        )
+        return True
+
     async def sweep_workspaces(self) -> None:
         """Remove the workspaces the runner made for work that is finished.
 
@@ -1193,6 +1581,8 @@ class SessionManager:
             return
         for workspace in disposable:
             name, volume = workspace.get("name"), workspace.get("volume_name")
+            if await self._still_wanted(workspace):
+                continue
             # The volume goes first, the row is retired second: a failure in
             # between leaves the workspace un-archived, so the next sweep
             # finds it again and tries the volume once more. Retiring first
@@ -1233,12 +1623,23 @@ class SessionManager:
         path = artifact_dir(session_id) / REPLY_FILE
         try:
             body = path.read_text().strip()
-        except OSError:
-            logger.info("session %s was asked a question but wrote no answer", session_id)
+        except FileNotFoundError:
+            body = ""
+        except OSError as exc:
+            # A mount that is not there yet, a permission, a read error: the
+            # file may well exist and be readable on the next pass, so this
+            # counts as an attempt rather than as an answer that was never
+            # written. Only a file that is genuinely absent is final.
+            await db.record_reply_attempt(session_id, delivered=False)
+            logger.warning("could not read the answer of session %s (will retry): %s", session_id, exc)
             return
         if not body:
-            logger.info("session %s wrote an empty answer; nothing to post", session_id)
-            return
+            # Somebody assigned something and is waiting to hear anything at
+            # all. A session that finishes without writing a word is the one
+            # outcome that must not be silent — it is the shape a silent
+            # failure takes, and it is indistinguishable from being ignored.
+            body = _report_without_the_agent(session or {})
+            logger.info("session %s left no answer; reporting what the runner knows", session_id)
         if len(body) > _MAX_REPLY_CHARS:
             # GitHub refuses a comment above its length limit outright, and
             # an answer nobody receives is worse than a shortened one on a

@@ -479,6 +479,23 @@
   }
 }
 
-.input--narrow {
-  max-width: 8rem;
+.field__value {
+  margin-left: 0.4rem;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  color: rgb(var(--color-typography-100));
+  letter-spacing: normal;
+}
+
+.slider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.slider__track {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: rgb(var(--color-primary-500));
+  cursor: pointer;
 }

@@ -173,3 +173,129 @@ class TestPauseAndResume:
         may_resume, reason = capacity.resume_decision(reading)
         assert not may_resume
         assert "nothing to reclaim" in reason
+
+
+class TestTheLaneWeAreServedBy:
+    """The ratio has to be about the model a session will actually use.
+
+    A fleet holds embedding models, rerankers and chat models that share
+    nothing but a building. Summed together they answer a question nobody
+    asked: "1 of 60 slots busy" says most of the fleet is asleep, not
+    whether another agent session is safe to start.
+    """
+
+    # The lane the runner's key can reach: provider 15, model 97 — the
+    # payload is keyed by those ids, and a name is not enough (the same
+    # model is served by providers this key has no permission for).
+    OURS = frozenset({("15", "97")})
+
+    @staticmethod
+    def fleet(*models, provider="15"):
+        """A scheduler payload shaped like the orchestrator's own."""
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    provider: {
+                        "name": "deimama",
+                        "models": {
+                            str(model_id): {
+                                "model_name": name,
+                                "active": active,
+                                "max_capacity": 20,
+                                "queue_depth": 0,
+                                "loaded": loaded,
+                            }
+                            for model_id, name, active, loaded in models
+                        },
+                    }
+                }
+            },
+        }
+
+    def test_only_our_own_deployment_counts(self):
+        payload = self.fleet(
+            (97, "Qwen/Qwen3.8-27B", 10, True),
+            (38, "Qwen/Qwen3-Embedding-8B", 0, True),
+            (37, "openai/gpt-oss-120b", 0, True),
+        )
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.OURS)
+
+        # 10 of our 20, not 10 of everybody's 60.
+        assert reading.total_slots == 20
+        assert reading.load == 0.5
+
+    def test_the_same_model_on_a_provider_we_cannot_reach_does_not_count(self):
+        # The point of matching ids rather than names: an idle provider the
+        # key has no permission for would otherwise halve the load we read
+        # and let a session start into a saturated lane.
+        ours = self.fleet((97, "Qwen/Qwen3.8-27B", 20, True), provider="15")
+        theirs = self.fleet((97, "Qwen/Qwen3.8-27B", 0, True), provider="61")
+        ours["logosnode"]["providers"].update(theirs["logosnode"]["providers"])
+
+        reading = capacity.parse_scheduler_state(ours, lane=self.OURS)
+
+        assert reading.busy_slots == 20 and reading.total_slots == 20
+        assert reading.load == 1.0
+
+    def test_without_a_lane_the_fleet_is_the_answer(self):
+        payload = self.fleet((97, "Qwen/Qwen3.8-27B", 10, True), (37, "openai/gpt-oss-120b", 0, True))
+
+        reading = capacity.parse_scheduler_state(payload)
+
+        assert reading.total_slots == 40
+
+    def test_a_key_that_reaches_nothing_is_refused(self):
+        # Not the same question as "no filter": there is no lane at all, so
+        # a paused session must not be resumed into a permission the key no
+        # longer has.
+        payload = self.fleet((97, "Qwen/Qwen3.8-27B", 0, True))
+
+        reading = capacity.parse_scheduler_state(payload, lane=frozenset())
+
+        assert reading.reclaimable is False
+        assert reading.load == 1.0
+
+    def test_a_queue_anywhere_still_counts(self):
+        # Models share GPUs: somebody waiting on another one is somebody
+        # this runner should get out of the way of.
+        payload = self.fleet((97, "Qwen/Qwen3.8-27B", 0, True), (37, "openai/gpt-oss-120b", 0, True))
+        payload["logosnode"]["providers"]["15"]["models"]["37"]["queue_depth"] = 3
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.OURS)
+
+        assert reading.queue_total == 3
+        assert reading.saturated
+
+    def test_a_sleeping_lane_falls_back_to_the_fleet(self):
+        # Nothing of ours is resident, so there is nothing of ours to
+        # measure — the fleet-wide ratio is the better of the two answers
+        # available, and it is what this said before it knew about lanes.
+        payload = self.fleet((97, "Qwen/Qwen3.8-27B", 0, False), (37, "openai/gpt-oss-120b", 15, True))
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.OURS)
+
+        assert reading.busy_slots == 15 and reading.total_slots == 20
+        assert "none of the runner" in reading.detail
+
+    def test_a_cold_fleet_is_still_nothing_to_reclaim(self):
+        payload = self.fleet((97, "Qwen/Qwen3.8-27B", 0, False), (37, "openai/gpt-oss-120b", 0, False))
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.OURS)
+
+        # Starting here would load a model and occupy GPUs nobody was using,
+        # which is the opposite of what this runner is for.
+        assert reading.reclaimable is False
+
+    def test_a_saturated_model_is_not_averaged_away(self):
+        # A key permitted on two models: one full, one idle. A session bound
+        # for the full one has nowhere to go, and the average would say the
+        # lane is a fifth busy.
+        payload = self.fleet((97, "Qwen/Qwen3.8-27B", 20, True), (37, "openai/gpt-oss-120b", 0, True))
+        payload["logosnode"]["providers"]["15"]["models"]["37"]["max_capacity"] = 100
+
+        reading = capacity.parse_scheduler_state(payload, lane=frozenset({("15", "97"), ("15", "37")}))
+
+        assert reading.load == 1.0
+        assert "busiest" in reading.detail
