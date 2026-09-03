@@ -447,6 +447,76 @@ class TestLaunchAndSupervision:
         assert removed.count("cid-7") >= 1
 
 
+class TestPermissionsRevokedMidFlight:
+    """A key can lose its local model while sessions are running.
+
+    Permissions are data: the key can be granted a cloud provider, or have
+    its local one taken away, long after a session started. What must not
+    happen is a session carrying on — or being resumed — on a permission
+    that no longer exists.
+    """
+
+    @staticmethod
+    def install(monkeypatch, *, running=(), paused=()):
+        from app import capacity, model_policy, sessions
+
+        revoked = model_policy.ModelPolicy(
+            ok=False,
+            unknown=False,
+            detail="the agent key reaches no locally served model",
+        )
+        paused_sessions: list = []
+        resumed: list = []
+
+        async def refresh():
+            return revoked
+
+        async def read_load(timeout_s: float = 5.0, lane=None):
+            # The lane an invalid policy hands over is empty, and an empty
+            # lane is refused rather than measured.
+            assert lane == frozenset()
+            return capacity.parse_scheduler_state({"queue_total": 0}, lane=lane)
+
+        async def sessions_in_status(status):
+            if status is sessions.SessionStatus.RUNNING:
+                return list(running)
+            if status is sessions.SessionStatus.PAUSED:
+                return list(paused)
+            return []
+
+        async def fake_pause(_self, session, reason):
+            paused_sessions.append((session["id"], reason))
+
+        async def fake_resume(_self, session, reason):
+            resumed.append(session["id"])
+
+        monkeypatch.setattr(model_policy, "refresh", refresh)
+        monkeypatch.setattr(model_policy, "_current", revoked)
+        monkeypatch.setattr(capacity, "read_load", read_load)
+        monkeypatch.setattr(sessions.db, "sessions_in_status", sessions_in_status)
+        monkeypatch.setattr(sessions.SessionManager, "_pause", fake_pause)
+        monkeypatch.setattr(sessions.SessionManager, "_resume", fake_resume)
+        return paused_sessions, resumed
+
+    async def test_a_running_session_is_handed_back(self, monkeypatch):
+        from app import sessions
+
+        paused_sessions, _ = self.install(monkeypatch, running=[{"id": 7, "container_id": "cid-7"}])
+
+        await sessions.manager.scheduler_pass()
+
+        assert [sid for sid, _ in paused_sessions] == [7]
+
+    async def test_a_paused_session_is_not_resumed(self, monkeypatch):
+        from app import sessions
+
+        _, resumed = self.install(monkeypatch, paused=[{"id": 7, "container_id": "cid-7"}])
+
+        await sessions.manager.scheduler_pass()
+
+        assert resumed == []
+
+
 class TestOnePieceOfWork:
     """A pull request is worked on by one workspace, across its rounds.
 
