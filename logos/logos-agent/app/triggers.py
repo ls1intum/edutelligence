@@ -178,7 +178,32 @@ def issue_task(issue: dict[str, Any]) -> str:
     )
 
 
-def takeover_task(number: int, title: str, body: str, branch: str) -> str:
+def conversation_block(entries: list[dict[str, Any]]) -> str:
+    """What has been said on a pull request, as the agent has to read it.
+
+    Written into the task because the sandbox cannot fetch it: an agent told
+    to "start from what is still open in the review" and given no review
+    reconstructs one from the diff, which is guesswork dressed up as work.
+    """
+    rendered: list[str] = []
+    for entry in entries:
+        author = str(entry.get("author") or "somebody")
+        body = str(entry.get("body") or "").strip()
+        state = str(entry.get("state") or "")
+        path = entry.get("path")
+        where = f" on {path}:{entry.get('line') or '?'}" if path else ""
+        verdict = f" ({state})" if state else ""
+        if not body:
+            body = f"(no text — {state or 'no verdict'})"
+        if len(body) > MAX_COMMENT_CHARS:
+            body = body[:MAX_COMMENT_CHARS] + " […]"
+        rendered.append(f"{author}{where}{verdict} wrote:\n{body}")
+    if not rendered:
+        return "Nothing has been said on it yet.\n\n"
+    return "The conversation so far, oldest first:\n\n" + "\n\n---\n\n".join(rendered) + "\n\n"
+
+
+def takeover_task(number: int, title: str, body: str, branch: str, conversation: str = "") -> str:
     """The task text for a pull request handed to the agent."""
     text = (body or "").strip()
     if len(text) > 6000:
@@ -189,12 +214,14 @@ def takeover_task(number: int, title: str, body: str, branch: str) -> str:
         f"branch `{branch}`, and your commit updates that pull request — do not open a "
         f"new one, and do not rename or move the branch.\n\n"
         f"What the pull request says about itself:\n\n{text or '(no description)'}\n\n"
-        f"Read the existing review conversation before you change anything, and start "
-        f"from whatever is still open in it. Bring the change to a state its author would "
-        f"recognise: tests and linters of the part you touched pass, the description "
-        f"still matches what the branch does. Say in your final message what you did and "
-        f"what you deliberately left alone. Do not merge the pull request and do not "
-        f"force-push over anybody else's commits."
+        f"{conversation}"
+        f"That conversation is all of it — you cannot fetch more, so work from it and "
+        f"from the branch. Check each point against the current code before you change "
+        f"anything: some of it has usually been addressed already. Bring the change to a "
+        f"state its author would recognise: tests and linters of the part you touched "
+        f"pass, the description still matches what the branch does. Say in your final "
+        f"message what you did and what you deliberately left alone. Do not merge the "
+        f"pull request and do not force-push over anybody else's commits."
     )
 
 
@@ -441,6 +468,19 @@ class TriggerPoller:
         except Exception as exc:
             logger.warning("could not record how far the comment scan got: %s", exc)
 
+    @staticmethod
+    async def _conversation(number: int) -> list[dict[str, Any]]:
+        """The pull request's review conversation, or nothing on a failure.
+
+        A handover without it still works from the branch; failing the whole
+        candidate because one listing was unavailable would not.
+        """
+        try:
+            return await github.pull_request_conversation(number)
+        except Exception as exc:
+            logger.info("could not read the conversation of #%s: %s", number, exc)
+            return []
+
     async def _acknowledge(self, candidate: dict[str, Any]) -> None:
         """React so the person who asked can see their request landed.
 
@@ -533,7 +573,13 @@ class TriggerPoller:
                     {
                         "ref": f"pr-{number}-assigned",
                         "kind": "takeover",
-                        "task": takeover_task(number, pull["title"], pull["body"], branch),
+                        "task": takeover_task(
+                            number,
+                            pull["title"],
+                            pull["body"],
+                            branch,
+                            conversation_block(await self._conversation(number)),
+                        ),
                         "branch": branch,
                         "workspace": workspace_name("pr", number, pull["title"]),
                         "reaction": f"/repos/{settings.repo_slug}/issues/{number}",

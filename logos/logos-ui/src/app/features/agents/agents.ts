@@ -78,6 +78,28 @@ export class Agents implements OnInit {
   pauseReason = signal('');
   /** What is typed in the limit field, until it is applied. */
   limitDraft = signal('');
+
+  /**
+   * What the slider stands at: the value being dragged if there is one,
+   * otherwise the limit in force — the override, or the configured value
+   * when nothing overrides it.
+   */
+  readonly limitShown = computed(() => {
+    const draft = this.limitDraft().trim();
+    if (draft !== '' && Number.isFinite(Number(draft))) return Number(draft);
+    const state = this.controls();
+    return state?.max_parallel_override ?? state?.max_parallel_configured ?? 0;
+  });
+
+  /**
+   * How far the slider goes. The configured value is the normal working
+   * point, so the scale reaches past it without running to the schema's
+   * hundred, which no deployment has the capacity for.
+   */
+  readonly limitCeiling = computed(() => {
+    const configured = this.controls()?.max_parallel_configured ?? 10;
+    return Math.min(100, Math.max(20, configured * 2));
+  });
   creatingWorkspace = signal(false);
 
   readonly workspaceOptions = computed<AppSelectOption[]>(() =>

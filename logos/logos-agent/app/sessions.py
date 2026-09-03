@@ -36,6 +36,17 @@ from .schemas import EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
 
+# How long output may wait before it is written, and how much of it goes into
+# one row. Two seconds is below what anybody reads as a delay, and twenty
+# lines keeps a chatty agent from writing a row per line.
+LOG_FLUSH_S = 2.0
+LOG_BATCH_LINES = 20
+
+# What the agent phase prints when it wants its spending known — the only
+# channel it has, holding no credential and reaching nothing but the model
+# gateway.
+_USAGE_LINE = re.compile(r"^\[usage\]\s+in=(?P<tin>\d+)\s+out=(?P<tout>\d+)")
+
 # Container names must be unique and stable so a restarted service can find
 # the container belonging to a session again.
 _CONTAINER_PREFIX = "logos-agent-session-"
@@ -1015,22 +1026,82 @@ class SessionManager:
         await self._settle(session_id, exit_code=exit_code, error=None)
 
     async def _collect_logs(self, session_id: int, container_id: str) -> None:
-        """Persist the container's output as events so the UI can replay it."""
+        """Persist the container's output as events so the UI can follow it.
+
+        Batched by size *and* by time. Size alone was the bug worth naming:
+        an agent that prints a handful of lines a minute — which is what
+        reading code and running tests looks like — filled a batch of twenty
+        only after several minutes, so a session that was working perfectly
+        well looked like a session that had hung. Whatever has arrived is
+        written within a couple of seconds, and a chatty agent still gets
+        one row per twenty lines rather than one per line.
+        """
+        lines: asyncio.Queue[str | None] = asyncio.Queue()
+
+        async def read() -> None:
+            # The stream is followed in its own task so the writer below can
+            # wake on a timeout: awaiting the iterator directly would block
+            # until the next line, which is exactly the line that is late.
+            try:
+                async for line in docker_engine.stream_logs(container_id, follow=True):
+                    await lines.put(line)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("log collection for session %s stopped: %s", session_id, exc)
+            finally:
+                await lines.put(None)
+
+        reader = asyncio.create_task(read())
+        batch: list[str] = []
+
+        async def flush() -> None:
+            nonlocal batch
+            if not batch:
+                return
+            await db.add_event(session_id, EventKind.LOG, {"lines": batch})
+            await self._note_usage(session_id, batch)
+            batch = []
+
         try:
-            batch: list[str] = []
-            async for line in docker_engine.stream_logs(container_id, follow=True):
+            while True:
+                try:
+                    line = await asyncio.wait_for(lines.get(), timeout=LOG_FLUSH_S)
+                except (TimeoutError, asyncio.TimeoutError):
+                    await flush()
+                    continue
+                if line is None:
+                    await flush()
+                    return
                 batch.append(line)
-                # Batching keeps a chatty agent from writing one row per line
-                # while still surfacing progress within a couple of seconds.
-                if len(batch) >= 20:
-                    await db.add_event(session_id, EventKind.LOG, {"lines": batch})
-                    batch = []
-            if batch:
-                await db.add_event(session_id, EventKind.LOG, {"lines": batch})
+                if len(batch) >= LOG_BATCH_LINES:
+                    await flush()
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.warning("log collection for session %s stopped: %s", session_id, exc)
+        finally:
+            reader.cancel()
+
+    async def _note_usage(self, session_id: int, lines: list[str]) -> None:
+        """Carry the usage the agent reports into the session row.
+
+        The authoritative numbers arrive with the result file at the end. A
+        session that runs for an hour should not show zero for that hour, so
+        the agent reports what it has spent so far on its own transcript and
+        the newest of those lines updates the row as it goes.
+        """
+        for line in reversed(lines):
+            match = _USAGE_LINE.match(line)
+            if match is None:
+                continue
+            try:
+                await db.update_session_usage(
+                    session_id,
+                    tokens_in=int(match.group("tin")),
+                    tokens_out=int(match.group("tout")),
+                )
+            except Exception as exc:
+                logger.debug("could not record the usage of session %s: %s", session_id, exc)
+            return
 
     # --- settlement -------------------------------------------------------
 
@@ -1234,10 +1305,14 @@ class SessionManager:
         try:
             body = path.read_text().strip()
         except OSError:
-            logger.info("session %s was asked a question but wrote no answer", session_id)
-            return
+            body = ""
         if not body:
-            logger.info("session %s wrote an empty answer; nothing to post", session_id)
+            # The session is over and its artefacts are final: no later pass
+            # will find an answer that is not there. Asked again every few
+            # seconds otherwise, for the life of the deployment. The 😕 the
+            # settlement leaves is what the thread gets instead.
+            logger.info("session %s was asked a question but wrote no answer", session_id)
+            await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
             return
         if len(body) > _MAX_REPLY_CHARS:
             # GitHub refuses a comment above its length limit outright, and

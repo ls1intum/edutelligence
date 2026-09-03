@@ -442,15 +442,48 @@ def run_agent(task: str) -> dict[str, object]:
     return usage
 
 
+# What has been spent so far, as the transcript goes. The runner reads these
+# lines back out of the container's output: it is the only channel out of the
+# sandbox, which holds no credential and reaches nothing but the model
+# gateway. The totals in the result file at the end are the authority.
+_spent = {"in": 0, "out": 0}
+
+
+def _report_usage(message: dict) -> None:
+    """Print what this turn cost, if it changed the running total.
+
+    Input tokens are the context the model was given, so the largest turn is
+    the honest figure for a session rather than the sum of every turn's
+    re-read of the same conversation. Output tokens do add up: each turn
+    writes something new.
+    """
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return
+    context = sum(
+        value
+        for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+        if isinstance(value := usage.get(key), int)
+    )
+    written = usage.get("output_tokens")
+    before = dict(_spent)
+    _spent["in"] = max(_spent["in"], context)
+    _spent["out"] += written if isinstance(written, int) else 0
+    if _spent != before:
+        print(f"[usage] in={_spent['in']} out={_spent['out']}", flush=True)
+
+
 def _render_event(event: dict) -> None:
     """Turn one stream event into a readable transcript line."""
     kind = event.get("type")
     if kind == "assistant":
-        for block in (event.get("message") or {}).get("content") or []:
+        message = (event.get("message") or {}) if isinstance(event.get("message"), dict) else {}
+        for block in message.get("content") or []:
             if block.get("type") == "text" and block.get("text", "").strip():
                 print(block["text"].strip(), flush=True)
             elif block.get("type") == "tool_use":
                 print(f"[tool] {block.get('name')}", flush=True)
+        _report_usage(message)
     elif kind == "result":
         subtype = event.get("subtype", "")
         print(f"[result] {subtype}", flush=True)

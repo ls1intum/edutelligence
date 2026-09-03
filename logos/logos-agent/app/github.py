@@ -449,6 +449,59 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     return [comment for comment in payload if isinstance(comment, dict)]
 
 
+async def pull_request_conversation(number: int, *, limit: int = 40) -> list[dict[str, Any]]:
+    """Everything said on a pull request, oldest last.
+
+    The agent phase holds no GitHub credential and has no network, so a
+    conversation it is asked to continue has to travel with its task. Asking
+    it to "read the review" without this is asking it to spend its turns
+    discovering that it cannot.
+
+    Three sources, because GitHub keeps them apart: submitted reviews (a
+    verdict and often an empty body), the inline comments that carry what
+    those reviews actually said, and the discussion under the pull request.
+    """
+    reviews, inline, discussion = await asyncio.gather(
+        _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews"),
+        _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/comments"),
+        _get_all(f"/repos/{settings.repo_slug}/issues/{number}/comments"),
+        return_exceptions=True,
+    )
+    entries: list[dict[str, Any]] = []
+
+    def add(items: object, kind: str) -> None:
+        if not isinstance(items, list):
+            # One source failing is not worth losing the other two over: a
+            # partial conversation still beats none.
+            logger.info("could not read the %s of #%s: %s", kind, number, items)
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            body = str(item.get("body") or "").strip()
+            state = str(item.get("state") or "").replace("_", " ").lower()
+            if not body and state not in ("changes requested", "approved"):
+                continue
+            entries.append(
+                {
+                    "kind": kind,
+                    "author": str((item.get("user") or {}).get("login") or "somebody"),
+                    "at": _parse_time(item.get("submitted_at") or item.get("created_at")),
+                    "path": item.get("path"),
+                    "line": item.get("line") or item.get("original_line"),
+                    "state": state,
+                    "body": body,
+                }
+            )
+
+    add(reviews, "review")
+    add(inline, "inline comment")
+    add(discussion, "comment")
+    entries.sort(key=lambda entry: entry["at"] or datetime.min.replace(tzinfo=timezone.utc))
+    # The newest are the ones still open; an old conversation is history.
+    return entries[-limit:]
+
+
 async def recent_issue_comments(since: datetime) -> list[dict[str, Any]]:
     """Every issue and pull-request comment in the repository since ``since``.
 

@@ -49,6 +49,12 @@ Working within the sandbox:
   Do not attempt to push, open pull requests, or post comments yourself:
   write your work into the checkout and your answer into the reply file, and
   the runner does the rest with a credential you never see.
+- Everything from GitHub that you need is already in this task: the issue,
+  the review, the comments, the conversation. `gh`, `git fetch` and the API
+  will not answer you, and finding that out costs you turns you could have
+  spent on the work. If something you need is genuinely missing, say so in
+  your final message instead of reconstructing it from the diff — a guess
+  presented as a review is worse than a question.
 - Your time is capped. If the task is larger than the budget, do the part
   you are confident about, leave the rest untouched, and say plainly in your
   final message what you left out and why. A partial change that is honest

@@ -175,17 +175,25 @@ async def set_controls(
                 """
                 INSERT INTO agent_controls (id, mode, mode_reason, max_parallel, updated_by, updated_at)
                 VALUES (1, COALESCE(:mode, 'running'), :mode_reason,
-                        CASE WHEN :clear THEN NULL ELSE :max_parallel END, :updated_by, :now)
+                        CASE WHEN CAST(:clear AS BOOLEAN) THEN NULL
+                             ELSE CAST(:max_parallel AS INTEGER) END,
+                        :updated_by, :now)
                 ON CONFLICT (id) DO UPDATE SET
                     mode = COALESCE(:mode, agent_controls.mode),
                     mode_reason = CASE
                         WHEN :mode IS NULL THEN agent_controls.mode_reason
                         ELSE :mode_reason
                     END,
+                    -- The casts are not decoration: both branches of a CASE
+                    -- over bare parameters are untyped, so PostgreSQL
+                    -- resolves the whole expression to text and refuses to
+                    -- write it into an integer column. Without them this
+                    -- statement fails for every value, including the ones
+                    -- that look obviously fine.
                     max_parallel = CASE
-                        WHEN :clear THEN NULL
-                        WHEN :max_parallel IS NULL THEN agent_controls.max_parallel
-                        ELSE :max_parallel
+                        WHEN CAST(:clear AS BOOLEAN) THEN NULL
+                        WHEN CAST(:max_parallel AS INTEGER) IS NULL THEN agent_controls.max_parallel
+                        ELSE CAST(:max_parallel AS INTEGER)
                     END,
                     updated_by = :updated_by,
                     updated_at = :now
@@ -577,23 +585,47 @@ async def create_session(
     return int(session_id)
 
 
+# How often a trigger may be taken up again after a session that never got
+# as far as running. Enough to survive a host that is missing an image or a
+# Docker daemon that was restarting; few enough that a request which cannot
+# be launched at all stops being retried and is left to a person.
+LAUNCH_ATTEMPTS = 3
+
+
 async def handled_trigger_refs(refs: Sequence[str]) -> set[str]:
-    """Which of these GitHub events already have a session — ever.
+    """Which of these GitHub events are dealt with — ever.
 
     Deliberately without a time window. A reference names one thing that
     happened once: an issue was assigned, a review was submitted, somebody
     asked a question. Answering it a second time a week later would be a
     duplicate pull request or a duplicate answer, not a retry — and an issue
-    that simply stays assigned would produce one every week. A session that
-    failed is re-queued by a person, who can see why it failed.
+    that simply stays assigned would produce one every week.
+
+    With one exception, learned in production: a session that failed *before
+    its agent ever started* did no work and answered nothing, and must not
+    consume the request. A host missing the session image failed sixteen
+    launches in as many seconds, and every one of those assignments and
+    questions was then permanently invisible to the poller — the only way
+    back was editing the database by hand. Such a request is taken up again,
+    at most ``LAUNCH_ATTEMPTS`` times, so a launch that can never work stops
+    rather than loops.
     """
     if not refs:
         return set()
     async with sessionmaker()() as db:
         rows = (
             await db.execute(
-                text("SELECT DISTINCT trigger_ref FROM agent_sessions WHERE trigger_ref = ANY(:refs)"),
-                {"refs": list(refs)},
+                text(
+                    """
+                    SELECT trigger_ref
+                      FROM agent_sessions
+                     WHERE trigger_ref = ANY(:refs)
+                     GROUP BY trigger_ref
+                    HAVING bool_or(status <> 'failed' OR started_at IS NOT NULL)
+                        OR count(*) >= CAST(:attempts AS INTEGER)
+                    """
+                ),
+                {"refs": list(refs), "attempts": LAUNCH_ATTEMPTS},
             )
         ).all()
     return {row[0] for row in rows}
@@ -659,6 +691,45 @@ async def record_reply_attempt(session_id: int, *, delivered: bool) -> None:
                 """
             ),
             {"id": session_id, "delivered": delivered, "now": _now()},
+        )
+        await db.commit()
+
+
+async def update_session_usage(session_id: int, *, tokens_in: int, tokens_out: int) -> None:
+    """Record what a running session has spent so far.
+
+    Only ever upwards: the counters are a running total, and a batch of
+    output that arrives out of order must not make the number go backwards.
+    Settlement overwrites both with the authoritative totals from the
+    result file.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                UPDATE agent_sessions
+                   SET tokens_in = GREATEST(COALESCE(tokens_in, 0), CAST(:tokens_in AS INTEGER)),
+                       tokens_out = GREATEST(COALESCE(tokens_out, 0), CAST(:tokens_out AS INTEGER))
+                 WHERE id = :id
+                """
+            ),
+            {"id": session_id, "tokens_in": tokens_in, "tokens_out": tokens_out},
+        )
+        await db.commit()
+
+
+async def abandon_reply(session_id: int, *, attempts: int) -> None:
+    """Stop owing an answer that can never be written.
+
+    A settled session's artefacts are final: if it wrote no answer, no later
+    pass will find one. Without this the sweep asks again every few seconds
+    for the life of the deployment. The target stays on the row for the
+    record; only the sweep lets go.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text("UPDATE agent_sessions SET reply_attempts = GREATEST(reply_attempts, :attempts) WHERE id = :id"),
+            {"id": session_id, "attempts": attempts},
         )
         await db.commit()
 

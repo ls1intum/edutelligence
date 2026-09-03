@@ -120,26 +120,43 @@
         />
       </label>
 
-      <label class="controls__field">
-        <span class="field__label">Sessions at once</span>
-        <input
-          class="input input--narrow"
-          type="number"
-          min="0"
-          max="100"
-          [placeholder]="String(ctl.max_parallel_configured)"
-          [ngModel]="limitDraft()"
-          (ngModelChange)="limitDraft.set($event === null ? '' : String($event))"
-          (blur)="applyLimit(limitDraft())"
-          (keydown.enter)="applyLimit(limitDraft())"
-          [disabled]="controlBusy()"
-          aria-label="How many sessions may run at once"
-        />
-        <span class="field__hint">
-          Applied when you leave the field. Empty uses the configured
-          {{ ctl.max_parallel_configured }}; zero drains without pausing.
+      <div class="controls__field">
+        <span class="field__label">
+          Sessions at once
+          <span class="field__value">{{ limitShown() }}</span>
+          @if (ctl.max_parallel_override === null) {
+            <span class="field__optional">(configured)</span>
+          }
         </span>
-      </label>
+        <div class="slider">
+          <input
+            class="slider__track"
+            type="range"
+            min="0"
+            [max]="limitCeiling()"
+            step="1"
+            [value]="limitShown()"
+            (input)="limitDraft.set($any($event.target).value)"
+            (change)="applyLimit(limitDraft())"
+            [disabled]="controlBusy()"
+            aria-label="How many sessions may run at once"
+          />
+          @if (ctl.max_parallel_override !== null) {
+            <button
+              class="btn btn--ghost btn--small"
+              (click)="applyLimit('')"
+              [disabled]="controlBusy()"
+              title="Go back to the limit this deployment was configured with"
+            >
+              Reset to {{ ctl.max_parallel_configured }}
+            </button>
+          }
+        </div>
+        <span class="field__hint">
+          Takes effect on the next scheduler pass. Zero drains without pausing:
+          nothing new starts, what runs finishes.
+        </span>
+      </div>
     </section>
   }
 

@@ -447,6 +447,128 @@ class TestLaunchAndSupervision:
         assert removed.count("cid-7") >= 1
 
 
+class TestTranscript:
+    """What the person watching a session sees, and when.
+
+    A session that prints a handful of lines a minute — which is what
+    reading code and running tests looks like — used to fill a batch of
+    twenty only after several minutes, so working sessions looked hung.
+    """
+
+    async def test_output_appears_without_waiting_for_a_full_batch(self, monkeypatch):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "LOG_FLUSH_S", 0.05)
+        events: list = []
+
+        async def add_event(session_id, kind, payload):
+            events.append((kind, payload))
+
+        async def three_lines(_cid, **_kwargs):
+            for line in ("[session] starting agent", "[tool] Bash", "reading the failing test"):
+                yield line
+            # Then the agent thinks for a while, as agents do.
+            await asyncio.sleep(0.4)
+
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.docker_engine, "stream_logs", three_lines)
+
+        collector = asyncio.create_task(sessions.manager._collect_logs(7, "cid-7"))
+        await asyncio.sleep(0.2)
+        collector.cancel()
+
+        assert events, "three lines must not wait for a batch of twenty"
+        assert events[0][1]["lines"] == [
+            "[session] starting agent",
+            "[tool] Bash",
+            "reading the failing test",
+        ]
+
+    async def test_usage_the_agent_reports_reaches_the_row(self, monkeypatch):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "LOG_FLUSH_S", 0.05)
+        recorded: list = []
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        async def update_session_usage(session_id, *, tokens_in, tokens_out):
+            recorded.append((session_id, tokens_in, tokens_out))
+
+        async def lines(_cid, **_kwargs):
+            yield "[usage] in=100 out=10"
+            yield "[tool] Bash"
+            yield "[usage] in=4200 out=310"
+            await asyncio.sleep(0.4)
+
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.db, "update_session_usage", update_session_usage)
+        monkeypatch.setattr(sessions.docker_engine, "stream_logs", lines)
+
+        collector = asyncio.create_task(sessions.manager._collect_logs(7, "cid-7"))
+        await asyncio.sleep(0.2)
+        collector.cancel()
+
+        # The newest line in the batch, not the first: the numbers are a
+        # running total and only the latest one is current.
+        assert recorded == [(7, 4200, 310)]
+
+    async def test_ordinary_output_records_no_usage(self, monkeypatch):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "LOG_FLUSH_S", 0.05)
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        async def refuse(*_args, **_kwargs):
+            raise AssertionError("no usage line, nothing to record")
+
+        async def lines(_cid, **_kwargs):
+            yield "[tool] Bash"
+            await asyncio.sleep(0.4)
+
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.db, "update_session_usage", refuse)
+        monkeypatch.setattr(sessions.docker_engine, "stream_logs", lines)
+
+        collector = asyncio.create_task(sessions.manager._collect_logs(7, "cid-7"))
+        await asyncio.sleep(0.2)
+        collector.cancel()
+
+
+class TestAnAnswerThatWasNeverWritten:
+    """A settled session's artefacts are final.
+
+    Retrying a reply that does not exist asked the same question of the same
+    empty directory every few seconds, for the life of the deployment.
+    """
+
+    async def test_a_session_with_no_answer_stops_owing_one(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        abandoned: list = []
+
+        async def get_session(_session_id):
+            return {"id": 7, "reply_target": "issue:772", "reply_posted_at": None}
+
+        async def abandon_reply(session_id, *, attempts):
+            abandoned.append((session_id, attempts))
+
+        async def refuse(*_args, **_kwargs):
+            raise AssertionError("there is nothing to post")
+
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
+        monkeypatch.setattr(sessions.db, "abandon_reply", abandon_reply)
+        monkeypatch.setattr(sessions.github, "post_issue_comment", refuse)
+
+        await sessions.manager._post_reply(7)
+
+        assert abandoned == [(7, sessions._MAX_REPLY_ATTEMPTS)]
+
+
 class TestReactionsOnAThread:
     """What a person watching their own comment gets to see.
 

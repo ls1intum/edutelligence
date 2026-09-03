@@ -130,6 +130,14 @@ jobs:
           script: |
             printf '%s' "$LOGOS_HARBOR_PASSWORD" | docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u '${{ vars.LOGOS_HARBOR_USER }}' --password-stdin
             docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env pull
+            # The session image is not a compose service — the runner starts
+            # containers from it through the Docker socket — so `compose pull`
+            # does not fetch it and a host that has never seen it fails every
+            # launch with a 404. Pulled here, where the registry login is,
+            # and only where sessions actually run.
+            if grep -q '^COMPOSE_PROFILES=.*agent' ${{ matrix.base-path }}/.env; then
+              docker pull ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-workspace:${{ inputs.image-tag || 'latest' }}
+            fi
 
       - name: Deploy with docker compose
         uses: appleboy/ssh-action@v1.2.5
