@@ -21,16 +21,20 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
                 FROM model_aliases a
                 WHERE a.model_id = m.id
                ) AS aliases,
-               (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                  AND tt.name = 'prompt_tokens' AND tp.valid_from <= NOW()
+                  AND tt.name = 'billed_input_uncached'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
                 ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
                ) AS input_usd_per_million,
-               (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                  AND tt.name = 'completion_tokens' AND tp.valid_from <= NOW()
+                  AND tt.name = 'billed_output_text'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
                 ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
                ) AS output_usd_per_million,
                (SELECT MAX(le.timestamp_request)
@@ -67,16 +71,20 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
                 FROM model_aliases a
                 WHERE a.model_id = m.id
                ) AS aliases,
-               (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                  AND tt.name = 'prompt_tokens' AND tp.valid_from <= NOW()
+                  AND tt.name = 'billed_input_uncached'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
                 ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
                ) AS input_usd_per_million,
-               (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                  AND tt.name = 'completion_tokens' AND tp.valid_from <= NOW()
+                  AND tt.name = 'billed_output_text'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
                 ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
                ) AS output_usd_per_million
         FROM models m

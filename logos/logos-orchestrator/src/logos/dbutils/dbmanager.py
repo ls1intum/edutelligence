@@ -2218,11 +2218,13 @@ class DBManager:
                               ) AS aliases,
                               m.description,
                               (
-                                  SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                  SELECT ROUND(price_per_k_unit::NUMERIC / 100000, 4)
                                   FROM token_prices tp
                                   JOIN token_types tt ON tt.id = tp.type_id
                                   WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                    AND tt.name = 'prompt_tokens'
+                                    AND tt.name = 'billed_input_uncached'
+                                    AND tp.unit = 'token' AND tp.service_tier = 'default'
+                                    AND tp.min_context_tokens = 0
                                     AND valid_from <= NOW()
                                   ORDER BY
                                       (tp.model_id = m.id) DESC NULLS LAST,
@@ -2230,11 +2232,13 @@ class DBManager:
                                   LIMIT 1
                               ) AS input_usd_per_million,
                             (
-                                SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                SELECT ROUND(price_per_k_unit::NUMERIC / 100000, 4)
                                 FROM token_prices tp
                                 JOIN token_types tt ON tt.id = tp.type_id
                                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                    AND tt.name = 'completion_tokens'
+                                    AND tt.name = 'billed_output_text'
+                                    AND tp.unit = 'token' AND tp.service_tier = 'default'
+                                    AND tp.min_context_tokens = 0
                                     AND valid_from <= NOW()
                                 ORDER BY
                                     (tp.model_id = m.id) DESC NULLS LAST,
@@ -2289,11 +2293,13 @@ class DBManager:
                                 ) AS aliases,
                                 m.description,
                                 (
-                                    SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                    SELECT ROUND(price_per_k_unit::NUMERIC / 100000, 4)
                                     FROM token_prices tp
                                              JOIN token_types tt ON tt.id = tp.type_id
                                     WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                      AND tt.name = 'prompt_tokens'
+                                      AND tt.name = 'billed_input_uncached'
+                                    AND tp.unit = 'token' AND tp.service_tier = 'default'
+                                    AND tp.min_context_tokens = 0
                                       AND valid_from <= NOW()
                                     ORDER BY
                                         (tp.model_id = m.id) DESC NULLS LAST,
@@ -2301,11 +2307,13 @@ class DBManager:
                                     LIMIT 1
                                 ) AS input_usd_per_million,
                        (
-                            SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                            SELECT ROUND(price_per_k_unit::NUMERIC / 100000, 4)
                             FROM token_prices tp
                                 JOIN token_types tt ON tt.id = tp.type_id
                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                AND tt.name = 'completion_tokens'
+                                AND tt.name = 'billed_output_text'
+                                    AND tp.unit = 'token' AND tp.service_tier = 'default'
+                                    AND tp.min_context_tokens = 0
                                 AND valid_from <= NOW()
                             ORDER BY
                                 (tp.model_id = m.id) DESC NULLS LAST,
@@ -2540,6 +2548,7 @@ class DBManager:
         usage=None,
         policy_id=-1,
         classified=None,
+        service_tier=None,
         **kwargs,
     ):
         # Hole Privacy-Level
@@ -2569,8 +2578,15 @@ class DBManager:
 
         for token_type in type_ids:
             if usage[token_type]:
-                _ = self.insert(
-                    "usage_tokens",
+                self.session.execute(
+                    text(
+                        """
+                        INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
+                        VALUES (:log_entry_id, :type_id, :token_count)
+                        ON CONFLICT (log_entry_id, type_id)
+                        DO UPDATE SET token_count = EXCLUDED.token_count
+                        """
+                    ),
                     {
                         "log_entry_id": log_id,
                         "type_id": type_ids[token_type],
@@ -2589,7 +2605,8 @@ class DBManager:
                        classification_statistics = :classification_statistics,
                        request_id = COALESCE(:request_id, request_id),
                        queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
-                       utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival)
+                       utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival),
+                       service_tier = COALESCE(:service_tier, service_tier)
                    WHERE id = :log_id
                    """
         )
@@ -2606,6 +2623,7 @@ class DBManager:
                 "request_id": kwargs.get("request_id"),
                 "queue_depth": kwargs.get("queue_depth_at_arrival"),
                 "utilization": kwargs.get("utilization_at_arrival"),
+                "service_tier": service_tier,
             },
         )
         self.session.commit()
@@ -2617,14 +2635,17 @@ class DBManager:
         provider_id: int,
         usage: Dict[str, int],
         response_at: datetime.datetime,
+        service_tier: Optional[str] = None,
     ) -> Optional[int]:
         """Return the configured cloud cost for one response in micro-cents.
 
-        The lookup mirrors the ``budget_usage`` view: model/provider-specific
-        prices take precedence over generic prices and only prices valid at
-        ``response_at`` are considered. ``None`` identifies a local provider;
-        cloud providers without a matching price retain the existing billing
-        semantics and cost zero.
+        Delegates to the ``logos_price_usage`` SQL function, the single source of
+        truth also used by the ``log_entry_cost`` / ``budget_usage`` views:
+        usage is decomposed into non-overlapping billable quantities and each is
+        priced through a fallback chain, honouring context-length and service
+        tiers. ``None`` means Logos has no pricing knowledge for the response (a
+        local provider, or a cloud model with no catalogue price) — the caller
+        omits the cost line rather than asserting a confident zero.
         """
         billable_usage = {
             token_type: token_count
@@ -2640,48 +2661,18 @@ class DBManager:
         row = self.session.execute(
             text(
                 """
-                WITH response_usage AS (
-                    SELECT usage.key AS token_type,
-                           usage.value::BIGINT AS token_count
-                    FROM jsonb_each_text(CAST(:usage AS JSONB)) AS usage
-                ),
-                cloud_provider AS (
-                    SELECT id
-                    FROM providers
-                    WHERE id = :provider_id
-                      AND LOWER(provider_type::text) = 'cloud'
-                )
-                SELECT CASE
-                    WHEN EXISTS (SELECT 1 FROM cloud_provider)
-                    THEN COALESCE(SUM(
-                        CASE WHEN price.price_per_k_token IS NOT NULL
-                             THEN (ru.token_count * price.price_per_k_token / 1000)::BIGINT
-                             ELSE 0
-                        END
-                    ), 0)
-                    ELSE NULL
-                END AS cost_micro_cents
-                FROM response_usage ru
-                LEFT JOIN token_types tt ON tt.name = ru.token_type
-                LEFT JOIN LATERAL (
-                    SELECT tp.price_per_k_token
-                    FROM token_prices tp
-                    WHERE tp.type_id = tt.id
-                      AND (tp.model_id = :model_id OR tp.model_id IS NULL)
-                      AND (tp.provider_id = :provider_id OR tp.provider_id IS NULL)
-                      AND tp.valid_from <= :response_at
-                    ORDER BY (tp.model_id = :model_id) DESC NULLS LAST,
-                             (tp.provider_id = :provider_id) DESC NULLS LAST,
-                             tp.valid_from DESC
-                    LIMIT 1
-                ) price ON true
+                SELECT logos_price_usage(
+                    :model_id, :provider_id, :response_at, :service_tier,
+                    CAST(:usage AS JSONB)
+                ) AS cost_micro_cents
                 """
             ),
             {
-                "usage": _json_for_jsonb(billable_usage),
                 "model_id": int(model_id),
                 "provider_id": int(provider_id),
                 "response_at": response_at,
+                "service_tier": service_tier,
+                "usage": _json_for_jsonb(billable_usage),
             },
         ).fetchone()
         if row is None or row.cost_micro_cents is None:

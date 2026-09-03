@@ -68,31 +68,14 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         -- Postgres can use idx_log_entry_api_key_id instead of scanning everyone's
         -- current-month usage to find this user's few keys.
         LEFT JOIN (
-            SELECT le.api_key_id, COALESCE(SUM(
-                CASE WHEN tp.price_per_k_token IS NOT NULL
-                    THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
-                    ELSE 0
-                END
-            ), 0) AS cost_micro_cents
-            FROM log_entry le
-            JOIN usage_tokens ut ON ut.log_entry_id = le.id
-            LEFT JOIN LATERAL (
-                SELECT price_per_k_token
-                FROM token_prices
-                WHERE type_id = ut.type_id
-                  AND (model_id = le.model_id OR model_id IS NULL)
-                  AND (provider_id = le.provider_id OR provider_id IS NULL)
-                  AND valid_from <= le.timestamp_request
-                ORDER BY (model_id = le.model_id) DESC NULLS LAST,
-                         (provider_id = le.provider_id) DESC NULLS LAST,
-                         valid_from DESC
-                LIMIT 1
-            ) tp ON true
-            WHERE le.api_key_id IN (
+            SELECT lec.api_key_id,
+                   COALESCE(SUM(lec.cost_micro_cents), 0) AS cost_micro_cents
+            FROM log_entry_cost lec
+            WHERE lec.api_key_id IN (
                 SELECT id FROM api_keys WHERE user_id = :userId AND is_active = true
             )
-            AND DATE_TRUNC('month', le.timestamp_request)::date = DATE_TRUNC('month', CURRENT_DATE)::date
-            GROUP BY le.api_key_id
+            AND DATE_TRUNC('month', lec.timestamp_request)::date = DATE_TRUNC('month', CURRENT_DATE)::date
+            GROUP BY lec.api_key_id
         ) bu ON bu.api_key_id = ak.id
         LEFT JOIN teams t ON t.id = ak.team_id
         -- Team spend, computed once per request (not once per key). Attributed via
@@ -106,33 +89,16 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         -- get_team_budget_usage in the orchestrator: application keys carry
         -- their own separate budget and never count against the team cap.
         LEFT JOIN (
-            SELECT ak2.team_id, COALESCE(SUM(
-                CASE WHEN tp.price_per_k_token IS NOT NULL
-                    THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
-                    ELSE 0
-                END
-            ), 0) AS cost_micro_cents
-            FROM log_entry le
-            JOIN usage_tokens ut ON ut.log_entry_id = le.id
-            JOIN api_keys ak2 ON ak2.id = le.api_key_id
-            LEFT JOIN LATERAL (
-                SELECT price_per_k_token
-                FROM token_prices
-                WHERE type_id = ut.type_id
-                  AND (model_id = le.model_id OR model_id IS NULL)
-                  AND (provider_id = le.provider_id OR provider_id IS NULL)
-                  AND valid_from <= le.timestamp_request
-                ORDER BY (model_id = le.model_id) DESC NULLS LAST,
-                         (provider_id = le.provider_id) DESC NULLS LAST,
-                         valid_from DESC
-                LIMIT 1
-            ) tp ON true
+            SELECT ak2.team_id,
+                   COALESCE(SUM(lec.cost_micro_cents), 0) AS cost_micro_cents
+            FROM log_entry_cost lec
+            JOIN api_keys ak2 ON ak2.id = lec.api_key_id
             WHERE ak2.team_id IN (
                 SELECT DISTINCT team_id FROM api_keys
                 WHERE user_id = :userId AND is_active = true AND team_id IS NOT NULL
             )
             AND ak2.key_type = 'developer'
-            AND DATE_TRUNC('month', le.timestamp_request)::date = DATE_TRUNC('month', CURRENT_DATE)::date
+            AND DATE_TRUNC('month', lec.timestamp_request)::date = DATE_TRUNC('month', CURRENT_DATE)::date
             GROUP BY ak2.team_id
         ) team_bu ON team_bu.team_id = ak.team_id
         WHERE ak.user_id = :userId AND ak.is_active = true

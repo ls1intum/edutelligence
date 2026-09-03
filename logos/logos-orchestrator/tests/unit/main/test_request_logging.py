@@ -54,7 +54,9 @@ def _make_dummy_db(cost_micro_cents=None):
         def update_log_entry_metrics(self, **kwargs):
             self.metric_calls.append(kwargs)
 
-        def get_usage_cost_micro_cents(self, model_id, provider_id, usage, response_at):  # noqa: ARG002
+        def get_usage_cost_micro_cents(
+            self, model_id, provider_id, usage, response_at, service_tier=None
+        ):  # noqa: ARG002
             return cost_micro_cents
 
     return DummyDB
@@ -183,6 +185,8 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
         "prompt_tokens": 3,
         "completion_tokens": 5,
         "total_tokens": 8,
+        "billed_requests": 1,
+        "billed_input_characters": 2,
     }
     assert dummy_db.payload_calls[0]["payload"]["usage"]["total_tokens"] == 8
     assert completion_calls == [
@@ -195,6 +199,8 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
                 "prompt_tokens": 3,
                 "completion_tokens": 5,
                 "total_tokens": 8,
+                "billed_requests": 1,
+                "billed_input_characters": 2,
             },
         }
     ]
@@ -262,6 +268,8 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
         "completion_tokens": 4,
         "total_tokens": 14,
         "prompt_cached_tokens": 6,
+        "billed_requests": 1,
+        "billed_input_characters": 2,
     }
 
 
@@ -407,6 +415,9 @@ async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
         "prompt_tokens": 10,
         "completion_tokens": 5,
         "total_tokens": 15,
+        "billed_requests": 1,
+        "billed_input_characters": 2,
+        "billed_output_characters": 2,
     }
 
 
@@ -535,6 +546,7 @@ async def test_proxy_streaming_response_logs_usage_and_status(monkeypatch):
         "prompt_tokens": 2,
         "completion_tokens": 4,
         "total_tokens": 6,
+        "billed_requests": 1,
     }
     assert dummy_db.metric_calls == [
         {
@@ -601,8 +613,9 @@ async def test_http_streaming_terminal_error_is_recorded(monkeypatch, terminal_e
             "result_status": "error",
             "error_message": terminal_error,
             "cold_start": False,
-            # The stream carried no usage chunk, so nothing was extracted.
-            "usage_tokens": {},
+            # The stream carried no usage chunk; only the derived per-request
+            # quantities (always billable) are recorded.
+            "usage_tokens": {"billed_requests": 1, "billed_input_characters": 2},
         }
     ]
     assert completion_logs[0]["status"] == "error"
@@ -800,8 +813,9 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
             "result_status": "error",
             "error_message": "bad request",
             "cold_start": False,
-            # An error body carries no usage, so nothing was extracted.
-            "usage_tokens": {},
+            # An error body carries no token usage; only the derived
+            # per-request quantities are recorded.
+            "usage_tokens": {"billed_requests": 1, "billed_input_characters": 3},
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-sync-error")]
@@ -862,6 +876,9 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
         "prompt_tokens": 11,
         "completion_tokens": 13,
         "total_tokens": 24,
+        "billed_requests": 1,
+        "billed_input_characters": 3,
+        "billed_output_characters": 2,
     }
     assert completion_calls == [
         {
@@ -873,6 +890,9 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
                 "prompt_tokens": 11,
                 "completion_tokens": 13,
                 "total_tokens": 24,
+                "billed_requests": 1,
+                "billed_input_characters": 3,
+                "billed_output_characters": 2,
             },
         }
     ]
@@ -1151,7 +1171,7 @@ async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "text/plain; charset=utf-8"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250}
+    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio
@@ -1209,7 +1229,7 @@ async def test_sync_whisper_json_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "application/json"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250}
+    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio

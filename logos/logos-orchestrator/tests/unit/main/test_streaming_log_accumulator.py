@@ -150,6 +150,8 @@ def test_responses_stream_billing_from_real_azure_sse():
         "total_tokens": 714,
         "prompt_cached_tokens": 0,
         "completion_reasoning_tokens": 640,
+        "billed_requests": 1,
+        "billed_output_characters": 20,
     }
 
 
@@ -171,9 +173,14 @@ def test_responses_terminal_event_returns_eur_cost(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def get_usage_cost_micro_cents(self, model_id, provider_id, usage, response_at):
+        def get_usage_cost_micro_cents(self, model_id, provider_id, usage, response_at, service_tier=None):
             assert (model_id, provider_id) == (27, 12)
-            assert usage == {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10}
+            assert usage == {
+                "prompt_tokens": 4,
+                "completion_tokens": 6,
+                "total_tokens": 10,
+                "billed_requests": 1,
+            }
             assert response_at.tzinfo == datetime.timezone.utc
             return 250
 

@@ -9,6 +9,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,15 +38,51 @@ public class PriceUpdaterService {
     private static final Logger log = LoggerFactory.getLogger(PriceUpdaterService.class);
     private static final String LITELLM_BASE = "https://api.litellm.ai/model_catalog";
 
-    private static final Map<String, String> LITELLM_TO_TOKEN_TYPE = Map.of(
-        "input_cost_per_token", "prompt_tokens",
-        "output_cost_per_token", "completion_tokens",
-        "cache_read_input_token_cost", "prompt_cached_tokens",
-        "output_cost_per_reasoning_token", "completion_reasoning_tokens",
-        "input_cost_per_audio_token", "prompt_audio_tokens",
-        "output_cost_per_audio_token", "completion_audio_tokens",
-        "input_cost_per_second", "audio_milliseconds"
+    /** A litellm per-unit price maps to one billable-quantity type and its unit. */
+    private record TypeUnit(String quantity, String unit) {}
+
+    /**
+     * EXTENSION POINT: to bill a new cost dimension, add a
+     * {@code (litellm catalog key) -> (billable quantity name, unit)} entry here
+     * plus the matching {@code token_types} row in changelog 022. An unmapped key
+     * is ignored (that dimension stays unpriced), never a crash.
+     */
+    private static final Map<String, TypeUnit> LITELLM_BASE_KEYS = Map.ofEntries(
+        Map.entry("input_cost_per_token",                      new TypeUnit("billed_input_uncached",       "token")),
+        Map.entry("output_cost_per_token",                     new TypeUnit("billed_output_text",          "token")),
+        Map.entry("cache_read_input_token_cost",               new TypeUnit("billed_input_cache_read",     "token")),
+        Map.entry("input_cost_per_token_cache_hit",            new TypeUnit("billed_input_cache_read",     "token")),
+        Map.entry("cache_creation_input_token_cost",           new TypeUnit("billed_input_cache_write",    "token")),
+        Map.entry("cache_creation_input_token_cost_above_1hr", new TypeUnit("billed_input_cache_write_1h", "token")),
+        Map.entry("cache_read_input_audio_token_cost",         new TypeUnit("billed_input_audio_cache_read", "token")),
+        Map.entry("cache_creation_input_audio_token_cost",     new TypeUnit("billed_input_audio_cache_write", "token")),
+        Map.entry("output_cost_per_reasoning_token",           new TypeUnit("billed_output_reasoning",     "token")),
+        Map.entry("input_cost_per_audio_token",                new TypeUnit("billed_input_audio",          "token")),
+        Map.entry("output_cost_per_audio_token",               new TypeUnit("billed_output_audio",         "token")),
+        Map.entry("input_cost_per_character",                  new TypeUnit("billed_input_characters",     "character")),
+        Map.entry("output_cost_per_character",                 new TypeUnit("billed_output_characters",    "character")),
+        Map.entry("input_cost_per_request",                    new TypeUnit("billed_requests",             "request")),
+        Map.entry("input_cost_per_image",                      new TypeUnit("billed_input_images",         "image")),
+        Map.entry("output_cost_per_image",                     new TypeUnit("billed_output_images",        "image")),
+        Map.entry("input_cost_per_image_token",                new TypeUnit("billed_input_image_tokens",   "token")),
+        Map.entry("output_cost_per_image_token",               new TypeUnit("billed_output_image_tokens",  "token")),
+        Map.entry("input_cost_per_pixel",                      new TypeUnit("billed_input_pixels",         "pixel")),
+        Map.entry("output_cost_per_pixel",                     new TypeUnit("billed_output_pixels",        "pixel")),
+        Map.entry("ocr_cost_per_page",                         new TypeUnit("billed_ocr_pages",            "page")),
+        Map.entry("ocr_cost_per_credit",                       new TypeUnit("billed_ocr_credits",          "credit")),
+        Map.entry("annotation_cost_per_page",                  new TypeUnit("billed_annotation_pages",     "page")),
+        Map.entry("search_context_cost_per_query",             new TypeUnit("billed_search_queries",       "query")),
+        Map.entry("input_cost_per_query",                      new TypeUnit("billed_search_queries",       "query")),
+        Map.entry("input_cost_per_second",                     new TypeUnit("audio_milliseconds",          "millisecond")),
+        Map.entry("input_cost_per_audio_per_second",           new TypeUnit("audio_milliseconds",          "millisecond"))
     );
+
+    // <base>_above_200k_tokens  /  <base>_above_128_tokens
+    private static final Pattern CONTEXT_SUFFIX =
+        Pattern.compile("^(?<base>.+?)_above_(?<n>\\d+)(?<k>k?)_tokens$");
+    // <base>_priority / <base>_flex / <base>_scale / <base>_standard
+    private static final Pattern MODE_SUFFIX =
+        Pattern.compile("^(?<base>.+?)_(?<mode>priority|flex|scale|standard)$");
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -157,18 +195,58 @@ public class PriceUpdaterService {
             return;
         }
 
-        Instant validFrom = Instant.now();
-        for (Map.Entry<String, String> entry : LITELLM_TO_TOKEN_TYPE.entrySet()) {
-            Object costObj = data.get(entry.getKey());
-            if (costObj == null) continue;
+        ingestCatalog(modelId, providerId, modelName, data, Instant.now());
+    }
+
+    /**
+     * Turn a fetched litellm catalog entry into {@code token_prices} rows: map
+     * each per-unit price key to a billable quantity + unit, peeling any
+     * {@code _priority/_flex/_scale} service-mode suffix and any
+     * {@code _above_<N>[k]_tokens} context tier off the key first. Package-private
+     * for tests.
+     */
+    void ingestCatalog(int modelId, int providerId, String modelName,
+                       Map<String, Object> data, Instant validFrom) {
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            String rawKey = entry.getKey();
+            Object costObj = entry.getValue();
+            if (!(costObj instanceof Number)) continue;
+            if (rawKey.contains("_batches") || rawKey.contains("_batch")) continue;
+
+            String key = rawKey;
+            long minContextTokens = 0L;
+            String serviceTier = "default";
+
+            Matcher mode = MODE_SUFFIX.matcher(key);
+            if (mode.matches()) {
+                String m = mode.group("mode");
+                serviceTier = "standard".equals(m) ? "default" : m;
+                key = mode.group("base");
+            }
+
+            Matcher ctx = CONTEXT_SUFFIX.matcher(key);
+            if (ctx.matches()) {
+                long n = Long.parseLong(ctx.group("n"));
+                minContextTokens = "k".equals(ctx.group("k")) ? n * 1000L : n;
+                key = ctx.group("base");
+            }
+
+            TypeUnit tu = LITELLM_BASE_KEYS.get(key);
+            if (tu == null) continue;
+
             double cost = ((Number) costObj).doubleValue();
-            if (cost <= 0) continue;
-            // Duration usage is stored as integer milliseconds. One thousand
-            // milliseconds equal one catalogue-priced second, so its per-1K
-            // unit price uses 1e8 rather than the usual 1e11.
-            double unitScale = "input_cost_per_second".equals(entry.getKey()) ? 1e8 : 1e11;
+            // A zero is an effective price update too: skipping it would leave
+            // the previous non-zero generation active forever. Negative prices
+            // are invalid catalogue data and remain ignored.
+            if (cost < 0) continue;
+
+            // token/character/flat units: 1e11 = 1e8 micro-cents x 1e3 per-1k.
+            // millisecond keeps the historical 1e8 scale (per-1k-ms == per-second).
+            double unitScale = "millisecond".equals(tu.unit()) ? 1e8 : 1e11;
             long pricePerK = Math.round(cost * unitScale);
-            upsertTokenPrice(modelId, providerId, entry.getValue(), pricePerK, validFrom);
+
+            upsertTokenPrice(modelId, providerId, tu.quantity(), tu.unit(),
+                minContextTokens, serviceTier, pricePerK, validFrom);
         }
         log.info("price_updater: prices updated for '{}' (id={}, provider_id={})", modelName, modelId, providerId);
     }
@@ -195,24 +273,34 @@ public class PriceUpdaterService {
     }
 
     @Transactional
-    private void upsertTokenPrice(int modelId, int providerId, String tokenTypeName,
-                                  long pricePerK, Instant validFrom) {
-        TokenType tokenType = tokenTypeRepository.findByName(tokenTypeName)
-            .orElseGet(() -> tokenTypeRepository.save(new TokenType(tokenTypeName)));
+    protected void upsertTokenPrice(int modelId, int providerId, String quantityName, String unit,
+                                    long minContextTokens, String serviceTier,
+                                    long pricePerK, Instant validFrom) {
+        TokenType tokenType = tokenTypeRepository.findByName(quantityName)
+            .orElseGet(() -> tokenTypeRepository.save(new TokenType(quantityName)));
 
         Optional<TokenPrice> latest = tokenPriceRepository
-            .findTopByModelIdAndTypeIdAndProviderIdOrderByValidFromDesc(modelId, tokenType.getId(), providerId);
+            .findTopByModelIdAndTypeIdAndProviderIdAndUnitAndMinContextTokensAndServiceTierOrderByValidFromDesc(
+                modelId, tokenType.getId(), providerId, unit, minContextTokens, serviceTier);
 
-        if (latest.isPresent() && latest.get().getPricePerKToken().longValue() == pricePerK) return;
+        if (latest.isPresent() && latest.get().getPricePerKUnit() != null
+                && latest.get().getPricePerKUnit().longValue() == pricePerK) {
+            return;
+        }
 
-        Instant from = latest.isEmpty() ? Instant.parse("2020-01-01T00:00:00Z") : validFrom;
-
+        // B6: stamp the first row for a triple with the fetch time, like every
+        // later row. Back-dating the first-ever price to 2020 is what produced the
+        // retroactive 5x overbilling; before the first fetch "no price = free" is
+        // the honest answer.
         TokenPrice price = new TokenPrice();
         price.setTypeId(tokenType.getId());
         price.setModelId(modelId);
         price.setProviderId(providerId);
-        price.setValidFrom(from);
-        price.setPricePerKToken(pricePerK);
+        price.setUnit(unit);
+        price.setMinContextTokens(minContextTokens);
+        price.setServiceTier(serviceTier);
+        price.setValidFrom(validFrom);
+        price.setPricePerKUnit(pricePerK);
         tokenPriceRepository.save(price);
     }
 }

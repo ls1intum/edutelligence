@@ -50,5 +50,6 @@ VALUES
   (93001, 91002, 9001, 4),
   (93002, 91002, 9002, 3);
 
-INSERT INTO token_prices (id, type_id, price_per_k_token, valid_from, model_id)
-VALUES (92001, 91001, 1000, NOW() - INTERVAL '1 year', 5001);
+INSERT INTO token_prices (id, type_id, price_per_k_unit, valid_from, model_id)
+SELECT 92001, tt.id, 1000, NOW() - INTERVAL '1 year', 5001
+FROM token_types tt WHERE tt.name = 'billed_input_uncached';

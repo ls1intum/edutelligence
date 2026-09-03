@@ -227,32 +227,91 @@ def proxy_behaviour(headers: dict, providers: list, path: str):
     return proxy_headers, forward_url, int(provider_info["id"])
 
 
-# The Responses API reports usage as input/output tokens; billing, rate
-# limiting, and token pricing are keyed to the Chat Completions names, so
-# normalize on extraction.
-_RESPONSES_USAGE_KEY_MAP = {
-    "input_tokens": "prompt_tokens",
-    "output_tokens": "completion_tokens",
+# Billing, rate limiting and token pricing are keyed to one canonical usage
+# vocabulary. Providers spell the same quantities many ways (OpenAI Chat
+# Completions / Responses API, Anthropic Messages, Bedrock Converse camelCase,
+# DeepSeek hit/miss); normalise every known spelling here without changing a
+# value. logos_price_usage in the DB keys off exactly these names.
+#
+# EXTENSION POINT: a new provider token category is billed at the base
+# input/output rate until it is added here and priced in Liquibase changelog 022.
+_CANONICAL_USAGE_FIELDS = {
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "prompt_cached_tokens",
+    "prompt_cache_write_tokens",
+    "prompt_cache_write_1h_tokens",
+    "prompt_cache_miss_tokens",
+    "prompt_audio_tokens",
+    "prompt_image_tokens",
+    "prompt_cache_read_audio_tokens",
+    "prompt_cache_write_audio_tokens",
+    "completion_reasoning_tokens",
+    "completion_audio_tokens",
+    "completion_image_tokens",
+    "audio_milliseconds",
 }
 
-# Nested details dicts, flattened under the canonical prefix: Chat Completions'
+_USAGE_KEY_MAP = {
+    "input_tokens": "prompt_tokens",
+    "inputTokens": "prompt_tokens",
+    "promptTokens": "prompt_tokens",
+    "output_tokens": "completion_tokens",
+    "outputTokens": "completion_tokens",
+    "completionTokens": "completion_tokens",
+    "totalTokens": "total_tokens",
+    "cache_read_input_tokens": "prompt_cached_tokens",
+    "cacheReadInputTokens": "prompt_cached_tokens",
+    "prompt_cache_hit_tokens": "prompt_cached_tokens",
+    "promptCacheHitTokens": "prompt_cached_tokens",
+    "cache_creation_input_tokens": "prompt_cache_write_tokens",
+    "cacheWriteInputTokens": "prompt_cache_write_tokens",
+    "cacheCreationInputTokens": "prompt_cache_write_tokens",
+    "promptCacheMissTokens": "prompt_cache_miss_tokens",
+    "cache_read_input_audio_tokens": "prompt_cache_read_audio_tokens",
+    "cache_creation_input_audio_tokens": "prompt_cache_write_audio_tokens",
+}
+
+# Nested *_tokens_details dicts, flattened onto canonical names. Chat Completions'
 # prompt/completion_tokens_details and the Responses API's
-# input/output_tokens_details (e.g. input_tokens_details.cached_tokens and
-# prompt_tokens_details.cached_tokens both become prompt_cached_tokens).
+# input/output_tokens_details.
 _USAGE_DETAILS_PREFIXES = (
     ("prompt_tokens_details", "prompt_"),
     ("completion_tokens_details", "completion_"),
     ("input_tokens_details", "prompt_"),
     ("output_tokens_details", "completion_"),
 )
+_DETAIL_KEY_MAP = {
+    ("prompt_", "cached_tokens"): "prompt_cached_tokens",
+    ("prompt_", "audio_tokens"): "prompt_audio_tokens",
+    ("prompt_", "image_tokens"): "prompt_image_tokens",
+    ("completion_", "audio_tokens"): "completion_audio_tokens",
+    ("completion_", "image_tokens"): "completion_image_tokens",
+    ("completion_", "reasoning_tokens"): "completion_reasoning_tokens",
+}
+
+_USAGE_META_FIELDS = {
+    "approximate_total",
+    "eval_count",
+    "eval_duration",
+    "load_duration",
+    "prompt_eval_count",
+    "prompt_eval_duration",
+    "prompt_token/s",
+    "response_token/s",
+    "total_duration",
+}
 
 
 def extract_token_usage(usage: dict) -> dict:
     """
-    Extract detailed token usage from provider response, filtering out meta fields.
-    Handles OpenAI Chat Completions, OpenAI Responses API, and Ollama formats.
+    Extract detailed token usage from a provider response onto the canonical
+    vocabulary, filtering out meta fields. Handles OpenAI Chat Completions, the
+    OpenAI Responses API, Anthropic Messages, Bedrock Converse, DeepSeek and
+    Ollama shapes. Values are never altered, only renamed.
     """
-    usage_tokens = {}
+    usage_tokens: dict = {}
 
     def _add(key: str, value: Any) -> None:
         if (
@@ -268,39 +327,55 @@ def extract_token_usage(usage: dict) -> dict:
             return
         # Only integer token counts are stored (one row per type in
         # usage_tokens). Skip non-numeric fields such as Azure's nested
-        # `latency_checkpoint` dict, which would otherwise reach the DB as a
-        # token_count and crash with "can't adapt type 'dict'". bool is an int
-        # subclass but never a token count, so exclude it explicitly.
+        # `latency_checkpoint` dict. bool is an int subclass but never a token
+        # count, so exclude it explicitly.
         if isinstance(value, bool) or not isinstance(value, int):
             return
         usage_tokens[key] = value
 
     for name in usage:
-        if "tokens_details" in name:
+        if "tokens_details" in name or name == "cache_creation":
             continue
+        if name in _USAGE_META_FIELDS or "/s" in name:
+            continue
+        canonical = _USAGE_KEY_MAP.get(name, name)
+        _add(canonical, usage[name])
         if (
-            name
-            in {
-                "approximate_total",
-                "eval_count",
-                "eval_duration",
-                "load_duration",
-                "prompt_eval_count",
-                "prompt_eval_duration",
-                "prompt_token/s",
-                "response_token/s",
-                "total_duration",
-            }
-            or "/s" in name
+            isinstance(usage[name], int)
+            and not isinstance(usage[name], bool)
+            and canonical not in _CANONICAL_USAGE_FIELDS
+            and not name.endswith("_details")
         ):
-            continue
-        _add(_RESPONSES_USAGE_KEY_MAP.get(name, name), usage[name])
+            logger.info("unknown usage field %r (billed at base rate until mapped)", name)
 
-    # Flatten nested token details under the canonical prefix
+    # Flatten nested token details onto canonical names.
     for details_key, prefix in _USAGE_DETAILS_PREFIXES:
         details = usage.get(details_key)
         if isinstance(details, dict):
-            for name in details:
-                _add(prefix + name, details[name])
+            for name, value in details.items():
+                _add(_DETAIL_KEY_MAP.get((prefix, name), prefix + name), value)
+
+    # Anthropic's cache_creation breakdown is authoritative when present; its
+    # sibling scalar cache_creation_input_tokens is their sum, so drop it to
+    # avoid double counting.
+    cache_creation = usage.get("cache_creation")
+    if isinstance(cache_creation, dict):
+        five_min = cache_creation.get("ephemeral_5m_input_tokens")
+        one_hour = cache_creation.get("ephemeral_1h_input_tokens")
+        if isinstance(five_min, int) and not isinstance(five_min, bool):
+            usage_tokens["prompt_cache_write_tokens"] = five_min
+        if isinstance(one_hour, int) and not isinstance(one_hour, bool):
+            usage_tokens["prompt_cache_write_1h_tokens"] = one_hour
 
     return usage_tokens
+
+
+def extract_service_tier(payload: Any) -> "str | None":
+    """The response's service tier ('default', 'flex', 'priority', 'scale', ...),
+    lowercased, or None. OpenAI/Azure echo it; Anthropic/Bedrock do not."""
+    if not isinstance(payload, dict):
+        return None
+    tier = payload.get("service_tier")
+    if isinstance(tier, str) and tier.strip():
+        return tier.strip().lower()
+    return None

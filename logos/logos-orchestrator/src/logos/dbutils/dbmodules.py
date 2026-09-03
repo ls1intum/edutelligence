@@ -245,7 +245,10 @@ class TokenPrice(Base):
     valid_from = Column(TIMESTAMP(timezone=True), nullable=False)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=True)
     provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=True)
-    price_per_k_token = Column(BigInteger, nullable=False)
+    price_per_k_unit = Column(BigInteger, nullable=False)
+    unit = Column(Text, nullable=False, server_default="token")
+    min_context_tokens = Column(BigInteger, nullable=False, server_default="0")
+    service_tier = Column(Text, nullable=False, server_default="default")
 
     token_type = relationship("TokenTypes")
 

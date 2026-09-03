@@ -44,6 +44,7 @@ from logos.benchmarks.guidellm_runner import (
     resolve_benchmark_target,
     run_benchmark_job,
 )
+from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
@@ -86,7 +87,7 @@ from logos.request_content import (
     sanitized_payload_for_logging,
     set_payload_field,
 )
-from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
+from logos.responses import extract_model, extract_service_tier, get_client_ip, request_setup
 from logos.role_auth import require_logos_admin_key
 from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
@@ -1557,24 +1558,18 @@ class _StreamingLogAccumulator:
         self.messages_usage = merged
 
 
-def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
+def _usage_tokens_from_payload(
+    response_payload: Any,
+    request_payload: Any = None,
+    path: str = "",
+) -> Dict[str, int]:
+    """Canonical token usage for a response, merged with the derived non-token
+    billable quantities (``billed_requests``, characters, images, ...) so the
+    stored ``usage_tokens`` rows carry everything ``logos_price_usage`` prices."""
     if not isinstance(response_payload, dict):
         return {}
-    usage = response_payload.get("usage")
-    if isinstance(usage, dict):
-        extracted = extract_token_usage(usage)
-        if extracted:
-            return extracted
-    duration = response_payload.get("duration")
-    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
-        return extract_token_usage({"seconds": duration})
-    if isinstance(duration, str):
-        try:
-            parsed_duration = float(duration)
-        except ValueError:
-            return {}
-        return extract_token_usage({"seconds": parsed_duration})
-    return {}
+    usage, _ = finalize_billing_inputs(request_payload, response_payload, path)
+    return usage
 
 
 # One currency unit = 100 cents = 1e8 micro-cents. The unit is USD, not EUR:
@@ -1590,8 +1585,10 @@ def _response_with_cost(
     provider_id: Optional[int],
     model_id: Optional[int],
     response_at: datetime.datetime,
+    request_payload: Any = None,
+    path: str = "",
 ) -> tuple[Any, bool]:
-    """Add the configured EUR cost to a cloud response's usage object.
+    """Add the configured USD cost to a cloud response's usage object.
 
     Cost enrichment is deliberately best-effort: a billing lookup must never
     turn a successful inference into an error. The DB method returns ``None``
@@ -1602,8 +1599,8 @@ def _response_with_cost(
         return response_payload, False
     usage = response_payload.get("usage")
     if not isinstance(usage, dict):
-        return response_payload, False
-    usage_tokens = extract_token_usage(usage)
+        usage = {}
+    usage_tokens, service_tier = finalize_billing_inputs(request_payload, response_payload, path)
     if not usage_tokens:
         return response_payload, False
 
@@ -1614,6 +1611,7 @@ def _response_with_cost(
                 provider_id,
                 usage_tokens,
                 response_at,
+                service_tier=service_tier,
             )
     except Exception:
         logger.exception(
@@ -1639,6 +1637,8 @@ class _StreamingCostEnricher:
 
     provider_id: Optional[int]
     model_id: Optional[int]
+    request_payload: Any = None
+    path: str = ""
     buffer: bytes = b""
 
     def feed(self, chunk: bytes | str) -> list[bytes]:
@@ -1684,6 +1684,8 @@ class _StreamingCostEnricher:
                 self.provider_id,
                 self.model_id,
                 datetime.datetime.now(datetime.timezone.utc),
+                request_payload=self.request_payload,
+                path=self.path,
             )
             if not changed:
                 continue
@@ -3717,7 +3719,7 @@ async def _streaming_response(
                 _live_streams.finish(request_id)
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload)
+                usage_tokens = _usage_tokens_from_payload(response_payload, prepared_payload, request_path or "")
                 if log_id:
                     with DBManager() as db:
                         db.set_response_payload(
@@ -3728,6 +3730,7 @@ async def _streaming_response(
                             usage_tokens,
                             policy_id,
                             classification_stats,
+                            service_tier=extract_service_tier(response_payload),
                             request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                             queue_depth_at_arrival=(
                                 scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
@@ -3810,7 +3813,7 @@ async def _streaming_response(
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
         cost_enricher = (
-            _StreamingCostEnricher(provider_id, model_id)
+            _StreamingCostEnricher(provider_id, model_id, request_payload=prepared_payload, path=request_path or "")
             if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
             else None
         )
@@ -3874,7 +3877,7 @@ async def _streaming_response(
             failed = error_message is not None
             stream_log.finish()
             response_payload = stream_log.response_payload()
-            usage_tokens = _usage_tokens_from_payload(response_payload)
+            usage_tokens = _usage_tokens_from_payload(response_payload, prepared_payload, request_path or "")
             if log_id:
                 with DBManager() as db:
                     db.set_response_payload(
@@ -3885,6 +3888,7 @@ async def _streaming_response(
                         usage_tokens,
                         policy_id,
                         classification_stats,
+                        service_tier=extract_service_tier(response_payload),
                         request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                         queue_depth_at_arrival=(
                             scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
@@ -4086,9 +4090,16 @@ async def _sync_response(
             )
 
         if exec_result.success and context.provider_type == "cloud":
-            response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
+            response_payload, _ = _response_with_cost(
+                response_payload,
+                provider_id,
+                model_id,
+                response_at,
+                request_payload=prepared_payload,
+                path=request_path or "",
+            )
 
-        usage_tokens = _usage_tokens_from_payload(response_payload)
+        usage_tokens = _usage_tokens_from_payload(response_payload, prepared_payload, request_path or "")
 
         if log_id:
             with DBManager() as db:
@@ -4102,6 +4113,7 @@ async def _sync_response(
                     usage_tokens,
                     policy_id,
                     classification_stats,
+                    service_tier=extract_service_tier(response_payload),
                     request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                     queue_depth_at_arrival=(
                         scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
@@ -4248,9 +4260,11 @@ def _proxy_streaming_response(
 
     from fastapi.responses import StreamingResponse
 
+    _proxy_path = forward_url.rsplit("/v1/", 1)[-1] if "/v1/" in forward_url else forward_url
+
     async def streamer():
         stream_log = _StreamingLogAccumulator()
-        cost_enricher = _StreamingCostEnricher(provider_id, model_id)
+        cost_enricher = _StreamingCostEnricher(provider_id, model_id, request_payload=payload, path=_proxy_path)
         stream_status = StreamingExecutionStatus()
         ttft = None
         error_message = None
@@ -4289,7 +4303,7 @@ def _proxy_streaming_response(
             if log_id:
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload)
+                usage_tokens = _usage_tokens_from_payload(response_payload, payload, _proxy_path)
 
                 with DBManager() as db:
                     if ttft is None and stream_log.first_chunk is not None and not error_message:
@@ -4302,6 +4316,7 @@ def _proxy_streaming_response(
                         usage_tokens,
                         policy_id,
                         classified,
+                        service_tier=extract_service_tier(response_payload),
                     )
                     db.update_log_entry_metrics(
                         log_id=log_id,
@@ -4338,11 +4353,19 @@ async def _proxy_sync_response(
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
         response_payload = {"error": exec_result.error}
+    _proxy_path = forward_url.rsplit("/v1/", 1)[-1] if "/v1/" in forward_url else forward_url
     if exec_result.success:
-        response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
+        response_payload, _ = _response_with_cost(
+            response_payload,
+            provider_id,
+            model_id,
+            response_at,
+            request_payload=payload,
+            path=_proxy_path,
+        )
 
     if log_id:
-        usage_tokens = _usage_tokens_from_payload(response_payload)
+        usage_tokens = _usage_tokens_from_payload(response_payload, payload, _proxy_path)
 
         with DBManager() as db:
             if exec_result.success:
@@ -4355,6 +4378,7 @@ async def _proxy_sync_response(
                 usage_tokens,
                 policy_id,
                 classified,
+                service_tier=extract_service_tier(response_payload),
             )
             db.update_log_entry_metrics(
                 log_id=log_id,
