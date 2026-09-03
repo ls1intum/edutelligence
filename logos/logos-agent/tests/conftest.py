@@ -71,6 +71,21 @@ def session_image_present(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_sessions_by_default(monkeypatch):
+    """Nothing is running unless a test says so.
+
+    Shutdown asks the database what to freeze, and a test that lets that
+    question through waits for a connection nobody is going to answer.
+    Tests about what is running set their own reply.
+    """
+
+    async def none(_status):
+        return []
+
+    monkeypatch.setattr(db, "sessions_in_status", none)
+
+
+@pytest.fixture(autouse=True)
 def unpaused_runner(monkeypatch):
     """No operator has touched the controls, unless a test says otherwise.
 

@@ -232,11 +232,13 @@ class SessionManager:
         Bounded by the grace period Docker gives us. Whatever cannot be
         frozen in time is left running, which is exactly what happened
         before this existed.
+
+        What is running is asked of the database rather than of this
+        process's own bookkeeping: a launch cancelled between starting its
+        container and registering a supervisor leaves nothing in memory and
+        a live agent on the host — the very case the starting half of this
+        exists for.
         """
-        if not self._supervisors:
-            # Nothing of ours is running: no session to freeze, and no
-            # reason to ask a database that may be going away with us.
-            return
         try:
             await asyncio.wait_for(self._freeze_running(), timeout=STAND_DOWN_S)
         except (TimeoutError, asyncio.TimeoutError):

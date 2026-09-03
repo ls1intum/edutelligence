@@ -559,9 +559,6 @@ class TestStandingDown:
 
         monkeypatch.setattr(sessions.db, "sessions_in_status", running)
         monkeypatch.setattr(sessions.SessionManager, "_pause", fake_pause)
-        # Standing down is about what this process supervises; with nothing
-        # supervised it does not even ask.
-        monkeypatch.setitem(sessions.manager._supervisors, 7, None)
 
         await sessions.manager._stand_down()
 
@@ -580,7 +577,6 @@ class TestStandingDown:
 
         monkeypatch.setattr(sessions.db, "sessions_in_status", running)
         monkeypatch.setattr(sessions.SessionManager, "_pause", hangs)
-        monkeypatch.setitem(sessions.manager._supervisors, 7, None)
 
         # Docker is going to kill this process shortly either way; a session
         # that cannot be frozen in time is left running, as before.
@@ -611,12 +607,39 @@ class TestStandingDown:
         monkeypatch.setattr(sessions.db, "sessions_in_status", rows)
         monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", containers)
         monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
-        monkeypatch.setitem(sessions.manager._supervisors, 9, None)
 
         await sessions.manager._stand_down()
 
         # Only the live session container: not the helper, not a container
         # that has already exited.
+        assert paused == ["cid-9"]
+
+    async def test_a_launch_with_no_supervisor_yet_is_still_frozen(self, monkeypatch):
+        # The gap this exists for: a launch cancelled between starting its
+        # container and registering a supervisor leaves nothing in memory
+        # and a live agent on the host. Bookkeeping that says "nothing is
+        # running" must not be what decides.
+        from app import sessions
+
+        paused: list = []
+
+        async def rows(status):
+            return [{"id": 9}] if status is sessions.SessionStatus.STARTING else []
+
+        async def containers():
+            return [{"Id": "cid-9", "State": "running", "Labels": {"logos.agent.session": "9"}}]
+
+        async def fake_pause(cid, **_kwargs):
+            paused.append(cid)
+            return True
+
+        monkeypatch.setattr(sessions.db, "sessions_in_status", rows)
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", containers)
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+
+        assert not sessions.manager._supervisors
+        await sessions.manager._stand_down()
+
         assert paused == ["cid-9"]
 
     async def test_an_unreadable_database_does_not_break_shutdown(self, monkeypatch):
@@ -626,7 +649,6 @@ class TestStandingDown:
             raise RuntimeError("connection refused")
 
         monkeypatch.setattr(sessions.db, "sessions_in_status", broken)
-        monkeypatch.setitem(sessions.manager._supervisors, 7, None)
 
         await sessions.manager._stand_down()
 
