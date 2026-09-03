@@ -18,7 +18,8 @@ ETTFT decomposes into three additive phases:
   1. State overhead  — wake or cold-load latency
   2. Reclaim overhead — VRAM eviction cost, victim-aware:
      idle/sleeping victim → RECLAIM_IDLE_EVICT_S;
-     busy victim → estimated queue drain time + RECLAIM_IDLE_EVICT_S
+     busy victim → drain_time + RECLAIM_IDLE_EVICT_S,
+     where drain_time counts every active AND queued request on the victim
      (minimum across all candidate victims on the provider)
   3. Queue wait — queued requests × observed per-request service time
 """
@@ -201,6 +202,32 @@ def _estimate_queue_wait_s(
     return queue_rounds * service_time_s
 
 
+# ── Reclaim (drain) time estimation ──────────────────────────────────
+
+
+def _estimate_drain_time_s(
+    total_running: int,
+    queue_waiting: int,
+    effective_parallel: int,
+    service_time_s: float,
+) -> float:
+    """Estimate time until all in-flight and queued work on a lane completes.
+
+    Unlike _estimate_queue_wait_s — which estimates the wait for a *new*
+    incoming request and excludes the current batch from the depth count —
+    eviction drain requires every active and waiting request to finish before
+    the lane can be unloaded.  We therefore count both.
+
+      total  = total_running + queue_waiting
+      rounds = total / effective_parallel
+      drain  = rounds × service_time_s
+    """
+    total = max(0, total_running) + max(0, queue_waiting)
+    if total <= 0:
+        return 0.0
+    return (total / max(effective_parallel, 1)) * service_time_s
+
+
 # ── Reclaim overhead estimation ───────────────────────────────────────
 
 
@@ -235,12 +262,11 @@ def _estimate_reclaim_overhead_s(
             cost = RECLAIM_IDLE_EVICT_S
         elif lane.runtime_state in ("loaded", "running"):
             service_time = _effective_service_time_s(lane.e2e_latency_p50_seconds)
-            drain_s = _estimate_queue_wait_s(
-                scheduler_queue_depth=0,
+            drain_s = _estimate_drain_time_s(
+                total_running=int(lane.requests_running),
+                queue_waiting=int(lane.queue_waiting),
                 effective_parallel=max(lane.num_parallel, 1),
                 service_time_s=service_time,
-                backend_queue_waiting=int(lane.queue_waiting),
-                backend_active_requests=int(lane.requests_running),
             )
             cost = drain_s + RECLAIM_IDLE_EVICT_S
         else:

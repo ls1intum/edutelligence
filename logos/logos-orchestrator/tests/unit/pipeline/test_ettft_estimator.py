@@ -17,8 +17,12 @@ from logos import (
     compute_weight_span,
     estimate_ettft_azure,
 )
-from logos.pipeline.ettft_estimator import _estimate_reclaim_overhead_s, estimate_ettft_local
-from logos.pipeline.ettft_estimator import RECLAIM_IDLE_EVICT_S
+from logos.pipeline.ettft_estimator import (
+    DEFAULT_GENERATION_TIME_S,
+    RECLAIM_IDLE_EVICT_S,
+    _estimate_reclaim_overhead_s,
+    estimate_ettft_local,
+)
 
 
 def _make_view(
@@ -444,7 +448,7 @@ def test_reclaim_sleeping_victim_returns_idle_evict():
 
 
 def test_reclaim_busy_victim_uses_queue_drain():
-    """Busy victim with 3 queued requests at 5 s e2e, 1 parallel → 15 s drain + 3 s unload."""
+    """Busy victim with 1 running + 3 queued at 5 s e2e, 1 parallel → 20 s drain + 3 s unload."""
     lane = _make_lane(
         runtime_state="running",
         active_requests=1,
@@ -453,10 +457,24 @@ def test_reclaim_busy_victim_uses_queue_drain():
         e2e_latency_p50_seconds=5.0,
         num_parallel=1,
     )
-    # effective_depth = 0 (orch) + 3 (waiting) + max(0, 1-1) = 3
-    # drain = 3 / 1 * 5 = 15 s; total = 15 + 3 = 18 s
+    # total = 1 running + 3 waiting = 4; rounds = 4/1 = 4; drain = 4 * 5 = 20 s
     cost = _estimate_reclaim_overhead_s([lane], "target")
-    assert cost == pytest.approx(15.0 + RECLAIM_IDLE_EVICT_S)
+    assert cost == pytest.approx(20.0 + RECLAIM_IDLE_EVICT_S)
+
+
+def test_reclaim_one_running_no_queue():
+    """A single in-flight request with no queued work must still drain before eviction."""
+    lane = _make_lane(
+        runtime_state="running",
+        active_requests=1,
+        queue_waiting=0.0,
+        requests_running=1.0,
+        e2e_latency_p50_seconds=5.0,
+        num_parallel=4,
+    )
+    # total = 1 running + 0 waiting = 1; rounds = 1/4 = 0.25; drain = 0.25 * 5 = 1.25 s
+    cost = _estimate_reclaim_overhead_s([lane], "target")
+    assert cost == pytest.approx(1.25 + RECLAIM_IDLE_EVICT_S)
 
 
 def test_reclaim_picks_cheapest_victim():
@@ -491,8 +509,6 @@ def test_reclaim_cold_lane_skipped_as_candidate():
 
 def test_reclaim_busy_no_e2e_falls_back_to_generation_constant():
     """If the victim lane has no e2e history, DEFAULT_GENERATION_TIME_S is used."""
-    from logos.pipeline.ettft_estimator import DEFAULT_GENERATION_TIME_S
-
     lane = _make_lane(
         runtime_state="running",
         active_requests=1,
@@ -501,7 +517,7 @@ def test_reclaim_busy_no_e2e_falls_back_to_generation_constant():
         e2e_latency_p50_seconds=0.0,  # no history
         num_parallel=1,
     )
-    # drain = (0 + 2 + 0) / 1 * DEFAULT_GENERATION_TIME_S
-    expected_drain = 2.0 * DEFAULT_GENERATION_TIME_S
+    # total = 1 running + 2 waiting = 3; drain = 3/1 * DEFAULT_GENERATION_TIME_S
+    expected_drain = 3.0 * DEFAULT_GENERATION_TIME_S
     cost = _estimate_reclaim_overhead_s([lane], "target")
     assert cost == pytest.approx(expected_drain + RECLAIM_IDLE_EVICT_S)
