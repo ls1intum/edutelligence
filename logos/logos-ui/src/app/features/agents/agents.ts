@@ -369,7 +369,12 @@ export class Agents implements OnInit {
     const id = this.selectedId();
     if (id === null) return;
     try {
-      const fresh = await this.agentService.getEvents(id, this.lastEventId);
+      const answer = await this.agentService.getEvents(id, this.lastEventId);
+      // Filtered against the cursor as it is *now*, not as it was when the
+      // request went out: the stream appends while this is in flight, and
+      // an event both of them saw would otherwise be shown twice.
+      const fresh = answer.filter((event) => event.id > this.lastEventId);
+      if (this.selectedId() !== id) return;
       if (fresh.length > 0) {
         this.lastEventId = fresh[fresh.length - 1].id;
         this.events.update((existing) => [...existing, ...fresh]);
