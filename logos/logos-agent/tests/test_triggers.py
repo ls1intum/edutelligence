@@ -164,7 +164,7 @@ class FakeDb:
         async def list_workspaces():
             return list(self.workspaces)
 
-        async def create_workspace(*, name, base_branch, created_by):
+        async def create_workspace(*, name, base_branch, created_by, ephemeral=False):
             if any(w.get("name") == name for w in self.workspaces):
                 raise ValueError(f"workspace '{name}' already exists")
             entry = {
@@ -172,6 +172,7 @@ class FakeDb:
                 "name": name,
                 "active_sessions": 0,
                 "base_branch": base_branch,
+                "ephemeral": ephemeral,
             }
             self.workspaces.append(entry)
             return entry
@@ -769,3 +770,101 @@ class TestWhoMayDirectChanges:
         await triggers.TriggerPoller().poll_once()
 
         assert looked_up == ["wasnertobias"]
+
+
+class TestWorkspaceNames:
+    """A workspace name is read by people, and lands in the branch."""
+
+    def test_an_issue_workspace_says_which_issue(self):
+        assert triggers.workspace_name("issue", 812, "OOM on startup") == "issue-812-oom-on-startup"
+
+    def test_a_long_title_is_trimmed_rather_than_dumped(self):
+        name = triggers.workspace_name("issue", 5, "Refactor the whole scheduling pipeline for clarity and speed")
+        # It becomes part of `logos/agent/<name>/session-42`, so it stays
+        # readable rather than complete.
+        assert len(name) < 60
+        assert name.startswith("issue-5-refactor")
+
+    def test_punctuation_does_not_reach_a_volume_or_a_branch_name(self):
+        name = triggers.workspace_name("issue", 9, "Fix: don't crash (again)!")
+        assert all(c.isalnum() or c == "-" for c in name)
+
+    def test_a_titleless_thread_still_names_its_number(self):
+        assert triggers.workspace_name("pr", 772, "") == "pr-772"
+
+    async def test_a_triggered_workspace_is_named_after_its_work(self, monkeypatch):
+        FakeRepo(assigned_issues=[issue(812, title="OOM on startup")]).install(monkeypatch)
+        fake_db = FakeDb(workspaces=[{"id": 1, "name": "taken", "active_sessions": 1, "base_branch": "main"}])
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        created = [w for w in fake_db.workspaces if w["name"] != "taken"]
+        assert created[0]["name"] == "issue-812-oom-on-startup"
+        # And it is the runner's to clean up when the work is done.
+        assert created[0]["ephemeral"] is True
+
+
+class TestUrgency:
+    async def test_a_security_issue_is_queued_above_a_documentation_one(self, monkeypatch):
+        FakeRepo(
+            assigned_issues=[
+                dict(issue(1, title="typo"), labels=[{"name": "documentation"}]),
+                dict(issue(2, title="token leak"), labels=[{"name": "security fix"}]),
+            ]
+        ).install(monkeypatch)
+        fake_db = FakeDb(
+            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in (1, 2, 3)]
+        )
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        # Both fit here; what matters is which one the queue offers first,
+        # since a busy platform only admits one per capacity reading.
+        assert [c["trigger_ref"] for c in fake_db.created] == ["issue-2", "issue-1"]
+        assert fake_db.created[0]["priority"] > fake_db.created[1]["priority"]
+        assert "security" in fake_db.created[0]["priority_reason"]
+
+    async def test_blocked_work_is_not_started(self, monkeypatch):
+        FakeRepo(assigned_issues=[dict(issue(3), labels=[{"name": "blocked"}])]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        assert fake_db.created == []
+
+    async def test_a_review_carries_more_urgency_than_a_fresh_issue(self, monkeypatch):
+        FakeRepo(
+            assigned_issues=[issue(1)],
+            authored_pulls=[pull(772)],
+            reviews={772: review(9)},
+        ).install(monkeypatch)
+        fake_db = FakeDb(
+            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in (1, 2, 3)]
+        )
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created[0]["trigger_ref"] == "pr-772-review-9"
+
+
+class TestTaskConventions:
+    """Every task carries what a new colleague would be told."""
+
+    def test_each_kind_of_task_carries_the_house_rules(self):
+        tasks = [
+            triggers.issue_task(issue(1)),
+            triggers.takeover_task(2, "t", "b", "logos/agent/x"),
+            triggers.review_task(3, "t", review(1), []),
+            triggers.thread_task(4, "t", [{"body": "q", "user": {"login": "a"}}], branch=None),
+        ]
+        for task in tasks:
+            assert "How work is done here" in task
+            assert "Never merge a pull request" in task
+            assert "fails on the unfixed code" in task

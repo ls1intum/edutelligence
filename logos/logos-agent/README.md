@@ -78,6 +78,12 @@ a workspace at a time** — two would write over each other. Parallelism comes
 from having several workspaces; the ceiling across all of them is
 `MAX_PARALLEL_SESSIONS`.
 
+Workspaces the runner creates for triggered work are named after it —
+`issue-812-oom-on-startup`, `pr-772-add-an-agent-runner` — which is also what
+appears in the branch (`logos/agent/issue-812-oom-on-startup/session-42`) and
+in the workspace list. They are removed once their work is finished, together
+with their volume; an operator's own workspaces are never touched.
+
 This is enforced twice: the admission query skips workspaces that are occupied,
 and a partial unique index in the schema rejects a second active session for a
 workspace outright. The second exists because a scheduler bug should raise
@@ -128,6 +134,33 @@ Branch names are derived from the session id, not chosen by the agent, so two
 sessions cannot collide and no workspace name can steer a push at a protected
 branch. The exception is a pull request handed to it, which keeps its own
 branch — checked against the protected list all the same.
+
+## Stopping it, and slowing it down
+
+Two controls live in the database rather than in the environment, because
+they are needed *during* something — an incident, a deploy, a surprise — and
+editing an `.env` on a host to restart a service that is mid-session is not
+what anybody wants to be doing then. Both are on the Agents page, both
+survive a restart, and both are visible to whoever finds the runner stopped.
+
+| Control | What it does |
+|---|---|
+| **Stop new sessions** (draining) | Nothing new starts. What is running finishes, and a paused session may still resume. |
+| **Pause everything** | Running sessions are paused on the next pass and the capacity goes back to the platform. Nothing is cancelled: resuming picks the work up mid-task. |
+| **Sessions at once** | A ceiling for now, overriding the configured one. Zero drains without pausing. |
+
+## What gets worked on first
+
+A session is admitted per capacity reading, so the order of the queue is what
+the platform actually works on while it is busy. That order is urgency, not
+arrival: a review (which holds a pull request shut) outranks a question,
+which outranks new work, and the repository's own labels move it — a
+`security fix` to the top, `documentation` down. `blocked`, `wontfix`,
+`invalid`, `duplicate` and `stale` are not urgency but an answer: the runner
+does not pick that work up at all, and says which label stopped it.
+
+The mapping is in `app/priority.py`, in one table, for a repository that
+labels things differently.
 
 ## Configuration
 

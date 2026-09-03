@@ -50,8 +50,9 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from . import db, github, model_policy
+from . import controls, db, github, model_policy, priority
 from .config import settings
+from .conventions import for_task
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +79,35 @@ CREATED_BY = "logos-agent (trigger)"
 REPLY_FILE = "reply.md"
 
 
+_NAME_SAFE = re.compile(r"[^a-z0-9]+")
+
+
+def workspace_name(kind: str, number: int, title: str) -> str:
+    """A workspace name that says what is in it.
+
+    The name is not decoration: it becomes part of the branch a session
+    pushes (`logos/agent/<workspace>/session-42`) and the first column of
+    the workspace list. `auto-2` tells nobody anything; `issue-812-oom-on-
+    startup` says what the checkout is for, in the branch as well as in the
+    UI.
+
+    Trimmed to keep branch names readable, and reduced to characters that
+    are safe in both a Docker volume name and a git ref.
+    """
+    slug = _NAME_SAFE.sub("-", (title or "").strip().lower()).strip("-")
+    words = [word for word in slug.split("-") if word][:5]
+    tail = "-".join(words)[:40].strip("-")
+    prefix = "issue" if kind == "issue" else "pr"
+    return f"{prefix}-{number}-{tail}" if tail else f"{prefix}-{number}"
+
+
 def _next_auto_name(existing: set[str]) -> str:
     """The lowest ``auto-N`` no workspace carries.
 
-    Counting workspaces would repeat a name after a deletion — with `auto-1`
-    and `auto-3` left, the count says `auto-3` — and every later poll would
-    hit the same conflict and defer work while the ceiling still had room.
+    The fallback for work that names nothing. Counting workspaces would
+    repeat a name after a deletion — with `auto-1` and `auto-3` left, the
+    count says `auto-3` — and every later poll would hit the same conflict
+    and defer work while the ceiling still had room.
     """
     index = 1
     while f"auto-{index}" in existing:
@@ -132,17 +156,15 @@ def issue_task(issue: dict[str, Any]) -> str:
     body = str(issue.get("body") or "").strip()
     if len(body) > 6000:
         body = body[:6000] + "\n\n[issue body truncated]"
-    return (
+    return for_task(
         f"You have been assigned issue #{number}. Work on it and open a draft pull "
         f"request with your result.\n\n"
         f"Issue #{number}: {title}\n\n"
         f"{body}\n\n"
-        f"Scope your change to what the issue asks for. Add or adjust tests for what you "
-        f"change, and run the test suite and linters of the part of the repository you "
-        f"touched before you finish. If the issue is unclear or turns out to be larger "
-        f"than it looks, do the part you are confident about and say plainly in your "
-        f"final message what you left out and why. Do not reference the issue number in "
-        f"code comments, docstrings, or test names."
+        f"Scope your change to what the issue asks for: the smallest change that "
+        f"answers it, with tests for what you changed. If the issue is unclear or turns "
+        f"out to be larger than it looks, do the part you are confident about and say "
+        f"plainly in your final message what you left out and why."
     )
 
 
@@ -151,7 +173,7 @@ def takeover_task(number: int, title: str, body: str, branch: str) -> str:
     text = (body or "").strip()
     if len(text) > 6000:
         text = text[:6000] + "\n\n[description truncated]"
-    return (
+    return for_task(
         f"Pull request #{number} ('{title}') has been assigned to you: somebody wants you "
         f"to carry it the rest of the way. You are working in a checkout of its own "
         f"branch `{branch}`, and your commit updates that pull request — do not open a "
@@ -196,7 +218,7 @@ def review_task(number: int, title: str, review: dict[str, Any], comments: list[
     if len(body) > 6000:
         body = body[:6000] + "\n\n[review body truncated]"
     inline = _inline_block(comments or [])
-    return (
+    return for_task(
         f"A review on pull request #{number} ('{title}') asked for changes. You are working "
         f"in a checkout of that pull request's own branch, and your commit updates it — "
         f"there is no new pull request to open.\n\n"
@@ -243,7 +265,7 @@ def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, bran
             "answer needs a code change, say what you would change and why, and leave it to "
             "the people on the thread."
         )
-    return (
+    return for_task(
         f"You were asked something on #{number} ('{title}').\n\n"
         f"{conversation}\n\n"
         f"Write your answer to `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` — the runner posts it in "
@@ -322,6 +344,14 @@ class TriggerPoller:
     async def poll_once(self) -> list[int]:
         """One look at the repository. Returns the sessions queued, if any."""
         now = datetime.now(timezone.utc)
+        # Nothing to queue into: the runner is paused, draining, or its
+        # ceiling is zero. The repository is read again next pass, and
+        # nothing is lost by not looking now.
+        blocked = (await controls.current()).admission_block()
+        if blocked:
+            logger.debug("trigger poll skipped: %s", blocked)
+            self._last_pass = now
+            return []
         room = max_active_sessions() - await db.count_active_trigger_sessions()
         if room <= 0:
             logger.debug("trigger poll skipped: already at %s self-queued sessions", max_active_sessions())
@@ -337,6 +367,9 @@ class TriggerPoller:
         if not candidates:
             return []
 
+        # Most urgent first: a pass may only have room for some of them, and
+        # what it takes should be what matters most.
+        candidates.sort(key=lambda candidate: -(candidate.get("urgency").value if candidate.get("urgency") else 50))
         handled = await db.handled_trigger_refs([candidate["ref"] for candidate in candidates])
         queued: list[int] = []
         for candidate in candidates:
@@ -380,12 +413,19 @@ class TriggerPoller:
             number = issue.get("number")
             if not isinstance(number, int):
                 continue
+            urgency = priority.of("issue", issue.get("labels"))
+            if urgency.refused:
+                logger.info("issue %s is %s; not starting work on it", number, urgency.reason)
+                continue
+            title = str(issue.get("title") or "")
             found.append(
                 {
                     "ref": f"issue-{number}",
                     "kind": "issue",
                     "task": issue_task(issue),
+                    "workspace": workspace_name("issue", number, title),
                     "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
+                    "urgency": urgency,
                 }
             )
 
@@ -427,12 +467,13 @@ class TriggerPoller:
                         "kind": "review",
                         "task": review_task(number, pull["title"], review, comments),
                         "branch": branch,
-                        "workspace": f"pr-{number}",
+                        "workspace": workspace_name("pr", number, pull["title"]),
                         # A submitted review is not a review *comment*: the
                         # two have independent id sequences, so the
                         # acknowledgement goes on the pull request itself.
                         "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
                         "reply_target": f"issue:{number}",
+                        "urgency": priority.of("review", pull["labels"]),
                     }
                 )
             elif pull["assigned"] and branch:
@@ -442,8 +483,9 @@ class TriggerPoller:
                         "kind": "takeover",
                         "task": takeover_task(number, pull["title"], pull["body"], branch),
                         "branch": branch,
-                        "workspace": f"pr-{number}",
+                        "workspace": workspace_name("pr", number, pull["title"]),
                         "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
+                        "urgency": priority.of("takeover", pull["labels"]),
                     }
                 )
 
@@ -467,6 +509,7 @@ class TriggerPoller:
             pulls[number] = {
                 "title": str(entry.get("title") or ""),
                 "body": str(entry.get("body") or ""),
+                "labels": entry.get("labels") or (),
                 "assigned": assigned,
                 "branch": await self._writable_head(number),
             }
@@ -607,7 +650,8 @@ class TriggerPoller:
                     "kind": "comment",
                     "task": thread_task(number, title, thread["comments"], branch=branch),
                     "branch": branch,
-                    "workspace": f"pr-{number}" if branch else None,
+                    "workspace": workspace_name("pr", number, title) if branch else None,
+                    "urgency": priority.of("comment", pull["labels"] if pull else ()),
                     "reaction": (
                         f"/repos/{settings.repo_slug}/pulls/comments/{newest}"
                         if inline
@@ -628,6 +672,7 @@ class TriggerPoller:
         if not policy.ok:
             logger.info("not queueing %s: %s", candidate["ref"], policy.detail)
             return None
+        urgency = candidate.get("urgency") or priority.of(candidate["kind"])
         branch = candidate.get("branch")
         workspace_id = await self._free_workspace(
             base_branch=branch or "main",
@@ -660,6 +705,8 @@ class TriggerPoller:
                 trigger_kind=candidate["kind"],
                 trigger_ref=candidate["ref"],
                 reply_target=candidate.get("reply_target"),
+                priority=urgency.value,
+                priority_reason=urgency.reason,
             )
         except ValueError as exc:
             logger.warning("could not queue a session for %s: %s", candidate["ref"], exc)
@@ -691,7 +738,9 @@ class TriggerPoller:
         if len(workspaces) < settings.max_parallel_sessions:
             name = preferred_name or _next_auto_name({str(w.get("name") or "") for w in workspaces})
             try:
-                created = await db.create_workspace(name=name, base_branch=base_branch, created_by=CREATED_BY)
+                created = await db.create_workspace(
+                    name=name, base_branch=base_branch, created_by=CREATED_BY, ephemeral=True
+                )
             except ValueError:
                 # The name belongs to a workspace that is currently
                 # occupied — most often the one for this very pull request,

@@ -19,11 +19,13 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
 
-from . import capacity, db, docker_engine, github, model_policy, triggers
+from . import capacity, controls, db, docker_engine, github, model_policy, triggers
 from .auth import Principal, require_agent_operator
 from .config import settings
 from .schemas import (
     CapacityState,
+    ControlState,
+    ControlUpdate,
     SessionCreate,
     SessionEvent,
     SessionStatus,
@@ -120,7 +122,13 @@ async def get_capacity(_: Principal = Depends(require_agent_operator)) -> Capaci
     counts = await db.count_sessions_by_status()
     running = counts.get(SessionStatus.RUNNING.value, 0)
     paused = counts.get(SessionStatus.PAUSED.value, 0)
-    may_start, reason = capacity.start_decision(reading, running=running, paused=paused)
+    control = await controls.current()
+    may_start, reason = capacity.start_decision(
+        reading, running=running, paused=paused, max_parallel=control.max_parallel
+    )
+    blocked = control.admission_block()
+    if blocked:
+        may_start, reason = False, blocked
     # The local-only model policy gates admission as hard as load does, so
     # the page that explains why nothing starts has to show it too — an
     # operator staring at an idle platform should not have to read the logs
@@ -137,10 +145,56 @@ async def get_capacity(_: Principal = Depends(require_agent_operator)) -> Capaci
         sessions_running=running,
         sessions_queued=counts.get(SessionStatus.QUEUED.value, 0),
         sessions_paused=paused,
-        max_parallel=settings.max_parallel_sessions,
+        max_parallel=control.max_parallel,
         may_start=may_start,
         reason=reason,
     )
+
+
+def _control_state(state: controls.Controls) -> ControlState:
+    return ControlState(
+        mode=state.mode,
+        mode_reason=state.mode_reason,
+        paused=state.paused,
+        admits_new_sessions=not state.admission_block(),
+        max_parallel=state.max_parallel,
+        max_parallel_override=state.max_parallel_override,
+        max_parallel_configured=settings.max_parallel_sessions,
+        updated_by=state.updated_by,
+    )
+
+
+@app.get("/controls", response_model=ControlState, tags=["capacity"])
+async def get_controls(_: Principal = Depends(require_agent_operator)) -> ControlState:
+    """The kill switch and the ceiling, as they stand."""
+    return _control_state(await controls.current())
+
+
+@app.post("/controls", response_model=ControlState, tags=["capacity"])
+async def update_controls(body: ControlUpdate, principal: Principal = Depends(require_agent_operator)) -> ControlState:
+    """Stop the runner, drain it, or change how much of the platform it uses.
+
+    `draining` starts nothing new and lets what is running finish;
+    `paused` hands everything back on the next scheduler pass. Neither
+    cancels anything, so going back to `running` resumes the work mid-task.
+    """
+    state = await controls.current()
+    if body.mode is not None:
+        state = await controls.set_mode(mode=body.mode, reason=body.reason, by=principal.username)
+        logger.info(
+            "%s set the agent runner to %s%s",
+            principal.username,
+            body.mode,
+            f": {body.reason}" if body.reason else "",
+        )
+    if body.clear_max_parallel or body.max_parallel is not None:
+        limit = None if body.clear_max_parallel else body.max_parallel
+        state = await controls.set_max_parallel(limit=limit, by=principal.username)
+        logger.info("%s set the parallel ceiling to %s", principal.username, limit if limit is not None else "default")
+    # A pause takes effect on the next pass anyway; running one now means the
+    # operator sees it happen instead of waiting a tick for it.
+    asyncio.create_task(manager.scheduler_pass())
+    return _control_state(state)
 
 
 @app.get("/models", tags=["capacity"])

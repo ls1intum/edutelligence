@@ -45,6 +45,9 @@ export interface AgentSession {
   trigger_kind: string | null;
   /** Which event it reacted to, e.g. 'issue-812'. */
   trigger_ref: string | null;
+  /** How urgent the work is (higher runs first), and why. */
+  priority: number;
+  priority_reason: string | null;
 }
 
 export interface AgentEvent {
@@ -69,6 +72,23 @@ export interface AgentCapacity {
   /** False when the agent key could reach a cloud model: nothing starts. */
   models_local_only: boolean;
   models_detail: string;
+}
+
+/** What an operator has changed about the runner while it runs. */
+export type AgentRunnerMode = 'running' | 'draining' | 'paused';
+
+export interface AgentControls {
+  /** running: as configured · draining: nothing new · paused: hand it all back. */
+  mode: AgentRunnerMode;
+  mode_reason: string;
+  paused: boolean;
+  admits_new_sessions: boolean;
+  /** The ceiling in force right now. */
+  max_parallel: number;
+  /** Null when the deployment's configured ceiling applies. */
+  max_parallel_override: number | null;
+  max_parallel_configured: number;
+  updated_by: string;
 }
 
 /** The locally served models a session may be driven by. */

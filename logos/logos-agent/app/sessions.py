@@ -24,13 +24,13 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from . import capacity, db, docker_engine, github, model_policy
+from . import capacity, controls, db, docker_engine, github, model_policy
 from .config import REPLY_FILE, settings
 from .schemas import EventKind, SessionStatus
 
@@ -57,6 +57,11 @@ _MAX_REPLY_CHARS = 60000
 
 # How often an undelivered answer is retried before it is left alone.
 _MAX_REPLY_ATTEMPTS = 5
+
+# How long a workspace the runner created must have existed before it may be
+# swept away. It covers the gap between a session being queued into a fresh
+# workspace and being claimed, in which neither is active yet.
+_WORKSPACE_IDLE_GRACE = timedelta(minutes=10)
 
 
 def container_name(session_id: int) -> str:
@@ -162,6 +167,8 @@ class SessionManager:
         # other's run and photograph the other's revision.
         self._deploy_screenshot_lock = asyncio.Lock()
         self._last_reading: capacity.Reading = capacity.UNKNOWN
+        # Set once the session image has been seen on this host.
+        self._image_present = False
 
     # --- lifecycle --------------------------------------------------------
 
@@ -366,6 +373,12 @@ class SessionManager:
             except Exception:
                 logger.exception("retrying undelivered answers failed")
             try:
+                await self.sweep_workspaces()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("removing finished workspaces failed")
+            try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=settings.scheduler_interval_s)
             except asyncio.TimeoutError:
                 pass
@@ -373,9 +386,22 @@ class SessionManager:
     async def scheduler_pass(self) -> None:
         reading = await capacity.read_load()
         self._last_reading = reading
+        # What an operator has asked for right now — the kill switch and the
+        # ceiling they set — read before anything is decided.
+        control = await controls.current()
 
         running = await db.sessions_in_status(SessionStatus.RUNNING)
         paused = await db.sessions_in_status(SessionStatus.PAUSED)
+
+        if control.paused:
+            # The hard half of the kill switch: hand the platform back
+            # everything the runner holds. Paused, not cancelled — the work
+            # survives, and releasing the switch resumes it mid-task.
+            # Draining is the other half and deliberately does none of this:
+            # it lets what is running finish and only stops admission.
+            for session in running:
+                await self._pause(session, control.admission_block())
+            return
 
         # 1. Give capacity back first. Yielding always takes precedence over
         #    admitting, so a burst of user traffic is never met by the runner
@@ -389,6 +415,10 @@ class SessionManager:
         # 2. Resume what was paused, oldest first.
         if paused:
             may_resume, why = capacity.resume_decision(reading)
+            if may_resume and not control.may_resume():
+                may_resume, why = False, control.admission_block()
+            elif may_resume and control.max_parallel < len(running) + 1:
+                may_resume, why = False, "the parallel ceiling was lowered"
             if may_resume:
                 for session in paused:
                     await self._resume(session, why)
@@ -420,7 +450,16 @@ class SessionManager:
                 return
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
-            may_start, why = capacity.start_decision(reading, running=len(running), paused=len(paused))
+            blocked = control.admission_block()
+            if blocked:
+                # Draining, paused, or a ceiling of zero: nothing new starts.
+                return
+            may_start, why = capacity.start_decision(
+                reading,
+                running=len(running),
+                paused=len(paused),
+                max_parallel=control.max_parallel,
+            )
             if not may_start:
                 return
             claimed = await db.claim_queued_sessions(1)
@@ -550,6 +589,23 @@ class SessionManager:
             await self._settle(sid, exit_code=None, error=f"refusing branch '{branch}'")
             return
 
+        # The image every phase of this session runs. It is published by the
+        # build of the default branch, so a deployment can be a few minutes
+        # ahead of its registry — and a session that dies with a bare
+        # `404: No such image` looks like a broken runner rather than an
+        # artefact that is not there yet.
+        if not await self._workspace_image_present():
+            await self._settle(
+                sid,
+                exit_code=None,
+                error=(
+                    f"the session image '{settings.workspace_image}' is not available on this host. "
+                    f"It is published by the build of the default branch — wait for that build, or "
+                    f"pull the image — and queue the session again."
+                ),
+            )
+            return
+
         # The model is checked again here, against the policy this pass
         # established: a session queued while its model was local must not
         # start after that model gained a cloud deployment. This is the last
@@ -662,6 +718,23 @@ class SessionManager:
 
         await db.add_event(sid, EventKind.STATUS, {"status": "running", "branch": branch})
         self._supervise(sid, container_id)
+
+    async def _workspace_image_present(self) -> bool:
+        """Whether the session image is on this host, remembered once it is.
+
+        Checked per launch until it succeeds: an image does not vanish, so
+        one positive answer stands for the life of the process, while a
+        negative one is worth re-asking every time — that is the state that
+        changes when the registry catches up.
+        """
+        if self._image_present:
+            return True
+        try:
+            self._image_present = await docker_engine.image_present(settings.workspace_image)
+        except Exception as exc:
+            logger.warning("could not check for the session image: %s", exc)
+            return True  # let the launch try and report the real error
+        return self._image_present
 
     async def _still_ours(self, session_id: int) -> bool:
         """Whether the row is still the 'starting' one this launch claimed."""
@@ -1062,6 +1135,37 @@ class SessionManager:
                 await self._capture_screenshots(session_id, deploy, after_run_id)
         else:
             await self._cleanup_container(session_id)
+
+    async def sweep_workspaces(self) -> None:
+        """Remove the workspaces the runner made for work that is finished.
+
+        A workspace is a Docker volume holding a working copy. One created
+        for a piece of triggered work has no meaning once that work is done,
+        and left behind they fill the parallel ceiling with checkouts nobody
+        is using — the ceiling counts workspaces, not sessions. Operators'
+        workspaces are never touched: they made them, they keep them.
+
+        The idle grace is what keeps this from deleting a workspace out from
+        under the session it was just created for: between queueing and
+        claiming, that session is not active yet either.
+        """
+        cutoff = datetime.now(timezone.utc) - _WORKSPACE_IDLE_GRACE
+        try:
+            disposable = await db.disposable_workspaces(cutoff)
+        except Exception as exc:
+            logger.warning("could not look for finished workspaces: %s", exc)
+            return
+        for workspace in disposable:
+            name, volume = workspace.get("name"), workspace.get("volume_name")
+            if not await db.delete_workspace(int(workspace["id"])):
+                # A session was accepted into it between the query and here.
+                continue
+            try:
+                await docker_engine.remove_volume(str(volume), force=True)
+            except Exception as exc:
+                logger.warning("workspace '%s' is gone but its volume %s is not: %s", name, volume, exc)
+                continue
+            logger.info("removed finished workspace '%s' and its volume", name)
 
     async def deliver_pending_replies(self) -> None:
         """Try again for answers that did not reach GitHub the first time.

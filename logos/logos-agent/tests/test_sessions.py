@@ -2985,3 +2985,201 @@ class TestReplyDelivery:
         # rejected answer is no answer.
         assert len(posted[0]) < 65_000
         assert posted[0].endswith("_[answer truncated]_")
+
+
+class TestOperatorControls:
+    """The kill switch, from the scheduler's side."""
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_pausing_hands_back_what_the_runner_holds(self, monkeypatch, tmp_path):
+        from app import capacity, controls, sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        paused: list = []
+        claimed: list = []
+
+        async def stopped():
+            return {"mode": "paused", "mode_reason": "incident", "max_parallel": None, "updated_by": "tobias"}
+
+        async def fake_pause(cid, **_kwargs):
+            paused.append(cid)
+            return True
+
+        async def fake_claim(_limit):
+            claimed.append(1)
+            return []
+
+        monkeypatch.setattr(controls.db, "get_controls", stopped)
+        controls.forget()
+        monkeypatch.setattr(
+            sessions.capacity,
+            "read_load",
+            self._async_value(capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)),
+        )
+        monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", self._async_value(True))
+
+        await sessions.SessionManager().scheduler_pass()
+
+        # Running work is handed back, and nothing is admitted — but nothing
+        # is cancelled either, so releasing the switch resumes it.
+        assert paused == ["cid-7"]
+        assert claimed == []
+
+    async def test_draining_stops_admission_without_pausing_anything(self, monkeypatch, tmp_path):
+        from app import capacity, controls, sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        claimed: list = []
+
+        async def drained():
+            return {"mode": "draining", "mode_reason": "before a deploy", "max_parallel": None, "updated_by": "t"}
+
+        async def fake_claim(_limit):
+            claimed.append(1)
+            return []
+
+        monkeypatch.setattr(controls.db, "get_controls", drained)
+        controls.forget()
+        monkeypatch.setattr(
+            sessions.capacity,
+            "read_load",
+            self._async_value(capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)),
+        )
+        paused: list = []
+
+        async def fake_pause(cid, **_kwargs):
+            paused.append(cid)
+            return True
+
+        monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+
+        await sessions.SessionManager().scheduler_pass()
+
+        # Nothing new is admitted, and the session already running is left
+        # alone — that is what separates draining from pausing.
+        assert claimed == []
+        assert paused == []
+
+
+class TestWorkspaceHousekeeping:
+    """Workspaces the runner made for itself do not accumulate."""
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_a_finished_workspace_and_its_volume_are_removed(self, monkeypatch):
+        from app import sessions
+
+        removed_volumes: list = []
+        deleted: list = []
+
+        async def disposable(_cutoff):
+            return [{"id": 3, "name": "issue-812-oom", "volume_name": "logos_agent_ws_issue-812-oom"}]
+
+        async def delete(workspace_id):
+            deleted.append(workspace_id)
+            return True
+
+        async def remove_volume(name, **_kwargs):
+            removed_volumes.append(name)
+
+        monkeypatch.setattr(sessions.db, "disposable_workspaces", disposable)
+        monkeypatch.setattr(sessions.db, "delete_workspace", delete)
+        monkeypatch.setattr(sessions.docker_engine, "remove_volume", remove_volume)
+
+        await sessions.SessionManager().sweep_workspaces()
+
+        assert deleted == [3]
+        assert removed_volumes == ["logos_agent_ws_issue-812-oom"]
+
+    async def test_a_workspace_that_just_took_work_is_left_alone(self, monkeypatch):
+        from app import sessions
+
+        removed: list = []
+
+        async def disposable(_cutoff):
+            return [{"id": 3, "name": "issue-812", "volume_name": "vol"}]
+
+        async def refuses(_workspace_id):
+            # A session was accepted into it between the query and here.
+            return False
+
+        async def remove_volume(name, **_kwargs):
+            removed.append(name)
+
+        monkeypatch.setattr(sessions.db, "disposable_workspaces", disposable)
+        monkeypatch.setattr(sessions.db, "delete_workspace", refuses)
+        monkeypatch.setattr(sessions.docker_engine, "remove_volume", remove_volume)
+
+        await sessions.SessionManager().sweep_workspaces()
+
+        assert removed == []
+
+
+class TestMissingSessionImage:
+    """A missing image is an artefact that is not there, not a runner bug."""
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_the_session_says_what_is_missing(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        settled: list = []
+        created: list = []
+
+        async def no_image(_image):
+            return False
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid"
+
+        async def fake_settle(_self, sid, *, exit_code, error):
+            settled.append((sid, error))
+
+        monkeypatch.setattr(sessions.docker_engine, "image_present", no_image)
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", self._async_value(None))
+        monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", self._async_value("/vol"))
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(
+            sessions.db,
+            "get_workspace",
+            self._async_value({"id": 1, "name": "issue-812", "base_branch": "main", "volume_name": "vol"}),
+        )
+        monkeypatch.setattr(sessions.SessionManager, "_settle", fake_settle)
+
+        await sessions.SessionManager()._launch(
+            {"id": 7, "workspace_id": 1, "task": "a task", "model": None, "screenshot_paths": []}
+        )
+
+        assert created == []
+        assert len(settled) == 1
+        message = settled[0][1]
+        assert "not available on this host" in message and "build of the default branch" in message
