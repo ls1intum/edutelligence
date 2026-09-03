@@ -855,34 +855,112 @@ class TestBackpressure:
 
 
 class TestAnAnswerThatWasNeverWritten:
-    """A settled session's artefacts are final.
+    """Somebody assigned something and is waiting to hear anything at all.
 
-    Retrying a reply that does not exist asked the same question of the same
-    empty directory every few seconds, for the life of the deployment.
+    A session that finishes without writing a word is the one outcome that
+    must not be silent: it is the shape a silent failure takes, and from the
+    thread it is indistinguishable from being ignored.
     """
 
-    async def test_a_session_with_no_answer_stops_owing_one(self, monkeypatch, tmp_path):
+    @staticmethod
+    def install(monkeypatch, tmp_path, row):
         from app import sessions
 
         monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
-        abandoned: list = []
+        posted: list = []
+        attempts: list = []
 
         async def get_session(_session_id):
-            return {"id": 7, "reply_target": "issue:772", "reply_posted_at": None}
+            return row
 
-        async def abandon_reply(session_id, *, attempts):
-            abandoned.append((session_id, attempts))
+        async def post_issue_comment(number, body):
+            posted.append((number, body))
+            return f"https://github.com/x/y/issues/{number}#issuecomment-1"
 
-        async def refuse(*_args, **_kwargs):
-            raise AssertionError("there is nothing to post")
+        async def record_reply_attempt(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        async def add_event(*_args, **_kwargs):
+            return None
 
         monkeypatch.setattr(sessions.db, "get_session", get_session)
-        monkeypatch.setattr(sessions.db, "abandon_reply", abandon_reply)
-        monkeypatch.setattr(sessions.github, "post_issue_comment", refuse)
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record_reply_attempt)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.github, "post_issue_comment", post_issue_comment)
+        return posted, attempts
 
-        await sessions.manager._post_reply(7)
+    async def test_a_silent_success_still_says_something(self, monkeypatch, tmp_path):
+        from app import sessions
 
-        assert abandoned == [(7, sessions._MAX_REPLY_ATTEMPTS)]
+        posted, attempts = self.install(
+            monkeypatch,
+            tmp_path,
+            {"id": 30, "status": "succeeded", "reply_target": "issue:886", "reply_posted_at": None, "pr_url": None},
+        )
+
+        await sessions.manager._post_reply(30)
+
+        assert attempts == [(30, True)]
+        number, body = posted[0]
+        assert number == 886
+        # It must not read as a verdict on the request.
+        assert "did not change anything" in body
+        assert "session 30" in body
+
+    async def test_a_session_that_opened_a_pull_request_says_where(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        posted, _ = self.install(
+            monkeypatch,
+            tmp_path,
+            {
+                "id": 30,
+                "status": "succeeded",
+                "reply_target": "issue:886",
+                "reply_posted_at": None,
+                "pr_url": "https://github.com/x/y/pull/900",
+            },
+        )
+
+        await sessions.manager._post_reply(30)
+
+        assert "pull/900" in posted[0][1]
+
+    async def test_a_failure_says_what_went_wrong(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        posted, _ = self.install(
+            monkeypatch,
+            tmp_path,
+            {
+                "id": 30,
+                "status": "failed",
+                "error": "agent exited with code 1",
+                "reply_target": "issue:886",
+                "reply_posted_at": None,
+                "pr_url": None,
+            },
+        )
+
+        await sessions.manager._post_reply(30)
+
+        assert "exited with code 1" in posted[0][1]
+
+    async def test_what_the_agent_wrote_wins(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        posted, _ = self.install(
+            monkeypatch,
+            tmp_path,
+            {"id": 30, "status": "succeeded", "reply_target": "issue:886", "reply_posted_at": None},
+        )
+        directory = tmp_path / "30"
+        directory.mkdir()
+        (directory / "reply.md").write_text("The alignment is fixed by the flex rule on line 42.")
+
+        await sessions.manager._post_reply(30)
+
+        assert posted[0][1] == "The alignment is fixed by the flex rule on line 42."
 
     async def test_an_unreadable_file_is_retried_rather_than_abandoned(self, monkeypatch, tmp_path):
         # A mount that is not there yet is not an answer that was never
@@ -3822,3 +3900,69 @@ class TestResumeCeiling:
         # Four were paused and the platform is idle; the ceiling is what
         # stops the fourth, third and — here — everything past the second.
         assert resumed == ["cid-1", "cid-2"]
+
+
+class TestPicturesTravelWithTheRequest:
+    """An issue whose whole description is a screenshot.
+
+    The sandbox has no network, so the agent met one of those with WebFetch,
+    was refused, read code for an hour and changed nothing. The runner has
+    the token and the egress; the agent can read a local image perfectly
+    well, it just cannot go and get one.
+    """
+
+    @staticmethod
+    def install(monkeypatch, tmp_path, answers):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(sessions, "_give_to_session_user", lambda _path: None)
+        asked: list = []
+
+        async def fetch_image(url, *, max_bytes):
+            asked.append(url)
+            return answers.get(url)
+
+        monkeypatch.setattr(sessions.github, "fetch_image", fetch_image)
+        return asked
+
+    async def test_an_image_in_the_request_is_downloaded(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        url = "https://github.com/user-attachments/assets/69276878-e522"
+        self.install(monkeypatch, tmp_path, {url: (b"\x89PNG...", "image/png")})
+
+        paths = await sessions.manager._collect_attachments(30, f'<img width="239" src="{url}" />')
+
+        assert paths == ["/artifacts/attachments/01.png"]
+        assert (tmp_path / "30" / "attachments" / "01.png").read_bytes() == b"\x89PNG..."
+
+    async def test_a_request_with_no_pictures_fetches_nothing(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        asked = self.install(monkeypatch, tmp_path, {})
+
+        assert await sessions.manager._collect_attachments(30, "Plain prose about a bug.") == []
+        assert asked == []
+
+    async def test_something_that_is_not_an_image_is_left(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        url = "https://example.com/thing.png"
+        self.install(monkeypatch, tmp_path, {url: (b"<html>", "text/html")})
+
+        assert await sessions.manager._collect_attachments(30, f"![shot]({url})") == []
+
+    async def test_a_fetch_that_fails_does_not_fail_the_session(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+
+        async def broken(_url, *, max_bytes):
+            raise RuntimeError("502")
+
+        monkeypatch.setattr(sessions.github, "fetch_image", broken)
+
+        # A picture that cannot be had is a picture the agent works without,
+        # which is where it was before.
+        assert await sessions.manager._collect_attachments(30, "![shot](https://example.com/a.png)") == []

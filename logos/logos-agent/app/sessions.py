@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from . import capacity, controls, db, docker_engine, github, model_policy
+from . import attachments, capacity, controls, db, docker_engine, github, model_policy
 from .config import REPLY_FILE, settings
 from .schemas import EventKind, SessionStatus
 
@@ -87,6 +87,37 @@ _WORKSPACE_IDLE_GRACE = timedelta(minutes=10)
 
 def container_name(session_id: int) -> str:
     return f"{_CONTAINER_PREFIX}{session_id}"
+
+
+def _report_without_the_agent(session: dict[str, Any]) -> str:
+    """What to say on a thread whose session said nothing.
+
+    Not an apology and not a summary of the runner's internals: what was
+    attempted, what came of it, and how to see the rest. Written here
+    because the alternative — saying nothing — reads exactly like being
+    ignored, whatever the session's status says.
+    """
+    status = str(session.get("status") or "finished")
+    error = str(session.get("error") or "").strip()
+    pr_url = str(session.get("pr_url") or "").strip()
+    lines = []
+    if pr_url:
+        lines.append(f"I have opened {pr_url} for this.")
+    elif status == SessionStatus.SUCCEEDED.value:
+        lines.append(
+            "I worked through this and did not change anything — and I did not "
+            "leave a note saying why, which I should have. Nothing here is a "
+            "verdict on the request: read it as 'not done', not as 'nothing to do'."
+        )
+    else:
+        lines.append(f"I did not get through this one: the session {status}.")
+        if error:
+            lines.append(f"\n> {error[:500]}")
+    lines.append(
+        "\nThe transcript is in the Logos agent page under session "
+        f"{session.get('id', '?')}, and this can be run again from there."
+    )
+    return "\n".join(lines)
 
 
 def _fallback_subject(session: dict[str, Any]) -> str:
@@ -768,6 +799,10 @@ class SessionManager:
             directory = artifact_dir(sid)
             directory.mkdir(parents=True, exist_ok=True)
             _give_to_session_user(directory)
+            # The pictures a request carries, fetched by the side that has a
+            # token and a network. An issue whose whole description is a
+            # screenshot is unreadable to the sandbox otherwise.
+            images = await self._collect_attachments(sid, str(session.get("task") or ""))
             artifact_host_path = str(Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(sid))
 
             # Boundary: the next step hands a GitHub token to a container.
@@ -799,7 +834,7 @@ class SessionManager:
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
                 image=settings.workspace_image,
-                env=self._session_env(session, branch, continuing=continuing),
+                env=self._session_env(session, branch, continuing=continuing, images=images),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
                 session_id=sid,
@@ -887,7 +922,53 @@ class SessionManager:
         """Whether the row is still the 'starting' one this launch claimed."""
         return await db.session_is_starting(session_id)
 
-    def _session_env(self, session: dict[str, Any], branch: str, *, continuing: bool = False) -> dict[str, str]:
+    @staticmethod
+    async def _collect_attachments(session_id: int, task: str) -> list[str]:
+        """Fetch the images this request refers to. Returns their paths in the container.
+
+        Best effort throughout: a picture that cannot be had is a picture the
+        agent works without, which is where it was before. It is not worth
+        failing a session over, and it is not worth retrying either — the
+        agent is told what it has, not what it should have had.
+        """
+        urls = attachments.urls_in(task)
+        if not urls:
+            return []
+        target = attachments.directory(artifact_dir(session_id))
+        paths: list[str] = []
+        for index, url in enumerate(urls, start=1):
+            try:
+                fetched = await github.fetch_image(url, max_bytes=attachments.MAX_BYTES)
+            except Exception as exc:
+                logger.info("could not fetch the attachment %s of session %s: %s", url, session_id, exc)
+                continue
+            if fetched is None:
+                continue
+            body, content_type = fetched
+            if not attachments.is_image(content_type):
+                logger.info("attachment %s is %s, not an image; leaving it", url, content_type or "untyped")
+                continue
+            name = attachments.name_for(index, content_type)
+            if not name:
+                continue
+            target.mkdir(parents=True, exist_ok=True)
+            _give_to_session_user(target)
+            path = target / name
+            path.write_bytes(body)
+            _give_to_session_user(path)
+            paths.append(f"/artifacts/attachments/{name}")
+        if paths:
+            logger.info("session %s was given %s image(s) from its request", session_id, len(paths))
+        return paths
+
+    def _session_env(
+        self,
+        session: dict[str, Any],
+        branch: str,
+        *,
+        continuing: bool = False,
+        images: list[str] | None = None,
+    ) -> dict[str, str]:
         """The environment the untrusted agent phase runs with.
 
         Nothing reusable: no GitHub token (the helper phases do the
@@ -905,6 +986,9 @@ class SessionManager:
             # conversation: the agent continues it rather than meeting the
             # repository as a stranger again.
             "LOGOS_SESSION_CONTINUE": "1" if continuing else "",
+            # Where the pictures from the request are. The sandbox cannot
+            # fetch them; it can read them.
+            "LOGOS_SESSION_IMAGES": ",".join(images or []),
             # The agent's model traffic goes to Logos itself, so it is
             # authenticated, policy-checked, and billed like any other
             # caller. It is pointed at the gateway, not at the orchestrator:
@@ -1542,13 +1626,12 @@ class SessionManager:
             logger.warning("could not read the answer of session %s (will retry): %s", session_id, exc)
             return
         if not body:
-            # The session is over and its artefacts are final: no later pass
-            # will find an answer that is not there. Asked again every few
-            # seconds otherwise, for the life of the deployment. The 😕 the
-            # settlement leaves is what the thread gets instead.
-            logger.info("session %s was asked a question but wrote no answer", session_id)
-            await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
-            return
+            # Somebody assigned something and is waiting to hear anything at
+            # all. A session that finishes without writing a word is the one
+            # outcome that must not be silent — it is the shape a silent
+            # failure takes, and it is indistinguishable from being ignored.
+            body = _report_without_the_agent(session or {})
+            logger.info("session %s left no answer; reporting what the runner knows", session_id)
         if len(body) > _MAX_REPLY_CHARS:
             # GitHub refuses a comment above its length limit outright, and
             # an answer nobody receives is worse than a shortened one on a

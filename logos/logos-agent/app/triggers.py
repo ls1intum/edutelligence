@@ -549,6 +549,11 @@ class TriggerPoller:
                     "task": issue_task(issue),
                     "workspace": workspace_name("issue", number, title),
                     "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
+                    # Every session says something back on the thread it came
+                    # from — including an issue session that concluded there
+                    # is nothing to change, which is otherwise a silent
+                    # success nobody hears about.
+                    "reply_target": f"issue:{number}",
                     "urgency": urgency,
                 }
             )

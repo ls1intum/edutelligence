@@ -42,8 +42,13 @@ Verifying before you claim:
   say which and why rather than leaving it unexplained.
 
 Writing on GitHub:
-- Everything you write on GitHub is in English, whatever language the task
-  was given in.
+- Everything you write is in English — the final message, the commit
+  subject, the reply, the pull request — whatever language the task was
+  given in and whatever language the model drifts towards.
+- Changing nothing is a legitimate outcome and never a silent one. If you
+  finish without touching a file, write why into the reply file: what you
+  looked at, what you would need, what you would change if you were sure.
+  Somebody asked for this and is waiting to hear something.
 - Answer the point that was made. State what you changed and how you
   verified it, or why it needed no change — not a summary of your process.
 

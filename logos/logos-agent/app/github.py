@@ -462,6 +462,52 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     return [comment for comment in payload if isinstance(comment, dict)]
 
 
+# Where our own credential may go. Everything else in a redirect chain is
+# somebody's storage backend, which signs its own URLs.
+_GITHUB_HOSTS = frozenset({"github.com", "api.github.com", "www.github.com"})
+_MAX_REDIRECTS = 5
+
+
+async def fetch_image(url: str, *, max_bytes: int) -> tuple[bytes, str] | None:
+    """Download an image a request refers to, or None if it is not one.
+
+    Authenticated, because an attachment on a private repository needs the
+    token; bounded, because this is a fetch of a URL that came out of text a
+    stranger can write. Redirects are followed — GitHub answers attachment
+    links with one — and anything that is not an image, or is too big, is
+    left alone.
+    """
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        target, headers = url, _headers()
+        for _ in range(_MAX_REDIRECTS):
+            async with client.stream("GET", target, headers=headers) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location", "")
+                    if not location:
+                        return None
+                    target = str(httpx.URL(target).join(location))
+                    # GitHub answers an attachment link with a redirect to
+                    # signed storage, and a signed URL carries its own
+                    # authorisation: sending ours as well is what makes that
+                    # backend refuse the request outright.
+                    if httpx.URL(target).host not in _GITHUB_HOSTS:
+                        headers = {}
+                    continue
+                if response.status_code != 200:
+                    logger.info("could not fetch %s: %s", url, response.status_code)
+                    return None
+                content_type = response.headers.get("content-type", "")
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        logger.info("attachment %s is larger than %s bytes; leaving it", url, max_bytes)
+                        return None
+                return bytes(body), content_type
+    logger.info("gave up following redirects for %s", url)
+    return None
+
+
 async def open_pull_request_for(branch: str) -> dict[str, Any] | None:
     """The open pull request whose head is this branch, if there is one.
 

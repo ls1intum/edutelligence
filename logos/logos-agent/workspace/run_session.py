@@ -45,6 +45,9 @@ CHECKOUT = WORKSPACE / "repo"
 # directory. The finalizer commits with it. Kept in step with the runner's
 # own COMMIT_FILE, which is how it reaches the prompt.
 COMMIT_FILE = "commit.txt"
+# Where the agent writes what it wants said back on the thread. The runner
+# posts it; the name is kept in step with the runner's own REPLY_FILE.
+REPLY_FILE = "reply.md"
 
 
 def log(message: str) -> None:
@@ -470,8 +473,22 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
 
 def build_prompt(task: str) -> str:
     """Wrap the operator's task with the constraints of this environment."""
+    images = [path for path in os.environ.get("LOGOS_SESSION_IMAGES", "").split(",") if path.strip()]
+    pictures = ""
+    if images:
+        # An issue whose description is a screenshot is unreadable without
+        # this, and the sandbox cannot go and fetch one.
+        listed = "\n".join(f"  {path}" for path in images)
+        pictures = (
+            "\n\nThe request came with images. They have been downloaded for you "
+            "and you can open them with the Read tool:\n"
+            f"{listed}\n"
+            "Look at them before you decide anything — on a visual report they "
+            "are usually the whole description.\n"
+        )
     return (
-        f"{task}\n\n"
+        f"{task}"
+        f"{pictures}\n\n"
         "--- Environment notes ---\n"
         "You are running unattended in an isolated container on a working copy "
         "of this repository. There is no human to ask, so make reasonable "
@@ -488,6 +505,13 @@ def build_prompt(task: str) -> str:
         "what you break.\n"
         "- If the task turns out to be impossible or already done, say so "
         "plainly instead of inventing changes.\n"
+        f"- Changing nothing is a legitimate outcome, but it is never a silent "
+        f"one: if you finish without touching a file, write why into "
+        f"$LOGOS_ARTIFACT_DIR/{REPLY_FILE} — what you looked at, what you "
+        "would need, what you would change if you were sure. Somebody asked "
+        "for this and is waiting to hear something.\n"
+        "- Write in English: your final message, your commit subject, your "
+        "reply, whatever you put in the pull request.\n"
     )
 
 

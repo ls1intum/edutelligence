@@ -314,6 +314,21 @@ that is not queued; and because the row is what the queue is, a restart
 changes nothing about it. GitHub's reaction palette is fixed and has no
 hourglass, so these three are the states it can show.
 
+**It can see what you attached.** An issue whose whole description is a
+screenshot is unreadable to a sandbox with no network — the agent met one of
+those with `WebFetch`, was refused, read code for an hour and changed
+nothing. The runner has the token and the egress the session deliberately
+does not, so it fetches the images a request refers to into the session's
+artefact directory and tells the agent where they are. Bounded: five images,
+eight megabytes each, and only what arrives as an image.
+
+**It always says something back.** Every triggered session answers on the
+thread it came from — including a session that changed nothing, which is the
+outcome most easily mistaken for being ignored. The agent writes that answer
+itself; when it writes none, the runner posts what it knows instead (what
+was attempted, what came of it, where the transcript is), because silence on
+a thread somebody is waiting on is the one thing a colleague never does.
+
 **It can answer.** The agent phase holds no GitHub credential, so it writes
 its answer into its artefact directory and the runner posts it when the
 session settles — in the thread the question was asked in, inline if it was
