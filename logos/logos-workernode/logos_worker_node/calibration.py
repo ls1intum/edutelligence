@@ -3246,128 +3246,139 @@ def calibrate_with_tp_escalation(
     # blacklisted.  Pass the cache object through; it will call
     # ensure_cached_sync only when needed.
     _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
-    cal_kwargs: dict[str, Any] = dict(
-        vllm_binary=vllm_binary,
-        port=port,
-        log_dir=log_dir,
-        sleep_level=sleep_level,
-        ready_timeout_s=ready_timeout_s,
-        nccl_p2p_available=nccl_p2p_available,
-        model_cache=_mc,
-        cancel_event=cancel_event,
-    )
-
-    def _retry_with_trust_remote_code_if_needed(
-        plan: dict[str, Any], tp: int, result: CalibrationResult
-    ) -> tuple[dict[str, Any], CalibrationResult]:
-        """Auto-retry *this* tp with --trust-remote-code when vLLM demands
-        it. Must run after every probe, not just the first — a low tp can
-        OOM before vLLM ever reaches the custom-code check, so the
-        requirement only surfaces once a wider tp gets far enough."""
-        _err = result.error or ""
-        if result.success or ("trust_remote_code=True" not in _err and "contains custom code" not in _err):
-            return plan, result
-        logger.info("  %s requires trust_remote_code — adding flag and retrying", model_name)
-        extra = list(plan.get("extra_args") or [])
-        if "--trust-remote-code" not in extra:
-            extra.append("--trust-remote-code")
-        plan = {**plan, "extra_args": extra}
-        retried_plan = {**plan, "tensor_parallel_size": tp}
-        return plan, _try_calibrate(retried_plan, **cal_kwargs)
-
-    def _is_fatal(result: CalibrationResult) -> bool:
-        _err = result.error or ""
-        return "does not recognize this architecture" in _err or "Cannot access gated repo" in _err
-
-    tp = max_tp
-    current_plan = {**plan, "tensor_parallel_size": tp}
-    result = _try_calibrate(current_plan, **cal_kwargs)
-    plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
-    _fatal = _is_fatal(result)
-
-    # _hf_max_tp_ceiling is only the smallest TP the HF byte-count estimate
-    # expects to fit — an optimization to skip needlessly high probes, not
-    # a guarantee. On failure, widen to the true hardware max before
-    # falling back to the pinned tp, same as an unconstrained failure did.
-    if not result.success and not _fatal and tp < hardware_max_tp:
-        logger.info(
-            "  %s failed at HF-derived ceiling tp=%d — retrying at hardware max tp=%d",
-            model_name,
-            tp,
-            hardware_max_tp,
+    if _mc is not None:
+        # The probes below read this model's tmpfs entry, but calibration
+        # has no lane handle and no startup reservation, so the re-plan's
+        # live-lane protection set cannot see it. Reserve the entry for
+        # the whole session so a tick between probes cannot reclaim it
+        # out from under a running probe.
+        _mc.reserve_cache_use(model_name)
+    try:
+        cal_kwargs: dict[str, Any] = dict(
+            vllm_binary=vllm_binary,
+            port=port,
+            log_dir=log_dir,
+            sleep_level=sleep_level,
+            ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
+            model_cache=_mc,
+            cancel_event=cancel_event,
         )
-        tp = hardware_max_tp
+
+        def _retry_with_trust_remote_code_if_needed(
+            plan: dict[str, Any], tp: int, result: CalibrationResult
+        ) -> tuple[dict[str, Any], CalibrationResult]:
+            """Auto-retry *this* tp with --trust-remote-code when vLLM demands
+            it. Must run after every probe, not just the first — a low tp can
+            OOM before vLLM ever reaches the custom-code check, so the
+            requirement only surfaces once a wider tp gets far enough."""
+            _err = result.error or ""
+            if result.success or ("trust_remote_code=True" not in _err and "contains custom code" not in _err):
+                return plan, result
+            logger.info("  %s requires trust_remote_code — adding flag and retrying", model_name)
+            extra = list(plan.get("extra_args") or [])
+            if "--trust-remote-code" not in extra:
+                extra.append("--trust-remote-code")
+            plan = {**plan, "extra_args": extra}
+            retried_plan = {**plan, "tensor_parallel_size": tp}
+            return plan, _try_calibrate(retried_plan, **cal_kwargs)
+
+        def _is_fatal(result: CalibrationResult) -> bool:
+            _err = result.error or ""
+            return "does not recognize this architecture" in _err or "Cannot access gated repo" in _err
+
+        tp = max_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
         plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
         _fatal = _is_fatal(result)
 
-    # If max tp fails, try the configured (original) tp before giving up.
-    # Models may have attention-head counts that aren't divisible by max_tp
-    # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-    if not result.success and not _fatal and tp > original_tp:
-        logger.info(
-            "  %s failed at max tp=%d — falling back to configured tp=%d",
-            model_name,
-            tp,
-            original_tp,
-        )
-        tp = original_tp
-        current_plan = {**plan, "tensor_parallel_size": tp}
-        result = _try_calibrate(current_plan, **cal_kwargs)
-        plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
-        _fatal = _is_fatal(result)
+        # _hf_max_tp_ceiling is only the smallest TP the HF byte-count estimate
+        # expects to fit — an optimization to skip needlessly high probes, not
+        # a guarantee. On failure, widen to the true hardware max before
+        # falling back to the pinned tp, same as an unconstrained failure did.
+        if not result.success and not _fatal and tp < hardware_max_tp:
+            logger.info(
+                "  %s failed at HF-derived ceiling tp=%d — retrying at hardware max tp=%d",
+                model_name,
+                tp,
+                hardware_max_tp,
+            )
+            tp = hardware_max_tp
+            current_plan = {**plan, "tensor_parallel_size": tp}
+            result = _try_calibrate(current_plan, **cal_kwargs)
+            plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+            _fatal = _is_fatal(result)
 
-    if not result.success or _fatal:
-        return result
+        # If max tp fails, try the configured (original) tp before giving up.
+        # Models may have attention-head counts that aren't divisible by max_tp
+        # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
+        if not result.success and not _fatal and tp > original_tp:
+            logger.info(
+                "  %s failed at max tp=%d — falling back to configured tp=%d",
+                model_name,
+                tp,
+                original_tp,
+            )
+            tp = original_tp
+            current_plan = {**plan, "tensor_parallel_size": tp}
+            result = _try_calibrate(current_plan, **cal_kwargs)
+            plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+            _fatal = _is_fatal(result)
 
-    # Max tp succeeded — now binary-search down to find minimum tp.
-    if tp > original_tp:
-        logger.info(
-            "  %s works at tp=%d — searching for minimum tp (from %d)",
-            model_name,
-            tp,
-            original_tp,
-        )
-    best_result = result
-    best_tp = tp
+        if not result.success or _fatal:
+            return result
 
-    # Binary search: try progressively smaller tp values.
-    # tp must be a power of 2 in vLLM, so we halve each step.
-    low_tp = original_tp
-    high_tp = tp
-    while low_tp < high_tp:
-        if cancel_event is not None and cancel_event.is_set():
-            break
-        mid_tp = high_tp // 2
-        if mid_tp < low_tp:
-            break
-        logger.info(
-            "  %s trying tp=%d (search range %d–%d)",
-            model_name,
-            mid_tp,
-            low_tp,
-            high_tp,
-        )
-        mid_plan = {**plan, "tensor_parallel_size": mid_tp}
-        mid_result = _try_calibrate(mid_plan, **cal_kwargs)
-        if mid_result.success:
-            best_result = mid_result
-            best_tp = mid_tp
-            high_tp = mid_tp
-        else:
-            low_tp = mid_tp * 2
+        # Max tp succeeded — now binary-search down to find minimum tp.
+        if tp > original_tp:
+            logger.info(
+                "  %s works at tp=%d — searching for minimum tp (from %d)",
+                model_name,
+                tp,
+                original_tp,
+            )
+        best_result = result
+        best_tp = tp
 
-    if best_tp != original_tp:
-        logger.info(
-            "  %s optimal tp=%d (configured=%d, max=%d)",
-            model_name,
-            best_tp,
-            original_tp,
-            max_tp,
-        )
+        # Binary search: try progressively smaller tp values.
+        # tp must be a power of 2 in vLLM, so we halve each step.
+        low_tp = original_tp
+        high_tp = tp
+        while low_tp < high_tp:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            mid_tp = high_tp // 2
+            if mid_tp < low_tp:
+                break
+            logger.info(
+                "  %s trying tp=%d (search range %d–%d)",
+                model_name,
+                mid_tp,
+                low_tp,
+                high_tp,
+            )
+            mid_plan = {**plan, "tensor_parallel_size": mid_tp}
+            mid_result = _try_calibrate(mid_plan, **cal_kwargs)
+            if mid_result.success:
+                best_result = mid_result
+                best_tp = mid_tp
+                high_tp = mid_tp
+            else:
+                low_tp = mid_tp * 2
 
-    return best_result
+        if best_tp != original_tp:
+            logger.info(
+                "  %s optimal tp=%d (configured=%d, max=%d)",
+                model_name,
+                best_tp,
+                original_tp,
+                max_tp,
+            )
+
+        return best_result
+    finally:
+        if _mc is not None:
+            _mc.release_cache_use(model_name)
 
 
 def auto_calibrate_models(
