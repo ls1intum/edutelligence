@@ -13,7 +13,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from app import triggers
+from app import controls, triggers
 
 AGENT = "LogosOSSAgent"
 REPO = "ls1intum/edutelligence"
@@ -153,6 +153,7 @@ class FakeDb:
         self.active_triggers = active_triggers
         self.created: list[dict] = []
         self.next_id = 100
+        self.comment_mark = None
 
     def install(self, monkeypatch):
         async def count_active_trigger_sessions():
@@ -164,7 +165,7 @@ class FakeDb:
         async def list_workspaces():
             return list(self.workspaces)
 
-        async def create_workspace(*, name, base_branch, created_by):
+        async def create_workspace(*, name, base_branch, created_by, ephemeral=False):
             if any(w.get("name") == name for w in self.workspaces):
                 raise ValueError(f"workspace '{name}' already exists")
             entry = {
@@ -172,6 +173,7 @@ class FakeDb:
                 "name": name,
                 "active_sessions": 0,
                 "base_branch": base_branch,
+                "ephemeral": ephemeral,
             }
             self.workspaces.append(entry)
             return entry
@@ -188,7 +190,15 @@ class FakeDb:
             self.next_id += 1
             return self.next_id
 
+        async def comments_scanned_at():
+            return self.comment_mark
+
+        async def mark_comments_scanned(moment):
+            self.comment_mark = moment
+
         for name, fn in [
+            ("comments_scanned_at", comments_scanned_at),
+            ("mark_comments_scanned", mark_comments_scanned),
             ("count_active_trigger_sessions", count_active_trigger_sessions),
             ("handled_trigger_refs", handled_trigger_refs),
             ("list_workspaces", list_workspaces),
@@ -206,6 +216,16 @@ def allow_models(monkeypatch, ok: bool = True):
             self.detail = "test policy"
 
     monkeypatch.setattr(triggers.model_policy, "current", lambda: Policy())
+
+
+def ceiling(monkeypatch, limit: int):
+    """Set the ceiling an operator would have set, at runtime."""
+
+    async def stored():
+        return {"mode": "running", "mode_reason": "", "max_parallel": limit, "updated_by": "tobias"}
+
+    monkeypatch.setattr(controls.db, "get_controls", stored)
+    controls.forget()
 
 
 def agent_account(monkeypatch):
@@ -478,16 +498,14 @@ class TestBounds:
         )
         fake_db.install(monkeypatch)
         allow_models(monkeypatch)
-        monkeypatch.setattr(
-            triggers,
-            "settings",
-            replace(triggers.settings, github_login=AGENT, repo_slug=REPO, max_parallel_sessions=4),
-        )
+        ceiling(monkeypatch, 4)
 
         queued = await triggers.TriggerPoller().poll_once()
 
-        # Half the parallel ceiling, so an operator always has room.
-        assert triggers.max_active_sessions() == 2
+        # Half the ceiling *in force*, so an operator always has room — and
+        # it follows what they set at runtime, not what the environment
+        # configured.
+        assert triggers.max_active_sessions(4) == 2
         assert len(queued) == 2
 
     async def test_nothing_is_queued_while_the_ceiling_is_full(self, monkeypatch):
@@ -517,11 +535,7 @@ class TestBounds:
         )
         fake_db.install(monkeypatch)
         allow_models(monkeypatch)
-        monkeypatch.setattr(
-            triggers,
-            "settings",
-            replace(triggers.settings, github_login=AGENT, repo_slug=REPO, max_parallel_sessions=4),
-        )
+        ceiling(monkeypatch, 4)
         poller = triggers.TriggerPoller()
 
         first = await poller.poll_once()
@@ -562,6 +576,132 @@ class TestCommentWindow:
         # state; comments are a stream, and without a bound the first pass
         # after a restart would read years of them.
         assert timedelta(hours=12) <= triggers.COMMENT_LOOKBACK <= timedelta(days=2)
+
+
+class TestTheCommentMark:
+    """Where the comment scan got to, kept across stops.
+
+    A question asked while the runner is paused has to still be there when
+    it comes back: nothing else remembers it. An assignment or a review is
+    read from the repository's current state on every pass, but a comment
+    older than the window is simply gone.
+    """
+
+    async def test_a_finished_pass_records_how_far_it_got(self, monkeypatch):
+        FakeRepo().install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.comment_mark is not None
+
+    async def test_a_stopped_runner_forgets_nothing(self, monkeypatch):
+        FakeRepo(assigned_issues=[issue(812)]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        async def paused():
+            return {"mode": "paused", "mode_reason": "incident", "max_parallel": None, "updated_by": "tobias"}
+
+        monkeypatch.setattr(controls.db, "get_controls", paused)
+        controls.forget()
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        # Moving the mark here would drop every question asked during the
+        # pause out of the window before anyone could answer it.
+        assert fake_db.comment_mark is None
+
+    async def test_work_left_for_the_next_pass_holds_the_mark(self, monkeypatch):
+        FakeRepo(assigned_issues=[issue(812), issue(813)]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+        ceiling(monkeypatch, 1)
+
+        queued = await triggers.TriggerPoller().poll_once()
+
+        assert len(queued) == 1
+        assert fake_db.comment_mark is None
+
+    async def test_the_window_starts_where_the_last_pass_stopped(self, monkeypatch):
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        now = datetime.now(timezone.utc)
+        fake_db.comment_mark = now - timedelta(days=3)
+
+        window = await triggers.TriggerPoller()._comment_window(now)
+
+        # Three days beyond the ordinary lookback, because that is how long
+        # the runner was down and those questions are still unanswered.
+        assert window == fake_db.comment_mark
+
+    async def test_a_long_absence_does_not_wake_up_to_a_month_of_talk(self, monkeypatch):
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        now = datetime.now(timezone.utc)
+        fake_db.comment_mark = now - timedelta(days=90)
+
+        window = await triggers.TriggerPoller()._comment_window(now)
+
+        assert window == now - triggers.MAX_COMMENT_LOOKBACK
+
+    async def test_without_a_mark_the_ordinary_window_applies(self, monkeypatch):
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        now = datetime.now(timezone.utc)
+
+        assert await triggers.TriggerPoller()._comment_window(now) == now - triggers.COMMENT_LOOKBACK
+
+
+class TestWhatTheUiIsTold:
+    def test_the_quota_shown_is_the_one_in_force(self):
+        # An operator who lowers the ceiling to 2 and still reads "up to 6"
+        # on the page has been told a number that decides nothing.
+        lowered = triggers.poller.status(2)["max_active_sessions"]
+        configured = triggers.poller.status()["max_active_sessions"]
+
+        assert lowered <= 2
+        assert lowered <= configured
+
+
+class TestReactions:
+    """What a person sees on the thread they wrote in."""
+
+    async def test_a_queued_request_is_acknowledged(self, monkeypatch):
+        repo = FakeRepo(assigned_issues=[issue(812)])
+        repo.install(monkeypatch)
+        FakeDb().install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert repo.reactions == [(f"/repos/{REPO}/issues/812", triggers.github.REACTION_QUEUED)]
+
+    async def test_nothing_is_acknowledged_that_was_not_queued(self, monkeypatch):
+        # The reaction is a promise that the work is in the queue: a refused
+        # session must not leave one behind.
+        repo = FakeRepo(assigned_issues=[issue(812)])
+        repo.install(monkeypatch)
+        FakeDb().install(monkeypatch)
+        allow_models(monkeypatch, ok=False)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        assert repo.reactions == []
+
+    async def test_the_session_carries_where_to_react_next(self, monkeypatch):
+        # The later stages are reacted to by the launcher, in another
+        # process and possibly after a restart.
+        FakeRepo(assigned_issues=[issue(812)]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created[0]["reaction_target"] == f"/repos/{REPO}/issues/812"
 
 
 class TestReviewRouting:
@@ -769,3 +909,136 @@ class TestWhoMayDirectChanges:
         await triggers.TriggerPoller().poll_once()
 
         assert looked_up == ["wasnertobias"]
+
+
+class TestWorkspaceNames:
+    """A workspace name is read by people, and lands in the branch."""
+
+    def test_an_issue_workspace_says_which_issue(self):
+        assert triggers.workspace_name("issue", 812, "OOM on startup") == "issue-812-oom-on-startup"
+
+    def test_a_long_title_is_trimmed_rather_than_dumped(self):
+        name = triggers.workspace_name("issue", 5, "Refactor the whole scheduling pipeline for clarity and speed")
+        # It becomes part of `logos/agent/<name>/session-42`, so it stays
+        # readable rather than complete.
+        assert len(name) < 60
+        assert name.startswith("issue-5-refactor")
+
+    def test_punctuation_does_not_reach_a_volume_or_a_branch_name(self):
+        name = triggers.workspace_name("issue", 9, "Fix: don't crash (again)!")
+        assert all(c.isalnum() or c == "-" for c in name)
+
+    def test_a_titleless_thread_still_names_its_number(self):
+        assert triggers.workspace_name("pr", 772, "") == "pr-772"
+
+    async def test_a_triggered_workspace_is_named_after_its_work(self, monkeypatch):
+        FakeRepo(assigned_issues=[issue(812, title="OOM on startup")]).install(monkeypatch)
+        fake_db = FakeDb(workspaces=[{"id": 1, "name": "taken", "active_sessions": 1, "base_branch": "main"}])
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        created = [w for w in fake_db.workspaces if w["name"] != "taken"]
+        assert created[0]["name"] == "issue-812-oom-on-startup"
+        # And it is the runner's to clean up when the work is done.
+        assert created[0]["ephemeral"] is True
+
+
+class TestUrgency:
+    async def test_a_security_issue_is_queued_above_a_documentation_one(self, monkeypatch):
+        FakeRepo(
+            assigned_issues=[
+                dict(issue(1, title="typo"), labels=[{"name": "documentation"}]),
+                dict(issue(2, title="token leak"), labels=[{"name": "security fix"}]),
+            ]
+        ).install(monkeypatch)
+        fake_db = FakeDb(
+            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in (1, 2, 3)]
+        )
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        # Both fit here; what matters is which one the queue offers first,
+        # since a busy platform only admits one per capacity reading.
+        assert [c["trigger_ref"] for c in fake_db.created] == ["issue-2", "issue-1"]
+        assert fake_db.created[0]["priority"] > fake_db.created[1]["priority"]
+        assert "security" in fake_db.created[0]["priority_reason"]
+
+    async def test_blocked_work_is_not_started(self, monkeypatch):
+        FakeRepo(assigned_issues=[dict(issue(3), labels=[{"name": "blocked"}])]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        assert fake_db.created == []
+
+    async def test_a_review_carries_more_urgency_than_a_fresh_issue(self, monkeypatch):
+        FakeRepo(
+            assigned_issues=[issue(1)],
+            authored_pulls=[pull(772)],
+            reviews={772: review(9)},
+        ).install(monkeypatch)
+        fake_db = FakeDb(
+            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in (1, 2, 3)]
+        )
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created[0]["trigger_ref"] == "pr-772-review-9"
+
+
+class TestTaskConventions:
+    """Every task carries what a new colleague would be told."""
+
+    def test_each_kind_of_task_carries_the_house_rules(self):
+        tasks = [
+            triggers.issue_task(issue(1)),
+            triggers.takeover_task(2, "t", "b", "logos/agent/x"),
+            triggers.review_task(3, "t", review(1), []),
+            triggers.thread_task(4, "t", [{"body": "q", "user": {"login": "a"}}], branch=None),
+        ]
+        for task in tasks:
+            assert "How work is done here" in task
+            assert "Never merge a pull request" in task
+            assert "fails on the unfixed code" in task
+
+
+class TestRefusalAppliesToEveryKind:
+    """`blocked` is an answer, whatever kind of work carries it."""
+
+    async def test_a_blocked_pull_request_is_not_taken_over(self, monkeypatch):
+        FakeRepo(assigned_pulls=[dict(pull(864), labels=[{"name": "blocked"}])]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        assert fake_db.created == []
+
+    async def test_a_review_on_a_blocked_pull_request_is_not_worked(self, monkeypatch):
+        FakeRepo(
+            authored_pulls=[dict(pull(772), labels=[{"name": "wontfix"}])],
+            reviews={772: review(5)},
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+
+    async def test_a_question_on_a_stale_thread_is_left_alone(self, monkeypatch):
+        FakeRepo(
+            authored_pulls=[dict(pull(772), labels=[{"name": "stale"}])],
+            issue_comments=[comment(9200, 772, f"@{AGENT} still relevant?")],
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []

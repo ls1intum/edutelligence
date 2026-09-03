@@ -61,6 +61,88 @@
     }
   }
 
+  <!-- ── Runner controls ───────────────────────────────────────────────────── -->
+  @if (controls(); as ctl) {
+    <section class="controls" [class.controls--stopped]="ctl.mode !== 'running'">
+      <div class="controls__state">
+        <i
+          class="pi"
+          [class.pi-play-circle]="ctl.mode === 'running'"
+          [class.pi-hourglass]="ctl.mode === 'draining'"
+          [class.pi-pause-circle]="ctl.mode === 'paused'"
+          aria-hidden="true"
+        ></i>
+        <span>{{ modeLabel() }}</span>
+        @if (ctl.mode_reason) {
+          <span class="field__hint"
+            >{{ ctl.mode_reason }}{{ ctl.updated_by ? ' — ' + ctl.updated_by : '' }}</span
+          >
+        }
+      </div>
+
+      <div class="controls__actions">
+        @if (ctl.mode !== 'running') {
+          <button class="btn" (click)="setMode('running')" [disabled]="controlBusy()">
+            Resume
+          </button>
+        }
+        @if (ctl.mode !== 'draining') {
+          <button
+            class="btn"
+            (click)="setMode('draining')"
+            [disabled]="controlBusy()"
+            title="Start nothing new; let what is running finish"
+          >
+            Stop new sessions
+          </button>
+        }
+        @if (ctl.mode !== 'paused') {
+          <button
+            class="btn btn--danger"
+            (click)="setMode('paused')"
+            [disabled]="controlBusy()"
+            title="Pause everything and hand the capacity back now"
+          >
+            Pause everything
+          </button>
+        }
+      </div>
+
+      <label class="controls__field">
+        <span class="field__label">Reason <span class="field__optional">(optional)</span></span>
+        <input
+          class="input"
+          type="text"
+          placeholder="what is going on"
+          [ngModel]="pauseReason()"
+          (ngModelChange)="pauseReason.set($event)"
+          aria-label="Reason for stopping the runner"
+        />
+      </label>
+
+      <label class="controls__field">
+        <span class="field__label">Sessions at once</span>
+        <input
+          class="input input--narrow"
+          type="number"
+          min="0"
+          max="100"
+          [placeholder]="String(ctl.max_parallel_configured)"
+          [ngModel]="limitDraft()"
+          (ngModelChange)="limitDraft.set($event === null ? '' : String($event))"
+          (blur)="applyLimit(limitDraft())"
+          (keydown.enter)="applyLimit(limitDraft())"
+          [disabled]="controlBusy()"
+          aria-label="How many sessions may run at once"
+        />
+        <span class="field__hint">
+          Applied when you leave the field. Empty uses the configured
+          {{ ctl.max_parallel_configured }}; zero drains without pausing.
+        </span>
+      </label>
+    </section>
+  }
+
   @if (error(); as message) {
     <div class="alert alert--error" role="alert">{{ message }}</div>
   }
@@ -253,6 +335,15 @@
             <div>
               <dt>Model</dt>
               <dd>{{ session.model ?? 'runner default' }}</dd>
+            </div>
+            <div>
+              <dt>Priority</dt>
+              <dd>
+                {{ session.priority }}
+                @if (session.priority_reason) {
+                  <span class="field__hint">{{ session.priority_reason }}</span>
+                }
+              </dd>
             </div>
             <div>
               <dt>Branch</dt>

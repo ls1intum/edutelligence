@@ -4,6 +4,7 @@ import { AgentService } from '../../core/services/agent.service';
 import {
   ACTIVE_SESSION_STATUSES,
   AgentCapacity,
+  AgentControls,
   AgentModels,
   AgentSession,
   AgentTriggers,
@@ -41,6 +42,8 @@ const makeSession = (overrides: Partial<AgentSession> = {}): AgentSession => ({
   screenshot_count: 0,
   trigger_kind: null,
   trigger_ref: null,
+  priority: 50,
+  priority_reason: null,
   ...overrides,
 });
 
@@ -83,6 +86,19 @@ class FakeAgentService {
       default: 'local-model',
       local_only: true,
       detail: 'one local model',
+    };
+  }
+
+  async getControls(): Promise<AgentControls> {
+    return {
+      mode: 'running',
+      mode_reason: '',
+      paused: false,
+      admits_new_sessions: true,
+      max_parallel: 10,
+      max_parallel_override: null,
+      max_parallel_configured: 10,
+      updated_by: '',
     };
   }
 

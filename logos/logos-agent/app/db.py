@@ -131,10 +131,82 @@ async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+# --- what an operator changed while the runner was running ----------------
+
+
+async def get_controls() -> dict[str, Any] | None:
+    """The one row of runtime controls, or None if it is missing."""
+    async with sessionmaker()() as db:
+        row = (
+            (
+                await db.execute(
+                    text(
+                        """
+                    SELECT mode, mode_reason, max_parallel, comments_scanned_at,
+                           updated_by, updated_at
+                      FROM agent_controls WHERE id = 1
+                    """
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row else None
+
+
+async def set_controls(
+    *,
+    mode: str | None = None,
+    mode_reason: str | None = None,
+    max_parallel: int | None = None,
+    clear_max_parallel: bool = False,
+    updated_by: str,
+) -> None:
+    """Change the runtime controls, leaving untouched what was not named.
+
+    ``clear_max_parallel`` is how the override goes back to "whatever the
+    environment configured": null is a value here, not an absence, so it
+    cannot be expressed by omitting the argument.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                INSERT INTO agent_controls (id, mode, mode_reason, max_parallel, updated_by, updated_at)
+                VALUES (1, COALESCE(:mode, 'running'), :mode_reason,
+                        CASE WHEN :clear THEN NULL ELSE :max_parallel END, :updated_by, :now)
+                ON CONFLICT (id) DO UPDATE SET
+                    mode = COALESCE(:mode, agent_controls.mode),
+                    mode_reason = CASE
+                        WHEN :mode IS NULL THEN agent_controls.mode_reason
+                        ELSE :mode_reason
+                    END,
+                    max_parallel = CASE
+                        WHEN :clear THEN NULL
+                        WHEN :max_parallel IS NULL THEN agent_controls.max_parallel
+                        ELSE :max_parallel
+                    END,
+                    updated_by = :updated_by,
+                    updated_at = :now
+                """
+            ),
+            {
+                "mode": mode,
+                "mode_reason": mode_reason,
+                "max_parallel": max_parallel,
+                "clear": clear_max_parallel,
+                "updated_by": updated_by,
+                "now": _now(),
+            },
+        )
+        await db.commit()
+
+
 # --- workspaces -----------------------------------------------------------
 
 
-async def create_workspace(name: str, base_branch: str, created_by: str) -> dict[str, Any]:
+async def create_workspace(name: str, base_branch: str, created_by: str, *, ephemeral: bool = False) -> dict[str, Any]:
     volume = f"logos_agent_ws_{name}"
     async with sessionmaker()() as db:
         row = (
@@ -142,10 +214,21 @@ async def create_workspace(name: str, base_branch: str, created_by: str) -> dict
                 await db.execute(
                     text(
                         """
-                    INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by)
-                    VALUES (:name, :base_branch, :volume, :created_by)
-                    ON CONFLICT (name) DO NOTHING
-                    RETURNING id, name, base_branch, volume_name, created_by, created_at
+                    INSERT INTO agent_workspaces
+                        (name, base_branch, volume_name, created_by, ephemeral)
+                    VALUES (:name, :base_branch, :volume, :created_by, :ephemeral)
+                    -- An archived workspace of the same name is revived
+                    -- rather than collided with: the name identifies the
+                    -- work (an issue, a pull request), and its history is
+                    -- worth keeping across the gap. A live one is left
+                    -- alone, which is what makes the name unique.
+                    ON CONFLICT (name) DO UPDATE
+                       SET archived_at = NULL,
+                           base_branch = EXCLUDED.base_branch,
+                           ephemeral = EXCLUDED.ephemeral
+                     WHERE agent_workspaces.archived_at IS NOT NULL
+                    RETURNING id, name, base_branch, volume_name, created_by,
+                              created_at, ephemeral
                     """
                     ),
                     {
@@ -153,6 +236,7 @@ async def create_workspace(name: str, base_branch: str, created_by: str) -> dict
                         "base_branch": base_branch,
                         "volume": volume,
                         "created_by": created_by,
+                        "ephemeral": ephemeral,
                     },
                 )
             )
@@ -173,10 +257,11 @@ async def list_workspaces() -> list[dict[str, Any]]:
                     text(
                         """
                     SELECT w.id, w.name, w.base_branch, w.volume_name, w.created_by,
-                           w.created_at,
+                           w.created_at, w.ephemeral,
                            COUNT(s.id) FILTER (WHERE s.status = ANY(:active)) AS active_sessions
                       FROM agent_workspaces w
                       LEFT JOIN agent_sessions s ON s.workspace_id = w.id
+                     WHERE w.archived_at IS NULL
                      GROUP BY w.id
                      ORDER BY w.created_at DESC
                     """
@@ -256,6 +341,124 @@ async def get_workspace(workspace_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+async def comments_scanned_at() -> datetime | None:
+    """How far the comment scan has got, across restarts."""
+    async with sessionmaker()() as db:
+        return (
+            await db.execute(text("SELECT comments_scanned_at FROM agent_controls WHERE id = 1"))
+        ).scalar_one_or_none()
+
+
+async def mark_comments_scanned(moment: datetime) -> None:
+    """Remember that comments up to this point have been dealt with."""
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                INSERT INTO agent_controls (id, comments_scanned_at, updated_at)
+                VALUES (1, :moment, :now)
+                ON CONFLICT (id) DO UPDATE SET comments_scanned_at = :moment
+                """
+            ),
+            {"moment": moment, "now": _now()},
+        )
+        await db.commit()
+
+
+async def disposable_workspaces(idle_before: datetime) -> list[dict[str, Any]]:
+    """Ephemeral workspaces whose work is done and whose volume can go.
+
+    A workspace the runner made for one piece of triggered work has no
+    meaning once that work has finished, and left behind they fill the
+    parallel ceiling with checkouts nobody is using. An operator's
+    workspace is never in this list: they made it, they keep it.
+
+    Idle is measured from when the last session in it *finished*, not from
+    when the workspace was created — a workspace made an hour ago whose
+    session ended a minute ago is not idle. A workspace that never ran
+    anything falls back to its creation time, which also covers the gap
+    between a session being queued into a fresh workspace and being
+    claimed: neither is active yet, and sweeping then would delete the
+    working copy out from under the session it was made for.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        """
+                    SELECT w.id, w.name, w.volume_name
+                      FROM agent_workspaces w
+                     WHERE w.ephemeral = TRUE
+                       AND w.archived_at IS NULL
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions s
+                              WHERE s.workspace_id = w.id
+                                AND s.status = ANY(:active)
+                           )
+                       AND COALESCE(
+                             (SELECT MAX(s.finished_at) FROM agent_sessions s
+                               WHERE s.workspace_id = w.id),
+                             w.created_at
+                           ) < :idle_before
+                     ORDER BY w.id
+                    """
+                    ),
+                    {"idle_before": idle_before, "active": [s.value for s in ACTIVE_STATUSES]},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    return [dict(row) for row in rows]
+
+
+async def archive_workspace(workspace_id: int) -> bool:
+    """Retire a workspace without deleting anything that happened in it.
+
+    The row stays: `agent_sessions.workspace_id` cascades, so deleting it
+    would take every finished session in it — their events, their trigger
+    references, their pending replies — and with the references gone, work
+    that is still assigned would be queued all over again. Archiving keeps
+    the history and the name while giving back the only thing worth
+    reclaiming, which is the volume.
+
+    Refuses while the workspace is occupied, under the same row lock
+    :func:`create_session` takes, so a session accepted a moment ago is
+    never archived out from under itself.
+    """
+    async with sessionmaker()() as db:
+        existing = (
+            await db.execute(
+                text("SELECT id FROM agent_workspaces WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
+                {"id": workspace_id},
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            await db.rollback()
+            return False
+        active = (
+            await db.execute(
+                text(
+                    """
+                    SELECT COUNT(*) FROM agent_sessions
+                     WHERE workspace_id = :id AND status = ANY(:active)
+                    """
+                ),
+                {"id": workspace_id, "active": [s.value for s in ACTIVE_STATUSES]},
+            )
+        ).scalar_one()
+        if active:
+            await db.rollback()
+            return False
+        await db.execute(
+            text("UPDATE agent_workspaces SET archived_at = :now WHERE id = :id"),
+            {"id": workspace_id, "now": _now()},
+        )
+        await db.commit()
+    return True
+
+
 async def delete_workspace(workspace_id: int) -> bool:
     """Delete a workspace. Refuses while it still has non-terminal sessions.
 
@@ -309,6 +512,9 @@ async def create_session(
     trigger_ref: str | None = None,
     branch: str | None = None,
     reply_target: str | None = None,
+    reaction_target: str | None = None,
+    priority: int = 50,
+    priority_reason: str | None = None,
 ) -> int:
     async with sessionmaker()() as db:
         # Lock the workspace row before inserting. delete_workspace takes
@@ -334,11 +540,14 @@ async def create_session(
                     INSERT INTO agent_sessions
                         (workspace_id, task, model, status, created_by,
                          open_pull_request, deploy_to_dev, screenshot_paths,
-                         trigger_kind, trigger_ref, branch_name, reply_target)
+                         trigger_kind, trigger_ref, branch_name, reply_target,
+                         reaction_target, priority, priority_reason)
                     VALUES
                         (:workspace_id, :task, :model, 'queued', :created_by,
                          :open_pr, :deploy, CAST(:paths AS jsonb),
-                         :trigger_kind, :trigger_ref, :branch, :reply_target)
+                         :trigger_kind, :trigger_ref, :branch, :reply_target,
+                         :reaction_target,
+                         :priority, :priority_reason)
                     RETURNING id
                     """
                 ),
@@ -358,6 +567,9 @@ async def create_session(
                     # the session id.
                     "branch": branch,
                     "reply_target": reply_target,
+                    "reaction_target": reaction_target,
+                    "priority": priority,
+                    "priority_reason": priority_reason,
                 },
             )
         ).scalar_one()
@@ -479,6 +691,8 @@ _SESSION_SELECT = """
            s.started_at, s.finished_at, s.exit_code, s.error,
            s.container_id, s.open_pull_request, s.deploy_to_dev,
            s.screenshot_paths, s.trigger_kind, s.trigger_ref, s.reply_target,
+           s.reaction_target,
+           s.priority, s.priority_reason,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_usd, 0) AS cost_usd,
@@ -546,15 +760,25 @@ async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
                            )
-                       -- Only the oldest queued session of each workspace is a
-                       -- candidate, so one workspace cannot take several slots
-                       -- in a single pass and then collide with itself.
+                       -- One candidate per workspace, so a workspace cannot
+                       -- take several slots in a pass and then collide with
+                       -- itself — and it is that workspace's most urgent
+                       -- queued session, oldest among equals. Picking the
+                       -- oldest outright would hide a security fix behind a
+                       -- typo that happened to be queued into the same
+                       -- checkout first, and the global order below could
+                       -- never correct it.
                        AND s.id = (
-                             SELECT min(peer.id) FROM agent_sessions peer
+                             SELECT peer.id FROM agent_sessions peer
                               WHERE peer.workspace_id = s.workspace_id
                                 AND peer.status = 'queued'
+                              ORDER BY peer.priority DESC, peer.created_at, peer.id
+                              LIMIT 1
                            )
-                     ORDER BY s.created_at
+                     -- Most urgent first, oldest among equals: sessions are
+                     -- admitted one per capacity reading, so this order is
+                     -- what the platform works on while it is busy.
+                     ORDER BY s.priority DESC, s.created_at
                      LIMIT :limit
                      FOR UPDATE OF s SKIP LOCKED
                     """

@@ -440,3 +440,45 @@
     padding: 0.5rem 0;
   }
 }
+
+/* ── Runner controls ──────────────────────────────────────────────────────── */
+.controls {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem 1rem;
+  align-items: center;
+  border: 1px solid rgb(var(--color-outline-200));
+  border-radius: 10px;
+  padding: 1rem;
+  background: rgb(var(--color-background-50));
+  margin-bottom: 1.25rem;
+
+  &--stopped {
+    border-color: rgb(var(--color-warning));
+  }
+
+  &__state {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: var(--font-weight-semibold);
+    color: rgb(var(--color-typography-700));
+  }
+
+  &__actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+  }
+
+  &__field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    grid-column: 1 / -1;
+  }
+}
+
+.input--narrow {
+  max-width: 8rem;
+}

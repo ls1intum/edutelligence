@@ -10,7 +10,7 @@ the policy build their own.
 from __future__ import annotations
 
 import pytest
-from app import db, model_policy
+from app import controls, db, model_policy
 
 
 @pytest.fixture(autouse=True)
@@ -47,3 +47,21 @@ def local_model_policy(monkeypatch):
     # underlying `load` is left alone so its own tests still exercise it.
     monkeypatch.setattr(model_policy, "_current", policy)
     monkeypatch.setattr(model_policy, "refresh", evaluated)
+
+
+@pytest.fixture(autouse=True)
+def unpaused_runner(monkeypatch):
+    """No operator has touched the controls, unless a test says otherwise.
+
+    The real reader runs — it is the code under test elsewhere — but against
+    an answer that needs no database. Tests about the controls give their
+    own `get_controls`.
+    """
+
+    async def untouched():
+        return None
+
+    monkeypatch.setattr(db, "get_controls", untouched)
+    controls.forget()
+    yield
+    controls.forget()
