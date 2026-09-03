@@ -422,6 +422,19 @@ class LogosNodeRuntimeRegistry:
                 e2e_p50 = _lane_e2e_latency_p50_seconds(bm)
                 if e2e_p50 > 0.0:
                     self._latency_store.record_e2e_latency(model_name, provider_id, e2e_p50)
+                # Prefill timing: the worker reports the wall time and prompt-token
+                # count for the most recently completed prefill so the scheduler can
+                # learn the per-token rate and estimate cost for future requests.
+                prefill_s = bm.get("last_prefill_s")
+                prefill_tokens = bm.get("last_prefill_tokens")
+                if (
+                    isinstance(prefill_s, (int, float))
+                    and isinstance(prefill_tokens, (int, float))
+                    and prefill_tokens > 0
+                ):
+                    self._latency_store.record_prefill(
+                        model_name, provider_id, float(prefill_s), int(prefill_tokens)
+                    )
 
     def set_on_runtime_updated(self, callback: Callable[[int], None] | None) -> None:
         """Register the post-status hook. See ``_on_runtime_updated``."""

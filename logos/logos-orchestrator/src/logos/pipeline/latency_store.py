@@ -40,8 +40,10 @@ writes back every EWMA update immediately (write-on-every-update, consistent
 with the rest of the codebase).  Without a factory the store is in-memory only
 and resets on restart.
 
-TTFT and e2e observations use ``tier = "ttft"`` / ``tier = "e2e"`` in the DB
-so they share the same table and unique constraint as overhead rows.
+TTFT, e2e, and prefill-rate observations use ``tier = "ttft"`` / ``tier = "e2e"``
+/ ``tier = "prefill_per_token"`` in the DB so they share the same table and
+unique constraint as overhead rows.  Prefill is stored as seconds-per-input-token
+so the scheduler can estimate prefill cost for any context length.
 The real provider_id is stored; the legacy sentinel -1 written by earlier
 versions is treated as an unknown provider and will be superseded by the
 first real observation.
@@ -71,6 +73,7 @@ _ZERO_TIERS = frozenset({ReadinessTier.WARM, ReadinessTier.BUSY})
 
 _TIER_TTFT = "ttft"
 _TIER_E2E = "e2e"
+_TIER_PREFILL_PER_TOKEN = "prefill_per_token"
 
 
 @dataclass
@@ -98,6 +101,8 @@ class LatencyStore:
         self._ttft: dict[tuple[str, int], _EWMAState] = {}
         # (model_name, provider_id) → EWMAState (seconds)
         self._e2e_latency: dict[tuple[str, int], _EWMAState] = {}
+        # (model_name, provider_id) → EWMAState (seconds per input token)
+        self._prefill_s_per_token: dict[tuple[str, int], _EWMAState] = {}
 
         if self._db_factory is not None:
             self._load_from_db()
@@ -159,6 +164,29 @@ class LatencyStore:
             state = self._e2e_latency[key]
         self._persist_model_metric(model_name, int(provider_id), _TIER_E2E, state)
 
+    def record_prefill(
+        self, model_name: str, provider_id: int, duration_s: float, input_tokens: int
+    ) -> None:
+        """Record a prefill observation, storing the learned rate as seconds per input token.
+
+        ``duration_s``   — wall time from first token of the prompt to prefill completion.
+        ``input_tokens`` — number of prompt tokens in that request.
+        The scheduler later estimates prefill cost as  rate × current_input_tokens.
+        """
+        if input_tokens <= 0 or duration_s < _MIN_PLAUSIBLE_S:
+            return
+        rate = duration_s / input_tokens
+        key = (model_name, int(provider_id))
+        with self._lock:
+            state = self._prefill_s_per_token.get(key)
+            if state is None:
+                self._prefill_s_per_token[key] = _EWMAState(value=rate)
+            else:
+                state.value = self._alpha * rate + (1.0 - self._alpha) * state.value
+                state.n += 1
+            state = self._prefill_s_per_token[key]
+        self._persist_model_metric(model_name, int(provider_id), _TIER_PREFILL_PER_TOKEN, state)
+
     # ------------------------------------------------------------------
     # Reading
     # ------------------------------------------------------------------
@@ -204,6 +232,19 @@ class LatencyStore:
             state = self._e2e_latency.get((model_name, int(provider_id)))
         return state.value if state is not None else None
 
+    def get_prefill_s(self, model_name: str, provider_id: int, input_tokens: int) -> Optional[float]:
+        """Estimate prefill duration for ``input_tokens``, or None when no data.
+
+        Returns  learned_rate_s_per_token × input_tokens.
+        """
+        if input_tokens <= 0:
+            return None
+        with self._lock:
+            state = self._prefill_s_per_token.get((model_name, int(provider_id)))
+        if state is None:
+            return None
+        return state.value * input_tokens
+
     def get_observation_count(
         self,
         model_name: str,
@@ -239,6 +280,8 @@ class LatencyStore:
                     self._ttft[(model_name, provider_id)] = state
                 elif tier_str == _TIER_E2E:
                     self._e2e_latency[(model_name, provider_id)] = state
+                elif tier_str == _TIER_PREFILL_PER_TOKEN:
+                    self._prefill_s_per_token[(model_name, provider_id)] = state
                 else:
                     try:
                         tier = ReadinessTier(tier_str)

@@ -23,6 +23,8 @@ from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
 from logos.timeouts import global_timeout_s
 
+from logos.context_budget import estimate_prompt_tokens
+
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
     CORRECTION_STRENGTH,
@@ -169,10 +171,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 deployment for deployment in deployments if deployment["provider_id"] == request.required_provider_id
             ]
 
+        input_tokens = estimate_prompt_tokens(request.payload)
         scored = self._compute_candidate_scores(
             request.classified_models or [],
             deployments,
             affinity,
+            input_tokens=input_tokens,
         )
 
         # Try immediate selection
@@ -301,6 +305,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         candidates: List[Tuple[int, float, int]],
         deployments: list,
         affinity: Optional[Dict[int, int]] = None,
+        input_tokens: int = 0,
     ) -> list:
         """Build scored list with ETTFT annotations.
 
@@ -353,7 +358,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     )
                     continue
 
-                ettft = self._estimate_ettft(model_id, provider_id, provider_type)
+                ettft = self._estimate_ettft(model_id, provider_id, provider_type, input_tokens=input_tokens)
 
                 if ettft.tier == ReadinessTier.UNAVAILABLE:
                     logger.debug(
@@ -445,7 +450,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         return scored
 
-    def _estimate_ettft(self, model_id: int, provider_id: int, provider_type: str) -> EttftEstimate:
+    def _estimate_ettft(
+        self, model_id: int, provider_id: int, provider_type: str, input_tokens: int = 0
+    ) -> EttftEstimate:
         """Get ETTFT estimate for a model using the appropriate provider facade."""
         if provider_type == "logosnode":
             try:
@@ -557,6 +564,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             # a static prior.
             overhead_overrides: dict[ReadinessTier, float] | None = None
             learned_ttft: Optional[float] = None
+            estimated_prefill_s: Optional[float] = None
             if self._latency_store is not None:
                 model_name_for_store = view.model_name or ""
                 _store_kwargs = dict(
@@ -578,10 +586,17 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 learned_e2e = self._latency_store.get_e2e_latency_s(model_name_for_store, provider_id)
                 if learned_e2e is not None:
                     observed_e2e_p50_s = learned_e2e
-                # Learned TTFT for this provider — added once to the estimate
-                # for this request (queue_wait already embeds TTFT of preceding
-                # requests via e2e_p50 as service time, so no double-counting).
+                # Learned TTFT (decode-only first-token time) for this provider —
+                # added once for this request (queue_wait already embeds TTFT of
+                # preceding requests via e2e_p50 as service time, no double-counting).
                 learned_ttft = self._latency_store.get_ttft_s(model_name_for_store, provider_id)
+                # Estimated prefill: context-length-dependent prompt-ingestion cost.
+                # learned_ttft intentionally excludes prefill; this is the separate
+                # component that scales with input_tokens.
+                if input_tokens > 0:
+                    estimated_prefill_s = self._latency_store.get_prefill_s(
+                        model_name_for_store, provider_id, input_tokens
+                    )
 
             estimate = estimate_ettft_local(
                 view,
@@ -595,11 +610,20 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 all_provider_lanes=all_provider_lanes,
                 overhead_overrides=overhead_overrides,
             )
-            if learned_ttft is not None and estimate.tier != ReadinessTier.UNAVAILABLE:
+            if (learned_ttft is not None or estimated_prefill_s is not None) and (
+                estimate.tier != ReadinessTier.UNAVAILABLE
+            ):
+                added = (learned_ttft or 0.0) + (estimated_prefill_s or 0.0)
+                parts: list[str] = []
+                if learned_ttft is not None:
+                    parts.append(f"TTFT {learned_ttft:.2f}s")
+                if estimated_prefill_s is not None:
+                    parts.append(f"prefill {estimated_prefill_s:.2f}s ({input_tokens} tok)")
                 estimate = dataclasses.replace(
                     estimate,
-                    expected_wait_s=estimate.expected_wait_s + learned_ttft,
-                    reasoning=f"{estimate.reasoning} + TTFT {learned_ttft:.2f}s",
+                    expected_wait_s=estimate.expected_wait_s + added,
+                    prefill_s=estimated_prefill_s or 0.0,
+                    reasoning=f"{estimate.reasoning} + {' + '.join(parts)}",
                 )
             return estimate
 
