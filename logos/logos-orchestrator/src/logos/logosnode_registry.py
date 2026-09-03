@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import math
 import secrets
 import time
 import uuid
@@ -430,6 +431,9 @@ class LogosNodeRuntimeRegistry:
                 if (
                     isinstance(prefill_s, (int, float))
                     and isinstance(prefill_tokens, (int, float))
+                    and math.isfinite(prefill_s)
+                    and math.isfinite(prefill_tokens)
+                    and prefill_tokens == int(prefill_tokens)
                     and prefill_tokens > 0
                 ):
                     self._latency_store.record_prefill(
