@@ -12,6 +12,7 @@ import pytest
 
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 from logos.pipeline.ettft_estimator import ReadinessTier
+from logos.pipeline.latency_store import LatencyStore
 
 
 def _make_registry(latency_store):
@@ -201,3 +202,33 @@ class TestPrefillIngestion:
         reg = _make_registry(store)
         reg._absorb_latency_observations(1, _runtime([self._lane_with_prefill(prefill_s=None, prefill_tokens=300)]))
         store.record_prefill.assert_not_called()
+
+    def test_prefill_fractional_tokens_accepted(self):
+        # Worker emits delta_tokens/delta_requests which is often fractional
+        # (e.g. 2502 tokens / 5 requests = 500.4 tok/req).  The registry must
+        # not reject fractional averages; record_prefill must be called.
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(
+            1, _runtime([self._lane_with_prefill(prefill_s=2.5, prefill_tokens=500.4)])
+        )
+        store.record_prefill.assert_called_once_with("test-model", 1, 2.5, 500.4)
+
+
+# ---------------------------------------------------------------------------
+# Integration: real LatencyStore — sub-100 ms TPOT must reach the store
+# ---------------------------------------------------------------------------
+
+
+class TestTpotIngestionIntegration:
+    """Verify that the 0.05 s TPOT P50 value survives the full path from
+    _absorb_latency_observations through a real LatencyStore."""
+
+    def test_tpot_p50_stored_in_real_latency_store(self):
+        store = LatencyStore()
+        reg = _make_registry(store)
+        tpot_hist = {"0.05": 5, "0.1": 9, "0.2": 10, "+Inf": 10}
+        lane = {"model": "test-model", "backend_metrics": {"tpot_histogram": tpot_hist}}
+        reg._absorb_latency_observations(7, _runtime([lane]))
+        result = store.get_ttft_s("test-model", 7)
+        assert result == pytest.approx(0.05)

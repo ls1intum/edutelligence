@@ -145,11 +145,18 @@ class TestTtft:
         expected = 0.2 * 1.0 + 0.8 * 2.0  # 1.8
         assert store.get_ttft_s("m", 1) == pytest.approx(expected)
 
-    def test_below_min_plausible_ignored(self):
+    def test_non_positive_or_nan_ignored(self):
         store = make_store()
         store.record_ttft("m", 1, 2.0)
-        store.record_ttft("m", 1, _MIN_PLAUSIBLE_S - 0.01)
+        store.record_ttft("m", 1, 0.0)
+        store.record_ttft("m", 1, float("nan"))
         assert store.get_ttft_s("m", 1) == pytest.approx(2.0)
+
+    def test_sub_100ms_accepted(self):
+        # TPOT P50 values such as 0.05 s must not be filtered by the load-time guard.
+        store = make_store()
+        store.record_ttft("m", 1, 0.05)
+        assert store.get_ttft_s("m", 1) == pytest.approx(0.05)
 
     def test_keyed_by_model_and_provider(self):
         store = make_store()

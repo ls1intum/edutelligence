@@ -433,11 +433,10 @@ class LogosNodeRuntimeRegistry:
                     and isinstance(prefill_tokens, (int, float))
                     and math.isfinite(prefill_s)
                     and math.isfinite(prefill_tokens)
-                    and prefill_tokens == int(prefill_tokens)
                     and prefill_tokens > 0
                 ):
                     self._latency_store.record_prefill(
-                        model_name, provider_id, float(prefill_s), int(prefill_tokens)
+                        model_name, provider_id, float(prefill_s), float(prefill_tokens)
                     )
 
     def set_on_runtime_updated(self, callback: Callable[[int], None] | None) -> None:

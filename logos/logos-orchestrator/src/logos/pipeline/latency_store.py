@@ -52,6 +52,7 @@ first real observation.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -135,8 +136,12 @@ class LatencyStore:
         self._persist_overhead(model_name, int(provider_id), tier, state)
 
     def record_ttft(self, model_name: str, provider_id: int, ttft_s: float) -> None:
-        """Record an observed TTFT sample for a (model, provider)."""
-        if ttft_s < _MIN_PLAUSIBLE_S:
+        """Record an observed TTFT sample for a (model, provider).
+
+        Accepts any finite positive value; the caller may pass sub-100 ms TPOT
+        observations, so the load-time minimum (_MIN_PLAUSIBLE_S) is not applied.
+        """
+        if not (math.isfinite(ttft_s) and ttft_s > 0.0):
             return
         key = (model_name, int(provider_id))
         with self._lock:
@@ -165,12 +170,13 @@ class LatencyStore:
         self._persist_model_metric(model_name, int(provider_id), _TIER_E2E, state)
 
     def record_prefill(
-        self, model_name: str, provider_id: int, duration_s: float, input_tokens: int
+        self, model_name: str, provider_id: int, duration_s: float, input_tokens: float
     ) -> None:
         """Record a prefill observation, storing the learned rate as seconds per input token.
 
         ``duration_s``   — wall time from first token of the prompt to prefill completion.
-        ``input_tokens`` — number of prompt tokens in that request.
+        ``input_tokens`` — prompt-token count for that interval; may be a fractional average
+                           when the worker reports delta_tokens / delta_requests.
         The scheduler later estimates prefill cost as  rate × current_input_tokens.
         """
         if input_tokens <= 0 or duration_s < _MIN_PLAUSIBLE_S:
