@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -66,8 +67,22 @@ class LiquibaseBaselineTest {
 
     @Test
     void migration020_providerSnapshotsTableRenamed() {
-        assertThat(tableExists("provider_snapshots")).isTrue();
-        assertThat(tableExists("ollama_provider_snapshots")).isFalse();
+        // The physical table carries the engine-neutral name now...
+        assertThat(tableType("provider_snapshots")).isEqualTo("BASE TABLE");
+        // ...while the pre-rename name survives exactly one release as a
+        // pass-through view, so an orchestrator rolled back to the previous
+        // release can still write it (see migration 020's compatibility view).
+        assertThat(tableType("ollama_provider_snapshots")).isEqualTo("VIEW");
+    }
+
+    @Test
+    void migration020_compatibilityViewMirrorsTheRenamedTable() {
+        // The view is a plain SELECT * over the renamed table, so it must
+        // expose every column the previous release wrote: the identifier, the
+        // base metrics, and the richer runtime/scheduler payloads added later.
+        // A rolled-back orchestrator INSERTs through this view.
+        assertThat(columns("ollama_provider_snapshots"))
+                .contains("id", "provider_id", "snapshot_ts", "loaded_models", "runtime_payload", "scheduler_signals");
     }
 
     @Test
@@ -173,5 +188,20 @@ class LiquibaseBaselineTest {
             "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' AND table_name=? AND column_name=?",
             Integer.class, tableName, columnName);
         return Integer.valueOf(1).equals(count);
+    }
+
+    private String tableType(String tableName) {
+        // Distinguishes a base table from a view: information_schema.tables
+        // lists both, tagged by table_type ('BASE TABLE' vs 'VIEW').
+        return jdbc.queryForObject(
+            "SELECT table_type FROM information_schema.tables WHERE table_schema='public' AND table_name=?",
+            String.class, tableName);
+    }
+
+    private List<String> columns(String tableName) {
+        return jdbc.queryForList(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=? "
+                + "ORDER BY ordinal_position",
+            String.class, tableName);
     }
 }

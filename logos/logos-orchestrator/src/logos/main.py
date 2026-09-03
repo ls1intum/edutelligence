@@ -870,40 +870,55 @@ def _capture_logosnode_provider_snapshot(
     if free_vram_mb is not None:
         free_bytes = int(float(free_vram_mb or 0.0) * 1024 * 1024)
 
-    with DBManager() as db:
-        snapshot_id = db.insert_provider_snapshot(
-            provider_id=provider_id,
-            snapshot_ts=timestamp,
-            total_models_loaded=int(sample.get("models_loaded") or 0),
-            total_vram_used_bytes=used_bytes,
-            total_memory_bytes=total_bytes,
-            free_memory_bytes=free_bytes,
-            loaded_models=list(sample.get("loaded_models") or []),
-            snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
-            runtime_payload=(sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}),
-            scheduler_signals=(
-                sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {}
-            ),
-            poll_success=True,
+    try:
+        with DBManager() as db:
+            snapshot_id = db.insert_provider_snapshot(
+                provider_id=provider_id,
+                snapshot_ts=timestamp,
+                total_models_loaded=int(sample.get("models_loaded") or 0),
+                total_vram_used_bytes=used_bytes,
+                total_memory_bytes=total_bytes,
+                free_memory_bytes=free_bytes,
+                loaded_models=list(sample.get("loaded_models") or []),
+                snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
+                runtime_payload=(
+                    sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}
+                ),
+                scheduler_signals=(
+                    sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {}
+                ),
+                poll_success=True,
+            )
+            # Persist calibrated model profiles into the dedicated table
+            runtime_payload = sample.get("runtime_payload")
+            if isinstance(runtime_payload, dict):
+                model_profiles = runtime_payload.get("model_profiles")
+                if isinstance(model_profiles, dict) and model_profiles:
+                    try:
+                        db.upsert_model_profiles(provider_id, model_profiles)
+                    except Exception:
+                        db.session.rollback()
+                        logger.warning(
+                            "Failed to upsert model profiles for provider %s, the "
+                            "entire row update (base_residency_mb, loaded_vram_mb, "
+                            "kv_budget_mb, measurement_count, last_measured_at) is "
+                            "lost until this recovers",
+                            _resolve_provider_name(provider_id),
+                            exc_info=True,
+                        )
+    except Exception:
+        # Persisting a VRAM snapshot must never drop the worker's live session.
+        # A missing table (the webservice migration that renames it has not run
+        # yet) or a transient database error is logged and the next status
+        # message retries; the worker stays connected and the capacity planner
+        # degrades to its last known snapshot instead of going dark.
+        logger.warning(
+            "Failed to persist provider snapshot for %s; worker session stays "
+            "connected and the next status message retries",
+            _resolve_provider_name(provider_id),
+            exc_info=True,
         )
-        # Persist calibrated model profiles into the dedicated table
-        runtime_payload = sample.get("runtime_payload")
-        if isinstance(runtime_payload, dict):
-            model_profiles = runtime_payload.get("model_profiles")
-            if isinstance(model_profiles, dict) and model_profiles:
-                try:
-                    db.upsert_model_profiles(provider_id, model_profiles)
-                except Exception:
-                    db.session.rollback()
-                    logger.warning(
-                        "Failed to upsert model profiles for provider %s, the "
-                        "entire row update (base_residency_mb, loaded_vram_mb, "
-                        "kv_budget_mb, measurement_count, last_measured_at) is "
-                        "lost until this recovers",
-                        _resolve_provider_name(provider_id),
-                        exc_info=True,
-                    )
-
+        return
     sample["snapshot_id"] = snapshot_id
     asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
 

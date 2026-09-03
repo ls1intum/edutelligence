@@ -9,13 +9,32 @@
          polled, but it now stores the live runtime snapshots (VRAM, loaded
          models, scheduler signals) that LogosNode workers report over the
          persistent WebSocket session. Rename it to the engine-neutral name;
-         the data and all indexes are untouched. -->
+         the data and all indexes are untouched. The old name is then kept as
+         a one-release compatibility view so an orchestrator rolled back to the
+         previous release can still write it (see the view's comment below). -->
     <changeSet id="020-rename-provider-snapshots" author="wasnertobias">
+        <!-- Apply only while the pre-rename name still resolves to a base
+             table. Once this changeSet has run the name is a view, so a
+             re-evaluated run is marked as already applied instead of trying
+             to RENAME a view (which would fail). -->
         <preConditions onFail="MARK_RAN">
-            <tableExists tableName="ollama_provider_snapshots"/>
+            <sqlCheck expectedResult="1">
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = 'ollama_provider_snapshots'
+                  AND table_type = 'BASE TABLE'
+            </sqlCheck>
         </preConditions>
         <sql>ALTER TABLE ollama_provider_snapshots RENAME TO provider_snapshots;</sql>
+        <!-- One-release compatibility view. A rolled-back orchestrator (the
+             previous release) still issues INSERT ... INTO ollama_provider_snapshots;
+             a simple single-table view accepts that, with the omitted id column
+             falling back to the provider_snapshots serial default. Data written
+             through the view lands in the renamed table. Drop the view next
+             release, once that previous release is no longer deployable. -->
+        <sql>CREATE VIEW ollama_provider_snapshots AS SELECT * FROM provider_snapshots;</sql>
         <rollback>
+            <sql>DROP VIEW IF EXISTS ollama_provider_snapshots;</sql>
             <sql>ALTER TABLE provider_snapshots RENAME TO ollama_provider_snapshots;</sql>
         </rollback>
     </changeSet>
