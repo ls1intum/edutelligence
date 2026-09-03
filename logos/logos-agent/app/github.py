@@ -315,21 +315,34 @@ async def _get_all(path: str, params: dict[str, Any] | None = None) -> list[Any]
     the *oldest* entries: on a pull request with more than a hundred reviews,
     reading one page would miss every new one, permanently.
     """
+    collected, _ = await _get_all_bounded(path, params)
+    return collected
+
+
+async def _get_all_bounded(path: str, params: dict[str, Any] | None = None) -> tuple[list[Any], bool]:
+    """The same listing, and whether the page ceiling cut it short.
+
+    A caller that tells an agent "this is the whole conversation" needs the
+    second half of that answer: two thousand entries read out of more is
+    incomplete context, and indistinguishable from a complete read without
+    it.
+    """
     collected: list[Any] = []
-    for page in range(1, _MAX_PAGES + 1):
+    for _ in range(_MAX_PAGES):
+        page = len(collected) // _PAGE_SIZE + 1
         payload = await _get(path, {**(params or {}), "per_page": _PAGE_SIZE, "page": page})
         if not isinstance(payload, list):
-            break
+            return collected, False
         collected.extend(payload)
         if len(payload) < _PAGE_SIZE:
-            return collected
+            return collected, False
     logger.warning(
         "listing %s hit the %s-page ceiling (%s items); newer entries beyond it were not read",
         path,
         _MAX_PAGES,
         len(collected),
     )
-    return collected
+    return collected, True
 
 
 async def _assigned(login: str) -> list[dict[str, Any]]:
@@ -449,6 +462,30 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     return [comment for comment in payload if isinstance(comment, dict)]
 
 
+async def open_pull_request_for(branch: str) -> dict[str, Any] | None:
+    """The open pull request whose head is this branch, if there is one.
+
+    What decides whether a workspace is still needed: while a pull request
+    is open its work is not finished, however long the checkout has been
+    idle, and the conversation kept beside that checkout is what the next
+    review continues rather than starting over.
+    """
+    if not branch:
+        return None
+    owner = settings.repo_slug.split("/", 1)[0]
+    try:
+        payload = await _get(
+            f"/repos/{settings.repo_slug}/pulls",
+            {"head": f"{owner}:{branch}", "state": "open", "per_page": 1},
+        )
+    except GitHubError as exc:
+        logger.info("could not establish whether '%s' still has an open pull request: %s", branch, exc)
+        raise
+    if isinstance(payload, list) and payload:
+        return payload[0]
+    return None
+
+
 async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[list[dict[str, Any]], list[str]]:
     """Everything said on a pull request, oldest last, and what is missing.
 
@@ -467,21 +504,26 @@ async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[li
     those reviews actually said, and the discussion under the pull request.
     """
     reviews, inline, discussion = await asyncio.gather(
-        _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews"),
-        _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/comments"),
-        _get_all(f"/repos/{settings.repo_slug}/issues/{number}/comments"),
+        _get_all_bounded(f"/repos/{settings.repo_slug}/pulls/{number}/reviews"),
+        _get_all_bounded(f"/repos/{settings.repo_slug}/pulls/{number}/comments"),
+        _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments"),
         return_exceptions=True,
     )
     entries: list[dict[str, Any]] = []
     missing: list[str] = []
 
-    def add(items: object, kind: str) -> None:
-        if not isinstance(items, list):
+    def add(answer: object, kind: str) -> None:
+        if not isinstance(answer, tuple):
             # One source failing is not worth losing the other two over: a
             # partial conversation still beats none — as long as it says so.
-            logger.info("could not read the %s of #%s: %s", kind, number, items)
+            logger.info("could not read the %s of #%s: %s", kind, number, answer)
             missing.append(kind)
             return
+        items, truncated = answer
+        if truncated:
+            # More than the listing ceiling: what was read is the oldest
+            # part, so the newest — the part still open — is what is gone.
+            missing.append(f"{kind} beyond the first {len(items)}")
         for item in items:
             if not isinstance(item, dict):
                 continue

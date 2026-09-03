@@ -447,6 +447,82 @@ class TestLaunchAndSupervision:
         assert removed.count("cid-7") >= 1
 
 
+class TestOnePieceOfWork:
+    """A pull request is worked on by one workspace, across its rounds.
+
+    An issue becomes a change, a review comes back, then another. Each round
+    in the same working copy, continuing the same conversation, instead of
+    re-reading the repository from scratch for a change of ten lines.
+    """
+
+    async def test_the_same_branch_continues(self, monkeypatch):
+        from app import sessions
+
+        async def previous(_workspace_id, *, before_session_id):
+            return "logos/agent/pr-858/session-3"
+
+        monkeypatch.setattr(sessions.db, "last_session_branch", previous)
+
+        assert await sessions.manager._continues_earlier_work(
+            {"id": 9, "workspace_id": 1}, "logos/agent/pr-858/session-3"
+        )
+
+    async def test_a_workspace_pointed_elsewhere_starts_clean(self, monkeypatch):
+        from app import sessions
+
+        async def previous(_workspace_id, *, before_session_id):
+            return "logos/agent/pr-772/session-1"
+
+        monkeypatch.setattr(sessions.db, "last_session_branch", previous)
+
+        assert not await sessions.manager._continues_earlier_work({"id": 9, "workspace_id": 1}, "logos/other")
+
+    async def test_the_first_session_in_a_workspace_starts_clean(self, monkeypatch):
+        from app import sessions
+
+        async def previous(_workspace_id, *, before_session_id):
+            return None
+
+        monkeypatch.setattr(sessions.db, "last_session_branch", previous)
+
+        assert not await sessions.manager._continues_earlier_work({"id": 9, "workspace_id": 1}, "logos/agent/x")
+
+    async def test_a_workspace_with_an_open_pull_request_is_kept(self, monkeypatch):
+        from app import sessions
+
+        async def open_pr(branch):
+            return {"number": 858} if branch == "logos/agent/pr-858/session-3" else None
+
+        monkeypatch.setattr(sessions.github, "open_pull_request_for", open_pr)
+
+        # Idle for hours, and still not finished: the next review continues
+        # it, and the volume holds the conversation that would be lost.
+        assert await sessions.manager._still_wanted({"name": "pr-858", "base_branch": "logos/agent/pr-858/session-3"})
+        assert not await sessions.manager._still_wanted({"name": "auto-1", "base_branch": "logos/agent/pr-772/old"})
+
+    async def test_a_workspace_is_kept_when_github_cannot_be_asked(self, monkeypatch):
+        from app import sessions
+
+        async def broken(_branch):
+            raise RuntimeError("502")
+
+        monkeypatch.setattr(sessions.github, "open_pull_request_for", broken)
+
+        # Losing a working copy because GitHub was briefly unreachable is
+        # the more expensive mistake.
+        assert await sessions.manager._still_wanted({"name": "pr-858", "base_branch": "logos/agent/pr-858/x"})
+
+    async def test_a_workspace_on_a_protected_branch_is_not_kept(self, monkeypatch):
+        from app import sessions
+
+        async def refuse(_branch):
+            raise AssertionError("main is not a pull request branch")
+
+        monkeypatch.setattr(sessions.github, "open_pull_request_for", refuse)
+
+        assert not await sessions.manager._still_wanted({"name": "auto-1", "base_branch": "main"})
+
+
 class TestTranscript:
     """What the person watching a session sees, and when.
 

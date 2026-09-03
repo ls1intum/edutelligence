@@ -133,6 +133,10 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
         )
     wanted = set(lane or ())
     queue_total = int(payload.get("queue_total") or 0)
+    # Counted per model as well as in total: a lane holding a saturated
+    # model and an idle one is not half busy — a session bound for the
+    # saturated one has nowhere to go, and the average would hide that.
+    per_model: dict[str, list[int]] = {}
     providers = ((payload.get("logosnode") or {}).get("providers")) or {}
 
     busy = 0
@@ -161,6 +165,10 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
                 continue
             total += capacity
             busy += active
+            name = str(model.get("model_name") or model_id)
+            slots = per_model.setdefault(name, [0, 0])
+            slots[0] += active
+            slots[1] += capacity
 
     fell_back = False
     if wanted and total == 0 and fleet_total > 0:
@@ -184,19 +192,35 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
             reclaimable=False,
         )
 
+    if wanted and not fell_back and len(per_model) > 1:
+        # The busiest of them decides. Being kept out of an idle model
+        # because another is full costs this runner some capacity; letting a
+        # session into a full one costs a user their turn.
+        name, (model_busy, model_total) = max(
+            per_model.items(), key=lambda item: (item[1][0] / item[1][1]) if item[1][1] else 0.0
+        )
+        return Reading(
+            load=model_busy / model_total,
+            busy_slots=model_busy,
+            total_slots=model_total,
+            queue_total=queue_total,
+            ok=True,
+            detail=f"{model_busy}/{model_total} slots busy on {name}, the busiest model this runner may use",
+        )
+
     if not wanted:
-        lane = ""
+        lane_note = ""
     elif fell_back:
-        lane = " across the fleet (none of the runner's own models is resident)"
+        lane_note = " across the fleet (none of the runner's own models is resident)"
     else:
-        lane = " on the models the runner uses"
+        lane_note = " on the model this runner uses"
     return Reading(
         load=busy / total,
         busy_slots=busy,
         total_slots=total,
         queue_total=queue_total,
         ok=True,
-        detail=f"{busy}/{total} slots busy{lane}",
+        detail=f"{busy}/{total} slots busy{lane_note}",
     )
 
 

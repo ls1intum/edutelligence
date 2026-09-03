@@ -237,6 +237,7 @@ class TestTheEndpointsThatCombineModules:
                 local_models=frozenset({"local-model"}),
                 offered=("local-model",),
                 local_deployments=frozenset({("15", "97")}),
+                deployments_by_model={"local-model": frozenset({("15", "97")})},
                 ok=True,
                 unknown=False,
                 detail="one local model",

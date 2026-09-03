@@ -144,6 +144,76 @@ def _install_git_askpass(token: str) -> None:
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
 
 
+# Where the conversation is kept between sessions, on the workspace volume
+# and beside the home rather than inside it. The home is wiped at the start
+# of every session on purpose; this is the one thing worth carrying across.
+MEMORY = WORKSPACE / ".memory"
+
+# What the CLI keeps a conversation in, under the agent's home.
+_TRANSCRIPTS = ".claude/projects"
+
+
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _has_conversation() -> bool:
+    """Whether a conversation was restored into this session's home."""
+    home = Path(os.environ.get("HOME") or "/workspace/.home")
+    projects = home / _TRANSCRIPTS
+    return projects.is_dir() and any(projects.rglob("*.jsonl"))
+
+
+def _save_conversation() -> int:
+    """Copy the agent's transcripts out of the home before it is wiped.
+
+    Only the transcripts — `*.jsonl` under the CLI's project directory. Not
+    `settings.json`, not hooks, not a `CLAUDE.md`, not a shell profile, not a
+    build cache: those are executable configuration a session could have
+    written while holding a push token, and the next session must not
+    inherit them. A conversation is data the same agent already authored,
+    and carrying it is what keeps a pull request from being re-read from
+    scratch on every review.
+    """
+    home = Path(os.environ.get("HOME") or "/workspace/.home")
+    source = home / _TRANSCRIPTS
+    if not source.is_dir() or source.is_symlink():
+        return 0
+    kept = 0
+    for path in sorted(source.rglob("*.jsonl")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        target = MEMORY / path.relative_to(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        kept += 1
+    return kept
+
+
+def _restore_conversation() -> int:
+    """Put the kept transcripts back into a freshly wiped home."""
+    if not MEMORY.is_dir() or MEMORY.is_symlink():
+        return 0
+    home = Path(os.environ.get("HOME") or "/workspace/.home")
+    restored = 0
+    for path in sorted(MEMORY.rglob("*.jsonl")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        target = home / _TRANSCRIPTS / path.relative_to(MEMORY)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        restored += 1
+    return restored
+
+
+def _forget_conversation() -> None:
+    """Drop what was kept: this workspace is starting on something else."""
+    if MEMORY.is_symlink():
+        MEMORY.unlink()
+    elif MEMORY.is_dir():
+        shutil.rmtree(MEMORY)
+
+
 def _reset_agent_home() -> None:
     """Replace the agent's home with a fresh, empty directory.
 
@@ -243,7 +313,20 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
     repository metadata rebuilt before any git command runs.
     """
     _install_git_askpass(token)
+    # The conversation is carried across the wipe when this session
+    # continues the same piece of work — an issue that became a pull
+    # request, a review on it, the review after that. Re-reading the whole
+    # repository on every cycle is what makes a feedback round cost
+    # millions of tokens for a change of ten lines.
+    continuing = _flag("LOGOS_SESSION_CONTINUE")
+    saved = _save_conversation() if continuing else 0
     _reset_agent_home()
+    if continuing:
+        restored = _restore_conversation()
+        log(f"continuing the conversation of this workspace ({saved} kept, {restored} restored)")
+    else:
+        # A workspace pointed at different work starts with a clean head.
+        _forget_conversation()
     if CHECKOUT.is_symlink() or (CHECKOUT.exists() and not CHECKOUT.is_dir()):
         # A session may have replaced the checkout itself with a link: the
         # `.git` check below would follow it into another tree and treat
@@ -343,6 +426,9 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
     Returns False when there is no working copy to finalize: the agent left
     nothing, or a link in place of the checkout.
     """
+    # Saved before the wipe, so the next review on this pull request finds
+    # the conversation that produced it rather than starting over.
+    _save_conversation()
     _reset_agent_home()
     if CHECKOUT.is_symlink() or (CHECKOUT.exists() and not CHECKOUT.is_dir()):
         log("the checkout is not a directory; there is no work to finalize")
@@ -476,26 +562,62 @@ def run_agent(task: str) -> dict[str, object]:
     """
     prompt = build_prompt(task)
     started = time.monotonic()
-    log("starting agent")
-    usage: dict[str, object] = {}
-    for attempt in range(_MAX_CONTINUATIONS + 1):
-        resuming = attempt > 0
-        if resuming:
-            log(f"the agent's connection was cut; continuing where it left off ({attempt}/{_MAX_CONTINUATIONS})")
-        code, run_usage, interrupted = _drive_agent(
-            _agent_command(CONTINUE_PROMPT if resuming else prompt, resuming=resuming)
+    # A conversation restored by the preparation phase is this workspace's
+    # own history on this pull request: continue it instead of introducing
+    # the repository to a stranger again.
+    carry_on = _flag("LOGOS_SESSION_CONTINUE") and _has_conversation()
+    if carry_on:
+        log("picking up this workspace's earlier conversation")
+        # The conversation already holds the change and why it was made, so
+        # the task is what is *new*: the review that just came in, the
+        # question somebody asked. Saying so beats letting it look like the
+        # work is starting over.
+        prompt = (
+            "This is the same piece of work you have been doing in this "
+            "checkout, one round later. Everything you did before is still "
+            "here, and so is your reasoning for it — do not start over and "
+            "do not re-read what you already know. Here is what came back:"
+            f"\n\n{prompt}"
         )
-        if run_usage:
-            usage = run_usage
+    log("starting agent")
+    # Spending is summed across invocations. An interrupted run is still a
+    # run — its tokens were spent and its cost incurred — and the result
+    # event of the invocation that finished only describes that one.
+    spent_in = spent_out = 0
+    spent_cost = 0.0
+    for attempt in range(_MAX_CONTINUATIONS + 1):
+        resuming = attempt > 0 or carry_on
+        if attempt > 0:
+            log(f"the agent's connection was cut; continuing where it left off ({attempt}/{_MAX_CONTINUATIONS})")
+        # The first run of a continued session carries the new work — the
+        # review that just came in — into the conversation that did the
+        # earlier rounds. A later run carries only "you were cut off".
+        text = CONTINUE_PROMPT if attempt > 0 else prompt
+        code, run_usage, interrupted = _drive_agent(_agent_command(text, resuming=resuming))
+        run_in, run_out, run_cost = usage_totals(run_usage)
+        if not run_usage:
+            # Cut off before it could report: what the assistant events
+            # showed is the best account of that invocation there is.
+            run_in, run_out = max(run_in, _spent["in"] - spent_in), max(run_out, _spent["out"] - spent_out)
+        spent_in += run_in
+        spent_out += run_out
+        spent_cost += run_cost
+        elapsed = time.monotonic() - started
         if code == 0:
-            elapsed = time.monotonic() - started
             log(f"agent finished in {elapsed:.0f}s with exit code {code}")
-            return usage
+            return _totalled(spent_in, spent_out, spent_cost)
         if not interrupted or attempt == _MAX_CONTINUATIONS:
-            elapsed = time.monotonic() - started
             log(f"agent finished in {elapsed:.0f}s with exit code {code}")
             raise RuntimeError(f"agent exited with code {code}")
     raise RuntimeError("agent exited without a result")
+
+
+def _totalled(tokens_in: int, tokens_out: int, cost: float) -> dict[str, object]:
+    """One usage record standing for every invocation this session made."""
+    return {
+        "usage": {"input_tokens": tokens_in, "output_tokens": tokens_out},
+        "total_cost_usd": cost,
+    }
 
 
 # What the agent is told when it comes back from an interruption. Short on

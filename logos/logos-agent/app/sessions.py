@@ -483,10 +483,15 @@ class SessionManager:
                 pass
 
     async def scheduler_pass(self) -> None:
+        # Permissions first, then the measurement they describe: a key moved
+        # to another model — or stripped of its local one while a session was
+        # paused — must not have its old lane decide whether that session is
+        # resumed.
+        policy = await model_policy.refresh()
         # Measured on the lane these sessions are served by, not on the
         # whole fleet: an embedding model being idle says nothing about
         # whether another agent session is safe to start.
-        reading = await capacity.read_load(lane=model_policy.current().lane())
+        reading = await capacity.read_load(lane=policy.lane())
         self._last_reading = reading
         # What an operator has asked for right now — the kill switch and the
         # ceiling they set — read before anything is decided.
@@ -559,10 +564,10 @@ class SessionManager:
             # because the policy is what says which lane to read: a key
             # moved from one local model to another would otherwise be
             # admitted against the load of the model it no longer uses.
-            policy = await model_policy.refresh()
-            if not policy.ok:
+            admission_policy = await model_policy.refresh()
+            if not admission_policy.ok:
                 return
-            reading = await capacity.read_load(lane=policy.lane())
+            reading = await capacity.read_load(lane=admission_policy.lane())
             self._last_reading = reading
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
@@ -760,7 +765,8 @@ class SessionManager:
             # container with egress and the scoped push token. The agent
             # phase that follows has neither — it runs on the internal
             # network with no credentials at all.
-            await self._prepare_checkout(session, workspace, branch, artifact_host_path)
+            continuing = await self._continues_earlier_work(session, branch)
+            await self._prepare_checkout(session, workspace, branch, artifact_host_path, continuing=continuing)
 
             # Boundary: the agent container is next. A cancel during the
             # prepare helper stops that helper; the launch must not go on to
@@ -772,7 +778,7 @@ class SessionManager:
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
                 image=settings.workspace_image,
-                env=self._session_env(session, branch),
+                env=self._session_env(session, branch, continuing=continuing),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
                 session_id=sid,
@@ -860,7 +866,7 @@ class SessionManager:
         """Whether the row is still the 'starting' one this launch claimed."""
         return await db.session_is_starting(session_id)
 
-    def _session_env(self, session: dict[str, Any], branch: str) -> dict[str, str]:
+    def _session_env(self, session: dict[str, Any], branch: str, *, continuing: bool = False) -> dict[str, str]:
         """The environment the untrusted agent phase runs with.
 
         Nothing reusable: no GitHub token (the helper phases do the
@@ -874,6 +880,10 @@ class SessionManager:
         model = model_policy.current().resolve(session.get("model"))
         env = {
             "LOGOS_SESSION_PHASE": "agent",
+            # Set when the preparation restored this workspace's earlier
+            # conversation: the agent continues it rather than meeting the
+            # repository as a stranger again.
+            "LOGOS_SESSION_CONTINUE": "1" if continuing else "",
             # The agent's model traffic goes to Logos itself, so it is
             # authenticated, policy-checked, and billed like any other
             # caller. It is pointed at the gateway, not at the orchestrator:
@@ -979,12 +989,44 @@ class SessionManager:
                 except Exception:
                     logger.warning("could not remove %s helper container for session %s", phase, session_id)
 
+    @staticmethod
+    async def _continues_earlier_work(session: dict[str, Any], branch: str) -> bool:
+        """Whether this session carries on what this workspace was doing.
+
+        The same branch is the same piece of work: an issue that became a
+        pull request, the review on it, the review after that. Continuing
+        means the agent keeps the conversation it already had instead of
+        reading the repository from scratch — the difference between a
+        feedback round costing a few thousand tokens and a few million.
+
+        A workspace pointed at something else starts clean, and so does a
+        session with no branch of its own to compare.
+        """
+        if not branch:
+            return False
+        try:
+            previous = await db.last_session_branch(int(session["workspace_id"]), before_session_id=int(session["id"]))
+        except Exception as exc:
+            logger.info("could not establish what session %s continues: %s", session["id"], exc)
+            return False
+        return bool(previous) and previous == branch
+
     async def _prepare_checkout(
-        self, session: dict[str, Any], workspace: dict[str, Any], branch: str, artifact_host_path: str
+        self,
+        session: dict[str, Any],
+        workspace: dict[str, Any],
+        branch: str,
+        artifact_host_path: str,
+        *,
+        continuing: bool = False,
     ) -> None:
         """Phase one: the helper that makes the working copy trustworthy."""
         env = {
             "LOGOS_SESSION_PHASE": "prepare",
+            # Carries the conversation across the home wipe, and nothing
+            # else: transcripts are data the same agent wrote, hooks and
+            # configuration are not.
+            "LOGOS_SESSION_CONTINUE": "1" if continuing else "",
             "LOGOS_SESSION_ID": str(session["id"]),
             "LOGOS_SESSION_BRANCH": branch,
             "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
@@ -1321,15 +1363,27 @@ class SessionManager:
                 "error": fields.get("error"),
             },
         )
+        session_row = (await db.get_session(session_id)) or {}
 
         if result.get("pr_url"):
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
+
+        workspace_id, settled_branch = session_row.get("workspace_id"), session_row.get("branch_name")
+        if succeeded and workspace_id and settled_branch:
+            # The workspace now belongs to this branch. That is what lets a
+            # review on the pull request find this working copy again — and
+            # with it the conversation that produced the change — instead of
+            # starting somewhere else from main.
+            try:
+                await db.set_workspace_base_branch(int(workspace_id), str(settled_branch))
+            except Exception as exc:
+                logger.info("could not point workspace %s at its branch: %s", workspace_id, exc)
 
         if not succeeded:
             # Somebody is looking at a thread that has been marked as picked
             # up and started. Saying that it did not work out belongs there
             # too — an answer that never comes is the worst of the three.
-            await self._react(await db.get_session(session_id), github.REACTION_FAILED)
+            await self._react(session_row, github.REACTION_FAILED)
 
         # Somebody asked this session a question. The agent phase holds no
         # GitHub credential, so it wrote the answer into its artefact
@@ -1358,6 +1412,37 @@ class SessionManager:
         else:
             await self._cleanup_container(session_id)
 
+    @staticmethod
+    async def _still_wanted(workspace: dict[str, Any]) -> bool:
+        """Whether a workspace belongs to work that is not finished yet.
+
+        A pull request that is still open is still being worked on, however
+        long its checkout has been idle: the next review continues it, and
+        removing the volume would take the conversation with it — the whole
+        history of the change, re-read from scratch on the next round.
+
+        A branch whose pull request cannot be looked up is kept: losing a
+        working copy because GitHub was briefly unreachable is the more
+        expensive mistake.
+        """
+        branch = str(workspace.get("base_branch") or "")
+        if not branch or branch in settings.protected_branches:
+            return False
+        try:
+            pull = await github.open_pull_request_for(branch)
+        except Exception:
+            logger.info("keeping workspace '%s': its pull request could not be looked up", workspace.get("name"))
+            return True
+        if pull is None:
+            return False
+        logger.debug(
+            "keeping workspace '%s': pull request #%s on '%s' is still open",
+            workspace.get("name"),
+            pull.get("number"),
+            branch,
+        )
+        return True
+
     async def sweep_workspaces(self) -> None:
         """Remove the workspaces the runner made for work that is finished.
 
@@ -1379,6 +1464,8 @@ class SessionManager:
             return
         for workspace in disposable:
             name, volume = workspace.get("name"), workspace.get("volume_name")
+            if await self._still_wanted(workspace):
+                continue
             # The volume goes first, the row is retired second: a failure in
             # between leaves the workspace un-archived, so the next sweep
             # finds it again and tries the volume once more. Retiring first

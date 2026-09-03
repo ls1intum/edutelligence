@@ -218,3 +218,31 @@ class TestTheLane:
 
     def test_an_unevaluated_policy_has_no_lane(self):
         assert model_policy.UNKNOWN.lane() == frozenset()
+
+    def test_a_lane_can_be_asked_for_by_model(self):
+        policy = model_policy.evaluate(
+            [
+                {"provider_id": 15, "model_id": 97, "model_name": "Qwen/Qwen3.8-27B", "provider_type": "logosnode"},
+                {"provider_id": 15, "model_id": 37, "model_name": "openai/gpt-oss-120b", "provider_type": "logosnode"},
+            ]
+        )
+
+        assert policy.lane("Qwen/Qwen3.8-27B") == frozenset({("15", "97")})
+        assert policy.lane("openai/gpt-oss-120b") == frozenset({("15", "37")})
+
+    def test_a_model_the_key_cannot_reach_has_no_lane(self):
+        # Fails closed: measuring the fleet for a model nobody granted would
+        # be an answer to a different question.
+        policy = model_policy.evaluate(
+            [{"provider_id": 15, "model_id": 97, "model_name": "Qwen/Qwen3.8-27B", "provider_type": "logosnode"}]
+        )
+
+        assert policy.lane("something/else") == frozenset()
+
+    def test_one_offered_model_needs_no_naming(self):
+        policy = model_policy.evaluate(
+            [{"provider_id": 15, "model_id": 97, "model_name": "Qwen/Qwen3.8-27B", "provider_type": "logosnode"}]
+        )
+
+        # The ordinary deployment: one model, so the default resolves it.
+        assert policy.lane() == frozenset({("15", "97")})

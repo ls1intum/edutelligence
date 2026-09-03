@@ -287,3 +287,15 @@ class TestTheLaneWeAreServedBy:
         # Starting here would load a model and occupy GPUs nobody was using,
         # which is the opposite of what this runner is for.
         assert reading.reclaimable is False
+
+    def test_a_saturated_model_is_not_averaged_away(self):
+        # A key permitted on two models: one full, one idle. A session bound
+        # for the full one has nowhere to go, and the average would say the
+        # lane is a fifth busy.
+        payload = self.fleet((97, "Qwen/Qwen3.8-27B", 20, True), (37, "openai/gpt-oss-120b", 0, True))
+        payload["logosnode"]["providers"]["15"]["models"]["37"]["max_capacity"] = 100
+
+        reading = capacity.parse_scheduler_state(payload, lane=frozenset({("15", "97"), ("15", "37")}))
+
+        assert reading.load == 1.0
+        assert "busiest" in reading.detail

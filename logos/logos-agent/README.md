@@ -419,6 +419,21 @@ an `Authorization` header, and the token is what authorises the read.
   phase now recognises the interruption and continues the same conversation
   in the same checkout, up to three times, so a pause costs a retry instead
   of an afternoon.
+- **A pull request is one piece of work, not one session per round.** An
+  issue becomes a change, a review comes back, then another — and each round
+  used to meet the repository as a stranger: the whole checkout read again,
+  the reasoning behind the change gone, millions of tokens for a change of
+  ten lines. A session that continues what its workspace was doing (the same
+  branch) keeps the conversation instead. The working copy stays put, the
+  workspace follows the branch its session pushed, and a workspace whose pull
+  request is still open is never swept — so the same checkout and the same
+  conversation carry the change from assignment to merge.
+
+  Only the conversation is carried. The agent's home is still wiped between
+  sessions: `settings.json` hooks, `core.hooksPath`, a global `CLAUDE.md`,
+  shell profiles and build caches are executable configuration written by a
+  session that held a push token, and the next session must not inherit
+  them. Transcripts are data the same agent already authored.
 - **Work can be run again.** A failed session keeps its task, its workspace,
   its branch and the thread it came from, and *Run again* queues all of it as
   a new session. This is the only way back for work the runner took on

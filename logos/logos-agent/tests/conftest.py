@@ -37,6 +37,7 @@ def local_model_policy(monkeypatch):
         # key reaches nothing, which fails closed — right in production,
         # and not what any of these tests are about.
         local_deployments=frozenset({("1", "1")}),
+        deployments_by_model={"local-model": frozenset({("1", "1")})},
         ok=True,
         unknown=False,
         detail="test policy: one local model",

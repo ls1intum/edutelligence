@@ -686,17 +686,17 @@ class TestTheConversationHandedToASession:
     """
 
     @staticmethod
-    def install(monkeypatch, *, reviews=None, inline=None, discussion=None):
-        async def _get_all(path, params=None):
+    def install(monkeypatch, *, reviews=None, inline=None, discussion=None, truncated=()):
+        async def _get_all_bounded(path, params=None):
             if path.endswith("/reviews"):
                 if isinstance(reviews, Exception):
                     raise reviews
-                return reviews or []
+                return reviews or [], "reviews" in truncated
             if path.endswith("/pulls/772/comments"):
-                return inline or []
-            return discussion or []
+                return inline or [], "inline" in truncated
+            return discussion or [], "discussion" in truncated
 
-        monkeypatch.setattr(github, "_get_all", _get_all)
+        monkeypatch.setattr(github, "_get_all_bounded", _get_all_bounded)
 
     @staticmethod
     def comment(index: int) -> dict:
@@ -722,6 +722,15 @@ class TestTheConversationHandedToASession:
 
         assert len(entries) == 4
         assert missing and "6 older comment(s)" in missing[0]
+
+    async def test_a_listing_that_hit_its_page_ceiling_is_named(self, monkeypatch):
+        # Two thousand entries read out of more is incomplete context, and
+        # the oldest part at that: what is gone is the part still open.
+        self.install(monkeypatch, discussion=[self.comment(1)], truncated=("discussion",))
+
+        _, missing = await github.pull_request_conversation(772)
+
+        assert missing and "comments beyond the first" in missing[0]
 
     async def test_a_source_that_failed_is_named(self, monkeypatch):
         self.install(monkeypatch, reviews=RuntimeError("502"), discussion=[self.comment(1)])

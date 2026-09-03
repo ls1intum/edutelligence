@@ -389,7 +389,10 @@ export class Agents implements OnInit {
     try {
       const fresh = await this.agentService.retrySession(session.id);
       await this.refresh({ quiet: true });
-      await this.select(fresh);
+      // Only if the person is still looking at what they retried: opening
+      // the new session over a selection they made in the meantime would
+      // clear that transcript and abort its stream.
+      if (this.selectedId() === session.id) await this.select(fresh);
     } catch (err: unknown) {
       this.error.set(this.messageOf(err, 'Could not queue that work again.'));
     } finally {

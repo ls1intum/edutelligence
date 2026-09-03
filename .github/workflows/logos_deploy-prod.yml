@@ -136,14 +136,6 @@ jobs:
           script: |
             printf '%s' "$LOGOS_HARBOR_PASSWORD" | docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u '${{ vars.LOGOS_HARBOR_USER }}' --password-stdin
             docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env pull
-            # The session image is not a compose service — the runner starts
-            # containers from it through the Docker socket — so `compose pull`
-            # does not fetch it and a host that has never seen it fails every
-            # launch with a 404. Pulled here, where the registry login is,
-            # and only where sessions actually run.
-            if grep -q '^COMPOSE_PROFILES=.*agent' ${{ matrix.base-path }}/.env; then
-              docker pull "$LOGOS_HARBOR_REGISTRY/logos/logos-agent-workspace:$WORKSPACE_IMAGE_TAG"
-            fi
 
       - name: Deploy with docker compose
         uses: appleboy/ssh-action@v1.2.5
@@ -160,6 +152,14 @@ jobs:
 
       - name: Clean up old images
         uses: appleboy/ssh-action@v1.2.5
+        env:
+          LOGOS_HARBOR_PASSWORD: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+          LOGOS_HARBOR_REGISTRY: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+          # Through the environment rather than into the script text: this
+          # value comes from whoever dispatched the workflow, and a shell
+          # command built by string substitution is a command they get to
+          # help write.
+          WORKSPACE_IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
         with:
           host: ${{ vars.VM_HOST }}
           username: ${{ vars.VM_USERNAME }}
@@ -168,5 +168,15 @@ jobs:
           proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
           proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
           proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          envs: LOGOS_HARBOR_PASSWORD,LOGOS_HARBOR_REGISTRY,WORKSPACE_IMAGE_TAG
           script: |
             docker image prune -af
+            # After the prune, not before it. The session image is not a
+            # compose service — the runner starts containers from it through
+            # the Docker socket — so nothing references it between sessions
+            # and `prune -af` deletes it. That is how a host ends up failing
+            # every launch with a 404 for an image the deploy just pulled.
+            if grep -q '^COMPOSE_PROFILES=.*agent' ${{ matrix.base-path }}/.env; then
+              printf '%s' "$LOGOS_HARBOR_PASSWORD" | docker login "$LOGOS_HARBOR_REGISTRY" -u '${{ vars.LOGOS_HARBOR_USER }}' --password-stdin
+              docker pull "$LOGOS_HARBOR_REGISTRY/logos/logos-agent-workspace:$WORKSPACE_IMAGE_TAG"
+            fi

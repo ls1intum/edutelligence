@@ -696,6 +696,32 @@ async def record_reply_attempt(session_id: int, *, delivered: bool) -> None:
         await db.commit()
 
 
+async def last_session_branch(workspace_id: int, *, before_session_id: int) -> str | None:
+    """The branch the previous session in this workspace worked on.
+
+    What decides whether the next session continues that conversation or
+    starts a new one: the same branch is the same piece of work — an issue
+    that became a pull request, and every review round after it.
+    """
+    async with sessionmaker()() as db:
+        return (
+            await db.execute(
+                text(
+                    """
+                    SELECT branch_name
+                      FROM agent_sessions
+                     WHERE workspace_id = :workspace_id
+                       AND id < :session_id
+                       AND branch_name IS NOT NULL
+                     ORDER BY id DESC
+                     LIMIT 1
+                    """
+                ),
+                {"workspace_id": workspace_id, "session_id": before_session_id},
+            )
+        ).scalar_one_or_none()
+
+
 async def update_session_usage(session_id: int, *, tokens_in: int, tokens_out: int) -> None:
     """Record what a running session has spent so far.
 

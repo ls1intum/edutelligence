@@ -30,8 +30,8 @@ started, and the next pass must notice.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Iterable
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Mapping
 
 from . import db
 from .config import settings
@@ -90,6 +90,9 @@ class ModelPolicy:
     # providers this key cannot reach, and counting their idle slots would
     # make a busy lane look free.
     local_deployments: frozenset[tuple[str, str]] = frozenset()
+    # The same, split by the model they serve, so a reading can be taken on
+    # the one model a session will actually use.
+    deployments_by_model: Mapping[str, frozenset[tuple[str, str]]] = field(default_factory=dict)
     ok: bool = False
     detail: str = "model policy not evaluated yet"
     # Set when the policy could not be established at all (no database, no
@@ -97,8 +100,15 @@ class ModelPolicy:
     # logs can say which it was.
     unknown: bool = True
 
-    def lane(self) -> frozenset[tuple[str, str]] | None:
+    def lane(self, model: str | None = None) -> frozenset[tuple[str, str]] | None:
         """The deployments a session of this runner would be served by.
+
+        A session runs on one model, so the lane is that model's deployments
+        where it can be resolved: a key permitted on a saturated model and
+        an idle one must not read the pair of them as half busy. With no
+        model named, the deployment's default answers — the ordinary case,
+        where the key reaches exactly one model — and only a key with
+        several models and no default falls back to all of them.
 
         An empty set means the key reaches nothing, which capacity reads as
         "no lane" and fails closed on — the same answer as a policy that
@@ -106,7 +116,12 @@ class ModelPolicy:
         filter", which only a caller without a policy has any business
         asking for.
         """
-        return self.local_deployments if self.ok else frozenset()
+        if not self.ok:
+            return frozenset()
+        wanted = (model or self.default_model or "").strip().lower()
+        if not wanted:
+            return self.local_deployments
+        return self.deployments_by_model.get(wanted, frozenset())
 
     @property
     def default_model(self) -> str:
@@ -198,13 +213,17 @@ def classify(rows: Iterable[dict[str, Any]]) -> tuple[frozenset[str], frozenset[
     return local_only, frozenset(cloud), offered
 
 
-def _deployments_of(rows: Iterable[dict[str, Any]], local_names: frozenset[str]) -> frozenset[tuple[str, str]]:
+def _deployments_of(
+    rows: Iterable[dict[str, Any]], local_names: frozenset[str]
+) -> tuple[frozenset[tuple[str, str]], dict[str, frozenset[tuple[str, str]]]]:
     """The (provider, model) pairs behind the locally served names.
 
     Keyed the way the scheduler's own payload is keyed, so a load reading
-    can count exactly these deployments and nothing else.
+    can count exactly these deployments and nothing else — once as a whole,
+    and once per model, because a session is served by one of them.
     """
     pairs: set[tuple[str, str]] = set()
+    per_model: dict[str, set[tuple[str, str]]] = {}
     for row in rows:
         if not is_local_provider_type(row.get("provider_type")):
             continue
@@ -214,8 +233,13 @@ def _deployments_of(rows: Iterable[dict[str, Any]], local_names: frozenset[str])
         provider_id, model_id = row.get("provider_id"), row.get("model_id")
         if provider_id is None or model_id is None:
             continue
-        pairs.add((str(provider_id), str(model_id)))
-    return frozenset(pairs)
+        pair = (str(provider_id), str(model_id))
+        pairs.add(pair)
+        # Under every name the model answers to, so a lane can be asked for
+        # by whatever name a session was created with.
+        for name in names:
+            per_model.setdefault(name, set()).add(pair)
+    return frozenset(pairs), {name: frozenset(found) for name, found in per_model.items()}
 
 
 def evaluate(rows: Iterable[dict[str, Any]]) -> ModelPolicy:
@@ -242,11 +266,13 @@ def evaluate(rows: Iterable[dict[str, Any]]) -> ModelPolicy:
             unknown=False,
             detail="the agent key reaches no locally served model, so there is nothing a session could be driven by",
         )
+    deployments, by_model = _deployments_of(rows, local)
     return ModelPolicy(
         local_models=local,
         cloud_models=frozenset(),
         offered=offered,
-        local_deployments=_deployments_of(rows, local),
+        local_deployments=deployments,
+        deployments_by_model=by_model,
         ok=True,
         unknown=False,
         detail=f"{len(offered)} locally served model(s) reachable, no cloud provider",
