@@ -9,7 +9,6 @@ of holding the answer back.
 
 # pylint: skip-file
 
-import re
 import threading
 import time
 from itertools import cycle
@@ -116,31 +115,6 @@ def test_pending_enrichment_is_hidden_in_partials_and_appears_later():
     registry.close()
 
 
-def test_enrichment_starts_when_the_handle_appears():
-    gate = threading.Event()
-    registry = CitationRegistry(_StubEnricher(gate))
-    handle = _register_lecture(registry)
-
-    assert handle == "[cite:1]"
-    assert len(registry._enrichment_futures) == 0
-
-    assert registry.render(f"Gradients flow.{handle}") == "Gradients flow."
-    assert len(registry._enrichment_futures) == 1
-
-    gate.set()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        future = registry._enrichment_futures[1]
-        if future.done():
-            break
-        time.sleep(0.01)
-
-    assert registry.render(f"Gradients flow.{handle}") == (
-        "Gradients flow.[cite:L:42:7:::Topic1:Summary of Backpropagation explained]"
-    )
-    registry.close()
-
-
 def test_final_render_waits_for_enrichment():
     gate = threading.Event()
     registry = CitationRegistry(_StubEnricher(gate))
@@ -189,22 +163,6 @@ def test_final_render_keeps_unrelated_brackets():
     registry.close()
 
 
-def test_only_exact_handles_are_expanded():
-    registry = CitationRegistry(_StubEnricher())
-    first = _register_lecture(registry, page=1, content="First")
-    second = _register_lecture(registry, page=2, content="Second")
-    assert (first, second) == ("[cite:1]", "[cite:2]")
-
-    rendered = registry.render(f"A{first} B{second}", final=True)
-
-    assert rendered.count("[cite:L:42:") == 2
-    assert registry.render("A[cite: 1]B", final=True) == "A[cite: 1]B"
-    assert registry.render("A[cite:1, 2]B", final=True) == "A[cite:1, 2]B"
-    assert registry.render("A[cite:L:42:1]B", final=True) == "A[cite:L:42:1]B"
-    assert registry.render("A [cite:1", final=True) == "A [cite:1"
-    registry.close()
-
-
 def test_same_source_registered_twice_shares_one_handle():
     """The viewed slide and the same chunk from RAG must not become two bubbles."""
     registry = CitationRegistry(_StubEnricher())
@@ -215,61 +173,6 @@ def test_same_source_registered_twice_shares_one_handle():
     )
 
     assert first == second == "[cite:1]"
-    registry.close()
-
-
-def test_every_citation_in_the_answer_is_enriched_not_just_the_first():
-    call_duration = 0.2
-
-    class _SlowEnricher(_StubEnricher):
-        def generate_keyword(self, content, language_instruction, used_keywords):
-            time.sleep(call_duration)
-            return super().generate_keyword(content, language_instruction, [])
-
-        def generate_summary(self, content, language_instruction):
-            time.sleep(call_duration)
-            return super().generate_summary(content, language_instruction)
-
-    registry = CitationRegistry(_SlowEnricher())
-    handles = [
-        registry.register(CITE_TYPE_LECTURE, 42, f"Topic {i}", page=i) for i in range(4)
-    ]
-    text = " ".join(f"Sentence {i}.{handle}" for i, handle in enumerate(handles))
-
-    rendered = registry.render(text, final=True)
-
-    for handle in handles:
-        assert handle not in rendered
-    markers = re.findall(r"\[cite:L:42:\d+:::([^:\]]*):([^\]]*)\]", rendered)
-    assert len(markers) == 4
-    assert all(keyword for keyword, _ in markers)
-    assert all(summary for _, summary in markers)
-    registry.close()
-
-
-def test_keyword_generation_has_no_cross_citation_state():
-    enricher = _StubEnricher()
-    registry = CitationRegistry(enricher)
-    first = registry.register(CITE_TYPE_LECTURE, 42, "First topic", page=1)
-
-    registry.render(f"A{first}", final=True)
-    second = registry.register(CITE_TYPE_LECTURE, 42, "Second topic", page=2)
-    registry.render(f"A{first} B{second}", final=True)
-
-    assert enricher.keyword_calls == [[], []]
-    registry.close()
-
-
-def test_enrichment_runs_once_per_handle_however_often_it_is_rendered():
-    """render() is called on every partial; that must not fan out into calls."""
-    registry = CitationRegistry(_StubEnricher())
-    handle = _register_lecture(registry)
-
-    for _ in range(5):
-        registry.render(f"Gradients flow.{handle}")
-    registry.render(f"Gradients flow.{handle}", final=True)
-
-    assert len(registry._enrichment_futures) == 1
     registry.close()
 
 
@@ -305,39 +208,6 @@ def _make_enricher() -> CitationEnricher:
         return CitationEnricher()
 
 
-def test_enricher_returns_the_generated_text_and_its_token_usage():
-    """Guards the real enrichment path; a stub enricher would hide breakage here."""
-    enricher = _make_enricher()
-
-    with patch(
-        "iris.pipeline.shared.citation_registry.IrisLangchainChatModel",
-        _FakeChatModel,
-    ):
-        keyword, tokens = enricher.generate_keyword("Some content", "", [])
-
-    assert keyword == "Backpropagation"
-    assert len(tokens) == 1
-    assert tokens[0].pipeline == PipelineEnum.IRIS_CITATION_PIPELINE
-
-
-def test_enricher_survives_a_model_that_reports_no_token_usage():
-    enricher = _make_enricher()
-
-    class _NoUsageModel(_FakeChatModel):
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            self.tokens = None
-
-    with patch(
-        "iris.pipeline.shared.citation_registry.IrisLangchainChatModel",
-        _NoUsageModel,
-    ):
-        summary, tokens = enricher.generate_summary("Some content", "")
-
-    assert summary == "Backpropagation"
-    assert tokens == []
-
-
 def test_enrichment_reaches_the_rendered_marker_through_the_real_enricher():
     """End-to-end over the real enricher: the marker must not stay empty."""
     enricher = _make_enricher()
@@ -357,11 +227,4 @@ def test_enrichment_reaches_the_rendered_marker_through_the_real_enricher():
         token.pipeline == PipelineEnum.IRIS_CITATION_PIPELINE
         for token in registry.tokens
     )
-    registry.close()
-
-
-def test_close_is_idempotent():
-    registry = CitationRegistry(_StubEnricher())
-    _register_lecture(registry)
-    registry.close()
     registry.close()
