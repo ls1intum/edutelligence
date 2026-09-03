@@ -2120,6 +2120,7 @@ class TestClaimToLaunchWindow:
         monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
         monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([]))
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", slow_event)
         monkeypatch.setattr(sessions.db, "get_session", self._async_value({**session_row, "status": "starting"}))
         monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
@@ -2225,6 +2226,7 @@ class TestOverlappingAdmission:
         monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
         monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
 
@@ -2277,6 +2279,7 @@ class TestOverlappingAdmission:
         monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
         monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
 
@@ -2348,6 +2351,7 @@ class TestOverlappingAdmission:
         monkeypatch.setattr(sessions.capacity, "start_decision", spy_start_decision)
         monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
         # A fresh manager: the shared singleton's admission lock is bound to
@@ -3655,6 +3659,7 @@ class TestOperatorControls:
         )
         monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
         monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
         monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
@@ -3695,6 +3700,7 @@ class TestOperatorControls:
 
         monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
         monkeypatch.setattr(sessions.docker_engine, "disconnect_network", self._async_value(True))
         monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
@@ -3902,6 +3908,86 @@ class TestResumeCeiling:
         assert resumed == ["cid-1", "cid-2"]
 
 
+class TestAdmissionMeasuresTheRightLane:
+    """A queued session on a saturated model must not enter on an idle one.
+
+    The launch checks permission afterwards; it never rechecks capacity. So
+    the reading admission decides against has to be of the lane the session
+    it is about to claim would actually be served by.
+    """
+
+    async def test_the_lane_measured_is_the_candidate_s(self, monkeypatch):
+        from app import capacity, model_policy, sessions
+
+        policy = model_policy.ModelPolicy(
+            local_models=frozenset({"model-a", "model-b"}),
+            offered=("model-a", "model-b"),
+            local_deployments=frozenset({("15", "1"), ("15", "2")}),
+            deployments_by_model={
+                "model-a": frozenset({("15", "1")}),
+                "model-b": frozenset({("15", "2")}),
+            },
+            ok=True,
+            unknown=False,
+            detail="two local models",
+        )
+        lanes: list = []
+
+        async def refresh():
+            return policy
+
+        async def read_load(timeout_s: float = 5.0, lane=None):
+            lanes.append(lane)
+            return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
+
+        async def peek():
+            return {"id": 7, "model": "model-b", "workspace_id": 1}
+
+        async def claim(_limit):
+            return []
+
+        async def none(_status):
+            return []
+
+        monkeypatch.setattr(model_policy, "refresh", refresh)
+        monkeypatch.setattr(model_policy, "_current", policy)
+        monkeypatch.setattr(capacity, "read_load", read_load)
+        monkeypatch.setattr(sessions.db, "next_queued_session", peek)
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", claim)
+        monkeypatch.setattr(sessions.db, "sessions_in_status", none)
+
+        await sessions.manager.scheduler_pass()
+
+        # The pass itself measures everything the key may use — that reading
+        # decides whether to hand capacity back — and admission measures the
+        # one model it is about to admit.
+        assert lanes[0] == policy.local_deployments
+        assert lanes[-1] == frozenset({("15", "2")})
+
+    async def test_nothing_queued_means_nothing_measured_twice(self, monkeypatch):
+        from app import capacity, sessions
+
+        readings: list = []
+
+        async def read_load(timeout_s: float = 5.0, lane=None):
+            readings.append(lane)
+            return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
+
+        async def none(_status):
+            return []
+
+        async def refuse(_limit):
+            raise AssertionError("nothing is queued; there is nothing to claim")
+
+        monkeypatch.setattr(capacity, "read_load", read_load)
+        monkeypatch.setattr(sessions.db, "sessions_in_status", none)
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", refuse)
+
+        await sessions.manager.scheduler_pass()
+
+        assert len(readings) == 1
+
+
 class TestPicturesTravelWithTheRequest:
     """An issue whose whole description is a screenshot.
 
@@ -3966,3 +4052,13 @@ class TestPicturesTravelWithTheRequest:
         # A picture that cannot be had is a picture the agent works without,
         # which is where it was before.
         assert await sessions.manager._collect_attachments(30, "![shot](https://example.com/a.png)") == []
+
+
+async def _peek():
+    """What admission looks at before it measures: any queued session.
+
+    The tests that stub the claim are about admission, not about which row
+    it picks, so the peek answers with a plain one on the runner's own
+    model.
+    """
+    return {"id": 7, "model": None, "workspace_id": 1}

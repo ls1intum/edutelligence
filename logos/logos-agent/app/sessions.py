@@ -619,7 +619,15 @@ class SessionManager:
             admission_policy = await model_policy.refresh()
             if not admission_policy.ok:
                 return
-            reading = await capacity.read_load(lane=admission_policy.lane())
+            # Whose lane to measure: the session that would be claimed next.
+            # Admitting it against another model's load is how a queued
+            # session enters a full lane on an idle one's figure — the
+            # launch checks permission afterwards, never capacity.
+            candidate = await db.next_queued_session()
+            if candidate is None:
+                return
+            wanted = admission_policy.resolve(candidate.get("model"))
+            reading = await capacity.read_load(lane=admission_policy.lane(wanted))
             self._last_reading = reading
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)

@@ -87,6 +87,20 @@ def no_sessions_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def nothing_queued_by_default(monkeypatch):
+    """Admission peeks at what it would claim before it measures capacity.
+
+    Unstubbed that peek asks a database that is not there. Tests about
+    admission provide their own answer, together with the claim it precedes.
+    """
+
+    async def none():
+        return None
+
+    monkeypatch.setattr(db, "next_queued_session", none)
+
+
+@pytest.fixture(autouse=True)
 def unpaused_runner(monkeypatch):
     """No operator has touched the controls, unless a test says otherwise.
 

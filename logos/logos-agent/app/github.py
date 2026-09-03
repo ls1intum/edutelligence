@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from . import attachments
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -462,9 +463,8 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     return [comment for comment in payload if isinstance(comment, dict)]
 
 
-# Where our own credential may go. Everything else in a redirect chain is
-# somebody's storage backend, which signs its own URLs.
-_GITHUB_HOSTS = frozenset({"github.com", "api.github.com", "www.github.com"})
+# GitHub answers an attachment link with a redirect to signed storage, and
+# that storage may take a few hops to reach.
 _MAX_REDIRECTS = 5
 
 
@@ -477,21 +477,28 @@ async def fetch_image(url: str, *, max_bytes: int) -> tuple[bytes, str] | None:
     links with one — and anything that is not an image, or is too big, is
     left alone.
     """
+    if not attachments.from_github(url):
+        # The only URLs worth following are the ones GitHub serves itself.
+        # Everything else in an issue body is a host its author chose.
+        logger.info("not fetching %s: not a GitHub attachment", url)
+        return None
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
-        target, headers = url, _headers()
+        target = url
         for _ in range(_MAX_REDIRECTS):
+            # Derived per hop rather than carried along: the credential goes
+            # to GitHub or to nobody.
+            headers = _headers() if attachments.may_carry_the_token(target) else {}
             async with client.stream("GET", target, headers=headers) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
                     location = response.headers.get("location", "")
                     if not location:
                         return None
                     target = str(httpx.URL(target).join(location))
-                    # GitHub answers an attachment link with a redirect to
-                    # signed storage, and a signed URL carries its own
-                    # authorisation: sending ours as well is what makes that
-                    # backend refuse the request outright.
-                    if httpx.URL(target).host not in _GITHUB_HOSTS:
-                        headers = {}
+                    if not attachments.is_public(target):
+                        # A redirect into the runner's own network is not a
+                        # picture; it is the fetch being aimed at us.
+                        logger.info("refusing to follow %s to %s", url, target)
+                        return None
                     continue
                 if response.status_code != 200:
                     logger.info("could not fetch %s: %s", url, response.status_code)

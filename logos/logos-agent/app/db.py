@@ -832,6 +832,49 @@ async def list_sessions(
     return [dict(r) for r in rows]
 
 
+async def next_queued_session() -> dict[str, Any] | None:
+    """The session a claim would take next, without taking it.
+
+    Admission decides against a capacity reading, and the reading has to be
+    of the lane *this* session would be served by: a queued session on a
+    saturated model must not be let in on an idle model's figure. Read under
+    the same lock the claim runs in, and in the same order, so what is
+    measured is what is then claimed.
+    """
+    async with sessionmaker()() as db:
+        row = (
+            (
+                await db.execute(
+                    text(
+                        """
+                    SELECT s.id, s.model, s.workspace_id
+                      FROM agent_sessions s
+                     WHERE s.status = 'queued'
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions busy
+                              WHERE busy.workspace_id = s.workspace_id
+                                AND busy.status = ANY(:occupying)
+                           )
+                     ORDER BY s.priority DESC, s.created_at
+                     LIMIT 1
+                    """
+                    ),
+                    {
+                        "occupying": [
+                            SessionStatus.STARTING.value,
+                            SessionStatus.RUNNING.value,
+                            SessionStatus.PAUSED.value,
+                            SessionStatus.FINALIZING.value,
+                        ]
+                    },
+                )
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row else None
+
+
 async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
     """Take up to `limit` startable queued sessions and mark them starting.
 

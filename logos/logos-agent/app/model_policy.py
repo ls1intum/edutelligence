@@ -103,12 +103,15 @@ class ModelPolicy:
     def lane(self, model: str | None = None) -> frozenset[tuple[str, str]] | None:
         """The deployments a session of this runner would be served by.
 
-        A session runs on one model, so the lane is that model's deployments
-        where it can be resolved: a key permitted on a saturated model and
-        an idle one must not read the pair of them as half busy. With no
-        model named, the deployment's default answers — the ordinary case,
-        where the key reaches exactly one model — and only a key with
-        several models and no default falls back to all of them.
+        A session runs on one model, so a decision about one session asks for
+        that model: a key permitted on a saturated model and an idle one
+        must not read the pair of them as half busy.
+
+        Without a model this answers with every deployment the key can
+        reach — the right lane for a decision that is not about one session,
+        such as whether to hand capacity back. The reading over that lane is
+        taken on its busiest model, so "several models" never averages a
+        full one away.
 
         An empty set means the key reaches nothing, which capacity reads as
         "no lane" and fails closed on — the same answer as a policy that
@@ -118,7 +121,7 @@ class ModelPolicy:
         """
         if not self.ok:
             return frozenset()
-        wanted = (model or self.default_model or "").strip().lower()
+        wanted = (model or "").strip().lower()
         if not wanted:
             return self.local_deployments
         return self.deployments_by_model.get(wanted, frozenset())

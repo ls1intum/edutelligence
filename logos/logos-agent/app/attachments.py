@@ -18,9 +18,11 @@ write, and this is the one place where its text turns into fetches.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +47,70 @@ _IMAGE_TYPES = {
 }
 
 
+# Where a request's images may come from. This is not a nicety: the text is
+# written by whoever opened the issue, and every URL in it is a URL the
+# runner would otherwise connect to while holding a GitHub token — at a host
+# of the author's choosing, from inside the network the orchestrator and the
+# database live on. So only GitHub's own attachment origins are followed,
+# and the token only ever goes to GitHub itself.
+_ATTACHMENT_HOSTS = frozenset({"user-images.githubusercontent.com", "raw.githubusercontent.com"})
+_ATTACHMENT_PATHS = ("/user-attachments/assets/",)
+_GITHUB_HOSTS = frozenset({"github.com", "www.github.com", "api.github.com"})
+_ASSET_PATH = re.compile(r"^/[^/]+/[^/]+/assets/", re.IGNORECASE)
+
+
+def from_github(url: str) -> bool:
+    """Whether this is an image GitHub itself is serving.
+
+    Anything else is a stranger's host named in a stranger's issue.
+    """
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    if host in _ATTACHMENT_HOSTS or host.endswith(".githubusercontent.com"):
+        return True
+    if host in _GITHUB_HOSTS:
+        return parsed.path.startswith(_ATTACHMENT_PATHS) or bool(_ASSET_PATH.match(parsed.path))
+    return False
+
+
+def may_carry_the_token(url: str) -> bool:
+    """Whether our credential may be sent to this hop.
+
+    GitHub answers an attachment link with a redirect to signed storage, and
+    a signed URL carries its own authorisation. Ours has no business there —
+    and on any host that is not GitHub's, no business at all.
+    """
+    parsed = urlsplit(url)
+    return parsed.scheme == "https" and (parsed.hostname or "").lower() in _GITHUB_HOSTS
+
+
+def is_public(url: str) -> bool:
+    """Whether a redirect may be followed at all.
+
+    A hop that names a bare host or a private address is not a picture on
+    the internet; it is the runner being pointed at its own network.
+    """
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    try:
+        return not ipaddress.ip_address(host).is_private
+    except ValueError:
+        return "." in host and not host.endswith(".local")
+
+
 def urls_in(text: str) -> list[str]:
-    """Every image URL a request refers to, in the order it mentions them."""
+    """Every image URL a request refers to that GitHub itself serves."""
     found: list[str] = []
     for pattern in (_MARKDOWN, _HTML, _BARE):
         for url in pattern.findall(text or ""):
             cleaned = url.rstrip(".,)")
-            if cleaned not in found:
-                found.append(cleaned)
+            if cleaned in found or not from_github(cleaned):
+                continue
+            found.append(cleaned)
     return found[:MAX_IMAGES]
 
 
@@ -70,4 +128,14 @@ def directory(artifacts: Path) -> Path:
     return artifacts / "attachments"
 
 
-__all__ = ["MAX_BYTES", "MAX_IMAGES", "directory", "is_image", "name_for", "urls_in"]
+__all__ = [
+    "MAX_BYTES",
+    "MAX_IMAGES",
+    "directory",
+    "from_github",
+    "is_image",
+    "is_public",
+    "may_carry_the_token",
+    "name_for",
+    "urls_in",
+]
