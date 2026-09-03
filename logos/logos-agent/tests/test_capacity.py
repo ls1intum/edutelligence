@@ -173,3 +173,96 @@ class TestPauseAndResume:
         may_resume, reason = capacity.resume_decision(reading)
         assert not may_resume
         assert "nothing to reclaim" in reason
+
+
+class TestTheLaneWeAreServedBy:
+    """The ratio has to be about the model a session will actually use.
+
+    A fleet holds embedding models, rerankers and chat models that share
+    nothing but a building. Summed together they answer a question nobody
+    asked: "1 of 60 slots busy" says most of the fleet is asleep, not
+    whether another agent session is safe to start.
+    """
+
+    @staticmethod
+    def fleet(*models):
+        """A scheduler payload shaped like the orchestrator's own."""
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "name": "deimama",
+                        "models": {
+                            str(index): {
+                                "model_name": name,
+                                "active": active,
+                                "max_capacity": 20,
+                                "queue_depth": 0,
+                                "loaded": loaded,
+                            }
+                            for index, (name, active, loaded) in enumerate(models)
+                        },
+                    }
+                }
+            },
+        }
+
+    def test_only_our_own_model_counts(self):
+        payload = self.fleet(
+            ("Qwen/Qwen3.8-27B", 10, True),
+            ("Qwen/Qwen3-Embedding-8B", 0, True),
+            ("openai/gpt-oss-120b", 0, True),
+        )
+
+        reading = capacity.parse_scheduler_state(payload, models=frozenset({"qwen/qwen3.8-27b"}))
+
+        # 10 of our 20, not 10 of everybody's 60.
+        assert reading.total_slots == 20
+        assert reading.load == 0.5
+
+    def test_without_a_filter_the_fleet_is_the_answer(self):
+        payload = self.fleet(("Qwen/Qwen3.8-27B", 10, True), ("openai/gpt-oss-120b", 0, True))
+
+        reading = capacity.parse_scheduler_state(payload)
+
+        assert reading.total_slots == 40
+
+    def test_a_queue_anywhere_still_counts(self):
+        # Models share GPUs: somebody waiting on another one is somebody
+        # this runner should get out of the way of.
+        payload = self.fleet(("Qwen/Qwen3.8-27B", 0, True), ("openai/gpt-oss-120b", 0, True))
+        payload["logosnode"]["providers"]["15"]["models"]["1"]["queue_depth"] = 3
+
+        reading = capacity.parse_scheduler_state(payload, models=frozenset({"qwen/qwen3.8-27b"}))
+
+        assert reading.queue_total == 3
+        assert reading.saturated
+
+    def test_a_sleeping_lane_falls_back_to_the_fleet(self):
+        # Nothing of ours is resident, so there is nothing of ours to
+        # measure — the fleet-wide ratio is the better of the two answers
+        # available, and it is what this said before it knew about lanes.
+        payload = self.fleet(("Qwen/Qwen3.8-27B", 0, False), ("openai/gpt-oss-120b", 15, True))
+
+        reading = capacity.parse_scheduler_state(payload, models=frozenset({"qwen/qwen3.8-27b"}))
+
+        assert reading.busy_slots == 15 and reading.total_slots == 20
+        assert "none of the runner" in reading.detail
+
+    def test_a_cold_fleet_is_still_nothing_to_reclaim(self):
+        payload = self.fleet(("Qwen/Qwen3.8-27B", 0, False), ("openai/gpt-oss-120b", 0, False))
+
+        reading = capacity.parse_scheduler_state(payload, models=frozenset({"qwen/qwen3.8-27b"}))
+
+        # Starting here would load a model and occupy GPUs nobody was using,
+        # which is the opposite of what this runner is for.
+        assert reading.reclaimable is False
+
+    def test_an_unknown_model_name_does_not_read_as_idle(self):
+        # A misconfigured name must not turn a busy fleet into free capacity.
+        payload = self.fleet(("Qwen/Qwen3.8-27B", 20, True))
+
+        reading = capacity.parse_scheduler_state(payload, models=frozenset({"something/else"}))
+
+        assert reading.load == 1.0

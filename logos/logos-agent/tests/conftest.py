@@ -10,7 +10,7 @@ the policy build their own.
 from __future__ import annotations
 
 import pytest
-from app import controls, db, model_policy
+from app import controls, db, docker_engine, model_policy
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +47,23 @@ def local_model_policy(monkeypatch):
     # underlying `load` is left alone so its own tests still exercise it.
     monkeypatch.setattr(model_policy, "_current", policy)
     monkeypatch.setattr(model_policy, "refresh", evaluated)
+
+
+@pytest.fixture(autouse=True)
+def session_image_present(monkeypatch):
+    """The launch checks for the session image before it starts anything.
+
+    Unstubbed, that check asks whatever Docker daemon happens to be running
+    on the machine the tests run on — so the suite passed or hung depending
+    on whether the developer had Docker Desktop open, which is not a
+    property of the code under test. The test that is about a missing image
+    answers for itself.
+    """
+
+    async def present(_image: str) -> bool:
+        return True
+
+    monkeypatch.setattr(docker_engine, "image_present", present)
 
 
 @pytest.fixture(autouse=True)

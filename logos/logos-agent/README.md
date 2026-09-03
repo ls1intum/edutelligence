@@ -46,7 +46,18 @@ key **LOW** priority so agent work can never outrank a user at the scheduler.
 ## Capacity, concretely
 
 The runner reads `/logosdb/scheduler_state` every 15 seconds and computes one
-number: the busy share of loaded serving slots.
+number: the busy share of the serving slots **its own sessions would use**.
+
+That filter matters. A fleet holds embedding models, rerankers and chat models
+that share nothing but a building, and summing them answers a question nobody
+asked — "6 of 120 slots busy" reads as an idle platform when all six of those
+requests are on the one model the agent is served by, which is half its lane.
+So the ratio counts the models the runner's key can reach, and falls back to
+the fleet-wide figure only when none of them is resident: there is nothing of
+ours to measure then, and the older signal is the better of the two answers
+available. The **queue** is deliberately not filtered — models share GPUs, so
+a person waiting on any of them is a person this runner gets out of the way
+of.
 
 | Condition | What happens |
 |---|---|
@@ -382,6 +393,18 @@ an `Authorization` header, and the token is what authorises the read.
 - **Restarts are safe.** On startup the runner reconciles: sessions whose
   containers are gone are settled, live containers are re-adopted, orphaned
   containers are removed.
+- **A deploy does not interrupt the work.** Session containers are not part of
+  the compose stack — the runner starts them through the Docker socket — so
+  they survive a redeploy of the runner and are picked up again by the
+  reconciliation above. What a deploy *does* replace alongside the runner is
+  the model gateway, and a session talking to a gateway being restarted under
+  it loses the turn it is in the middle of. So shutdown freezes what is
+  running first: the same pause the capacity logic uses, which detaches the
+  container from the session network and ends the upstream generation
+  cleanly. The rows stay `paused`, the new runner adopts them, and the
+  scheduler resumes them mid-task. `stop_grace_period` is 30 s for this, and
+  whatever cannot be frozen in time simply runs through the deploy as it did
+  before.
 - **A stuck session is capped**, not left to burn capacity — `SESSION_TIMEOUT_S`
   stops it and records the reason.
 - **Nothing merges itself.** Pull requests are opened as drafts, and a person

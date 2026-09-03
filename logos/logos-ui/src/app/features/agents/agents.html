@@ -21,8 +21,10 @@
           >{{ cap.busy_slots }}/{{ cap.total_slots }} serving slots busy</span
         >
         <span class="capacity__sessions">
-          {{ cap.sessions_running }} running · {{ cap.sessions_paused }} paused ·
-          {{ cap.sessions_queued }} queued (max {{ cap.max_parallel }})
+          <!-- The ceiling belongs to what runs. The queue is not capped:
+               waiting work is what the ceiling exists to produce. -->
+          {{ cap.sessions_running }}/{{ cap.max_parallel }} running ·
+          {{ cap.sessions_paused }} paused · {{ cap.sessions_queued }} waiting
         </span>
       </div>
       <p class="capacity__reason">
@@ -332,7 +334,9 @@
         <span [class]="statusClass(session.status)">{{ statusLabel(session) }}</span>
         <span class="session__task">{{ taskPreview(session.task) }}</span>
         <span class="session__meta">
-          <span class="session__workspace">{{ session.workspace_name }}</span>
+          <span class="session__workspace" title="The working copy this session runs in">
+            <i class="pi pi-folder" aria-hidden="true"></i> {{ session.workspace_name }}
+          </span>
           <span class="session__duration">{{ duration(session) }}</span>
         </span>
       </button>
@@ -431,7 +435,14 @@
         <li class="workspace">
           <span class="workspace__name">{{ workspace.name }}</span>
           <span class="workspace__branch">from {{ workspace.base_branch }}</span>
-          @if (workspace.active_sessions > 0) {
+          @if (occupantOf(workspace); as busy) {
+            <!-- Which session is in there, not merely that one is: a
+                 workspace runs one session at a time, and "busy" left the
+                 other half of that sentence to be guessed. -->
+            <button class="btn btn--link workspace__busy" (click)="select(busy)">
+              session #{{ busy.id }} · {{ taskPreview(busy.task) }}
+            </button>
+          } @else if (workspace.active_sessions > 0) {
             <span class="workspace__busy">busy</span>
           } @else {
             <button class="btn btn--ghost" (click)="deleteWorkspace(workspace)">Delete</button>

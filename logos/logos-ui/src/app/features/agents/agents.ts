@@ -97,8 +97,13 @@ export class Agents implements OnInit {
    * hundred, which no deployment has the capacity for.
    */
   readonly limitCeiling = computed(() => {
-    const configured = this.controls()?.max_parallel_configured ?? 10;
-    return Math.min(100, Math.max(20, configured * 2));
+    const state = this.controls();
+    const configured = state?.max_parallel_configured ?? 10;
+    // Never below what is actually set: a stored override of 80 against a
+    // scale that stops at 20 would show 80 in the label, clamp the control
+    // to 20, and lower the limit on the first touch of it.
+    const inForce = Math.max(state?.max_parallel_override ?? 0, this.limitShown());
+    return Math.min(100, Math.max(20, configured * 2, inForce));
   });
   creatingWorkspace = signal(false);
 
@@ -136,6 +141,25 @@ export class Agents implements OnInit {
   finishedSessions = computed(() => this.sessions().filter((s) => !isActive(s.status)));
 
   loadPercent = computed(() => Math.round((this.capacity()?.load ?? 0) * 100));
+
+  /**
+   * The session occupying each workspace, by workspace id.
+   *
+   * A workspace runs one session at a time — that is what makes the parallel
+   * ceiling a count of workspaces — so the list can say which one rather
+   * than only that it is taken.
+   */
+  private readonly occupants = computed(() => {
+    const byWorkspace = new Map<number, AgentSession>();
+    for (const session of this.activeSessions()) {
+      if (!byWorkspace.has(session.workspace_id)) byWorkspace.set(session.workspace_id, session);
+    }
+    return byWorkspace;
+  });
+
+  occupantOf(workspace: AgentWorkspace): AgentSession | undefined {
+    return this.occupants().get(workspace.id);
+  }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   async ngOnInit(): Promise<void> {

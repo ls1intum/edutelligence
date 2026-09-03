@@ -122,7 +122,7 @@ jobs:
             # launch with a 404. Pulled here, where the registry login is,
             # and only where sessions actually run.
             if grep -q '^COMPOSE_PROFILES=.*agent' ${{ matrix.base-path }}/.env; then
-              docker pull ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-workspace:${{ inputs.image-tag }}
+              docker pull ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-workspace:${{ inputs.image-tag || 'latest' }}
             fi
 
       - name: Deploy with docker compose

@@ -178,12 +178,16 @@ def issue_task(issue: dict[str, Any]) -> str:
     )
 
 
-def conversation_block(entries: list[dict[str, Any]]) -> str:
+def conversation_block(entries: list[dict[str, Any]], missing: list[str] | None = None) -> str:
     """What has been said on a pull request, as the agent has to read it.
 
     Written into the task because the sandbox cannot fetch it: an agent told
     to "start from what is still open in the review" and given no review
     reconstructs one from the diff, which is guesswork dressed up as work.
+
+    ``missing`` names the sources that could not be read. A failed listing
+    looks exactly like an empty one, and the task says this conversation is
+    all there is — so when it is not, it has to say that instead.
     """
     rendered: list[str] = []
     for entry in entries:
@@ -198,9 +202,16 @@ def conversation_block(entries: list[dict[str, Any]]) -> str:
         if len(body) > MAX_COMMENT_CHARS:
             body = body[:MAX_COMMENT_CHARS] + " […]"
         rendered.append(f"{author}{where}{verdict} wrote:\n{body}")
+    gap = ""
+    if missing:
+        gap = (
+            f"Some of the conversation could not be read ({', '.join(missing)}); what "
+            f"follows is incomplete. Treat a point you cannot see as unresolved rather "
+            f"than as absent, and say so in your final message.\n\n"
+        )
     if not rendered:
-        return "Nothing has been said on it yet.\n\n"
-    return "The conversation so far, oldest first:\n\n" + "\n\n---\n\n".join(rendered) + "\n\n"
+        return gap or "Nothing has been said on it yet.\n\n"
+    return gap + "The conversation so far, oldest first:\n\n" + "\n\n---\n\n".join(rendered) + "\n\n"
 
 
 def takeover_task(number: int, title: str, body: str, branch: str, conversation: str = "") -> str:
@@ -468,18 +479,39 @@ class TriggerPoller:
         except Exception as exc:
             logger.warning("could not record how far the comment scan got: %s", exc)
 
-    @staticmethod
-    async def _conversation(number: int) -> list[dict[str, Any]]:
-        """The pull request's review conversation, or nothing on a failure.
+    async def _conversation(self, number: int) -> tuple[list[dict[str, Any]], list[str]]:
+        """The conversation a handover may act on, and what is missing from it.
 
-        A handover without it still works from the branch; failing the whole
-        candidate because one listing was unavailable would not.
+        Anybody may comment on a public pull request, and a takeover session
+        can push to its branch — so a comment is only allowed into the task
+        if its author could have made that change themselves. The same rule
+        the review path already applies: a stranger may say anything, but
+        not through the agent's commit access.
+
+        What is dropped is named rather than silently removed, because the
+        agent is told this conversation is complete.
         """
         try:
-            return await github.pull_request_conversation(number)
+            entries, missing = await github.pull_request_conversation(number)
         except Exception as exc:
             logger.info("could not read the conversation of #%s: %s", number, exc)
-            return []
+            return [], ["the conversation"]
+        allowed: list[dict[str, Any]] = []
+        outsiders = 0
+        for entry in entries:
+            author = str(entry.get("author") or "")
+            if author and await self._writer(author):
+                allowed.append(entry)
+            else:
+                outsiders += 1
+        if outsiders:
+            logger.info(
+                "left %s comment(s) on #%s out of the handover task: their authors may not write here",
+                outsiders,
+                number,
+            )
+            missing = [*missing, f"{outsiders} comment(s) from accounts without write access"]
+        return allowed, missing
 
     async def _acknowledge(self, candidate: dict[str, Any]) -> None:
         """React so the person who asked can see their request landed.
@@ -578,7 +610,7 @@ class TriggerPoller:
                             pull["title"],
                             pull["body"],
                             branch,
-                            conversation_block(await self._conversation(number)),
+                            conversation_block(*await self._conversation(number)),
                         ),
                         "branch": branch,
                         "workspace": workspace_name("pr", number, pull["title"]),

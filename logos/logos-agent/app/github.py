@@ -449,8 +449,13 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     return [comment for comment in payload if isinstance(comment, dict)]
 
 
-async def pull_request_conversation(number: int, *, limit: int = 40) -> list[dict[str, Any]]:
-    """Everything said on a pull request, oldest last.
+async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[list[dict[str, Any]], list[str]]:
+    """Everything said on a pull request, oldest last, and what is missing.
+
+    The second half of the answer is the point: a source that failed reads
+    exactly like a source with nothing in it, and the task built from this
+    tells the agent the conversation is complete. A transient failure would
+    then hide requested changes behind a sentence saying nothing is hidden.
 
     The agent phase holds no GitHub credential and has no network, so a
     conversation it is asked to continue has to travel with its task. Asking
@@ -468,12 +473,14 @@ async def pull_request_conversation(number: int, *, limit: int = 40) -> list[dic
         return_exceptions=True,
     )
     entries: list[dict[str, Any]] = []
+    missing: list[str] = []
 
     def add(items: object, kind: str) -> None:
         if not isinstance(items, list):
             # One source failing is not worth losing the other two over: a
-            # partial conversation still beats none.
+            # partial conversation still beats none — as long as it says so.
             logger.info("could not read the %s of #%s: %s", kind, number, items)
+            missing.append(kind)
             return
         for item in items:
             if not isinstance(item, dict):
@@ -494,12 +501,12 @@ async def pull_request_conversation(number: int, *, limit: int = 40) -> list[dic
                 }
             )
 
-    add(reviews, "review")
-    add(inline, "inline comment")
-    add(discussion, "comment")
+    add(reviews, "reviews")
+    add(inline, "inline comments")
+    add(discussion, "comments")
     entries.sort(key=lambda entry: entry["at"] or datetime.min.replace(tzinfo=timezone.utc))
     # The newest are the ones still open; an old conversation is history.
-    return entries[-limit:]
+    return entries[-limit:], missing
 
 
 async def recent_issue_comments(since: datetime) -> list[dict[str, Any]]:

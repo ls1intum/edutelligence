@@ -42,6 +42,15 @@ logger = logging.getLogger(__name__)
 # writing a row each.
 LOG_FLUSH_S = 0.5
 LOG_BATCH_LINES = 20
+# How many lines may wait to be written before the reader is made to wait.
+# Twenty flushes' worth: enough to absorb a burst, small enough that a
+# runaway session cannot grow it into a memory problem.
+LOG_QUEUE_MAX = 2000
+
+# How long shutdown may spend freezing running sessions. Below the stop
+# grace period the compose file gives this service, so the work finishes
+# before Docker stops waiting.
+STAND_DOWN_S = 20.0
 
 # What the agent phase prints when it wants its spending known — the only
 # channel it has, holding no credential and reaching nothing but the model
@@ -203,9 +212,50 @@ class SessionManager:
                 await self._scheduler_task
             except asyncio.CancelledError:
                 pass
+        await self._stand_down()
         for task in list(self._supervisors.values()):
             task.cancel()
         await db.dispose()
+
+    async def _stand_down(self) -> None:
+        """Freeze what is running before this process goes away.
+
+        A deploy replaces the runner and the model gateway together, and a
+        session left running keeps talking to a gateway that is being
+        restarted underneath it — losing the turn it was in the middle of.
+        Frozen first it loses nothing: the container survives the deploy
+        (sessions are not part of the compose stack), the row stays paused,
+        the new runner adopts it, and the scheduler resumes it as soon as
+        there is capacity. Pausing is not cancelling; the work continues
+        mid-task.
+
+        Bounded by the grace period Docker gives us. Whatever cannot be
+        frozen in time is left running, which is exactly what happened
+        before this existed.
+        """
+        if not self._supervisors:
+            # Nothing of ours is running: no session to freeze, and no
+            # reason to ask a database that may be going away with us.
+            return
+        try:
+            await asyncio.wait_for(self._freeze_running(), timeout=STAND_DOWN_S)
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("ran out of time pausing sessions; the rest keep running through the restart")
+        except Exception as exc:
+            # Shutdown continues whatever happens here. A session that could
+            # not be frozen is a session that runs through the restart,
+            # which is what it did before this existed.
+            logger.warning("could not stand down cleanly: %s", exc)
+
+    async def _freeze_running(self) -> None:
+        running = await db.sessions_in_status(SessionStatus.RUNNING)
+        if not running:
+            return
+        logger.info("standing down: pausing %s running session(s)", len(running))
+        await asyncio.gather(
+            *(self._pause(session, "the runner is restarting") for session in running),
+            return_exceptions=True,
+        )
 
     async def _reconcile(self) -> None:
         """Re-attach to reality after a restart.
@@ -396,7 +446,10 @@ class SessionManager:
                 pass
 
     async def scheduler_pass(self) -> None:
-        reading = await capacity.read_load()
+        # Measured on the lane these sessions are served by, not on the
+        # whole fleet: an embedding model being idle says nothing about
+        # whether another agent session is safe to start.
+        reading = await capacity.read_load(models=model_policy.current().local_models)
         self._last_reading = reading
         # What an operator has asked for right now — the kill switch and the
         # ceiling they set — read before anything is decided.
@@ -445,7 +498,7 @@ class SessionManager:
                         break
                     await self._resume(session, why)
                     live += 1
-                    reading = await capacity.read_load()
+                    reading = await capacity.read_load(models=model_policy.current().local_models)
                     self._last_reading = reading
                     if not capacity.resume_decision(reading)[0]:
                         break
@@ -462,7 +515,7 @@ class SessionManager:
         #    under the lock makes every claim pay for its own observation;
         #    the backlog drains at one fresh reading per admission.
         async with self._admission_lock:
-            reading = await capacity.read_load()
+            reading = await capacity.read_load(models=model_policy.current().local_models)
             self._last_reading = reading
             # Permissions are data: the agent key can be granted a cloud
             # provider long after this service started, so the local-only
@@ -1037,7 +1090,12 @@ class SessionManager:
         written within a couple of seconds, and a chatty agent still gets
         one row per twenty lines rather than one per line.
         """
-        lines: asyncio.Queue[str | None] = asyncio.Queue()
+        # Bounded: a session that prints faster than the database accepts
+        # rows must slow its reader down, not grow a queue until the runner
+        # runs out of memory. The reader blocking is the backpressure — the
+        # container's own log buffer is where the surplus waits, which is
+        # what it is for.
+        lines: asyncio.Queue[str | None] = asyncio.Queue(maxsize=LOG_QUEUE_MAX)
 
         async def read() -> None:
             # The stream is followed in its own task so the writer below can
@@ -1051,7 +1109,14 @@ class SessionManager:
             except Exception as exc:
                 logger.warning("log collection for session %s stopped: %s", session_id, exc)
             finally:
-                await lines.put(None)
+                # Never blocking on a full queue: the end-of-stream marker
+                # is what lets the writer finish, and waiting for room in a
+                # queue nobody is draining any more would hang the task
+                # that is trying to end.
+                try:
+                    lines.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
 
         reader = asyncio.create_task(read())
         batch: list[str] = []
@@ -1305,8 +1370,16 @@ class SessionManager:
         path = artifact_dir(session_id) / REPLY_FILE
         try:
             body = path.read_text().strip()
-        except OSError:
+        except FileNotFoundError:
             body = ""
+        except OSError as exc:
+            # A mount that is not there yet, a permission, a read error: the
+            # file may well exist and be readable on the next pass, so this
+            # counts as an attempt rather than as an answer that was never
+            # written. Only a file that is genuinely absent is final.
+            await db.record_reply_attempt(session_id, delivered=False)
+            logger.warning("could not read the answer of session %s (will retry): %s", session_id, exc)
+            return
         if not body:
             # The session is over and its artefacts are final: no later pass
             # will find an answer that is not there. Asked again every few

@@ -538,6 +538,97 @@ class TestTranscript:
         collector.cancel()
 
 
+class TestStandingDown:
+    """What a deploy does to work that is under way.
+
+    The runner and the model gateway are replaced together. A session left
+    running keeps talking to a gateway being restarted underneath it and
+    loses the turn it was in the middle of; frozen first, it loses nothing.
+    """
+
+    async def test_running_sessions_are_frozen_before_the_process_goes(self, monkeypatch):
+        from app import sessions
+
+        paused: list = []
+
+        async def running(status):
+            return [{"id": 7, "container_id": "cid-7"}] if status is sessions.SessionStatus.RUNNING else []
+
+        async def fake_pause(_self, session, reason):
+            paused.append((session["id"], reason))
+
+        monkeypatch.setattr(sessions.db, "sessions_in_status", running)
+        monkeypatch.setattr(sessions.SessionManager, "_pause", fake_pause)
+        # Standing down is about what this process supervises; with nothing
+        # supervised it does not even ask.
+        monkeypatch.setitem(sessions.manager._supervisors, 7, None)
+
+        await sessions.manager._stand_down()
+
+        assert paused == [(7, "the runner is restarting")]
+
+    async def test_a_pause_that_hangs_does_not_hold_the_shutdown(self, monkeypatch):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "STAND_DOWN_S", 0.05)
+
+        async def running(status):
+            return [{"id": 7, "container_id": "cid-7"}] if status is sessions.SessionStatus.RUNNING else []
+
+        async def hangs(_self, _session, _reason):
+            await asyncio.sleep(30)
+
+        monkeypatch.setattr(sessions.db, "sessions_in_status", running)
+        monkeypatch.setattr(sessions.SessionManager, "_pause", hangs)
+        monkeypatch.setitem(sessions.manager._supervisors, 7, None)
+
+        # Docker is going to kill this process shortly either way; a session
+        # that cannot be frozen in time is left running, as before.
+        await asyncio.wait_for(sessions.manager._stand_down(), timeout=2.0)
+
+    async def test_an_unreadable_database_does_not_break_shutdown(self, monkeypatch):
+        from app import sessions
+
+        async def broken(_status):
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(sessions.db, "sessions_in_status", broken)
+        monkeypatch.setitem(sessions.manager._supervisors, 7, None)
+
+        await sessions.manager._stand_down()
+
+
+class TestBackpressure:
+    """Output must not be able to grow into a memory problem."""
+
+    async def test_a_session_that_outruns_the_database_still_arrives(self, monkeypatch):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "LOG_FLUSH_S", 0.01)
+        monkeypatch.setattr(sessions, "LOG_QUEUE_MAX", 3)
+        monkeypatch.setattr(sessions, "LOG_BATCH_LINES", 2)
+        written: list[str] = []
+
+        async def slow_add_event(_session_id, _kind, payload):
+            # The database is the slow end here, which is the case the
+            # bound exists for.
+            await asyncio.sleep(0.01)
+            written.extend(payload["lines"])
+
+        async def chatty(_cid, **_kwargs):
+            for index in range(20):
+                yield f"line {index}"
+
+        monkeypatch.setattr(sessions.db, "add_event", slow_add_event)
+        monkeypatch.setattr(sessions.docker_engine, "stream_logs", chatty)
+
+        # Returns when the stream ends: a reader blocked on a full queue
+        # nobody drains would hang here instead.
+        await asyncio.wait_for(sessions.manager._collect_logs(7, "cid-7"), timeout=5.0)
+
+        assert written == [f"line {index}" for index in range(20)]
+
+
 class TestAnAnswerThatWasNeverWritten:
     """A settled session's artefacts are final.
 
@@ -567,6 +658,35 @@ class TestAnAnswerThatWasNeverWritten:
         await sessions.manager._post_reply(7)
 
         assert abandoned == [(7, sessions._MAX_REPLY_ATTEMPTS)]
+
+    async def test_an_unreadable_file_is_retried_rather_than_abandoned(self, monkeypatch, tmp_path):
+        # A mount that is not there yet is not an answer that was never
+        # written: the file may well be readable on the next pass.
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        attempts: list = []
+
+        async def get_session(_session_id):
+            return {"id": 7, "reply_target": "issue:772", "reply_posted_at": None}
+
+        async def record_reply_attempt(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        async def refuse(*_args, **_kwargs):
+            raise AssertionError("an unreadable file must not be given up on")
+
+        def unreadable(*_args, **_kwargs):
+            raise PermissionError("permission denied")
+
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record_reply_attempt)
+        monkeypatch.setattr(sessions.db, "abandon_reply", refuse)
+        monkeypatch.setattr(sessions.Path, "read_text", unreadable)
+
+        await sessions.manager._post_reply(7)
+
+        assert attempts == [(7, False)]
 
 
 class TestReactionsOnAThread:
@@ -971,7 +1091,7 @@ class TestAgentPhaseIsolation:
         paused: list = []
         events: list = []
 
-        async def fake_reading(_timeout_s=5.0):
+        async def fake_reading(_timeout_s=5.0, models=None):
             return capacity.Reading(load=0.99, busy_slots=10, total_slots=10, queue_total=0, ok=True)
 
         async def fake_in_status(status):
@@ -1888,7 +2008,7 @@ class TestOverlappingAdmission:
         decided_loads: list = []
         real_start_decision = capacity.start_decision
 
-        async def fake_read_load():
+        async def fake_read_load(models=None):
             return readings.pop(0) if len(readings) > 1 else readings[0]
 
         def spy_start_decision(reading, **kwargs):
