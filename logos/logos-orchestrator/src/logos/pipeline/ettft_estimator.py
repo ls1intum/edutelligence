@@ -24,6 +24,7 @@ ETTFT decomposes into three additive phases:
   3. Queue wait — queued requests × observed per-request service time
 """
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
@@ -219,13 +220,14 @@ def _estimate_drain_time_s(
     the lane can be unloaded.  We therefore count both.
 
       total  = total_running + queue_waiting
-      rounds = total / effective_parallel
+      rounds = ceil(total / effective_parallel)   # partial final batch counts as a full round
       drain  = rounds × service_time_s
     """
     total = max(0, total_running) + max(0, queue_waiting)
     if total <= 0:
         return 0.0
-    return (total / max(effective_parallel, 1)) * service_time_s
+    rounds = math.ceil(total / max(effective_parallel, 1))
+    return rounds * service_time_s
 
 
 # ── Reclaim overhead estimation ───────────────────────────────────────

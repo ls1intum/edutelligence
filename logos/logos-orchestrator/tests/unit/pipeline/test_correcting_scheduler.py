@@ -396,8 +396,8 @@ async def test_learned_ttft_breaks_tie_between_warm_providers():
     Without TTFT the scores are identical and provider selection is arbitrary.
     """
     store = LatencyStore()
-    store.record_ttft("model-a", 10, 0.5)   # provider 10: fast
-    store.record_ttft("model-a", 20, 2.0)   # provider 20: slow
+    store.record_ttft("model-a", 10, 0.5)  # provider 10: fast
+    store.record_ttft("model-a", 20, 2.0)  # provider 20: slow
 
     logosnode = MockLogosNodeFacade()
     for pid in (10, 20):

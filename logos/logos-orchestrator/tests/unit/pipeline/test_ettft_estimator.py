@@ -472,9 +472,9 @@ def test_reclaim_one_running_no_queue():
         e2e_latency_p50_seconds=5.0,
         num_parallel=4,
     )
-    # total = 1 running + 0 waiting = 1; rounds = 1/4 = 0.25; drain = 0.25 * 5 = 1.25 s
+    # total = 1 running + 0 waiting = 1; ceil(1/4) = 1 full round; drain = 1 * 5 = 5 s
     cost = _estimate_reclaim_overhead_s([lane], "target")
-    assert cost == pytest.approx(1.25 + RECLAIM_IDLE_EVICT_S)
+    assert cost == pytest.approx(5.0 + RECLAIM_IDLE_EVICT_S)
 
 
 def test_reclaim_picks_cheapest_victim():
