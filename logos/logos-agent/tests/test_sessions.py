@@ -4127,3 +4127,106 @@ class TestTakingWorkUpAgain:
 
         assert await sessions.manager.take_up_again(dict(self.ROW)) is None
         assert created == []
+
+
+class TestAPausedSessionThatCannotComeBack:
+    """One stuck session must not stop the whole queue.
+
+    Production: a paused session's container was removed underneath it, so
+    every pass tried to reattach it, failed, and returned — because
+    resuming comes before admitting. Two sessions sat queued behind it for
+    as long as it existed, and the log filled with the same line every
+    fifteen seconds.
+    """
+
+    @staticmethod
+    def install(monkeypatch, *, exists: bool):
+        from app import capacity, sessions
+
+        settled: list = []
+        resumed: list = []
+
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None):
+            return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
+
+        async def container_state(_container_id):
+            return ("running" if exists else "gone"), None
+
+        async def settle(_self, session_id, *, exit_code, error):
+            settled.append((session_id, error))
+
+        async def connect_network(_network, _container_id):
+            resumed.append("attached")
+            return True
+
+        async def unpause(_container_id):
+            return True
+
+        async def transition(_sid, _target, **_fields):
+            return True
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(capacity, "read_load", reading)
+        monkeypatch.setattr(sessions.docker_engine, "container_state", container_state)
+        monkeypatch.setattr(sessions.docker_engine, "connect_network", connect_network)
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", unpause)
+        monkeypatch.setattr(sessions.db, "transition_session", transition)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
+        return settled, resumed
+
+    async def test_a_vanished_container_settles_the_session(self, monkeypatch):
+        from app import sessions
+
+        settled, resumed = self.install(monkeypatch, exists=False)
+
+        assert await sessions.manager._resume({"id": 34, "container_id": "cid-34"}, "load 0%") is False
+        assert settled and settled[0][0] == 34
+        assert "disappeared" in settled[0][1]
+        # It was never attached to anything: there was nothing there.
+        assert resumed == []
+
+    async def test_a_session_that_is_still_there_resumes(self, monkeypatch):
+        from app import sessions
+
+        settled, resumed = self.install(monkeypatch, exists=True)
+
+        assert await sessions.manager._resume({"id": 34, "container_id": "cid-34"}, "load 0%") is True
+        assert settled == [] and resumed == ["attached"]
+
+    async def test_the_queue_moves_on_when_nothing_could_be_resumed(self, monkeypatch):
+        from app import capacity, sessions
+
+        admitted: list = []
+
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None):
+            return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
+
+        async def in_status(status):
+            if status is sessions.SessionStatus.PAUSED:
+                return [{"id": 34, "container_id": "cid-34"}]
+            return []
+
+        async def no_resume(_self, _session, _reason):
+            return False
+
+        async def peek(*, include_triggered: bool = True):
+            return {"id": 37, "model": None, "workspace_id": 1}
+
+        async def claim_session(session_id):
+            admitted.append(session_id)
+            return None
+
+        monkeypatch.setattr(capacity, "read_load", reading)
+        monkeypatch.setattr(sessions.db, "sessions_in_status", in_status)
+        monkeypatch.setattr(sessions.db, "next_queued_session", peek)
+        monkeypatch.setattr(sessions.db, "claim_session", claim_session)
+        monkeypatch.setattr(sessions.SessionManager, "_resume", no_resume)
+
+        await sessions.manager.scheduler_pass()
+
+        # Nothing was resumed, so the pass has not spent its turn: the work
+        # behind the stuck session gets its chance.
+        assert admitted == [37]

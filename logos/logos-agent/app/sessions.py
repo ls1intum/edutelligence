@@ -578,6 +578,7 @@ class SessionManager:
                 # before the loop would resume all four and put the runner
                 # over the ceiling an operator just set.
                 live = len(running)
+                woken = 0
                 for session in paused:
                     if live >= control.max_parallel:
                         logger.info(
@@ -586,7 +587,12 @@ class SessionManager:
                             control.max_parallel,
                         )
                         break
-                    await self._resume(session, why)
+                    if not await self._resume(session, why):
+                        # It stayed paused, or it was settled because its
+                        # container had gone. Either way it took no capacity
+                        # and the pass has not spent its turn on it.
+                        continue
+                    woken += 1
                     live += 1
                     # Re-read after each one, and through the same discount:
                     # the session just resumed is this runner's, and a
@@ -600,7 +606,11 @@ class SessionManager:
                     self._last_reading = reading
                     if not capacity.resume_decision(reading)[0]:
                         break
-            return  # resume before admitting anything new
+                if woken:
+                    return  # resume before admitting anything new
+            elif paused and not may_resume:
+                # Held back for a reason that applies to admission too.
+                return
 
         # 3. Admit queued work — at most one session per fresh capacity
         #    reading, taken *inside* the admission lock. A session creation
@@ -708,10 +718,20 @@ class SessionManager:
             # released when the upstream request finishes on its own.
             logger.warning("could not detach paused session %s from the session network: %s", session_id, exc)
 
-    async def _resume(self, session: dict[str, Any], reason: str) -> None:
+    async def _resume(self, session: dict[str, Any], reason: str) -> bool:
+        """Thaw a paused session. Returns whether it is running again."""
         sid, container_id = session["id"], session.get("container_id")
         if not container_id:
-            return
+            return False
+        if not await self._container_exists(container_id):
+            # Gone while it was paused — removed by a person, or swept with
+            # the host. There is nothing to thaw and nothing to wait for:
+            # left paused it would be retried every fifteen seconds forever,
+            # and it holds a workspace and a place in the queue while it
+            # does.
+            logger.warning("session %s was paused and its container is gone; settling it", sid)
+            await self._settle(sid, exit_code=None, error="the container disappeared while the session was paused")
+            return False
         # Attach first: a session thawed without its network would fail on
         # its next model call, which is worse than staying paused one more
         # tick.
@@ -719,16 +739,33 @@ class SessionManager:
             attached = await docker_engine.connect_network(settings.session_network, container_id)
         except Exception as exc:
             logger.error("could not reattach session %s to the session network: %s", sid, exc)
-            return
+            return False
         if not attached:
             logger.error("session %s could not be reattached to the session network; leaving it paused", sid)
-            return
+            return False
         if not await docker_engine.unpause_container(container_id):
             logger.info("session %s could not be resumed; its container is not running", sid)
-            return
+            return False
         if await db.transition_session(sid, SessionStatus.RUNNING):
             await db.add_event(sid, EventKind.CAPACITY, {"decision": "resume", "reason": reason})
             logger.info("resumed session %s: %s", sid, reason)
+            return True
+        return False
+
+    @staticmethod
+    async def _container_exists(container_id: str) -> bool:
+        """Whether Docker still has this container.
+
+        Unknown counts as present: a daemon that cannot be asked is not
+        evidence that a session's container is gone, and settling a live
+        session on a failed question would throw its work away.
+        """
+        try:
+            state, _ = await docker_engine.container_state(container_id)
+        except Exception as exc:
+            logger.info("could not ask about container %s: %s", container_id, exc)
+            return True
+        return state != "gone"
 
     def _register_launch(self, session_id: int) -> _Launch:
         """Take (or find) the launch record for a session.

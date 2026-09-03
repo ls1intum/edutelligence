@@ -70,6 +70,14 @@ def session_image_present(monkeypatch):
 
     monkeypatch.setattr(docker_engine, "image_present", present)
 
+    async def running(_container_id: str):
+        return "running", None
+
+    # Same reason: the resume path asks whether a paused session's container
+    # is still there, and unstubbed that question goes to whatever daemon is
+    # running on this machine — which has never heard of "cid-7".
+    monkeypatch.setattr(docker_engine, "container_state", running)
+
 
 @pytest.fixture(autouse=True)
 def no_sessions_by_default(monkeypatch):
