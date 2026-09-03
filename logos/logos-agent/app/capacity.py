@@ -30,7 +30,8 @@ is a different thing entirely, and fails closed.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 import httpx
 
@@ -49,6 +50,12 @@ class Reading:
     queue_total: int
     ok: bool  # False when the orchestrator could not be read
     detail: str = ""
+    # How full the engine's KV cache is on the model this reading is about.
+    # Kept apart from `load` because it cannot be attributed: the cache does
+    # not say whose tokens are in it. Starting more work on a model whose
+    # cache is nearly full is a bad idea whoever filled it — pausing what is
+    # already running because *we* filled it is how a runner starves itself.
+    cache_pressure: float = 0.0
     # False when no model is loaded anywhere: an empty fleet has no idle
     # capacity to spend, so there is nothing for the runner to reclaim.
     # Warming a lane in that situation is a different product decision, and
@@ -60,12 +67,21 @@ class Reading:
         return self.queue_total > 0 or self.load >= 1.0
 
 
+# How full a model's KV cache may be before the runner stops adding to it.
+# Not a pause threshold: the cache does not say whose tokens are in it, and
+# a runner that pauses for its own context never finishes anything.
+CACHE_FULL = 0.9
+
 # When the orchestrator cannot be reached we must not assume the platform is
 # idle: the safe failure mode for a scavenger is to stop scavenging.
 UNKNOWN = Reading(load=1.0, busy_slots=0, total_slots=0, queue_total=0, ok=False, detail="orchestrator unreachable")
 
 
-async def read_load(timeout_s: float = 5.0, lane: frozenset[tuple[str, str]] | None = None) -> Reading:
+async def read_load(
+    timeout_s: float = 5.0,
+    lane: frozenset[tuple[str, str]] | None = None,
+    ours: Mapping[str, int] | None = None,
+) -> Reading:
     """Ask the orchestrator how busy the serving lane we would use is.
 
     ``lane`` holds the (provider id, model id) pairs the runner's key can be
@@ -101,7 +117,7 @@ async def read_load(timeout_s: float = 5.0, lane: frozenset[tuple[str, str]] | N
         logger.warning("capacity read failed: %s", exc)
         return UNKNOWN
 
-    return parse_scheduler_state(payload, lane=lane)
+    return parse_scheduler_state(payload, lane=lane, ours=ours)
 
 
 def _live(model: dict, capacity: int) -> tuple[int, int, float]:
@@ -116,7 +132,7 @@ def _live(model: dict, capacity: int) -> tuple[int, int, float]:
     it at all: the KV cache. A model can be three requests into a
     twenty-request allowance and still have no room for a fourth, because
     concurrency there is bounded by cache, not by a number in a
-    configuration file. Whichever of the two is worse is the pressure.
+    configuration file.
     """
     signals = model.get("scheduler_signals") or {}
     if not isinstance(signals, dict):
@@ -137,12 +153,14 @@ def _live(model: dict, capacity: int) -> tuple[int, int, float]:
     queue = int(waiting if waiting is not None else float(model.get("queue_depth") or 0))
 
     cache = number("gpu_cache_usage_percent_max", "gpu_cache_usage_percent_avg")
-    by_slots = (active / capacity) if capacity else 0.0
-    pressure = max(by_slots, (cache or 0.0) / 100.0)
-    return active, queue, pressure
+    return active, queue, (cache or 0.0) / 100.0
 
 
-def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None = None) -> Reading:
+def parse_scheduler_state(
+    payload: dict,
+    lane: frozenset[tuple[str, str]] | None = None,
+    ours: Mapping[str, int] | None = None,
+) -> Reading:
     """Turn the orchestrator's debug payload into a single load figure.
 
     Kept separate from the HTTP call so it can be tested against recorded
@@ -154,7 +172,14 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
     queue is deliberately *not* narrowed: models share GPUs, so a person
     waiting on any of them is a person this runner should get out of the way
     of.
+
+    ``ours`` is how many sessions this runner is running *per model*, and it
+    is subtracted from that model before anything is compared. Per model
+    rather than in total: five sessions on one model say nothing about
+    another, and subtracting them there would turn somebody else's busy
+    lane into an idle-looking one.
     """
+    mine = {name.strip().lower(): count for name, count in (ours or {}).items()}
     if lane is not None and not lane:
         # A key that reaches no local deployment has no lane to measure and
         # nothing it could legitimately run on. Refusing here rather than
@@ -195,7 +220,19 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
             capacity = int(model.get("max_capacity") or 0)
             if capacity <= 0:
                 continue
-            active, waiting, pressure = _live(model, capacity)
+            name = str(model.get("model_name") or model_id)
+            active, waiting, cache = _live(model, capacity)
+            # Ours come off this model's figures, from what is *running*
+            # first. The other way round empties the queue on the assumption
+            # that our sessions are the ones waiting — and a queue that
+            # reads as empty is the signal that a user is not waiting, which
+            # is the one thing worth being wrong about in the safe
+            # direction.
+            ours_here = mine.get(name.strip().lower(), 0)
+            ours_serving = min(ours_here, active)
+            ours_waiting = min(ours_here - ours_serving, waiting)
+            active -= ours_serving
+            waiting -= ours_waiting
             queue_total += waiting
             fleet_total += capacity
             fleet_busy += active
@@ -203,11 +240,10 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
                 continue
             total += capacity
             busy += active
-            name = str(model.get("model_name") or model_id)
             slots = per_model.setdefault(name, [0, 0, 0.0])
             slots[0] += active
             slots[1] += capacity
-            slots[2] = max(slots[2], pressure)
+            slots[2] = max(slots[2], cache)
 
     fell_back = False
     if wanted and total == 0 and fleet_total > 0:
@@ -235,18 +271,20 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
         # The busiest of them decides. Being kept out of an idle model
         # because another is full costs this runner some capacity; letting a
         # session into a full one costs a user their turn.
-        name, (model_busy, model_total, pressure) = max(per_model.items(), key=lambda item: item[1][2])
+        name, (model_busy, model_total, cache) = max(
+            per_model.items(),
+            key=lambda item: (max((item[1][0] / item[1][1]) if item[1][1] else 0.0, item[1][2])),
+        )
         where = f" on {name}" if len(per_model) > 1 else ""
         detail = f"{model_busy}/{model_total} requests in flight{where}"
-        if model_total and pressure > (model_busy / model_total):
-            # The KV cache is what actually fills up: a model can be at
-            # three of twenty requests and still have no room for a fourth.
-            detail = f"{pressure:.0%} of the KV cache in use{where} ({model_busy} requests in flight)"
+        if cache:
+            detail += f", {cache:.0%} of its KV cache in use"
         return Reading(
-            load=min(pressure, 1.0),
+            load=(model_busy / model_total) if model_total else 0.0,
             busy_slots=model_busy,
             total_slots=model_total,
             queue_total=queue_total,
+            cache_pressure=cache,
             ok=True,
             detail=detail,
         )
@@ -264,42 +302,6 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
         queue_total=queue_total,
         ok=True,
         detail=f"{busy}/{total} slots busy{lane_note}",
-    )
-
-
-def without_our_own(reading: Reading, running_sessions: int) -> Reading:
-    """The same reading, minus what this runner is doing to it.
-
-    The orchestrator reports how busy a model is; it does not report *who*
-    is keeping it busy, and there is nothing in its payload that could say.
-    So a runner with three sessions in flight reads its own three requests
-    as platform load and pauses itself for them — and once paused the load
-    it was reacting to disappears, so it resumes, and does it again. Worse,
-    its own sessions queueing read as "users are queueing", which is the
-    signal that means *stop everything*.
-
-    A running session has at most one request outstanding, either being
-    served or waiting for a slot. Subtracting that many — from the queue
-    first, since a request that is waiting is not being served — leaves what
-    everybody else is doing, which is the number every decision here is
-    actually about. A real user waiting still shows, and still stops the
-    runner.
-    """
-    if running_sessions <= 0 or not reading.ok:
-        return reading
-    ours_serving = min(running_sessions, reading.busy_slots)
-    ours_waiting = min(max(running_sessions - ours_serving, 0), reading.queue_total)
-    busy = reading.busy_slots - ours_serving
-    queue = reading.queue_total - ours_waiting
-    if ours_serving == 0 and ours_waiting == 0:
-        return reading
-    detail = f"{busy}/{reading.total_slots} slots busy besides this runner's {running_sessions}"
-    return replace(
-        reading,
-        load=(busy / reading.total_slots) if reading.total_slots else reading.load,
-        busy_slots=busy,
-        queue_total=queue,
-        detail=detail,
     )
 
 
@@ -326,6 +328,13 @@ def start_decision(reading: Reading, *, running: int, paused: int, max_parallel:
         return False, (
             f"load {reading.load:.0%} is at or above the start threshold " f"{settings.start_below_load:.0%}"
         )
+    if reading.cache_pressure >= CACHE_FULL:
+        # Whoever filled it, there is no room to put another session's
+        # context in: concurrency on a vLLM lane ends at the KV cache, not
+        # at a slot count. Not a reason to *pause* what is already running —
+        # that would be the runner starving itself for its own cache — but
+        # a good reason not to add to it.
+        return False, f"the model's KV cache is {reading.cache_pressure:.0%} full"
     return True, f"load {reading.load:.0%}, {reading.detail}"
 
 

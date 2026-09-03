@@ -79,6 +79,11 @@ _MAX_REPLY_CHARS = 60000
 # How often an undelivered answer is retried before it is left alone.
 _MAX_REPLY_ATTEMPTS = 5
 
+# How many sessions one request may have before the runner stops taking it
+# up again. A launch that cannot work, or a task nothing can be made of:
+# three attempts survives an accident and is few enough to notice.
+_MAX_ATTEMPTS_PER_REQUEST = 3
+
 # How long a workspace the runner created must have existed before it may be
 # swept away. It covers the gap between a session being queued into a fresh
 # workspace and being claimed, in which neither is active yet.
@@ -89,35 +94,20 @@ def container_name(session_id: int) -> str:
     return f"{_CONTAINER_PREFIX}{session_id}"
 
 
-def _report_without_the_agent(session: dict[str, Any]) -> str:
-    """What to say on a thread whose session said nothing.
+def _ours_by_model(running: list[dict[str, Any]], policy: model_policy.ModelPolicy) -> dict[str, int]:
+    """How many sessions this runner is running, per model they run on.
 
-    Not an apology and not a summary of the runner's internals: what was
-    attempted, what came of it, and how to see the rest. Written here
-    because the alternative — saying nothing — reads exactly like being
-    ignored, whatever the session's status says.
+    Per model rather than in total: subtracting five sessions on one model
+    from another model's figures would turn somebody else's busy lane into
+    an idle-looking one, which is the opposite of the mistake this exists to
+    prevent.
     """
-    status = str(session.get("status") or "finished")
-    error = str(session.get("error") or "").strip()
-    pr_url = str(session.get("pr_url") or "").strip()
-    lines = []
-    if pr_url:
-        lines.append(f"I have opened {pr_url} for this.")
-    elif status == SessionStatus.SUCCEEDED.value:
-        lines.append(
-            "I worked through this and did not change anything — and I did not "
-            "leave a note saying why, which I should have. Nothing here is a "
-            "verdict on the request: read it as 'not done', not as 'nothing to do'."
-        )
-    else:
-        lines.append(f"I did not get through this one: the session {status}.")
-        if error:
-            lines.append(f"\n> {error[:500]}")
-    lines.append(
-        "\nThe transcript is in the Logos agent page under session "
-        f"{session.get('id', '?')}, and this can be run again from there."
-    )
-    return "\n".join(lines)
+    counted: dict[str, int] = {}
+    for session in running:
+        name = policy.resolve(session.get("model"))
+        if name:
+            counted[name] = counted.get(name, 0) + 1
+    return counted
 
 
 def _fallback_subject(session: dict[str, Any]) -> str:
@@ -543,7 +533,6 @@ class SessionManager:
         # Measured on the lane these sessions are served by, not on the
         # whole fleet: an embedding model being idle says nothing about
         # whether another agent session is safe to start.
-        measured = await capacity.read_load(lane=policy.lane())
         # What an operator has asked for right now — the kill switch and the
         # ceiling they set — read before anything is decided.
         control = await controls.current()
@@ -551,11 +540,12 @@ class SessionManager:
         running = await db.sessions_in_status(SessionStatus.RUNNING)
         paused = await db.sessions_in_status(SessionStatus.PAUSED)
 
-        # The platform's load, minus this runner's own share of it. Without
-        # this the runner reads its own sessions as user traffic: it pauses
-        # itself, the load it reacted to vanishes with them, it resumes, and
-        # it does it again.
-        reading = capacity.without_our_own(measured, len(running))
+        # The platform's load, minus this runner's own share of it — counted
+        # per model, because five sessions on one model say nothing about
+        # another. Without it the runner reads its own sessions as user
+        # traffic: it pauses itself, the load it reacted to vanishes with
+        # them, it resumes, and it does it again.
+        reading = await capacity.read_load(lane=policy.lane(), ours=_ours_by_model(running, policy))
         self._last_reading = reading
 
         if control.paused:
@@ -598,7 +588,15 @@ class SessionManager:
                         break
                     await self._resume(session, why)
                     live += 1
-                    reading = await capacity.read_load(lane=model_policy.current().lane())
+                    # Re-read after each one, and through the same discount:
+                    # the session just resumed is this runner's, and a
+                    # reading that counts it would stop the batch on its own
+                    # load — leaving the rest paused for nothing.
+                    resumed = await db.sessions_in_status(SessionStatus.RUNNING)
+                    reading = await capacity.read_load(
+                        lane=policy.lane(),
+                        ours=_ours_by_model(resumed, policy),
+                    )
                     self._last_reading = reading
                     if not capacity.resume_decision(reading)[0]:
                         break
@@ -639,10 +637,12 @@ class SessionManager:
             if candidate is None:
                 return
             wanted = admission_policy.resolve(candidate.get("model"))
-            measured = await capacity.read_load(lane=admission_policy.lane(wanted))
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
-            reading = capacity.without_our_own(measured, len(running))
+            reading = await capacity.read_load(
+                lane=admission_policy.lane(wanted),
+                ours=_ours_by_model(running, admission_policy),
+            )
             self._last_reading = reading
             blocked = control.admission_block()
             if blocked:
@@ -656,7 +656,12 @@ class SessionManager:
             )
             if not may_start:
                 return
-            claimed = await db.claim_queued_sessions(1, include_triggered=include_triggered)
+            # The row that was measured, not "the next one": between the
+            # peek and here the candidate can be cancelled, or something
+            # more urgent on another model can arrive, and either would be
+            # started against a reading of somebody else's lane.
+            taken = await db.claim_session(int(candidate["id"]))
+            claimed = [taken] if taken else []
             # The claim is what makes these rows this pass's to launch, so
             # the launch record is taken here rather than inside _launch:
             # the event write below is an await, and a cancel landing in it
@@ -1392,6 +1397,53 @@ class SessionManager:
 
     # --- settlement -------------------------------------------------------
 
+    async def take_up_again(self, session: dict[str, Any], *, by: str = "the runner") -> int | None:
+        """Queue this session's work once more, from where it came from.
+
+        The same task, workspace, branch, thread and urgency; a new row, so
+        the attempt that failed keeps its transcript and its reason. Bounded
+        by how many attempts that one request has already had: a request
+        nothing can be made of stops being taken up rather than looping.
+
+        Returns the new session's id, or None when it was not taken up.
+        """
+        ref = str(session.get("trigger_ref") or "")
+        if ref:
+            try:
+                attempts = await db.attempts_for_trigger(ref)
+            except Exception as exc:
+                logger.info("could not count the attempts on %s: %s", ref, exc)
+                return None
+            if attempts >= _MAX_ATTEMPTS_PER_REQUEST:
+                logger.info("not taking %s up again: %s attempts is enough", ref, attempts)
+                return None
+        try:
+            new_id = await db.create_session(
+                workspace_id=int(session["workspace_id"]),
+                task=str(session["task"]),
+                model=session.get("model"),
+                created_by=by,
+                open_pull_request=bool(session.get("open_pull_request")),
+                # Deploying is a decision per attempt, not a property of the
+                # work.
+                deploy_to_dev=False,
+                screenshot_paths=[],
+                trigger_kind=session.get("trigger_kind"),
+                trigger_ref=session.get("trigger_ref"),
+                branch=session.get("branch_name"),
+                reply_target=session.get("reply_target"),
+                reaction_target=session.get("reaction_target"),
+                priority=int(session.get("priority") or 50),
+                priority_reason=session.get("priority_reason"),
+            )
+        except Exception as exc:
+            logger.warning("could not take session %s up again: %s", session.get("id"), exc)
+            return None
+        await db.add_event(new_id, EventKind.STATUS, {"status": "queued", "retry_of": session.get("id")})
+        logger.info("session %s queued as another attempt at %s", new_id, ref or session.get("id"))
+        asyncio.create_task(self.scheduler_pass())
+        return new_id
+
     async def _react(self, session: dict[str, Any] | None, content: str) -> None:
         """Show on the thread how far this session's work has got.
 
@@ -1647,12 +1699,17 @@ class SessionManager:
             logger.warning("could not read the answer of session %s (will retry): %s", session_id, exc)
             return
         if not body:
-            # Somebody assigned something and is waiting to hear anything at
-            # all. A session that finishes without writing a word is the one
-            # outcome that must not be silent — it is the shape a silent
-            # failure takes, and it is indistinguishable from being ignored.
-            body = _report_without_the_agent(session or {})
-            logger.info("session %s left no answer; reporting what the runner knows", session_id)
+            # A session that wrote nothing has nothing to say, and a thread
+            # is the wrong place to say so: "the session failed, run it
+            # again from the page" is the runner talking about itself in
+            # front of people who asked about their pull request. What that
+            # means is that the request was not dealt with — so it is dealt
+            # with again, quietly, and the thread hears from the attempt
+            # that has something to report.
+            logger.info("session %s left no answer; taking the work up again instead of saying so", session_id)
+            await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
+            await self.take_up_again(session or {})
+            return
         if len(body) > _MAX_REPLY_CHARS:
             # GitHub refuses a comment above its length limit outright, and
             # an answer nobody receives is worse than a shortened one on a

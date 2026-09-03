@@ -360,12 +360,13 @@ answered twice. Only the *newest* changes-requested review of a pull request
 counts as work; the older ones were answered by it. A session that failed is
 re-queued by a person, who can see why it failed.
 
-**Bounded.** Self-queued sessions may use the parallel ceiling less a couple
-of places kept for people, so an operator queueing work by hand always finds
-room — triggered sessions carry higher priorities and would otherwise win
-every slot. Keeping half the fleet idle for a session nobody has asked for
-is the wrong trade on a platform whose point is spending what would go to
-waste. Bots are ignored:
+**Bounded.** Self-queued sessions may *run* up to the parallel ceiling less a
+fifth of it, at least one place, kept for people — triggered sessions carry
+higher priorities and would otherwise win every slot. Keeping half the fleet
+idle for a session nobody has asked for is the wrong trade on a platform
+whose point is spending what would go to waste. What does not fit runs
+later: it is queued, in priority order, and visible as work waiting rather
+than left in the repository where nobody sees it. Bots are ignored:
 their findings reach the agent through the next review, not as a session per
 note. Workspaces are created on demand up to the ceiling, since a session the
 runner queued has nobody to prepare a working copy for it.

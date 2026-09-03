@@ -302,58 +302,6 @@ class TestTheLaneWeAreServedBy:
         assert "Qwen/Qwen3.8-27B" in reading.detail
 
 
-class TestNotReactingToItself:
-    """The orchestrator says how busy a model is, never who is keeping it so.
-
-    A runner with three sessions in flight reads its own three requests as
-    platform load: it pauses itself for them, the load it reacted to leaves
-    with them, it resumes, and it does it again. Its own sessions queueing
-    read as "users are queueing", which is the signal that means stop.
-    """
-
-    @staticmethod
-    def busy(*, busy_slots: int, queue: int = 0) -> capacity.Reading:
-        return capacity.Reading(load=busy_slots / 10, busy_slots=busy_slots, total_slots=10, queue_total=queue, ok=True)
-
-    def test_our_own_requests_are_not_platform_load(self):
-        reading = capacity.without_our_own(self.busy(busy_slots=3), running_sessions=3)
-
-        assert reading.busy_slots == 0 and reading.load == 0.0
-
-    def test_what_somebody_else_is_doing_remains(self):
-        reading = capacity.without_our_own(self.busy(busy_slots=5), running_sessions=2)
-
-        assert reading.busy_slots == 3 and reading.load == 0.3
-
-    def test_our_own_queueing_is_not_a_user_waiting(self):
-        # Two of ours served, one waiting for a slot: nobody else is
-        # waiting, so nothing should stop.
-        reading = capacity.without_our_own(self.busy(busy_slots=2, queue=1), running_sessions=3)
-
-        assert reading.queue_total == 0
-        assert not reading.saturated
-
-    def test_a_real_user_waiting_still_stops_it(self):
-        reading = capacity.without_our_own(self.busy(busy_slots=2, queue=3), running_sessions=3)
-
-        # One of those three waiting is ours; the other two are not.
-        assert reading.queue_total == 2
-        assert reading.saturated
-
-    def test_nothing_of_ours_running_changes_nothing(self):
-        before = self.busy(busy_slots=4, queue=1)
-
-        assert capacity.without_our_own(before, running_sessions=0) is before
-
-    def test_an_unreadable_platform_is_left_alone(self):
-        assert capacity.without_our_own(capacity.UNKNOWN, running_sessions=3) is capacity.UNKNOWN
-
-    def test_the_detail_says_what_was_discounted(self):
-        reading = capacity.without_our_own(self.busy(busy_slots=5), running_sessions=2)
-
-        assert "besides this runner's 2" in reading.detail
-
-
 class TestWhatTheEngineSaysItself:
     """vLLM's own numbers, not the ledger's guess at them.
 
@@ -394,15 +342,22 @@ class TestWhatTheEngineSaysItself:
 
         assert reading.busy_slots == 0 and reading.load == 0.0
 
-    def test_a_full_cache_is_a_full_model(self):
+    def test_a_full_cache_stops_new_work(self):
         # Three of twenty "slots", and no room for a fourth: concurrency is
-        # bounded by the cache, not by a number in a configuration file.
+        # bounded by the cache, not by a number in a configuration file. It
+        # is reported apart from the load, because the cache does not say
+        # whose tokens are in it — a reason not to add, never a reason to
+        # pause what is already running.
         payload = self.one(active=3, requests_running_current=3.0, gpu_cache_usage_percent_max=94.0)
 
         reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
 
-        assert reading.load == 0.94
+        assert reading.cache_pressure == 0.94
         assert "KV cache" in reading.detail
+        assert not capacity.start_decision(reading, running=0, paused=0, max_parallel=4)[0]
+        # And it does not pause anything: that would be the runner starving
+        # itself for its own context.
+        assert not capacity.pause_decision(reading)[0]
 
     def test_the_engine_s_queue_is_the_queue(self):
         payload = self.one(queue_depth=0, requests_running_current=20.0, queue_waiting_current=4.0)
@@ -419,3 +374,77 @@ class TestWhatTheEngineSaysItself:
         reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
 
         assert reading.busy_slots == 5 and reading.queue_total == 1
+
+
+class TestNotReactingToItself:
+    """The orchestrator says how busy a model is, never who is keeping it so.
+
+    A runner with sessions in flight reads its own requests as platform
+    load: it pauses itself for them, the load it reacted to leaves with
+    them, it resumes, and it does it again. Its own sessions queueing read
+    as "users are queueing", which is the signal that means stop.
+    """
+
+    LANE = frozenset({("15", "97")})
+
+    @staticmethod
+    def busy(running: float, waiting: float = 0.0, name: str = "Qwen/Qwen3.8-27B", model_id: str = "97"):
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {
+                            model_id: {
+                                "model_name": name,
+                                "active": 0,
+                                "queue_depth": 0,
+                                "max_capacity": 10,
+                                "loaded": True,
+                                "scheduler_signals": {
+                                    "requests_running_current": running,
+                                    "queue_waiting_current": waiting,
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+    def test_our_own_requests_are_not_platform_load(self):
+        reading = capacity.parse_scheduler_state(self.busy(3.0), lane=self.LANE, ours={"Qwen/Qwen3.8-27B": 3})
+
+        assert reading.busy_slots == 0 and reading.load == 0.0
+
+    def test_what_somebody_else_is_doing_remains(self):
+        reading = capacity.parse_scheduler_state(self.busy(5.0), lane=self.LANE, ours={"Qwen/Qwen3.8-27B": 2})
+
+        assert reading.busy_slots == 3 and reading.load == 0.3
+
+    def test_our_own_queueing_is_not_a_user_waiting(self):
+        reading = capacity.parse_scheduler_state(
+            self.busy(2.0, waiting=1.0), lane=self.LANE, ours={"Qwen/Qwen3.8-27B": 3}
+        )
+
+        assert reading.queue_total == 0 and not reading.saturated
+
+    def test_a_real_user_waiting_still_stops_it(self):
+        reading = capacity.parse_scheduler_state(
+            self.busy(2.0, waiting=3.0), lane=self.LANE, ours={"Qwen/Qwen3.8-27B": 3}
+        )
+
+        # One of those three waiting is ours; the other two are not.
+        assert reading.queue_total == 2 and reading.saturated
+
+    def test_sessions_on_another_model_are_not_subtracted_here(self):
+        # The finding: eighteen user requests on one model and five agent
+        # sessions on another would have read as an idle-looking lane.
+        reading = capacity.parse_scheduler_state(self.busy(9.0), lane=self.LANE, ours={"some/other-model": 5})
+
+        assert reading.busy_slots == 9 and reading.load == 0.9
+
+    def test_nothing_of_ours_running_changes_nothing(self):
+        reading = capacity.parse_scheduler_state(self.busy(4.0), lane=self.LANE)
+
+        assert reading.busy_slots == 4

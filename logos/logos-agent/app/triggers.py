@@ -40,11 +40,10 @@ is not answered twice. Only the *newest* changes-requested review of a pull
 request is work; the older ones were answered by it.
 
 **Bounded, and written down.** Self-queued sessions may *run* up to the
-parallel ceiling less a couple of places kept for people — triggered
-sessions carry higher priorities and would otherwise win every slot. What
-does not fit is queued rather than forgotten: it becomes a row, in priority
-order, visible on the page as work waiting its turn. A workspace holds one
-session at a time, so the backlog is bounded by the pool of them.
+parallel ceiling less a fifth of it, at least one place, kept for people —
+triggered sessions carry higher priorities and would otherwise win every
+slot. What does not fit is queued rather than forgotten: it becomes a row,
+in priority order, visible on the page as work waiting its turn.
 """
 
 from __future__ import annotations

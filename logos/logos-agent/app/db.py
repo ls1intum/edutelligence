@@ -836,6 +836,20 @@ async def list_sessions(
     return [dict(r) for r in rows]
 
 
+async def attempts_for_trigger(ref: str) -> int:
+    """How many sessions this one request has already had."""
+    if not ref:
+        return 0
+    async with sessionmaker()() as db:
+        count = (
+            await db.execute(
+                text("SELECT COUNT(*) FROM agent_sessions WHERE trigger_ref = :ref"),
+                {"ref": ref},
+            )
+        ).scalar_one()
+    return int(count or 0)
+
+
 async def next_queued_session(*, include_triggered: bool = True) -> dict[str, Any] | None:
     """The session a claim would take next, without taking it.
 
@@ -878,6 +892,57 @@ async def next_queued_session(*, include_triggered: bool = True) -> dict[str, An
             .mappings()
             .first()
         )
+    return dict(row) if row else None
+
+
+async def claim_session(session_id: int) -> dict[str, Any] | None:
+    """Take this exact queued session, or nothing.
+
+    Admission measures the lane of the session it intends to start, and the
+    peek and the claim are separate statements: in between, that row can be
+    cancelled, or a more urgent one on another model can be queued. Claiming
+    "the next one" would then start a session whose lane nobody measured.
+    """
+    async with sessionmaker()() as db:
+        claimed = (
+            await db.execute(
+                text(
+                    """
+                    SELECT s.id FROM agent_sessions s
+                     WHERE s.id = :session_id
+                       AND s.status = 'queued'
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions busy
+                              WHERE busy.workspace_id = s.workspace_id
+                                AND busy.status = ANY(:occupying)
+                           )
+                     FOR UPDATE OF s SKIP LOCKED
+                    """
+                ),
+                {
+                    "session_id": session_id,
+                    "occupying": [
+                        SessionStatus.STARTING.value,
+                        SessionStatus.RUNNING.value,
+                        SessionStatus.PAUSED.value,
+                        SessionStatus.FINALIZING.value,
+                    ],
+                },
+            )
+        ).scalar_one_or_none()
+        if claimed is None:
+            await db.rollback()
+            return None
+        await db.execute(
+            text("UPDATE agent_sessions SET status = 'starting' WHERE id = :session_id"),
+            {"session_id": session_id},
+        )
+        row = (
+            (await db.execute(text(_SESSION_SELECT + " WHERE s.id = :session_id"), {"session_id": session_id}))
+            .mappings()
+            .first()
+        )
+        await db.commit()
     return dict(row) if row else None
 
 

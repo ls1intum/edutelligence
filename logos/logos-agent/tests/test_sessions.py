@@ -471,7 +471,7 @@ class TestPermissionsRevokedMidFlight:
         async def refresh():
             return revoked
 
-        async def read_load(timeout_s: float = 5.0, lane=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
             # The lane an invalid policy hands over is empty, and an empty
             # lane is refused rather than measured.
             assert lane == frozenset()
@@ -855,11 +855,12 @@ class TestBackpressure:
 
 
 class TestAnAnswerThatWasNeverWritten:
-    """Somebody assigned something and is waiting to hear anything at all.
+    """A session that wrote nothing has nothing to say.
 
-    A session that finishes without writing a word is the one outcome that
-    must not be silent: it is the shape a silent failure takes, and from the
-    thread it is indistinguishable from being ignored.
+    Somebody is waiting to hear about their pull request, not about the
+    runner. So a session that finishes without a word is not announced —
+    the request is taken up again, and the thread hears from the attempt
+    that has something to report.
     """
 
     @staticmethod
@@ -880,73 +881,45 @@ class TestAnAnswerThatWasNeverWritten:
         async def record_reply_attempt(session_id, *, delivered):
             attempts.append((session_id, delivered))
 
+        async def abandon_reply(_session_id, *, attempts):
+            return None
+
         async def add_event(*_args, **_kwargs):
             return None
 
         monkeypatch.setattr(sessions.db, "get_session", get_session)
         monkeypatch.setattr(sessions.db, "record_reply_attempt", record_reply_attempt)
+        monkeypatch.setattr(sessions.db, "abandon_reply", abandon_reply)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
         monkeypatch.setattr(sessions.github, "post_issue_comment", post_issue_comment)
         return posted, attempts
 
-    async def test_a_silent_success_still_says_something(self, monkeypatch, tmp_path):
-        from app import sessions
-
-        posted, attempts = self.install(
-            monkeypatch,
-            tmp_path,
-            {"id": 30, "status": "succeeded", "reply_target": "issue:886", "reply_posted_at": None, "pr_url": None},
-        )
-
-        await sessions.manager._post_reply(30)
-
-        assert attempts == [(30, True)]
-        number, body = posted[0]
-        assert number == 886
-        # It must not read as a verdict on the request.
-        assert "did not change anything" in body
-        assert "session 30" in body
-
-    async def test_a_session_that_opened_a_pull_request_says_where(self, monkeypatch, tmp_path):
+    async def test_a_silent_session_is_taken_up_again_rather_than_announced(self, monkeypatch, tmp_path):
         from app import sessions
 
         posted, _ = self.install(
             monkeypatch,
             tmp_path,
-            {
-                "id": 30,
-                "status": "succeeded",
-                "reply_target": "issue:886",
-                "reply_posted_at": None,
-                "pr_url": "https://github.com/x/y/pull/900",
-            },
+            {"id": 30, "status": "failed", "reply_target": "issue:886", "reply_posted_at": None, "pr_url": None},
         )
+        taken_up: list = []
+
+        async def take_up_again(_self, session, *, by="the runner"):
+            taken_up.append(session["id"])
+            return 99
+
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
 
         await sessions.manager._post_reply(30)
 
-        assert "pull/900" in posted[0][1]
+        # "The session failed, run it again from the page" is the runner
+        # talking about itself in front of people who asked about their
+        # pull request. What it means is that the request was not dealt
+        # with — so it is dealt with again.
+        assert posted == []
+        assert taken_up == [30]
 
-    async def test_a_failure_says_what_went_wrong(self, monkeypatch, tmp_path):
-        from app import sessions
-
-        posted, _ = self.install(
-            monkeypatch,
-            tmp_path,
-            {
-                "id": 30,
-                "status": "failed",
-                "error": "agent exited with code 1",
-                "reply_target": "issue:886",
-                "reply_posted_at": None,
-                "pr_url": None,
-            },
-        )
-
-        await sessions.manager._post_reply(30)
-
-        assert "exited with code 1" in posted[0][1]
-
-    async def test_what_the_agent_wrote_wins(self, monkeypatch, tmp_path):
+    async def test_what_the_agent_wrote_is_posted(self, monkeypatch, tmp_path):
         from app import sessions
 
         posted, _ = self.install(
@@ -1394,7 +1367,7 @@ class TestAgentPhaseIsolation:
         paused: list = []
         events: list = []
 
-        async def fake_reading(_timeout_s=5.0, lane=None):
+        async def fake_reading(_timeout_s=5.0, lane=None, ours=None):
             return capacity.Reading(load=0.99, busy_slots=10, total_slots=10, queue_total=0, ok=True)
 
         async def fake_in_status(status):
@@ -2120,6 +2093,7 @@ class TestClaimToLaunchWindow:
         monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
         monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([]))
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", slow_event)
         monkeypatch.setattr(sessions.db, "get_session", self._async_value({**session_row, "status": "starting"}))
@@ -2226,6 +2200,7 @@ class TestOverlappingAdmission:
         monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
         monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
@@ -2279,6 +2254,7 @@ class TestOverlappingAdmission:
         monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
         monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
@@ -2314,7 +2290,7 @@ class TestOverlappingAdmission:
         decided_loads: list = []
         real_start_decision = capacity.start_decision
 
-        async def fake_read_load(lane=None):
+        async def fake_read_load(lane=None, ours=None):
             return readings.pop(0) if len(readings) > 1 else readings[0]
 
         def spy_start_decision(reading, **kwargs):
@@ -2351,6 +2327,7 @@ class TestOverlappingAdmission:
         monkeypatch.setattr(sessions.capacity, "start_decision", spy_start_decision)
         monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
@@ -3663,6 +3640,7 @@ class TestOperatorControls:
         )
         monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
         monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
@@ -3704,6 +3682,7 @@ class TestOperatorControls:
 
         monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
         monkeypatch.setattr(sessions.docker_engine, "disconnect_network", self._async_value(True))
@@ -3940,7 +3919,7 @@ class TestAdmissionMeasuresTheRightLane:
         async def refresh():
             return policy
 
-        async def read_load(timeout_s: float = 5.0, lane=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
             lanes.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -3950,6 +3929,9 @@ class TestAdmissionMeasuresTheRightLane:
         async def claim(_limit, *, include_triggered: bool = True):
             return []
 
+        async def claim_session(_session_id):
+            return None
+
         async def none(_status):
             return []
 
@@ -3958,6 +3940,7 @@ class TestAdmissionMeasuresTheRightLane:
         monkeypatch.setattr(capacity, "read_load", read_load)
         monkeypatch.setattr(sessions.db, "next_queued_session", peek)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", claim)
+        monkeypatch.setattr(sessions.db, "claim_session", claim_session)
         monkeypatch.setattr(sessions.db, "sessions_in_status", none)
 
         await sessions.manager.scheduler_pass()
@@ -3973,7 +3956,7 @@ class TestAdmissionMeasuresTheRightLane:
 
         readings: list = []
 
-        async def read_load(timeout_s: float = 5.0, lane=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
             readings.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -4058,6 +4041,21 @@ class TestPicturesTravelWithTheRequest:
         assert await sessions.manager._collect_attachments(30, "![shot](https://example.com/a.png)") == []
 
 
+def _claim_one(fake_claim):
+    """The targeted claim, expressed through a test's own batch stub.
+
+    Admission takes the row it measured rather than "the next one"; these
+    tests care about *whether* something was claimed, so this keeps their
+    existing fakes honest without each of them growing a second one.
+    """
+
+    async def claim_session(_session_id: int):
+        taken = await fake_claim(1)
+        return taken[0] if taken else None
+
+    return claim_session
+
+
 async def _peek(*, include_triggered: bool = True):
     """What admission looks at before it measures: any queued session.
 
@@ -4066,3 +4064,66 @@ async def _peek(*, include_triggered: bool = True):
     model.
     """
     return {"id": 7, "model": None, "workspace_id": 1}
+
+
+class TestTakingWorkUpAgain:
+    """The same request, once more, without a person having to ask."""
+
+    ROW = {
+        "id": 30,
+        "workspace_id": 3,
+        "task": "answer the review on #858",
+        "trigger_kind": "review",
+        "trigger_ref": "pr-858-review-1",
+        "branch_name": "logos/issue-797",
+        "reply_target": "issue:858",
+        "reaction_target": "/repos/x/y/issues/858",
+        "priority": 80,
+        "open_pull_request": False,
+    }
+
+    @staticmethod
+    def install(monkeypatch, *, attempts: int):
+        from app import sessions
+
+        created: list = []
+
+        async def attempts_for_trigger(_ref):
+            return attempts
+
+        async def create_session(**kwargs):
+            created.append(kwargs)
+            return 99
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        async def scheduler_pass(_self=None):
+            return None
+
+        monkeypatch.setattr(sessions.db, "attempts_for_trigger", attempts_for_trigger)
+        monkeypatch.setattr(sessions.db, "create_session", create_session)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.SessionManager, "scheduler_pass", scheduler_pass)
+        return created
+
+    async def test_the_work_comes_back_where_it_came_from(self, monkeypatch):
+        from app import sessions
+
+        created = self.install(monkeypatch, attempts=1)
+
+        assert await sessions.manager.take_up_again(dict(self.ROW)) == 99
+        # The branch, the thread and the urgency belong to the request, not
+        # to the attempt that failed.
+        assert created[0]["branch"] == "logos/issue-797"
+        assert created[0]["reply_target"] == "issue:858"
+        assert created[0]["priority"] == 80
+        assert created[0]["deploy_to_dev"] is False
+
+    async def test_a_request_nothing_can_be_made_of_stops(self, monkeypatch):
+        from app import sessions
+
+        created = self.install(monkeypatch, attempts=sessions._MAX_ATTEMPTS_PER_REQUEST)
+
+        assert await sessions.manager.take_up_again(dict(self.ROW)) is None
+        assert created == []
