@@ -96,8 +96,10 @@ class PriorityQueueManager:
         # advances on actual dequeues only, so the 1:2 bound holds for the
         # manager's lifetime no matter how long a class idled: a flagged
         # burst arriving after a long regular-only stretch still gets at
-        # most 1 of every 3 dispatch slots, and a fresh flagged arrival
-        # never outranks the regular entries already waiting.
+        # most 1 of every 3 dispatch slots. A fresh flagged arrival may
+        # jump the regular entries waiting ahead of it only while the
+        # flagged slot is owed (fresh level, or a regular-only stretch);
+        # mid-cycle it waits for the owed regular pair.
         self._regular_since_flagged: Dict[int, Dict[Priority, int]] = defaultdict(
             lambda: defaultdict(lambda: _REGULAR_PER_CYCLE)
         )
@@ -122,8 +124,8 @@ class PriorityQueueManager:
 
         ``background_app`` marks background app traffic (see
         ``logos.pipeline.pipeline.is_background_app``): the entry takes its
-        place in the bounded interleave ahead of a queue of regular entries,
-        without monopolising dispatch (see ``_select_dispatch_head``).
+        place in the bounded interleave — a fast lane while the flagged
+        slot is owed, never a monopoly (see ``_select_dispatch_head``).
         """
         with self._lock:
             self._entry_counter += 1
