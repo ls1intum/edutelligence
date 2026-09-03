@@ -305,6 +305,18 @@
     <p class="empty">No sessions yet. Start one to put idle capacity to work.</p>
   }
 
+  @if (queuedSessions().length > 0) {
+    <!-- Its own group, in the order the scheduler will work through it:
+         shown among the running ones it would read newest-first, which is
+         not the order the arrows move things in. -->
+    <h2 class="section-title">Queue</h2>
+    <ul class="session-list">
+      @for (session of queuedSessions(); track session.id) {
+        <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+      }
+    </ul>
+  }
+
   @if (activeSessions().length > 0) {
     <h2 class="section-title">Active</h2>
     <ul class="session-list">

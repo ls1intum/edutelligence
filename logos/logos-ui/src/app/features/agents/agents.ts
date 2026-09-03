@@ -137,7 +137,10 @@ export class Agents implements OnInit {
   );
 
   // ── grouped view ─────────────────────────────────────────────────────────
-  activeSessions = computed(() => this.sessions().filter((s) => isActive(s.status)));
+  /** What is under way: everything active that is not still waiting. */
+  activeSessions = computed(() =>
+    this.sessions().filter((s) => isActive(s.status) && s.status !== 'queued'),
+  );
   finishedSessions = computed(() => this.sessions().filter((s) => !isActive(s.status)));
 
   loadPercent = computed(() => Math.round((this.capacity()?.load ?? 0) * 100));

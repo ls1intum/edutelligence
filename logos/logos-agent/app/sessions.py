@@ -559,8 +559,14 @@ class SessionManager:
         # lane that is genuinely busy, so admission uses the figure as
         # measured. Our own concurrency is bounded by the parallel ceiling,
         # not by this.
+        # Two readings: what the platform is doing, and what it is doing
+        # apart from this runner. The discount is applied *while* the
+        # per-model figures still exist — subtracting sessions on one model
+        # from a figure that describes another is how nine user requests
+        # read as four — which is why it is a second reading rather than an
+        # adjustment of the first.
         measured = await capacity.read_load(lane=policy.lane())
-        reading = capacity.without_our_own(measured, _ours_by_model(running, policy))
+        reading = await capacity.read_load(lane=policy.lane(), ours=_ours_by_model(running, policy))
         self._last_reading = measured
 
         if control.paused:
@@ -614,9 +620,8 @@ class SessionManager:
                     # reading that counts it would stop the batch on its own
                     # load — leaving the rest paused for nothing.
                     resumed = await db.sessions_in_status(SessionStatus.RUNNING)
-                    measured = await capacity.read_load(lane=policy.lane())
-                    reading = capacity.without_our_own(measured, _ours_by_model(resumed, policy))
-                    self._last_reading = measured
+                    self._last_reading = await capacity.read_load(lane=policy.lane())
+                    reading = await capacity.read_load(lane=policy.lane(), ours=_ours_by_model(resumed, policy))
                     if not capacity.resume_decision(reading)[0]:
                         break
                 if woken:

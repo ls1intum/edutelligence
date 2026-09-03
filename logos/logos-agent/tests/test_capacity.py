@@ -457,38 +457,78 @@ class TestWhichDecisionGetsTheDiscount:
     makes the runner stop for itself. Whether to admit is about the model:
     it does not matter who filled it, and our share is an estimate — a
     running session may be between turns, making no request at all.
+
+    Both figures come from the same parsing, because the discount only means
+    anything while the per-model numbers still exist.
     """
 
+    LANE = frozenset({("15", "97"), ("15", "37")})
+
     @staticmethod
-    def busy(busy_slots: int, queue: int = 0) -> capacity.Reading:
-        return capacity.Reading(load=busy_slots / 10, busy_slots=busy_slots, total_slots=10, queue_total=queue, ok=True)
+    def two_models(a_running: float, b_running: float, a_waiting: float = 0.0):
+        def model(name, running, waiting):
+            return {
+                "model_name": name,
+                "active": 0,
+                "queue_depth": 0,
+                "max_capacity": 10,
+                "loaded": True,
+                "scheduler_signals": {
+                    "requests_running_current": running,
+                    "queue_waiting_current": waiting,
+                },
+            }
 
-    def test_our_own_load_comes_off(self):
-        reading = capacity.without_our_own(self.busy(5), {"qwen": 2})
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {
+                            "97": model("model-a", a_running, a_waiting),
+                            "37": model("model-b", b_running, 0.0),
+                        }
+                    }
+                }
+            },
+        }
 
-        assert reading.busy_slots == 3 and reading.load == 0.3
+    def test_our_sessions_on_one_model_do_not_empty_another(self):
+        # The finding: nine user requests on A and five runner sessions on
+        # B read as 40% and stopped the runner from ever yielding.
+        payload = self.two_models(a_running=9.0, b_running=5.0)
 
-    def test_our_own_queueing_is_not_a_user_waiting(self):
-        reading = capacity.without_our_own(self.busy(2, queue=1), {"qwen": 3})
+        adjusted = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={"model-b": 5})
 
-        assert reading.queue_total == 0
+        assert adjusted.load == 0.9
+        assert "model-a" in adjusted.detail
+
+    def test_our_own_load_still_comes_off_its_own_model(self):
+        payload = self.two_models(a_running=2.0, b_running=5.0)
+
+        adjusted = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={"model-b": 5})
+
+        assert adjusted.load == 0.2
+
+    def test_the_measured_figure_keeps_everything(self):
+        payload = self.two_models(a_running=2.0, b_running=5.0)
+
+        measured = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        # What admission decides on: it does not matter who filled the lane.
+        assert measured.load == 0.5
 
     def test_a_user_waiting_behind_us_still_counts(self):
-        reading = capacity.without_our_own(self.busy(2, queue=3), {"qwen": 3})
+        payload = self.two_models(a_running=2.0, b_running=0.0, a_waiting=3.0)
 
-        assert reading.queue_total == 2 and reading.saturated
+        adjusted = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={"model-a": 3})
 
-    def test_nothing_of_ours_changes_nothing(self):
-        before = self.busy(4)
-
-        assert capacity.without_our_own(before, {}) is before
-
-    def test_an_unreadable_platform_is_left_alone(self):
-        assert capacity.without_our_own(capacity.UNKNOWN, {"qwen": 3}) is capacity.UNKNOWN
+        # Two of ours were serving, one of the three waiting is ours.
+        assert adjusted.queue_total == 2 and adjusted.saturated
 
     def test_it_never_subtracts_more_than_is_there(self):
-        # The count is an upper bound on what is ours: a session between
-        # turns has no request outstanding.
-        reading = capacity.without_our_own(self.busy(1, queue=0), {"qwen": 9})
+        payload = self.two_models(a_running=1.0, b_running=0.0)
 
-        assert reading.busy_slots == 0 and reading.queue_total == 0
+        adjusted = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={"model-a": 9})
+
+        assert adjusted.busy_slots == 0 and adjusted.queue_total == 0

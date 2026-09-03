@@ -2291,7 +2291,12 @@ class TestOverlappingAdmission:
         real_start_decision = capacity.start_decision
 
         async def fake_read_load(lane=None, ours=None):
-            return readings.pop(0) if len(readings) > 1 else readings[0]
+            # A pass takes two readings of one moment — the platform's, and
+            # the platform's minus this runner's share — so only the first
+            # of the pair advances the prepared sequence.
+            if ours is None and len(readings) > 1:
+                return readings.pop(0)
+            return readings[0]
 
         def spy_start_decision(reading, **kwargs):
             decided_loads.append(reading.load)
@@ -2344,10 +2349,7 @@ class TestOverlappingAdmission:
         assert launched == [1]
         assert [sid for sid, state in states.items() if state == "queued"] == [2, 3, 4]
         # And the second decision was made on a post-launch observation, not
-        # on the shared pre-launch one. The figure it decided on is that
-        # observation minus the runner's own session — the load the launch
-        # caused is this runner's, and reacting to it would be reacting to
-        # itself.
+        # on the shared pre-launch one.
         assert decided_loads[0] == 0.0
         assert decided_loads[1] > 0.0
 
@@ -3972,7 +3974,9 @@ class TestAdmissionMeasuresTheRightLane:
 
         await sessions.manager.scheduler_pass()
 
-        assert len(readings) == 1
+        # Two of the same moment — with and without this runner's share —
+        # and nothing queued, so admission takes none of its own.
+        assert len(readings) == 2
 
 
 class TestPicturesTravelWithTheRequest:
