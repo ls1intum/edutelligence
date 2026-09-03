@@ -79,11 +79,12 @@ export interface AgentModels {
   detail: string;
 }
 
-/** Whether the runner queues work of its own, and what it has queued. */
+/** Whether the runner reacts to the repository, and what it has queued. */
 export interface AgentTriggers {
   enabled: boolean;
   polling: boolean;
-  label: string;
+  /** The GitHub account whose assignments and mentions it answers. */
+  account: string;
   poll_interval_s: number;
   max_active_sessions: number;
   active_sessions: number;

@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from .config import settings
-from .schemas import ACTIVE_STATUSES, EventKind, SessionStatus
+from .schemas import ACTIVE_STATUSES, TERMINAL_STATUSES, EventKind, SessionStatus
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker | None = None
@@ -308,6 +308,7 @@ async def create_session(
     trigger_kind: str | None = None,
     trigger_ref: str | None = None,
     branch: str | None = None,
+    reply_target: str | None = None,
 ) -> int:
     async with sessionmaker()() as db:
         # Lock the workspace row before inserting. delete_workspace takes
@@ -333,11 +334,11 @@ async def create_session(
                     INSERT INTO agent_sessions
                         (workspace_id, task, model, status, created_by,
                          open_pull_request, deploy_to_dev, screenshot_paths,
-                         trigger_kind, trigger_ref, branch_name)
+                         trigger_kind, trigger_ref, branch_name, reply_target)
                     VALUES
                         (:workspace_id, :task, :model, 'queued', :created_by,
                          :open_pr, :deploy, CAST(:paths AS jsonb),
-                         :trigger_kind, :trigger_ref, :branch)
+                         :trigger_kind, :trigger_ref, :branch, :reply_target)
                     RETURNING id
                     """
                 ),
@@ -356,6 +357,7 @@ async def create_session(
                     # answers. Otherwise the launch derives the branch from
                     # the session id.
                     "branch": branch,
+                    "reply_target": reply_target,
                 },
             )
         ).scalar_one()
@@ -363,29 +365,23 @@ async def create_session(
     return int(session_id)
 
 
-async def handled_trigger_refs(refs: Sequence[str], since: datetime) -> set[str]:
-    """Which of these GitHub events already have a session.
+async def handled_trigger_refs(refs: Sequence[str]) -> set[str]:
+    """Which of these GitHub events already have a session — ever.
 
-    A reference counts as handled while its session is still active, and for
-    as long as ``since`` looks back once it has finished. Both halves matter:
-    without the first, a poll would queue a second session for an event the
-    first is still working on; without the second, a finished session would
-    let the same review trigger the same work forever.
+    Deliberately without a time window. A reference names one thing that
+    happened once: an issue was assigned, a review was submitted, somebody
+    asked a question. Answering it a second time a week later would be a
+    duplicate pull request or a duplicate answer, not a retry — and an issue
+    that simply stays assigned would produce one every week. A session that
+    failed is re-queued by a person, who can see why it failed.
     """
     if not refs:
         return set()
     async with sessionmaker()() as db:
         rows = (
             await db.execute(
-                text(
-                    """
-                    SELECT DISTINCT trigger_ref
-                      FROM agent_sessions
-                     WHERE trigger_ref = ANY(:refs)
-                       AND (status = ANY(:active) OR created_at >= :since)
-                    """
-                ),
-                {"refs": list(refs), "active": [s.value for s in ACTIVE_STATUSES], "since": since},
+                text("SELECT DISTINCT trigger_ref FROM agent_sessions WHERE trigger_ref = ANY(:refs)"),
+                {"refs": list(refs)},
             )
         ).all()
     return {row[0] for row in rows}
@@ -403,6 +399,56 @@ async def session_is_starting(session_id: int) -> bool:
             await db.execute(text("SELECT status FROM agent_sessions WHERE id = :id"), {"id": session_id})
         ).scalar_one_or_none()
     return status == SessionStatus.STARTING.value
+
+
+async def sessions_owing_a_reply(max_attempts: int) -> list[dict[str, Any]]:
+    """Finished sessions whose answer has not reached GitHub yet.
+
+    The reply is attempted once when a session settles; a timeout or a 5xx
+    at that moment would otherwise lose it, because the trigger reference
+    counts as handled and nothing looks at it again. This is what a later
+    pass retries.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        """
+                    SELECT id, reply_target, reply_attempts
+                      FROM agent_sessions
+                     WHERE reply_target IS NOT NULL
+                       AND reply_posted_at IS NULL
+                       AND reply_attempts < :max_attempts
+                       AND status = ANY(:terminal)
+                     ORDER BY id
+                     LIMIT 20
+                    """
+                    ),
+                    {"max_attempts": max_attempts, "terminal": [s.value for s in TERMINAL_STATUSES]},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    return [dict(row) for row in rows]
+
+
+async def record_reply_attempt(session_id: int, *, delivered: bool) -> None:
+    """Count an attempt, and stamp the delivery when it worked."""
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                UPDATE agent_sessions
+                   SET reply_attempts = reply_attempts + 1,
+                       reply_posted_at = CASE WHEN :delivered THEN :now ELSE reply_posted_at END
+                 WHERE id = :id
+                """
+            ),
+            {"id": session_id, "delivered": delivered, "now": _now()},
+        )
+        await db.commit()
 
 
 async def count_active_trigger_sessions() -> int:
@@ -432,7 +478,7 @@ _SESSION_SELECT = """
            s.model, s.branch_name, s.pr_url, s.created_by, s.created_at,
            s.started_at, s.finished_at, s.exit_code, s.error,
            s.container_id, s.open_pull_request, s.deploy_to_dev,
-           s.screenshot_paths, s.trigger_kind, s.trigger_ref,
+           s.screenshot_paths, s.trigger_kind, s.trigger_ref, s.reply_target,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_usd, 0) AS cost_usd,

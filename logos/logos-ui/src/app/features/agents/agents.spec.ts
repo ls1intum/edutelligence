@@ -90,7 +90,7 @@ class FakeAgentService {
     return {
       enabled: false,
       polling: false,
-      label: 'logos-agent',
+      account: 'LogosOSSAgent',
       poll_interval_s: 120,
       max_active_sessions: 5,
       active_sessions: 0,

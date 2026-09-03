@@ -2867,3 +2867,121 @@ class TestRestartReconciliation:
         assert stopped == ["cid-x"]
         assert removed == ["cid-x"]
         assert supervised == []
+
+
+class TestReplyDelivery:
+    """An answer that GitHub refused once is not an answer lost.
+
+    Delivery happens when a session settles, and its trigger counts as
+    handled from then on — so without a retry a single timeout would leave
+    somebody waiting on a thread forever.
+    """
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_a_failed_delivery_is_recorded_as_pending(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("the answer")
+        attempts: list = []
+
+        async def failing_reply(_target, _body):
+            raise RuntimeError("502 from GitHub")
+
+        async def record(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(failing_reply))
+
+        await sessions.SessionManager()._post_reply(7)
+
+        assert attempts == [(7, False)]
+
+    async def test_a_pending_answer_is_tried_again(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("the answer")
+        posted: list = []
+        attempts: list = []
+
+        async def owing(_max_attempts):
+            return [{"id": 7, "reply_target": "issue:772", "reply_attempts": 1}]
+
+        async def send(target, body):
+            posted.append((target, body))
+            return "https://github.com/x/y#c9"
+
+        async def record(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        monkeypatch.setattr(sessions.db, "sessions_owing_a_reply", owing)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        await sessions.SessionManager().deliver_pending_replies()
+
+        assert posted == [("issue:772", "the answer")]
+        assert attempts == [(7, True)]
+
+    async def test_a_delivered_answer_is_not_posted_twice(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("the answer")
+        posted: list = []
+
+        async def send(target, body):
+            posted.append(target)
+            return "url"
+
+        monkeypatch.setattr(
+            sessions.db,
+            "get_session",
+            self._async_value({"reply_target": "issue:772", "reply_posted_at": "2026-09-02T18:00:00Z"}),
+        )
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", self._async_value(None))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        await sessions.SessionManager()._post_reply(7)
+
+        assert posted == []
+
+    async def test_an_oversized_answer_is_shortened_rather_than_refused(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("x" * 80_000)
+        posted: list = []
+
+        async def send(_target, body):
+            posted.append(body)
+            return "url"
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", self._async_value(None))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        await sessions.SessionManager()._post_reply(7)
+
+        # GitHub rejects a body over 65 536 characters outright, and a
+        # rejected answer is no answer.
+        assert len(posted[0]) < 65_000
+        assert posted[0].endswith("_[answer truncated]_")

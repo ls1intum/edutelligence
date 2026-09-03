@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 
 from . import capacity, db, docker_engine, github, model_policy
-from .config import settings
+from .config import REPLY_FILE, settings
 from .schemas import EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,13 @@ _BRANCH_SAFE = re.compile(r"[^a-zA-Z0-9_-]")
 # a stopped helper container to be reaped, short enough that a wedged Docker
 # call cannot hold the cancel API open.
 _CANCEL_LAUNCH_WAIT_S = 60.0
+
+# GitHub rejects a comment body longer than 65536 characters; the margin
+# leaves room for the truncation note.
+_MAX_REPLY_CHARS = 60000
+
+# How often an undelivered answer is retried before it is left alone.
+_MAX_REPLY_ATTEMPTS = 5
 
 
 def container_name(session_id: int) -> str:
@@ -349,6 +356,16 @@ class SessionManager:
             except Exception:
                 logger.exception("scheduler pass failed")
             try:
+                # Answers that did not reach GitHub when their session
+                # settled. Beside the pass rather than inside it: a pass is
+                # about admitting and yielding, and every session creation
+                # schedules one of those.
+                await self.deliver_pending_replies()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("retrying undelivered answers failed")
+            try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=settings.scheduler_interval_s)
             except asyncio.TimeoutError:
                 pass
@@ -516,16 +533,20 @@ class SessionManager:
             await self._settle(sid, exit_code=None, error="workspace disappeared")
             return
 
-        # A session queued against an existing branch — a review session
-        # updating the pull request it answers — carries it on the row. Every
-        # other session gets the branch derived from its id. Both go through
-        # the same check below: a preset branch is no more trusted than a
-        # derived one, and it is the only place a bug could aim a push at a
-        # protected branch.
-        branch = str(session.get("branch_name") or "") or branch_for(sid, workspace["name"])
-        if branch.rsplit("/", 1)[-1] in settings.protected_branches or not branch.startswith(settings.branch_prefix):
-            # Cannot happen with the derivation above, but the check is cheap
-            # and this is the one place where a bug would push to main.
+        # A session queued against an existing branch — a review answered, or
+        # a pull request handed over — carries it on the row and keeps that
+        # name: renaming somebody's branch would abandon the pull request it
+        # belongs to. Everything else gets the branch derived from the
+        # session id, under the runner's own prefix.
+        taken_over = str(session.get("branch_name") or "")
+        branch = taken_over or branch_for(sid, workspace["name"])
+        if branch in settings.protected_branches or branch.rsplit("/", 1)[-1] in settings.protected_branches:
+            # This is the one place where a bug would push to main.
+            await self._settle(sid, exit_code=None, error=f"refusing branch '{branch}'")
+            return
+        if not taken_over and not branch.startswith(settings.branch_prefix):
+            # The prefix binds branches the runner creates; it says nothing
+            # about one it was handed.
             await self._settle(sid, exit_code=None, error=f"refusing branch '{branch}'")
             return
 
@@ -677,6 +698,10 @@ class SessionManager:
             # /artifacts is its output root; there is no per-session prefix
             # to get wrong.
             "LOGOS_ARTIFACT_DIR": "/artifacts",
+            # Where an answer goes when the session was asked something. The
+            # task text names the same file; this is what makes it available
+            # to anything else in the container that wants it.
+            "LOGOS_SESSION_REPLY_FILE": f"/artifacts/{REPLY_FILE}",
         }
         if model:
             for key in (
@@ -1011,6 +1036,14 @@ class SessionManager:
         if result.get("pr_url"):
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
 
+        # Somebody asked this session a question. The agent phase holds no
+        # GitHub credential, so it wrote the answer into its artefact
+        # directory and this is where the answer is posted — by the process
+        # that does hold the token. Posted even for a failed session: a
+        # partial answer beats silence on a thread where a person is
+        # waiting.
+        await self._post_reply(session_id)
+
         deploy: str | None = None
         after_run_id: int | None = None
         if succeeded:
@@ -1029,6 +1062,76 @@ class SessionManager:
                 await self._capture_screenshots(session_id, deploy, after_run_id)
         else:
             await self._cleanup_container(session_id)
+
+    async def deliver_pending_replies(self) -> None:
+        """Try again for answers that did not reach GitHub the first time.
+
+        Delivery happens once when a session settles, and a timeout or a 5xx
+        at that moment would otherwise lose the answer for good: the trigger
+        reference counts as handled, so nothing looks at it again. Every
+        scheduler pass gives the few outstanding ones another go, until they
+        land or the attempts run out.
+        """
+        try:
+            owing = await db.sessions_owing_a_reply(_MAX_REPLY_ATTEMPTS)
+        except Exception as exc:
+            logger.warning("could not look for undelivered answers: %s", exc)
+            return
+        for row in owing:
+            await self._post_reply(int(row["id"]))
+
+    async def _post_reply(self, session_id: int) -> None:
+        """Post the answer a session wrote, if it was asked for one."""
+        session = await db.get_session(session_id)
+        target = str((session or {}).get("reply_target") or "")
+        if not target:
+            return
+        if (session or {}).get("reply_posted_at"):
+            return
+        path = artifact_dir(session_id) / REPLY_FILE
+        try:
+            body = path.read_text().strip()
+        except OSError:
+            logger.info("session %s was asked a question but wrote no answer", session_id)
+            return
+        if not body:
+            logger.info("session %s wrote an empty answer; nothing to post", session_id)
+            return
+        if len(body) > _MAX_REPLY_CHARS:
+            # GitHub refuses a comment above its length limit outright, and
+            # an answer nobody receives is worse than a shortened one on a
+            # thread where somebody is waiting.
+            body = body[:_MAX_REPLY_CHARS].rstrip() + "\n\n_[answer truncated]_"
+            logger.info("the answer of session %s was truncated to fit a GitHub comment", session_id)
+        try:
+            url = await self._send_reply(target, body)
+        except Exception as exc:
+            # Counted, not given up on: the next scheduler pass tries again
+            # until it lands or the attempts run out.
+            await db.record_reply_attempt(session_id, delivered=False)
+            logger.warning("could not post the answer of session %s (will retry): %s", session_id, exc)
+            await db.add_event(session_id, EventKind.ERROR, {"error": f"could not post the reply: {exc}"})
+            return
+        await db.record_reply_attempt(session_id, delivered=True)
+        await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True})
+        logger.info("session %s answered at %s", session_id, url)
+
+    @staticmethod
+    async def _send_reply(target: str, body: str) -> str:
+        """Post one answer where its question was asked.
+
+        ``target`` is what the trigger recorded: ``issue:<n>`` for a thread,
+        or ``review_comment:<n>:<id>`` to answer inside an inline review
+        thread — where the question was asked, and where its author is
+        looking.
+        """
+        kind, _, rest = target.partition(":")
+        if kind == "issue":
+            return await github.post_issue_comment(int(rest), body)
+        if kind == "review_comment":
+            number, _, comment_id = rest.partition(":")
+            return await github.reply_to_review_comment(int(number), int(comment_id), body)
+        raise ValueError(f"unknown reply target '{target}'")
 
     def _read_result(self, session_id: int) -> dict[str, Any]:
         """Read the result file the container writes before it exits.
