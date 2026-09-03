@@ -28,6 +28,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "workspace"))
 
+import run_session  # noqa: E402
 from run_session import (  # noqa: E402
     Result,
     _clear_checkout,
@@ -580,3 +581,72 @@ class TestWorkflowFileGuard:
         monkeypatch.delenv("LOGOS_AGENT_WORKFLOW_CHANGES", raising=False)
         with pytest.raises(RuntimeError):
             run_session._refuse_workflow_changes([".github/workflows/x.yml"])
+
+
+class TestSurvivingAPause:
+    """The platform takes its capacity back by cutting the session off.
+
+    Every session that was paused died of it before this existed, and every
+    session that was never paused finished — hours of work thrown away by
+    the mechanism that is supposed to be the cheap way to yield.
+    """
+
+    @staticmethod
+    def install(monkeypatch, runs):
+        """Each run is (exit code, lines it printed)."""
+        seen: list[list[str]] = []
+
+        def fake_drive(cmd):
+            seen.append(cmd)
+            code, lines = runs[len(seen) - 1]
+            interrupted = False
+            for line in lines:
+                if any(marker in line.lower() for marker in run_session._INTERRUPTIONS):
+                    interrupted = True
+            return code, {"usage": {"output_tokens": 1}}, interrupted
+
+        monkeypatch.setattr(run_session, "_drive_agent", fake_drive)
+        return seen
+
+    def test_an_interrupted_run_is_continued(self, monkeypatch):
+        seen = self.install(
+            monkeypatch,
+            [
+                (1, ["API Error: Connection lost mid-response. The response above may be incomplete."]),
+                (0, ["[result] success"]),
+            ],
+        )
+
+        run_session.run_agent("do the thing")
+
+        assert len(seen) == 2
+        # The second run continues the conversation rather than starting the
+        # task again: the checkout is as the agent left it.
+        assert "--continue" in seen[1]
+        assert "--continue" not in seen[0]
+
+    def test_an_ordinary_failure_is_not_retried(self, monkeypatch):
+        # A task the agent could not do is a result, not an interruption.
+        seen = self.install(monkeypatch, [(1, ["[result] error_during_execution"])])
+
+        with pytest.raises(RuntimeError, match="exited with code 1"):
+            run_session.run_agent("do the thing")
+
+        assert len(seen) == 1
+
+    def test_continuing_does_not_go_on_forever(self, monkeypatch):
+        cut = (1, ["API Error: Connection lost mid-response."])
+        seen = self.install(monkeypatch, [cut] * 10)
+
+        with pytest.raises(RuntimeError):
+            run_session.run_agent("do the thing")
+
+        # A gateway that is genuinely down stops being asked.
+        assert len(seen) == run_session._MAX_CONTINUATIONS + 1
+
+    def test_a_successful_run_is_driven_once(self, monkeypatch):
+        seen = self.install(monkeypatch, [(0, ["[result] success"])])
+
+        run_session.run_agent("do the thing")
+
+        assert len(seen) == 1

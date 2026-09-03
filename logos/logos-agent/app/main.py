@@ -23,9 +23,11 @@ from . import capacity, controls, db, docker_engine, github, model_policy, pulse
 from .auth import Principal, require_agent_operator
 from .config import settings
 from .schemas import (
+    TERMINAL_STATUSES,
     CapacityState,
     ControlState,
     ControlUpdate,
+    EventKind,
     SessionCreate,
     SessionEvent,
     SessionStatus,
@@ -354,6 +356,64 @@ async def cancel_session(session_id: int, _: Principal = Depends(require_agent_o
             detail=f"Session is {row['status']} and cannot be cancelled",
         )
     return {"cancelled": True}
+
+
+@app.post(
+    "/sessions/{session_id}/retry",
+    response_model=SessionSummary,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["sessions"],
+)
+async def retry_session(session_id: int, principal: Principal = Depends(require_agent_operator)) -> SessionSummary:
+    """Queue the same work again, from where it came from.
+
+    A session that failed keeps its task, its workspace and — for work that
+    came from the repository — the branch and the thread it belongs to.
+    Without this the only way back was to retype the task by hand, and a
+    request the runner took on and then lost to an infrastructure failure
+    was simply gone: the trigger counts as handled, so no later pass finds
+    it again.
+
+    A new row rather than a resurrection of the old one: the failed session
+    keeps its transcript and its reason, which is the record of what
+    happened.
+    """
+    row = await db.get_session(session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if row["status"] not in {s.value for s in TERMINAL_STATUSES}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Session is {row['status']}; retry it once it has finished",
+        )
+    try:
+        new_id = await db.create_session(
+            workspace_id=row["workspace_id"],
+            task=row["task"],
+            model=row.get("model"),
+            created_by=principal.username or "operator",
+            open_pull_request=bool(row.get("open_pull_request")),
+            # Deploying is a decision per attempt, not a property of the work.
+            deploy_to_dev=False,
+            screenshot_paths=[],
+            trigger_kind=row.get("trigger_kind"),
+            trigger_ref=row.get("trigger_ref"),
+            branch=row.get("branch_name"),
+            reply_target=row.get("reply_target"),
+            reaction_target=row.get("reaction_target"),
+            priority=int(row.get("priority") or 50),
+            priority_reason=row.get("priority_reason"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await db.add_event(new_id, EventKind.STATUS, {"status": "queued", "retry_of": session_id})
+    logger.info("session %s queued as a retry of %s", new_id, session_id)
+    # Same reason as a fresh session: a pass now means it starts in a second
+    # rather than at the next tick.
+    asyncio.create_task(manager.scheduler_pass())
+    created = await db.get_session(new_id)
+    assert created is not None
+    return SessionSummary(**_summary_fields(created))
 
 
 @app.get("/sessions/{session_id}/events", response_model=list[SessionEvent], tags=["sessions"])

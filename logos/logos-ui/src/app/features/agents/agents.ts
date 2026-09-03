@@ -372,6 +372,30 @@ export class Agents implements OnInit {
   }
 
   private stream: AbortController | null = null;
+  retrying = signal<number | null>(null);
+
+  /**
+   * Queue a finished session's work again.
+   *
+   * A session that failed keeps its task, its workspace and — for work the
+   * runner took on itself — the branch and the thread it belongs to. What
+   * came from the repository is not queued a second time by the poller
+   * either: the trigger counts as handled the moment a session exists for
+   * it, so without this the request was simply gone.
+   */
+  async retry(session: AgentSession): Promise<void> {
+    if (this.retrying() !== null) return;
+    this.retrying.set(session.id);
+    try {
+      const fresh = await this.agentService.retrySession(session.id);
+      await this.refresh({ quiet: true });
+      await this.select(fresh);
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not queue that work again.'));
+    } finally {
+      this.retrying.set(null);
+    }
+  }
 
   private async loadEvents(): Promise<void> {
     const id = this.selectedId();

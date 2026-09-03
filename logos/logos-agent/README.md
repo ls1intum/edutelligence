@@ -411,6 +411,19 @@ an `Authorization` header, and the token is what authorises the read.
   before.
 - **A stuck session is capped**, not left to burn capacity — `SESSION_TIMEOUT_S`
   stops it and records the reason.
+- **Yielding does not cost the work.** Freezing a session and cutting it off
+  the model network — which is how capacity is handed back — ends the answer
+  it was reading, and the agent meets a dead connection when it thaws. That
+  used to end the session: every session that was paused failed with `exit
+  code 1`, and every session that was never paused finished. The agent
+  phase now recognises the interruption and continues the same conversation
+  in the same checkout, up to three times, so a pause costs a retry instead
+  of an afternoon.
+- **Work can be run again.** A failed session keeps its task, its workspace,
+  its branch and the thread it came from, and *Run again* queues all of it as
+  a new session. This is the only way back for work the runner took on
+  itself: a trigger counts as handled the moment a session exists for it, so
+  no later pass finds that issue, review or question again.
 - **Nothing merges itself.** Pull requests are opened as drafts, and a person
   approves and merges exactly as they do for human work.
 - **Screenshots follow the deploy.** A session that asks for dev screenshots

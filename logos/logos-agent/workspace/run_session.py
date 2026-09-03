@@ -395,9 +395,28 @@ def build_prompt(task: str) -> str:
     )
 
 
-def run_agent(task: str) -> dict[str, object]:
-    """Drive the coding agent and return what it reported about the run."""
-    prompt = build_prompt(task)
+# What the CLI prints when its connection to the model died mid-answer. The
+# runner causes exactly this on purpose: a session paused to give capacity
+# back is frozen and taken off the model network, so the response it was
+# reading ends under it. Every session that was paused died this way before
+# the retry below existed, and every session that was never paused finished.
+_INTERRUPTIONS = (
+    "connection lost mid-response",
+    "connection error",
+    "api error: request timed out",
+    "fetch failed",
+    "socket hang up",
+    "econnreset",
+)
+
+# How many times a run may be picked up again after such an interruption.
+# The work itself is in the checkout, so continuing costs a prompt and the
+# conversation it resumes; three is enough for a busy afternoon of pauses
+# and few enough that a genuinely broken gateway stops being retried.
+_MAX_CONTINUATIONS = 3
+
+
+def _agent_command(prompt: str, *, resuming: bool) -> list[str]:
     cmd = [
         "claude",
         "-p",
@@ -410,20 +429,28 @@ def run_agent(task: str) -> dict[str, object]:
         "--permission-mode",
         "bypassPermissions",
     ]
+    if resuming:
+        # Same conversation, same working directory: the agent keeps what it
+        # has already read and done instead of starting the task again.
+        cmd.append("--continue")
     max_turns = os.environ.get("LOGOS_SESSION_MAX_TURNS", "").strip()
     if max_turns.isdigit():
         cmd += ["--max-turns", max_turns]
+    return cmd
 
-    log("starting agent")
-    started = time.monotonic()
+
+def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool]:
+    """Run one invocation. Returns its exit code, usage, and whether it was cut off."""
     usage: dict[str, object] = {}
-
+    interrupted = False
     process = subprocess.Popen(cmd, cwd=CHECKOUT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert process.stdout is not None
     for line in process.stdout:
         line = line.rstrip("\n")
         if not line:
             continue
+        if any(marker in line.lower() for marker in _INTERRUPTIONS):
+            interrupted = True
         # The stream is newline-delimited JSON; anything that is not valid JSON
         # is the CLI talking to us directly, and is worth showing verbatim.
         try:
@@ -434,13 +461,54 @@ def run_agent(task: str) -> dict[str, object]:
         _render_event(event)
         if event.get("type") == "result":
             usage = event
-    code = process.wait()
-    elapsed = time.monotonic() - started
-    log(f"agent finished in {elapsed:.0f}s with exit code {code}")
-    if code != 0:
-        raise RuntimeError(f"agent exited with code {code}")
-    return usage
+    return process.wait(), usage, interrupted
 
+
+def run_agent(task: str) -> dict[str, object]:
+    """Drive the coding agent and return what it reported about the run.
+
+    An interrupted run is picked up rather than failed. The platform takes
+    its capacity back by freezing a session and cutting it off the model
+    network — deliberately, so a waiting user gets the slot — and the agent
+    finds a dead response when it thaws. Treating that as a failed session
+    threw away everything it had done: hours of work, uncommitted, in a
+    checkout the next session resets.
+    """
+    prompt = build_prompt(task)
+    started = time.monotonic()
+    log("starting agent")
+    usage: dict[str, object] = {}
+    for attempt in range(_MAX_CONTINUATIONS + 1):
+        resuming = attempt > 0
+        if resuming:
+            log(f"the agent's connection was cut; continuing where it left off ({attempt}/{_MAX_CONTINUATIONS})")
+        code, run_usage, interrupted = _drive_agent(
+            _agent_command(CONTINUE_PROMPT if resuming else prompt, resuming=resuming)
+        )
+        if run_usage:
+            usage = run_usage
+        if code == 0:
+            elapsed = time.monotonic() - started
+            log(f"agent finished in {elapsed:.0f}s with exit code {code}")
+            return usage
+        if not interrupted or attempt == _MAX_CONTINUATIONS:
+            elapsed = time.monotonic() - started
+            log(f"agent finished in {elapsed:.0f}s with exit code {code}")
+            raise RuntimeError(f"agent exited with code {code}")
+    raise RuntimeError("agent exited without a result")
+
+
+# What the agent is told when it comes back from an interruption. Short on
+# purpose: the conversation it resumes carries the task, and repeating it
+# would invite starting over.
+CONTINUE_PROMPT = (
+    "Your connection to the model was interrupted — the platform froze this "
+    "session to give a waiting user its capacity, and the answer you were "
+    "receiving was cut off. Nothing you had already done was lost: the "
+    "working copy is exactly as you left it. Carry on from where you were. "
+    "If you are unsure how far you got, check `git status` and the files you "
+    "were editing before assuming anything."
+)
 
 # What has been spent so far, as the transcript goes. The runner reads these
 # lines back out of the container's output: it is the only channel out of the

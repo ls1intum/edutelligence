@@ -59,6 +59,13 @@ export class AgentService {
     );
   }
 
+  /** Queue the same work again — same task, workspace, branch and thread. */
+  retrySession(id: number): Promise<AgentSession> {
+    return firstValueFrom(
+      this.http.post<AgentSession>(`${AgentService.BASE}/sessions/${id}/retry`, {}),
+    );
+  }
+
   getEvents(sessionId: number, afterId = 0): Promise<AgentEvent[]> {
     const params = new HttpParams().set('after_id', afterId);
     return firstValueFrom(

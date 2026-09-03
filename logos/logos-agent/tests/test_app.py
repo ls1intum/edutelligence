@@ -8,6 +8,8 @@ tests import the app and inspect what it built.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from app import main
 from fastapi.routing import APIRoute
@@ -271,3 +273,114 @@ class TestTheEndpointsThatCombineModules:
 
         assert status["active_sessions"] == 1
         assert status["max_active_sessions"] <= 2
+
+
+class TestRunningWorkAgain:
+    """A failed session's request would otherwise be gone.
+
+    The trigger counts as handled the moment a session exists for it, so no
+    later pass finds that issue, review or question again — and the runner
+    is the thing that failed, not the request.
+    """
+
+    ROW = {
+        "id": 20,
+        "workspace_id": 3,
+        "workspace_name": "pr-858",
+        "task": "answer the review on #858",
+        "status": "failed",
+        "model": None,
+        "pr_url": None,
+        "created_by": "LogosOSSAgent",
+        "created_at": datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc),
+        "started_at": None,
+        "finished_at": None,
+        "exit_code": 1,
+        "error": "agent exited with code 1",
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "cost_usd": 0.0,
+        "screenshot_count": 0,
+        "open_pull_request": False,
+        "trigger_kind": "review",
+        "trigger_ref": "pr-858-review-5088907839",
+        "branch_name": "logos/issue-797-dynamic-ram",
+        "reply_target": "issue:858",
+        "reaction_target": "/repos/x/y/issues/858",
+        "priority": 80,
+        "priority_reason": "a review is waiting",
+    }
+
+    def install(self, monkeypatch, *, status_value="failed"):
+        from app import db, main, sessions
+
+        created: list[dict] = []
+        rows = {20: {**self.ROW, "status": status_value}}
+
+        async def get_session(session_id):
+            return rows.get(session_id)
+
+        async def create_session(**kwargs):
+            created.append(kwargs)
+            rows[21] = {**self.ROW, "id": 21, "status": "queued"}
+            return 21
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        async def scheduler_pass():
+            return None
+
+        monkeypatch.setattr(db, "get_session", get_session)
+        monkeypatch.setattr(db, "create_session", create_session)
+        monkeypatch.setattr(db, "add_event", add_event)
+        monkeypatch.setattr(sessions.manager, "scheduler_pass", scheduler_pass)
+        monkeypatch.setattr(main, "_summary_fields", lambda row: dict(row))
+        return created
+
+    async def test_the_work_is_queued_again_where_it_came_from(self, monkeypatch):
+        created = self.install(monkeypatch)
+
+        await main.retry_session(20, principal=_principal())
+
+        assert created and created[0]["task"] == self.ROW["task"]
+        assert created[0]["workspace_id"] == 3
+        # The branch, the thread and the urgency belong to the request, not
+        # to the attempt that failed.
+        assert created[0]["branch"] == "logos/issue-797-dynamic-ram"
+        assert created[0]["reply_target"] == "issue:858"
+        assert created[0]["trigger_ref"] == "pr-858-review-5088907839"
+        assert created[0]["priority"] == 80
+
+    async def test_deploying_is_decided_per_attempt(self, monkeypatch):
+        created = self.install(monkeypatch)
+
+        await main.retry_session(20, principal=_principal())
+
+        assert created[0]["deploy_to_dev"] is False
+
+    async def test_a_session_still_running_is_refused(self, monkeypatch):
+        from fastapi import HTTPException
+
+        self.install(monkeypatch, status_value="running")
+
+        with pytest.raises(HTTPException) as refused:
+            await main.retry_session(20, principal=_principal())
+
+        assert refused.value.status_code == 409
+
+    async def test_an_unknown_session_is_not_found(self, monkeypatch):
+        from fastapi import HTTPException
+
+        self.install(monkeypatch)
+
+        with pytest.raises(HTTPException) as missing:
+            await main.retry_session(4711, principal=_principal())
+
+        assert missing.value.status_code == 404
+
+
+def _principal():
+    from app.auth import Principal
+
+    return Principal(subject="s", username="tobias", roles=frozenset({"agent-operator"}))

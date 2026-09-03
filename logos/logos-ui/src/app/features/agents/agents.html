@@ -398,6 +398,18 @@
             session.status === 'finalizing'
           ) {
             <button class="btn btn--danger" (click)="cancel(session)">Cancel session</button>
+          } @else {
+            <!-- A session that failed took its request with it: the trigger
+                 counts as handled, so the poller will not find that issue,
+                 review or question again. This is the way back. -->
+            <button
+              class="btn"
+              (click)="retry(session)"
+              [disabled]="retrying() !== null"
+              title="Queue the same work again — same task, workspace and branch"
+            >
+              {{ retrying() === session.id ? 'Queueing…' : 'Run again' }}
+            </button>
           }
 
           @if (session.error) {
