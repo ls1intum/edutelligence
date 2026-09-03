@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- What an operator can change about the agent runner while it runs.
+
+         The environment configures a deployment; this configures a moment.
+         Stopping the automation and lowering the parallel ceiling are things
+         somebody needs during an incident, from the page they are already
+         looking at — not by editing an `.env` on a host and restarting a
+         service that is in the middle of ten sessions.
+
+         One row, because there is one runner per deployment. The mode is
+         the kill switch, and it has two halves that are genuinely
+         different: `draining` stops new sessions while the ones already
+         running finish, `paused` hands everything back to the platform at
+         once. `max_parallel` is null when the environment's value stands.
+         All of it survives a restart, which is the point: a runner that
+         forgets it was stopped is not stopped. -->
+    <changeSet id="021-agent-controls" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="agent_controls"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE agent_controls (
+                id SMALLINT PRIMARY KEY DEFAULT 1,
+                -- running:  work as configured
+                -- draining: start nothing new; what runs, runs to the end
+                -- paused:   hand everything back to the platform now
+                mode TEXT NOT NULL DEFAULT 'running',
+                mode_reason TEXT,
+                max_parallel INTEGER,
+                -- How far the comment scan has got. Assignments and reviews
+                -- are read from the repository's current state, but comments
+                -- are a stream: without a mark, a question asked while the
+                -- runner was stopped would fall out of the lookback window
+                -- and never be answered.
+                comments_scanned_at TIMESTAMPTZ,
+                updated_by TEXT,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                CONSTRAINT agent_controls_single_row CHECK (id = 1),
+                CONSTRAINT agent_controls_mode_known
+                    CHECK (mode IN ('running', 'draining', 'paused')),
+                CONSTRAINT agent_controls_max_parallel_sane
+                    CHECK (max_parallel IS NULL OR (max_parallel >= 0 AND max_parallel <= 100))
+            );
+
+            INSERT INTO agent_controls (id) VALUES (1) ON CONFLICT DO NOTHING;
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS agent_controls;</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- How urgent a session's work is, and where it came from.
+
+         Sessions are admitted one per capacity reading, so the order they
+         are admitted in is the only thing that decides what the platform
+         works on first while it is busy. A security fix waiting behind a
+         documentation typo is the whole problem: priority is read from the
+         labels the repository already uses and kept on the row, so the
+         admission query can order by it instead of by arrival. -->
+    <changeSet id="021-agent-session-priority" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="priority"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_sessions ADD COLUMN priority INTEGER NOT NULL DEFAULT 50;
+            ALTER TABLE agent_sessions ADD COLUMN priority_reason TEXT;
+
+            -- The admission query asks for the most urgent queued session,
+            -- oldest first among equals.
+            DROP INDEX IF EXISTS idx_agent_sessions_status_created;
+            CREATE INDEX idx_agent_sessions_queue_order
+                ON agent_sessions(status, priority DESC, created_at);
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+                DROP INDEX IF EXISTS idx_agent_sessions_queue_order;
+                CREATE INDEX idx_agent_sessions_status_created
+                    ON agent_sessions(status, created_at);
+                ALTER TABLE agent_sessions DROP COLUMN IF EXISTS priority_reason;
+                ALTER TABLE agent_sessions DROP COLUMN IF EXISTS priority;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Workspaces the runner made for itself, and the resource it reclaims.
+
+         A workspace is two things: a row, and a Docker volume holding a
+         working copy. Only the volume is worth reclaiming — the row is what
+         the finished sessions hang off (`agent_sessions.workspace_id` is ON
+         DELETE CASCADE), and deleting it would take their events, their
+         trigger references and their pending replies with it. The history
+         would go, and with the trigger references gone, work that is still
+         assigned would be queued all over again.
+
+         So a swept workspace is *archived*: its volume is removed, its row
+         stays, and it stops counting towards the parallel ceiling. The name
+         stays reserved, which is what lets the same issue revive its
+         workspace later instead of colliding with it. -->
+    <changeSet id="021-agent-workspace-ephemeral" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_workspaces" columnName="ephemeral"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_workspaces ADD COLUMN ephemeral BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE agent_workspaces ADD COLUMN archived_at TIMESTAMPTZ;
+
+            -- The sweep asks for ephemeral workspaces that are not archived
+            -- yet; the admission side asks for the ones that still exist.
+            CREATE INDEX idx_agent_workspaces_live
+                ON agent_workspaces(archived_at)
+             WHERE archived_at IS NULL;
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+                DROP INDEX IF EXISTS idx_agent_workspaces_live;
+                ALTER TABLE agent_workspaces DROP COLUMN IF EXISTS archived_at;
+                ALTER TABLE agent_workspaces DROP COLUMN IF EXISTS ephemeral;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Where a session reacts, so a person can see where their request is.
+
+         A reaction is the cheapest status there is: it appears on the
+         comment somebody wrote, needs no notification, and says whether the
+         request is waiting or being worked on. The queueing pass knows the
+         thing that was reacted to, but the launch happens minutes later in
+         another process — so the target is kept on the row rather than in
+         the poller's memory, and survives a restart with it. -->
+    <changeSet id="021-agent-session-reaction-target" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="reaction_target"/></not>
+        </preConditions>
+        <sql>ALTER TABLE agent_sessions ADD COLUMN reaction_target TEXT;</sql>
+        <rollback>
+            <sql>ALTER TABLE agent_sessions DROP COLUMN IF EXISTS reaction_target;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

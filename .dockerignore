@@ -25,6 +25,9 @@
 !logos/logos-agent/app
 !logos/logos-agent/workspace/run_session.py
 !logos/logos-agent/workspace/screenshot.js
+# The model gateway's nginx configuration, shipped in its image rather than
+# bind-mounted: a deployment copies only the compose file to its VM.
+!logos/agent-gateway/nginx.conf
 !iris/pyproject.toml
 !iris/poetry.lock
 !iris/src/iris

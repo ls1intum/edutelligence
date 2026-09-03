@@ -3,6 +3,7 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import {
   AgentCapacity,
+  AgentControls,
   AgentEvent,
   AgentModels,
   AgentSession,
@@ -89,5 +90,20 @@ export class AgentService {
   /** Whether the runner reacts to the repository on its own. */
   getTriggers(): Promise<AgentTriggers> {
     return firstValueFrom(this.http.get<AgentTriggers>(`${AgentService.BASE}/triggers`));
+  }
+
+  /** The kill switch and the parallel ceiling, as they stand. */
+  getControls(): Promise<AgentControls> {
+    return firstValueFrom(this.http.get<AgentControls>(`${AgentService.BASE}/controls`));
+  }
+
+  /** Stop the runner, release it, or change how much of the platform it uses. */
+  setControls(body: {
+    mode?: 'running' | 'draining' | 'paused';
+    reason?: string;
+    max_parallel?: number | null;
+    clear_max_parallel?: boolean;
+  }): Promise<AgentControls> {
+    return firstValueFrom(this.http.post<AgentControls>(`${AgentService.BASE}/controls`, body));
   }
 }
