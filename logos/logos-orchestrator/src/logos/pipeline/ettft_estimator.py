@@ -14,16 +14,17 @@ This preserves same-state ordering (two models in the same infrastructure state
 get identical penalty → classification ordering preserved) while making the
 correction proportional to the weight span of the candidate set.
 
-ETTFT decomposes into four additive phases:
-  1. State overhead  — wake or cold-load latency
-  2. Reclaim overhead — VRAM eviction cost, victim-aware:
-     idle/sleeping victim → RECLAIM_IDLE_EVICT_S;
+ETTFT decomposes into five additive phases (in temporal order):
+  1. Reclaim overhead — VRAM eviction cost before the model can be loaded,
+     victim-aware: idle/sleeping victim → RECLAIM_IDLE_EVICT_S;
      busy victim → drain_time + RECLAIM_IDLE_EVICT_S,
      where drain_time counts every active AND queued request on the victim
      (minimum across all candidate victims on the provider)
-  3. Queue wait — queued requests × observed per-request service time
-  4. Prefill — context-length-dependent prompt-ingestion cost:
+  2. State overhead  — wake or cold-load latency (GPU is now free)
+  3. Queue wait      — time for all earlier requests on this model to complete
+  4. Prefill         — context-length-dependent prompt-ingestion cost:
      learned_prefill_s_per_token × input_tokens
+  5. TTFT            — decode-only first-token time once prefill is done
 """
 
 import math

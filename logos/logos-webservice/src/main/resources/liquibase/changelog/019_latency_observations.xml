@@ -7,9 +7,13 @@
 
     <!-- Persistent EWMA state for the orchestrator's dynamic scheduler.
 
-         Each row stores one exponentially weighted moving average (EWMA):
-         either a per-(model, provider, tier) load/wake overhead, or a
-         per-model TTFT / e2e latency (provider_id = -1, tier = 'ttft' | 'e2e').
+         Each row stores one EWMA keyed by (model_name, provider_id, tier).
+         'tier' is either a ReadinessTier value ('cold', 'sleeping', …) for
+         load/wake overhead, or one of the literal strings
+           'ttft'              — decode-only first-token time
+           'e2e'               — end-to-end request latency
+           'prefill_per_token' — prompt-ingestion rate in seconds / input token
+         The real provider_id is always stored.
 
          The orchestrator loads all rows on startup and upserts on every new
          observation so the learned values survive restarts. -->

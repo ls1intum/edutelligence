@@ -312,9 +312,10 @@ class Job(Base):
 class LatencyObservation(Base):
     """Persistent EWMA state for the dynamic scheduler's LatencyStore.
 
-    Each row stores one EWMA: either a per-(model, provider, tier) load/wake
-    overhead, or a per-model TTFT / e2e latency (provider_id = -1,
-    tier = "ttft" | "e2e").
+    Each row stores one EWMA keyed by (model_name, provider_id, tier).
+    ``tier`` is one of the ReadinessTier string values for load/wake overhead,
+    or the literal strings ``"ttft"``, ``"e2e"``, ``"prefill_per_token"``
+    for the per-model latency metrics.  The real provider_id is always stored.
     """
 
     __tablename__ = "latency_observations"
