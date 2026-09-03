@@ -143,6 +143,7 @@ export class Agents implements OnInit {
     const timer = setInterval(() => void this.tick(), POLL_MS);
     this.destroyRef.onDestroy(() => {
       clearInterval(timer);
+      this.stopStream();
       this.resetScreenshots();
     });
   }
@@ -286,15 +287,59 @@ export class Agents implements OnInit {
     if (this.selectedId() === session.id) {
       this.selectedId.set(null);
       this.events.set([]);
+      this.stopStream();
       this.resetScreenshots();
       return;
     }
     this.selectedId.set(session.id);
     this.events.set([]);
     this.lastEventId = 0;
+    this.stopStream();
     this.resetScreenshots();
     await this.loadEvents();
+    this.startStream(session.id);
   }
+
+  /**
+   * Follow an open session's output as it is written.
+   *
+   * The four-second poll is what made a working session look like a stalled
+   * one: the agent prints a line and it appears whenever the next poll
+   * happens to run. The stream carries each event as the runner writes it;
+   * polling stays as the fallback, so a proxy that will not hold a long
+   * response degrades to what it did before rather than to nothing.
+   */
+  private startStream(sessionId: number): void {
+    const controller = new AbortController();
+    this.stream = controller;
+    void (async () => {
+      try {
+        for await (const event of this.agentService.streamEvents(
+          sessionId,
+          this.lastEventId,
+          controller.signal,
+        )) {
+          if (this.selectedId() !== sessionId) return;
+          if (event.id <= this.lastEventId) continue;
+          this.lastEventId = event.id;
+          this.events.update((existing) => [...existing, event]);
+          if (event.kind === 'screenshot') void this.loadScreenshots();
+        }
+      } catch {
+        // Aborted, refused, or dropped: the poll keeps the page correct, so
+        // there is nothing to report and nothing to retry here.
+      } finally {
+        if (this.stream === controller) this.stream = null;
+      }
+    })();
+  }
+
+  private stopStream(): void {
+    this.stream?.abort();
+    this.stream = null;
+  }
+
+  private stream: AbortController | null = null;
 
   private async loadEvents(): Promise<void> {
     const id = this.selectedId();

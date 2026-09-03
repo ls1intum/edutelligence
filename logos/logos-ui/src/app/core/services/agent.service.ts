@@ -1,4 +1,5 @@
 import { Injectable, inject } from '@angular/core';
+import { KEYCLOAK } from '../auth/keycloak';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import {
@@ -15,6 +16,7 @@ import {
 @Injectable({ providedIn: 'root' })
 export class AgentService {
   private http = inject(HttpClient);
+  private keycloak = inject(KEYCLOAK);
   private static readonly BASE = '/api/agent';
 
   // ── workspaces ───────────────────────────────────────────────────────────
@@ -62,6 +64,58 @@ export class AgentService {
     return firstValueFrom(
       this.http.get<AgentEvent[]>(`${AgentService.BASE}/sessions/${sessionId}/events`, { params }),
     );
+  }
+
+  /**
+   * A session's events as they are written, over one long-lived response.
+   *
+   * Polling is what made a working session look like a stalled one: an agent
+   * prints a line, and it appears whenever the next poll happens to run. The
+   * runner already serves this as server-sent events; it is read here with
+   * `fetch` rather than `EventSource` because the endpoint is bearer-only and
+   * `EventSource` cannot carry a header. The frames are ordinary SSE.
+   *
+   * Yields until the session ends, the caller aborts, or the connection
+   * drops — the caller decides whether a drop is worth reconnecting for.
+   */
+  async *streamEvents(
+    sessionId: number,
+    afterId: number,
+    signal: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
+    const kc = this.keycloak;
+    // Same refresh window the interceptor uses: a stream opened with a token
+    // about to expire would be cut off mid-session.
+    await kc.updateToken(30).catch(() => undefined);
+    const response = await fetch(
+      `${AgentService.BASE}/sessions/${sessionId}/stream?after_id=${afterId}`,
+      { headers: { Authorization: `Bearer ${kc.token ?? ''}` }, signal },
+    );
+    if (!response.ok || !response.body) {
+      throw new Error(`event stream refused with ${response.status}`);
+    }
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      buffer += value;
+      // Frames are separated by a blank line; a partial one stays in the
+      // buffer until the rest of it arrives.
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        for (const line of frame.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          // The keep-alives and the closing frame carry nothing to show.
+          if (!data || data === '{}') continue;
+          yield JSON.parse(data) as AgentEvent;
+        }
+        boundary = buffer.indexOf('\n\n');
+      }
+    }
   }
 
   /**

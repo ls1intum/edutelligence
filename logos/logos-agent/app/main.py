@@ -19,7 +19,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
 
-from . import capacity, controls, db, docker_engine, github, model_policy, triggers
+from . import capacity, controls, db, docker_engine, github, model_policy, pulse, triggers
 from .auth import Principal, require_agent_operator
 from .config import settings
 from .schemas import (
@@ -422,10 +422,15 @@ async def stream_events(
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
                 yield "event: end\ndata: {}\n\n"
+                pulse.forget(session_id)
                 return
             if idle_ticks > 600:  # ~20 minutes of nothing; let the client reconnect
                 return
-            await asyncio.sleep(2.0)
+            # Woken by the write side rather than by the clock: watching an
+            # agent work is the one thing here that a person does in real
+            # time, and a fixed tick puts a floor under how live it can be.
+            # The timeout is the fallback, not the mechanism.
+            await pulse.wait(session_id, timeout=2.0)
 
     return StreamingResponse(
         generate(),

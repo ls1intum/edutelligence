@@ -15,6 +15,7 @@ from typing import Any, Sequence
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+from . import pulse
 from .config import settings
 from .schemas import ACTIVE_STATUSES, TERMINAL_STATUSES, EventKind, SessionStatus
 
@@ -981,6 +982,9 @@ async def add_event(session_id: int, kind: EventKind, payload: dict[str, Any]) -
             {"sid": session_id, "kind": kind.value, "payload": json.dumps(payload)},
         )
         await db.commit()
+    # Committed first, then announced: a watcher woken by this reads the
+    # event it was woken for, not the transaction that has not landed yet.
+    pulse.ring(session_id)
 
 
 async def list_events(session_id: int, *, after_id: int = 0, limit: int = 500) -> list[dict[str, Any]]:

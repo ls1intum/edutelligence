@@ -37,9 +37,10 @@ from .schemas import EventKind, SessionStatus
 logger = logging.getLogger(__name__)
 
 # How long output may wait before it is written, and how much of it goes into
-# one row. Two seconds is below what anybody reads as a delay, and twenty
-# lines keeps a chatty agent from writing a row per line.
-LOG_FLUSH_S = 2.0
+# one row. Half a second is below what a person notices between the agent
+# printing a line and the line appearing; twenty lines keeps a burst from
+# writing a row each.
+LOG_FLUSH_S = 0.5
 LOG_BATCH_LINES = 20
 
 # What the agent phase prints when it wants its spending known — the only

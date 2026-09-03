@@ -143,7 +143,7 @@
           />
           @if (ctl.max_parallel_override !== null) {
             <button
-              class="btn btn--ghost btn--small"
+              class="btn btn--link"
               (click)="applyLimit('')"
               [disabled]="controlBusy()"
               title="Go back to the limit this deployment was configured with"
@@ -368,7 +368,16 @@
             </div>
             <div>
               <dt>Tokens</dt>
-              <dd>{{ session.tokens_in }} in / {{ session.tokens_out }} out</dd>
+              <dd>
+                @if (session.tokens_in || session.tokens_out) {
+                  {{ session.tokens_in }} in / {{ session.tokens_out }} out
+                } @else {
+                  <!-- A running session that has not reported yet has no
+                       number: a zero would read as "spent nothing", which is
+                       a claim, and the wrong one. -->
+                  —
+                }
+              </dd>
             </div>
           </dl>
 

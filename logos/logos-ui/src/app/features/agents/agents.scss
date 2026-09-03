@@ -479,10 +479,6 @@
   }
 }
 
-.input--narrow {
-  max-width: 8rem;
-}
-
 .field__value {
   margin-left: 0.4rem;
   font-size: var(--font-size-sm);
@@ -502,15 +498,4 @@
   min-width: 0;
   accent-color: rgb(var(--color-primary-500));
   cursor: pointer;
-
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-}
-
-.btn--small {
-  padding: 0.25rem 0.6rem;
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
 }
