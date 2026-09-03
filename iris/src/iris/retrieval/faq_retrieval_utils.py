@@ -33,9 +33,7 @@ def format_faqs(retrieved_faqs, citation_registry=None):
 
     Args:
         retrieved_faqs (List[dict]): List of retrieved FAQs.
-        citation_registry: If given, each FAQ is registered and its citation
-            handle is shown to the model so it can cite inline. Callers that do
-            not cite pass ``None``.
+        citation_registry: Optional registry for inline citation handles.
 
     Returns:
         str: Formatted FAQ string.
@@ -49,8 +47,6 @@ def format_faqs(retrieved_faqs, citation_registry=None):
         if citation_registry is not None:
             content = " ".join(part for part in (question, answer) if part).strip()
             if content:
-                # Appended after the FAQ block so the handle's own brackets do
-                # not nest inside it.
                 handle = citation_registry.register(
                     CITE_TYPE_FAQ, faq_id, content, dedup_key=f"faq:{faq_id}"
                 )

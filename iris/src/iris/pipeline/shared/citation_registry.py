@@ -1,26 +1,4 @@
-"""Inline citations: short handles the answer model writes while it streams.
-
-Citations used to be attached after the answer was generated: a second LLM call
-re-wrote the whole answer to insert source ids, followed by keyword/summary calls
-per cited source. Both sat on the critical path, and because the raw agent output
-is streamed *before* the post-processing runs, the streamed draft never contained
-any citations at all.
-
-Instead, the answer model now writes a short handle -- ``[cite:3]`` -- inline while
-it generates. It only has to copy one or two digits, so the extra output is
-negligible and there is little to garble. This module owns both sides of that
-handle:
-
-- :class:`CitationRegistry` hands out the handles when content is retrieved and
-  expands them back into the wire format the client parses,
-  ``[cite:<type>:<entity_id>:<page>:<start>:<end>:<keyword>:<summary>]``.
-- :class:`CitationEnricher` produces the keyword and summary fields.
-
-The enrichment for a handle starts as soon as the handle is *seen in the stream*,
-so it runs while the model is still writing the rest of the answer. By the time
-the answer is complete the results are normally ready, which leaves no LLM call
-on the critical path.
-"""
+"""Inline citation handles and their enrichment."""
 
 import contextvars
 import os
@@ -45,11 +23,7 @@ logger = get_logger(__name__)
 # The handle the answer model writes inline, e.g. ``[cite:3]``.
 CITATION_HANDLE_PATTERN = re.compile(r"\[cite:(\d+)\]")
 
-# A handle the model is halfway through typing at the very end of a partial
-# ("... siehe [cit"). Such a fragment must never reach the client, or the draft
-# briefly shows a broken marker. Matching only prefixes of "[cite:<digits>"
-# keeps unrelated text -- including a markdown link being typed -- untouched
-# beyond the opening bracket, which reappears on the next tick anyway.
+# Hide a trailing partial handle like ``[cit`` in streamed drafts.
 TRAILING_HANDLE_FRAGMENT_PATTERN = re.compile(r"\[(?:c(?:i(?:t(?:e(?::\d*)?)?)?)?)?$")
 
 CITE_TYPE_LECTURE = "L"
@@ -75,12 +49,7 @@ class _Source:
 
 
 class CitationEnricher:
-    """Generates the keyword and summary fields of a citation marker.
-
-    Uses a small, cheap model (the ``keyword_summary`` role). Instances are
-    shared across requests and called from worker threads, so every call builds
-    its own chat model over the shared request handler.
-    """
+    """Generates citation keyword and summary fields."""
 
     def __init__(self, local: bool = False):
         keyword_model = resolve_model(
@@ -113,15 +82,12 @@ class CitationEnricher:
         return self._invoke(prompt, {"Paragraph": content})
 
     def _invoke(self, prompt, variables) -> tuple[str, list[TokenUsageDTO]]:
-        # Thread-local model instance: IrisLangchainChatModel records the usage
-        # of its last call on itself, so sharing one across workers would race.
+        # ``IrisLangchainChatModel`` stores token usage on the instance.
         llm = IrisLangchainChatModel(
             request_handler=self._request_handler,
             completion_args=self._completion_args,
         )
         raw = str((prompt | llm | StrOutputParser()).invoke(variables)).strip()
-        # ``tokens`` is a single TokenUsageDTO, not a list, and stays None if the
-        # model reported no usage.
         tokens: list[TokenUsageDTO] = []
         if llm.tokens is not None:
             llm.tokens.pipeline = PipelineEnum.IRIS_CITATION_PIPELINE
@@ -144,23 +110,13 @@ def _sanitize_field(value: str) -> str:
 
 
 class CitationRegistry:
-    """Per-request map from inline citation handles to source metadata.
-
-    Retrieval registers content and gets back a handle to show the answer model;
-    :meth:`render` turns the handles the model wrote back into full markers. The
-    same ``render`` runs on every streamed partial and once on the final answer,
-    so it is called from the partial-sender thread and the pipeline thread alike
-    and guards its state with a lock.
-    """
+    """Per-request map from citation handles to source metadata."""
 
     def __init__(
         self,
         enricher: Optional[CitationEnricher] = None,
         user_language: str = "en",
     ):
-        # Without an enricher nothing can be registered meaningfully, but
-        # rendering still works and drops every handle -- that is the state a
-        # pipeline which does not cite runs in.
         self._enricher = enricher
         self._language_instruction = (
             "Format all citations and references in German.\n\n"
@@ -193,13 +149,7 @@ class CitationRegistry:
         end=None,
         dedup_key: Optional[str] = None,
     ) -> str:
-        """Register citable content and return the handle to show the model.
-
-        ``dedup_key`` (the chunk's uuid) makes the same chunk reachable under a
-        single handle even when it arrives twice -- e.g. the slide the student is
-        currently viewing is injected into the system prompt *and* comes back
-        from the retrieval tool.
-        """
+        """Register citable content and return its handle."""
         key = (
             dedup_key
             or f"{cite_type}:{_format_part(entity_id)}:{_format_part(page)}"
@@ -323,7 +273,7 @@ class CitationRegistry:
 
 
 def _run_in_thread(fn, *args) -> Future:
-    """Start ``fn`` right away on its own daemon thread."""
+    """Start ``fn`` on a daemon thread."""
     future: Future = Future()
     context = contextvars.copy_context()
 
@@ -340,7 +290,7 @@ def _run_in_thread(fn, *args) -> Future:
 
 
 def _future_value(future: Future) -> tuple[str, str]:
-    """Read a finished enrichment; anything else degrades to empty fields."""
+    """Read a finished enrichment, else fall back to empty fields."""
     if not future.done():
         return "", ""
     try:

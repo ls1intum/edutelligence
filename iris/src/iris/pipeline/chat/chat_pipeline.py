@@ -131,8 +131,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         ("advanced", "Advanced", "Uses a larger model, balancing speed and quality."),
     ]
     DEPENDENCIES = [
-        # Citations only need the small keyword/summary model now that the
-        # answer model places them itself, and that model is not variant-bound.
         Dep("citation_enricher"),
         Dep("session_title_generation_pipeline"),
         Dep("interaction_suggestion_pipeline", variant="course"),
@@ -312,18 +310,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
 
-            # Expand the citation handles the model wrote while generating into
-            # the markers the client turns into bubbles. The enrichment behind
-            # them has been running since each handle first appeared in the
-            # stream, so this is normally a pure substitution.
             with timed_span("ChatPipeline", "citations", state.start_time):
                 result = state.citation_registry.render(result, final=True)
                 for token in state.citation_registry.tokens:
                     self._track_tokens(state, token)
             state.result = result
-            # Snapshot for title generation: the same post-citation, pre-MCQ
-            # text the title was generated from before the deferral (the MCQ
-            # JSON blob appended below must not leak into the title prompt).
             result_for_title = result
 
             # Handle MCQ placeholder replacement and parallel thread joining
@@ -617,23 +608,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
     ) -> list[str]:
-        """Build the blocks describing what the student is currently viewing.
-
-        Looks up the slide page chunks / transcription segments for the student's
-        current position and renders one block per position: the position
-        description (page/timestamp + lecture unit) directly followed by the
-        corresponding lecture material. Only positions whose material is ingested
-        in the vector database are included — otherwise Iris can neither see nor
-        retrieve the material and could not actually be context-aware about it.
-
-        The content is also stored in ``lecture_content_storage`` so other
-        consumers can see what the student is currently looking at.
-
-        Returns:
-            A list of blocks (position + content). Empty when there is no current
-            position or none of the viewed material is ingested in the vector
-            database.
-        """
+        """Build prompt blocks for the student's current lecture position."""
         context_pages, context_timestamps = self._collect_context_positions(
             getattr(state, "lecture_contexts", [])
         )
@@ -655,10 +630,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         except Exception as e:
             logger.error("Error fetching current view lecture content", exc_info=e)
 
-        # Only describe positions whose material is actually ingested in the
-        # vector database: without content Iris can neither see nor retrieve the
-        # material, so it cannot be context-aware about it. Listing such a
-        # position would only invite bluffing about a page it has no access to.
         if not page_chunks and not transcriptions:
             return []
 
@@ -667,16 +638,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             for item in (*page_chunks, *transcriptions)
         }
 
-        # Store the content so other consumers can still see what the student is
-        # looking at.
         state.lecture_content_storage["current_view"] = LectureRetrievalDTO(
             lecture_unit_segments=[],
             lecture_transcriptions=list(transcriptions),
             lecture_unit_page_chunks=list(page_chunks),
         )
 
-        # Group the page chunks by slide page so all chunks of one page are
-        # bundled into a single block under that page's position description.
         chunks_by_page: dict[tuple, list] = {}
         for chunk in page_chunks:
             chunks_by_page.setdefault(
@@ -709,8 +676,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             return f"{text}\nCitation id: {handle}"
 
-        # One block per viewed position: position description first, then the
-        # corresponding lecture material directly below it.
         for p in context_pages:
             unit_id = p["lecture_unit_id"]
             page = p["page"]

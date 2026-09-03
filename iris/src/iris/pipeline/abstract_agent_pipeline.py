@@ -64,9 +64,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     lecture_content_storage: dict
     faq_storage: dict
     accessed_memory_storage: list
-    # Maps the inline ``[cite:N]`` handles the answer model writes back to the
-    # retrieved sources. Present on every run; pipelines that never register a
-    # source simply render nothing.
+    # Maps ``[cite:N]`` handles to retrieved sources.
     citation_registry: CitationRegistry
     allow_lecture_tool: bool
     allow_faq_tool: bool
@@ -484,13 +482,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
     ) -> CitationRegistry:
-        """
-        CAN override: Build the citation registry for this run.
-
-        The default registry has no enricher, so it registers nothing and drops
-        every citation handle it renders. Pipelines that cite override this to
-        supply an enricher and the user's language.
-        """
+        """Build the citation registry for this run."""
         del state
         return CitationRegistry()
 
@@ -797,9 +789,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 len(state.tools),
             )
         finally:
-            # Release the citation enrichment workers. Done here rather than in
-            # post_agent_hook so the pools also go away when the agent loop
-            # raised before the hook ran.
+            # Release citation workers even if the agent loop failed.
             state.citation_registry.close()
             # Clean up tracing context to prevent memory leaks
             clear_current_context()

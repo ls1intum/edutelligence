@@ -8,7 +8,7 @@ from ..web.status.status_update import StatusCallback
 
 
 def _as_seconds(value) -> Optional[int]:
-    """Transcript timestamps go into the citation marker as whole seconds."""
+    """Convert transcript timestamps to whole seconds."""
     return None if value is None else int(value)
 
 
@@ -35,9 +35,7 @@ def create_tool_lecture_content_retrieval(
         query_text: The student's query text.
         history: Chat history messages.
         lecture_content_storage: Storage for retrieved content.
-        citation_registry: If given, each retrieved paragraph is registered and
-            its citation handle is shown to the model so it can cite inline.
-            Pipelines that do not cite pass ``None``.
+        citation_registry: Optional registry for inline citation handles.
 
     Returns:
         Callable[[], str]: Function that returns lecture content string.
@@ -45,7 +43,7 @@ def create_tool_lecture_content_retrieval(
     del callback
 
     def citation_hint(cite_type: str, entity_id, content: str, **coordinates) -> str:
-        """Return the header suffix naming this paragraph's citation handle."""
+        """Return this paragraph's citation suffix."""
         if citation_registry is None or not content:
             return ""
         handle = citation_registry.register(
@@ -76,7 +74,6 @@ def create_tool_lecture_content_retrieval(
             base_url=base_url,
         )
 
-        # Store the lecture content for later use (e.g., citation pipeline)
         lecture_content_storage["content"] = lecture_content
 
         result = "Lecture slide content:\n"
