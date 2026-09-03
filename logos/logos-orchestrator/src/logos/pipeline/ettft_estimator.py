@@ -16,8 +16,10 @@ correction proportional to the weight span of the candidate set.
 
 ETTFT decomposes into three additive phases:
   1. State overhead  — wake or cold-load latency
-  2. Reclaim overhead — VRAM eviction cost, context-aware:
-     idle/sleeping eviction is cheap, draining busy lanes is expensive
+  2. Reclaim overhead — VRAM eviction cost, victim-aware:
+     idle/sleeping victim → RECLAIM_IDLE_EVICT_S;
+     busy victim → estimated queue drain time + RECLAIM_IDLE_EVICT_S
+     (minimum across all candidate victims on the provider)
   3. Queue wait — queued requests × observed per-request service time
 """
 
@@ -208,39 +210,47 @@ def _estimate_reclaim_overhead_s(
 ) -> float:
     """Estimate VRAM reclaim cost based on what sibling lanes are doing.
 
-    Examines other lanes on the same provider to determine whether reclaim
-    would require evicting idle/sleeping lanes (fast) or draining busy
-    lanes (slow).
+    For each potential eviction victim (any lane not serving target_model_name)
+    the cost is:
+      - idle / sleeping lane  → RECLAIM_IDLE_EVICT_S  (just the unload operation)
+      - busy lane             → drain_time + RECLAIM_IDLE_EVICT_S
+        where drain_time = _estimate_queue_wait_s using the lane's own queue
+        depth and observed e2e latency (same formula as ETTFT queue wait).
 
-    Returns:
-        Estimated reclaim overhead in seconds.
+    The scheduler would evict whichever victim is cheapest, so we return the
+    minimum cost across all candidates.  Cold / stopped / error lanes are not
+    useful eviction targets and are skipped.
+
+    Returns RECLAIM_IDLE_EVICT_S when no candidate lanes are visible.
     """
-    if not sibling_lanes:
-        # No visibility into sibling state — use conservative idle estimate
-        return RECLAIM_IDLE_EVICT_S
-
-    # Look at siblings that are NOT the target model (potential eviction victims)
-    evictable_idle = False
-    must_drain_busy = True  # assume worst case, disprove below
+    best_cost: Optional[float] = None
 
     for lane in sibling_lanes:
         if lane.model_name == target_model_name:
             continue
-        # A lane is cheaply evictable if it's sleeping or idle (no active requests)
-        if lane.runtime_state == "sleeping":
-            evictable_idle = True
-            must_drain_busy = False
-        elif lane.runtime_state in ("loaded", "running") and lane.active_requests == 0:
-            evictable_idle = True
-            must_drain_busy = False
 
-    if evictable_idle:
-        return RECLAIM_IDLE_EVICT_S
-    if must_drain_busy:
-        return RECLAIM_BUSY_DRAIN_S
+        if lane.runtime_state == "sleeping" or (
+            lane.runtime_state in ("loaded", "running") and lane.active_requests == 0
+        ):
+            cost = RECLAIM_IDLE_EVICT_S
+        elif lane.runtime_state in ("loaded", "running"):
+            service_time = _effective_service_time_s(lane.e2e_latency_p50_seconds)
+            drain_s = _estimate_queue_wait_s(
+                scheduler_queue_depth=0,
+                effective_parallel=max(lane.num_parallel, 1),
+                service_time_s=service_time,
+                backend_queue_waiting=int(lane.queue_waiting),
+                backend_active_requests=int(lane.requests_running),
+            )
+            cost = drain_s + RECLAIM_IDLE_EVICT_S
+        else:
+            # cold / starting / stopped / error — not a useful eviction target
+            continue
 
-    # Fallback
-    return RECLAIM_IDLE_EVICT_S
+        if best_cost is None or cost < best_cost:
+            best_cost = cost
+
+    return best_cost if best_cost is not None else RECLAIM_IDLE_EVICT_S
 
 
 # ── Local (logosnode) estimation ───────────────────────────────────────
