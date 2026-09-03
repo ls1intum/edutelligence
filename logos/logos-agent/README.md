@@ -181,6 +181,14 @@ survive a restart, and both are visible to whoever finds the runner stopped.
 
 ## What gets worked on first
 
+An operator can overrule it. The queue on the page carries three controls on
+every session waiting in it — to the front, up one, down one — because the
+order is what the runner works through while the platform is busy, and
+which review is holding up a release is something the person watching knows
+and the rules do not. A move past a session of equal priority goes one above
+it: ties are broken by age, and nothing can make a session older.
+
+
 A session is admitted per capacity reading, so the order of the queue is what
 the platform actually works on while it is busy. That order is urgency, not
 arrival: a review (which holds a pull request shut) outranks a question,

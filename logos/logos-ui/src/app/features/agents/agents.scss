@@ -479,6 +479,17 @@
   }
 }
 
+.session__queue {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 0.75rem 0.5rem;
+}
+
+.btn--icon {
+  padding: 0.2rem 0.45rem;
+  line-height: 1;
+}
+
 .field__value {
   margin-left: 0.4rem;
   font-size: var(--font-size-sm);

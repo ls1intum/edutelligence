@@ -28,6 +28,7 @@ from .schemas import (
     ControlState,
     ControlUpdate,
     EventKind,
+    QueueMove,
     SessionCreate,
     SessionEvent,
     SessionStatus,
@@ -414,6 +415,32 @@ async def retry_session(session_id: int, principal: Principal = Depends(require_
     created = await db.get_session(new_id)
     assert created is not None
     return SessionSummary(**_summary_fields(created))
+
+
+@app.post("/sessions/{session_id}/queue", response_model=SessionSummary, tags=["sessions"])
+async def move_session_in_queue(
+    session_id: int,
+    body: QueueMove,
+    principal: Principal = Depends(require_agent_operator),
+) -> SessionSummary:
+    """Move a queued session up, down, or to the front.
+
+    Priority is derived from what a request is — a review outranks a fresh
+    issue, a security label outranks a typo — and that is right most of the
+    time. An operator watching the backlog knows the rest: which review is
+    holding up a release, which issue can wait until tomorrow.
+    """
+    try:
+        moved = await db.move_in_queue(session_id, body.move, by=principal.username or "an operator")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if moved is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only a queued session can be moved in the queue",
+        )
+    logger.info("session %s moved %s in the queue by %s", session_id, body.move, principal.username)
+    return SessionSummary(**_summary_fields(moved))
 
 
 @app.get("/sessions/{session_id}/events", response_model=list[SessionEvent], tags=["sessions"])

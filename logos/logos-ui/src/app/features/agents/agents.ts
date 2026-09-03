@@ -373,6 +373,31 @@ export class Agents implements OnInit {
 
   private stream: AbortController | null = null;
   retrying = signal<number | null>(null);
+  moving = signal<number | null>(null);
+
+  /** The queue, in the order the runner will work through it. */
+  readonly queuedSessions = computed(() => this.sessions().filter((s) => s.status === 'queued'));
+
+  /**
+   * Move a queued session in the queue.
+   *
+   * Priority is derived from what a request is, which is right most of the
+   * time. The rest — which review is holding up a release, which issue can
+   * wait until tomorrow — is something the person watching knows and the
+   * rules do not.
+   */
+  async move(session: AgentSession, where: 'up' | 'down' | 'first'): Promise<void> {
+    if (this.moving() !== null) return;
+    this.moving.set(session.id);
+    try {
+      await this.agentService.moveInQueue(session.id, where);
+      await this.refresh({ quiet: true });
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not move that session in the queue.'));
+    } finally {
+      this.moving.set(null);
+    }
+  }
 
   /**
    * Queue a finished session's work again.

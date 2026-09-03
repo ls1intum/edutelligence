@@ -836,6 +836,68 @@ async def list_sessions(
     return [dict(r) for r in rows]
 
 
+async def move_in_queue(session_id: int, move: str, *, by: str) -> dict[str, Any] | None:
+    """Put a queued session somewhere else in the queue.
+
+    The order is `priority DESC, created_at` — what the runner works on
+    while the platform is busy — and an operator watching a backlog knows
+    things the priority rules cannot: that this review is holding up a
+    release, that this issue can wait. So they can say so.
+
+    Expressed as a move rather than as a number, because a number invites
+    guessing what the neighbours are. Moving past a session of equal
+    priority means going one above it: ties are broken by age, and nothing
+    here can make a session older.
+
+    Returns the session as it now stands, or None if it is not queued.
+    """
+    if move not in ("up", "down", "first"):
+        raise ValueError(f"unknown move '{move}' (expected up, down or first)")
+    async with sessionmaker()() as db:
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        """
+                    SELECT id, priority FROM agent_sessions
+                     WHERE status = 'queued'
+                     ORDER BY priority DESC, created_at, id
+                     FOR UPDATE
+                    """
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        order = [dict(row) for row in rows]
+        at = next((index for index, row in enumerate(order) if row["id"] == session_id), None)
+        if at is None:
+            await db.rollback()
+            return None
+        if move == "first":
+            target = max((row["priority"] for row in order), default=50) + 1 if at > 0 else order[at]["priority"]
+        elif move == "up":
+            target = order[at - 1]["priority"] + 1 if at > 0 else order[at]["priority"]
+        else:
+            target = order[at + 1]["priority"] - 1 if at + 1 < len(order) else order[at]["priority"]
+        target = max(0, min(100, target))
+        await db.execute(
+            text(
+                """
+                UPDATE agent_sessions
+                   SET priority = :priority,
+                       priority_reason = :reason
+                 WHERE id = :id AND status = 'queued'
+                """
+            ),
+            {"id": session_id, "priority": target, "reason": f"moved in the queue by {by}"},
+        )
+        row = (await db.execute(text(_SESSION_SELECT + " WHERE s.id = :id"), {"id": session_id})).mappings().first()
+        await db.commit()
+    return dict(row) if row else None
+
+
 async def attempts_for_trigger(ref: str) -> int:
     """How many sessions this one request has already had."""
     if not ref:

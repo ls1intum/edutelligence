@@ -59,6 +59,13 @@ export class AgentService {
     );
   }
 
+  /** Move a queued session up, down, or to the front of the queue. */
+  moveInQueue(id: number, move: 'up' | 'down' | 'first'): Promise<AgentSession> {
+    return firstValueFrom(
+      this.http.post<AgentSession>(`${AgentService.BASE}/sessions/${id}/queue`, { move }),
+    );
+  }
+
   /** Queue the same work again — same task, workspace, branch and thread. */
   retrySession(id: number): Promise<AgentSession> {
     return firstValueFrom(

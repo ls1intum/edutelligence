@@ -188,3 +188,116 @@ class TestStatementTypes:
         source = inspect.getsource(db.handled_trigger_refs)
 
         assert "CAST(:attempts AS INTEGER)" in source
+
+
+class TestMovingInTheQueue:
+    """What an operator can say about the order.
+
+    Priority is derived from what a request is — a review outranks a fresh
+    issue — and that is right most of the time. Which review is holding up a
+    release is not something the rules can know.
+    """
+
+    @staticmethod
+    def queue(*rows):
+        """A fake database holding one queued list."""
+        state = [dict(row) for row in rows]
+
+        class _Rows:
+            def __init__(self, values):
+                self._values = values
+
+            def mappings(self):
+                return self
+
+            def all(self):
+                return list(self._values)
+
+            def first(self):
+                return self._values[0] if self._values else None
+
+        class _Session:
+            async def execute(self, statement, params=None):
+                sql = str(statement)
+                if "ORDER BY priority DESC" in sql:
+                    return _Rows(sorted(state, key=lambda row: (-row["priority"], row["id"])))
+                if sql.strip().startswith("UPDATE"):
+                    for row in state:
+                        if row["id"] == params["id"]:
+                            row["priority"] = params["priority"]
+                            row["priority_reason"] = params["reason"]
+                    return _Rows([])
+                return _Rows([row for row in state if row["id"] == params.get("id")])
+
+            async def commit(self):
+                return None
+
+            async def rollback(self):
+                return None
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return None
+
+        return state, (lambda: _Session())
+
+    async def test_moving_up_goes_above_the_one_ahead(self, monkeypatch):
+        state, session = self.queue(
+            {"id": 1, "priority": 80},
+            {"id": 2, "priority": 60},
+            {"id": 3, "priority": 60},
+        )
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(3, "up", by="tobias")
+
+        # Past a session of equal priority means one above it: ties are
+        # broken by age, and nothing here can make a session older.
+        assert next(row["priority"] for row in state if row["id"] == 3) == 61
+
+    async def test_moving_to_the_front_outranks_everything(self, monkeypatch):
+        state, session = self.queue({"id": 1, "priority": 80}, {"id": 2, "priority": 60})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(2, "first", by="tobias")
+
+        assert next(row["priority"] for row in state if row["id"] == 2) == 81
+
+    async def test_moving_down_goes_below_the_next_one(self, monkeypatch):
+        state, session = self.queue({"id": 1, "priority": 80}, {"id": 2, "priority": 60})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(1, "down", by="tobias")
+
+        assert next(row["priority"] for row in state if row["id"] == 1) == 59
+
+    async def test_the_last_one_cannot_go_further_down(self, monkeypatch):
+        state, session = self.queue({"id": 1, "priority": 80}, {"id": 2, "priority": 60})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(2, "down", by="tobias")
+
+        assert next(row["priority"] for row in state if row["id"] == 2) == 60
+
+    async def test_a_session_that_is_not_queued_is_not_moved(self, monkeypatch):
+        _, session = self.queue({"id": 1, "priority": 80})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        assert await db.move_in_queue(4711, "up", by="tobias") is None
+
+    async def test_an_unknown_move_is_refused(self, monkeypatch):
+        _, session = self.queue({"id": 1, "priority": 80})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        with pytest.raises(ValueError, match="unknown move"):
+            await db.move_in_queue(1, "sideways", by="tobias")
+
+    async def test_the_reason_says_who_moved_it(self, monkeypatch):
+        state, session = self.queue({"id": 1, "priority": 80}, {"id": 2, "priority": 60})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(2, "first", by="tobias")
+
+        assert "tobias" in next(row["priority_reason"] for row in state if row["id"] == 2)

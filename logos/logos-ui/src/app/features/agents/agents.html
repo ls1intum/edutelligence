@@ -155,8 +155,8 @@
           }
         </div>
         <span class="field__hint">
-          Takes effect on the next scheduler pass. Zero drains without pausing:
-          nothing new starts, what runs finishes.
+          Takes effect on the next scheduler pass. Zero drains without pausing: nothing new starts,
+          what runs finishes.
         </span>
       </div>
     </section>
@@ -340,6 +340,44 @@
           <span class="session__duration">{{ duration(session) }}</span>
         </span>
       </button>
+
+      @if (session.status === 'queued' && queuedSessions().length > 1) {
+        <!-- The order is what the runner works through while the platform
+             is busy. Priority is derived from what a request is, which is
+             right most of the time; the rest is what the person watching
+             knows and the rules do not. -->
+        <div class="session__queue" role="group" aria-label="Position in the queue">
+          <button
+            class="btn btn--ghost btn--icon"
+            (click)="move(session, 'first')"
+            [disabled]="moving() !== null || queuedSessions()[0].id === session.id"
+            title="Work on this one next"
+            aria-label="Move to the front of the queue"
+          >
+            <i class="pi pi-angle-double-up" aria-hidden="true"></i>
+          </button>
+          <button
+            class="btn btn--ghost btn--icon"
+            (click)="move(session, 'up')"
+            [disabled]="moving() !== null || queuedSessions()[0].id === session.id"
+            title="Move up one place"
+            aria-label="Move up in the queue"
+          >
+            <i class="pi pi-angle-up" aria-hidden="true"></i>
+          </button>
+          <button
+            class="btn btn--ghost btn--icon"
+            (click)="move(session, 'down')"
+            [disabled]="
+              moving() !== null || queuedSessions()[queuedSessions().length - 1].id === session.id
+            "
+            title="Move down one place"
+            aria-label="Move down in the queue"
+          >
+            <i class="pi pi-angle-down" aria-hidden="true"></i>
+          </button>
+        </div>
+      }
 
       @if (selectedId() === session.id) {
         <div class="session__detail">
