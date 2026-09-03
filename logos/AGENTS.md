@@ -100,7 +100,7 @@ So new code must move toward that structure, not back into the monolith:
 - **New endpoints** go in the matching router module under `src/logos/routers/` — never into `main.py`.
 - **New helpers** go in a domain module (`live_stream.py`, `logosnode_snapshot.py`, `middleware.py`, ...) — never into `main.py`, unless several routers genuinely share them (then they belong in `main.py`'s shared-helper section, imported by the routers).
 - A module approaching ~1000 lines is a signal to split it — a soft guideline, not a gate.
-- The guideline applies to the whole orchestrator, not just `main.py`: `capacity/capacity_planner.py` is currently 7716 lines, larger than `main.py` itself.
+- The guideline applies to the whole orchestrator, not just `main.py`: `capacity/capacity_planner.py` is currently 7818 lines, larger than `main.py` itself.
 
 Endpoint request models live in `dbutils/dbrequest.py`.
 
