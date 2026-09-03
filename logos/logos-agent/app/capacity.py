@@ -30,7 +30,7 @@ is a different thing entirely, and fails closed.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 
@@ -221,6 +221,42 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
         queue_total=queue_total,
         ok=True,
         detail=f"{busy}/{total} slots busy{lane_note}",
+    )
+
+
+def without_our_own(reading: Reading, running_sessions: int) -> Reading:
+    """The same reading, minus what this runner is doing to it.
+
+    The orchestrator reports how busy a model is; it does not report *who*
+    is keeping it busy, and there is nothing in its payload that could say.
+    So a runner with three sessions in flight reads its own three requests
+    as platform load and pauses itself for them — and once paused the load
+    it was reacting to disappears, so it resumes, and does it again. Worse,
+    its own sessions queueing read as "users are queueing", which is the
+    signal that means *stop everything*.
+
+    A running session has at most one request outstanding, either being
+    served or waiting for a slot. Subtracting that many — from the queue
+    first, since a request that is waiting is not being served — leaves what
+    everybody else is doing, which is the number every decision here is
+    actually about. A real user waiting still shows, and still stops the
+    runner.
+    """
+    if running_sessions <= 0 or not reading.ok:
+        return reading
+    ours_serving = min(running_sessions, reading.busy_slots)
+    ours_waiting = min(max(running_sessions - ours_serving, 0), reading.queue_total)
+    busy = reading.busy_slots - ours_serving
+    queue = reading.queue_total - ours_waiting
+    if ours_serving == 0 and ours_waiting == 0:
+        return reading
+    detail = f"{busy}/{reading.total_slots} slots busy besides this runner's {running_sessions}"
+    return replace(
+        reading,
+        load=(busy / reading.total_slots) if reading.total_slots else reading.load,
+        busy_slots=busy,
+        queue_total=queue,
+        detail=detail,
     )
 
 

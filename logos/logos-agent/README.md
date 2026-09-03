@@ -63,6 +63,17 @@ session is never resumed into a permission it no longer has. The **queue** is
 deliberately not filtered — models share GPUs, so a person waiting on any of
 them is a person this runner gets out of the way of.
 
+**Minus its own share.** The orchestrator reports how busy a model is; it
+does not report *who* is keeping it busy, and nothing in its payload could
+say. So the runner subtracts itself: a running session has at most one
+request outstanding, either being served or waiting for a slot, and that
+many are taken off the figures before anything is decided. Without it a
+runner reads its own sessions as user traffic — it pauses itself for them,
+the load it reacted to leaves with them, it resumes, and it does it again —
+and its own sessions queueing read as "users are queueing", which is the
+signal that means stop everything. A real user waiting still shows, and
+still stops it.
+
 | Condition | What happens |
 |---|---|
 | load < `START_BELOW_LOAD` (default 60 %) and no queue | queued sessions may start |
@@ -349,8 +360,12 @@ answered twice. Only the *newest* changes-requested review of a pull request
 counts as work; the older ones were answered by it. A session that failed is
 re-queued by a person, who can see why it failed.
 
-**Bounded.** At most half the parallel ceiling may be self-queued sessions,
-so an operator queueing work by hand always finds room. Bots are ignored:
+**Bounded.** Self-queued sessions may use the parallel ceiling less a couple
+of places kept for people, so an operator queueing work by hand always finds
+room — triggered sessions carry higher priorities and would otherwise win
+every slot. Keeping half the fleet idle for a session nobody has asked for
+is the wrong trade on a platform whose point is spending what would go to
+waste. Bots are ignored:
 their findings reach the agent through the next review, not as a session per
 note. Workspaces are created on demand up to the ceiling, since a session the
 runner queued has nobody to prepare a working copy for it.

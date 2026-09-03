@@ -509,11 +509,11 @@ class TestBounds:
 
         queued = await triggers.TriggerPoller().poll_once()
 
-        # Half the ceiling *in force*, so an operator always has room — and
-        # it follows what they set at runtime, not what the environment
-        # configured.
-        assert triggers.max_active_sessions(4) == 2
-        assert len(queued) == 2
+        # The ceiling *in force*, less the places kept for people — and it
+        # follows what an operator set at runtime, not what the environment
+        # configured. With four, one stays free.
+        assert triggers.max_active_sessions(4) == 3
+        assert len(queued) == 3
 
     async def test_nothing_is_queued_while_the_ceiling_is_full(self, monkeypatch):
         FakeRepo(assigned_issues=[issue(1)]).install(monkeypatch)
@@ -535,10 +535,10 @@ class TestBounds:
     async def test_what_does_not_fit_now_is_found_again(self, monkeypatch):
         # Nothing is consumed by being seen: a pass reads the repository's
         # current state, so what it could not take on is still there.
-        repo = FakeRepo(assigned_issues=[issue(1), issue(2), issue(3)])
+        repo = FakeRepo(assigned_issues=[issue(number) for number in range(1, 6)])
         repo.install(monkeypatch)
         fake_db = FakeDb(
-            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in range(1, 6)]
+            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in range(1, 8)]
         )
         fake_db.install(monkeypatch)
         allow_models(monkeypatch)
@@ -546,11 +546,13 @@ class TestBounds:
         poller = triggers.TriggerPoller()
 
         first = await poller.poll_once()
-        fake_db.active_triggers = 0  # the first two finished
+        fake_db.active_triggers = 0  # the first three finished
         second = await poller.poll_once()
 
-        assert len(first) == 2 and len(second) == 1
-        assert {c["trigger_ref"] for c in fake_db.created} == {"issue-1", "issue-2", "issue-3"}
+        # Three fit under the ceiling in force; the other two were left
+        # where they were and the next pass found them again.
+        assert len(first) == 3 and len(second) == 2
+        assert {c["trigger_ref"] for c in fake_db.created} == {f"issue-{n}" for n in range(1, 6)}
 
 
 class TestWorkspaceNaming:

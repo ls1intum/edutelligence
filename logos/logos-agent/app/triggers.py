@@ -39,8 +39,10 @@ does not produce a second pull request next week, and an answered question
 is not answered twice. Only the *newest* changes-requested review of a pull
 request is work; the older ones were answered by it.
 
-**Bounded.** At most half the parallel ceiling may be self-queued sessions,
-so an operator queueing work by hand always finds room.
+**Bounded.** Self-queued sessions may use the parallel ceiling less a couple
+of places kept for people, so an operator queueing work by hand always finds
+room — triggered sessions carry higher priorities and would otherwise win
+every slot.
 """
 
 from __future__ import annotations
@@ -124,16 +126,18 @@ def _next_auto_name(existing: set[str]) -> str:
 def max_active_sessions(ceiling: int | None = None) -> int:
     """How many self-queued sessions may be active at once.
 
-    Derived rather than configured: half the ceiling in force, at least
-    one. The runner is a guest on this platform even when it is idle, and
-    an operator who queues work by hand should always find room next to the
-    automation — which is why it follows the *current* ceiling and not the
-    configured one. Lowering the limit to two and still letting five
-    triggered sessions through would take that room away, and their higher
-    priorities would win it.
+    Derived rather than configured: the ceiling in force, less a couple of
+    places kept for people. An operator who queues work by hand should
+    always find room next to the automation — triggered sessions have
+    higher priorities and would otherwise win every slot — but keeping half
+    the fleet idle for a session nobody has asked for is a poor trade on a
+    platform whose whole point is spending capacity that would go to waste.
+
+    It follows the *current* ceiling rather than the configured one, so
+    lowering the limit during an incident lowers this with it.
     """
     limit = settings.max_parallel_sessions if ceiling is None else ceiling
-    return max(1, limit // 2)
+    return max(1, limit - max(1, limit // 5))
 
 
 def mentions_agent(body: str) -> bool:

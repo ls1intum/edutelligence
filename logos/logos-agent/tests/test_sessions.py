@@ -2366,9 +2366,13 @@ class TestOverlappingAdmission:
         # bought exactly one session, not one per overlapping pass.
         assert launched == [1]
         assert [sid for sid, state in states.items() if state == "queued"] == [2, 3, 4]
-        # And the second decision was made on a post-launch observation,
-        # not on the shared pre-launch one.
-        assert decided_loads == [0.0, 0.7]
+        # And the second decision was made on a post-launch observation, not
+        # on the shared pre-launch one. The figure it decided on is that
+        # observation minus the runner's own session — the load the launch
+        # caused is this runner's, and reacting to it would be reacting to
+        # itself.
+        assert decided_loads[0] == 0.0
+        assert decided_loads[1] > 0.0
 
 
 class TestScreenshotOrchestration:

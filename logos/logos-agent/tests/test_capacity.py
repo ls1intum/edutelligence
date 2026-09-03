@@ -299,3 +299,55 @@ class TestTheLaneWeAreServedBy:
 
         assert reading.load == 1.0
         assert "busiest" in reading.detail
+
+
+class TestNotReactingToItself:
+    """The orchestrator says how busy a model is, never who is keeping it so.
+
+    A runner with three sessions in flight reads its own three requests as
+    platform load: it pauses itself for them, the load it reacted to leaves
+    with them, it resumes, and it does it again. Its own sessions queueing
+    read as "users are queueing", which is the signal that means stop.
+    """
+
+    @staticmethod
+    def busy(*, busy_slots: int, queue: int = 0) -> capacity.Reading:
+        return capacity.Reading(load=busy_slots / 10, busy_slots=busy_slots, total_slots=10, queue_total=queue, ok=True)
+
+    def test_our_own_requests_are_not_platform_load(self):
+        reading = capacity.without_our_own(self.busy(busy_slots=3), running_sessions=3)
+
+        assert reading.busy_slots == 0 and reading.load == 0.0
+
+    def test_what_somebody_else_is_doing_remains(self):
+        reading = capacity.without_our_own(self.busy(busy_slots=5), running_sessions=2)
+
+        assert reading.busy_slots == 3 and reading.load == 0.3
+
+    def test_our_own_queueing_is_not_a_user_waiting(self):
+        # Two of ours served, one waiting for a slot: nobody else is
+        # waiting, so nothing should stop.
+        reading = capacity.without_our_own(self.busy(busy_slots=2, queue=1), running_sessions=3)
+
+        assert reading.queue_total == 0
+        assert not reading.saturated
+
+    def test_a_real_user_waiting_still_stops_it(self):
+        reading = capacity.without_our_own(self.busy(busy_slots=2, queue=3), running_sessions=3)
+
+        # One of those three waiting is ours; the other two are not.
+        assert reading.queue_total == 2
+        assert reading.saturated
+
+    def test_nothing_of_ours_running_changes_nothing(self):
+        before = self.busy(busy_slots=4, queue=1)
+
+        assert capacity.without_our_own(before, running_sessions=0) is before
+
+    def test_an_unreadable_platform_is_left_alone(self):
+        assert capacity.without_our_own(capacity.UNKNOWN, running_sessions=3) is capacity.UNKNOWN
+
+    def test_the_detail_says_what_was_discounted(self):
+        reading = capacity.without_our_own(self.busy(busy_slots=5), running_sessions=2)
+
+        assert "besides this runner's 2" in reading.detail

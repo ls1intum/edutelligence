@@ -543,14 +543,20 @@ class SessionManager:
         # Measured on the lane these sessions are served by, not on the
         # whole fleet: an embedding model being idle says nothing about
         # whether another agent session is safe to start.
-        reading = await capacity.read_load(lane=policy.lane())
-        self._last_reading = reading
+        measured = await capacity.read_load(lane=policy.lane())
         # What an operator has asked for right now — the kill switch and the
         # ceiling they set — read before anything is decided.
         control = await controls.current()
 
         running = await db.sessions_in_status(SessionStatus.RUNNING)
         paused = await db.sessions_in_status(SessionStatus.PAUSED)
+
+        # The platform's load, minus this runner's own share of it. Without
+        # this the runner reads its own sessions as user traffic: it pauses
+        # itself, the load it reacted to vanishes with them, it resumes, and
+        # it does it again.
+        reading = capacity.without_our_own(measured, len(running))
+        self._last_reading = reading
 
         if control.paused:
             # The hard half of the kill switch: hand the platform back
@@ -627,10 +633,11 @@ class SessionManager:
             if candidate is None:
                 return
             wanted = admission_policy.resolve(candidate.get("model"))
-            reading = await capacity.read_load(lane=admission_policy.lane(wanted))
-            self._last_reading = reading
+            measured = await capacity.read_load(lane=admission_policy.lane(wanted))
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
+            reading = capacity.without_our_own(measured, len(running))
+            self._last_reading = reading
             blocked = control.admission_block()
             if blocked:
                 # Draining, paused, or a ceiling of zero: nothing new starts.
