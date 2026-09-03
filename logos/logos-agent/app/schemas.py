@@ -158,6 +158,9 @@ class SessionSummary(BaseModel):
     # ('issue-812'). Null for sessions a person created.
     trigger_kind: str | None = None
     trigger_ref: str | None = None
+    # How urgent this work is, and the sentence explaining it.
+    priority: int = 50
+    priority_reason: str | None = None
 
 
 class SessionEvent(BaseModel):
@@ -166,6 +169,37 @@ class SessionEvent(BaseModel):
     ts: datetime
     kind: EventKind
     payload: dict
+
+
+class ControlState(BaseModel):
+    """What an operator has changed about the runner while it runs."""
+
+    # 'running', 'draining' (start nothing new), or 'paused' (hand
+    # everything back now).
+    mode: str = "running"
+    mode_reason: str = ""
+    paused: bool = False
+    admits_new_sessions: bool = True
+    # The ceiling in force. `max_parallel_override` is null when the
+    # environment's configured value stands.
+    max_parallel: int
+    max_parallel_override: int | None = None
+    max_parallel_configured: int
+    updated_by: str = ""
+
+
+class ControlUpdate(BaseModel):
+    """A change to the runtime controls. Omitted fields stay as they are."""
+
+    # 'running' works as configured, 'draining' starts nothing new while
+    # what runs finishes, 'paused' hands everything back now.
+    mode: str | None = Field(default=None, pattern="^(running|draining|paused)$")
+    # Why it was stopped, for the people who find it stopped.
+    reason: str = Field(default="", max_length=200)
+    # 0 drains without pausing: nothing new starts, what runs keeps running.
+    # Null clears the override and the configured ceiling applies again.
+    max_parallel: int | None = Field(default=None, ge=0, le=100)
+    clear_max_parallel: bool = False
 
 
 class CapacityState(BaseModel):

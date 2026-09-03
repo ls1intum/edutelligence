@@ -1,75 +1,119 @@
-"""Queueing work the repository asked for, without anyone asking the runner.
+"""Working with the agent the way you work with a colleague.
 
-Two things happen in a repository that an agent can act on without being
-told: an issue is opened, and a review asks a pull request for changes. This
-module watches for both and queues a session for each — the same sessions an
-operator would have created by hand, with the same capacity gating, the same
-local-only model policy, and the same isolation.
+The agent has a GitHub account, and this module is what makes that account
+usable like a person's. The gestures are the ordinary ones:
 
-**Opt-in by label.** Only issues and pull requests carrying `logos-agent`
-are picked up. The repository is shared with people who did not ask for an
-agent to answer their issue, and "everything that moves" would be a promise
-this runner has no business making. The label is the promise.
+| What you do on GitHub | What the agent does |
+|---|---|
+| assign it an issue | works on the issue and opens a draft pull request |
+| assign it a pull request | takes that pull request over, on its own branch |
+| ask one of its pull requests for changes | addresses the review on that branch |
+| comment on a pull request it is responsible for | reads the comment and answers it |
+| mention it in any comment | answers there, and changes code only if that is what was asked |
+
+No labels, no separate vocabulary. **Consent is per item:** nothing is picked
+up because it exists, only because somebody assigned it, reviewed its work,
+or asked it something by name.
+
+**It says where your request is.** The moment a session is queued — after the
+row exists, never before — the runner reacts with 👀 on what triggered it. A
+🚀 follows when the session actually starts, and a 😕 if it fails, so a
+thread never sits there looking either ignored or eternally in progress.
+GitHub's palette has no hourglass; these are the three states it can say.
+
+**It can answer.** The agent phase holds no GitHub credential, so it writes
+its answer to a file in its artefact directory and the runner posts it when
+the session settles. The reply is data produced by the untrusted phase; the
+posting is done by the trusted one.
 
 **Polling, not webhooks.** A webhook needs an endpoint GitHub can reach, and
 this service is deliberately reachable only from the stack's own network.
 The trade is minutes of latency for work whose whole premise is "when the
 GPUs are idle anyway".
 
-**Idempotent by reference.** Every reaction is recorded on the session as the
-thing it reacted to — `issue-812`, `pr-772-review-5085681761`. A poll that
-sees the same issue or review again finds that session and queues nothing.
-References are stable identities, not timestamps, so a restarted runner with
-a fresh clock cannot duplicate work.
+**Remembered by reference, forever.** Every reaction is recorded on the
+session as the thing it reacted to — `issue-812`, `pr-772-assigned`,
+`pr-772-review-5085681761`, `thread-772-3910035243`. A reference that
+already has a session is never queued again, so an issue that stays assigned
+does not produce a second pull request next week, and an answered question
+is not answered twice. Only the *newest* changes-requested review of a pull
+request is work; the older ones were answered by it.
 
-**Bounded.** At most a few self-queued sessions are active at once, and the
-runner never crowds out an operator: the ceiling counts only sessions it
-queued itself, and the parallel-session ceiling applies on top.
+**Bounded.** At most half the parallel ceiling may be self-queued sessions,
+so an operator queueing work by hand always finds room.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from . import db, github, model_policy
+from . import controls, db, github, model_policy, priority
 from .config import settings
+from .conventions import for_task
 
 logger = logging.getLogger(__name__)
 
-# How often the repository is polled. Frequent enough that a review posted
-# during a working day is picked up while its author is still around, rare
-# enough to stay far inside GitHub's rate limits (a pass is a handful of
-# requests).
+# How often the repository is polled. Frequent enough that a question asked
+# during a working day is seen while its author is still around, rare enough
+# to stay far inside GitHub's rate limits (a pass is a handful of requests).
 POLL_INTERVAL_S = 120.0
 
-# How far back the first pass after a start looks. A runner that was down
-# over a weekend must not wake up and queue the whole weekend at once; six
-# hours is "what is currently going on", not "the backlog".
-FIRST_PASS_LOOKBACK = timedelta(hours=6)
+# How far back a pass looks for comments when it has no mark of its own —
+# the first pass on a fresh deployment. Assignments and reviews need no
+# window (they are read from the repository's current state), but comments
+# are a stream, and without a bound the first pass would read years of them.
+COMMENT_LOOKBACK = timedelta(hours=24)
 
-# How long a handled reference stays handled after its session finished.
-# Long enough that a finished session is not re-queued by the next poll,
-# short enough that a genuinely new review on the same pull request — which
-# carries a new review id anyway — is never suppressed by it.
-DEDUP_WINDOW = timedelta(days=7)
+# How far back the scan will ever reach, even with a mark that old. A runner
+# stopped for a week should answer what it missed; one that was gone for a
+# month should not wake up and reply to a month of conversations.
+MAX_COMMENT_LOOKBACK = timedelta(days=7)
 
-# The label that opts a thread into agent work.
-LABEL = "logos-agent"
+# At most this many comments are carried into one task, and this much of each.
+MAX_THREAD_COMMENTS = 20
+MAX_COMMENT_CHARS = 3000
 
 # The account sessions are attributed to when the runner queued them itself.
 CREATED_BY = "logos-agent (trigger)"
+
+# Where a session writes an answer for the runner to post.
+REPLY_FILE = "reply.md"
+
+
+_NAME_SAFE = re.compile(r"[^a-z0-9]+")
+
+
+def workspace_name(kind: str, number: int, title: str) -> str:
+    """A workspace name that says what is in it.
+
+    The name is not decoration: it becomes part of the branch a session
+    pushes (`logos/agent/<workspace>/session-42`) and the first column of
+    the workspace list. `auto-2` tells nobody anything; `issue-812-oom-on-
+    startup` says what the checkout is for, in the branch as well as in the
+    UI.
+
+    Trimmed to keep branch names readable, and reduced to characters that
+    are safe in both a Docker volume name and a git ref.
+    """
+    slug = _NAME_SAFE.sub("-", (title or "").strip().lower()).strip("-")
+    words = [word for word in slug.split("-") if word][:5]
+    tail = "-".join(words)[:40].strip("-")
+    prefix = "issue" if kind == "issue" else "pr"
+    return f"{prefix}-{number}-{tail}" if tail else f"{prefix}-{number}"
 
 
 def _next_auto_name(existing: set[str]) -> str:
     """The lowest ``auto-N`` no workspace carries.
 
-    Counting workspaces would repeat a name after a deletion — with `auto-1`
-    and `auto-3` left, the count says `auto-3` — and every later poll would
-    hit the same conflict and defer work while the ceiling still had room.
+    The fallback for work that names nothing. Counting workspaces would
+    repeat a name after a deletion — with `auto-1` and `auto-3` left, the
+    count says `auto-3` — and every later poll would hit the same conflict
+    and defer work while the ceiling still had room.
     """
     index = 1
     while f"auto-{index}" in existing:
@@ -77,39 +121,80 @@ def _next_auto_name(existing: set[str]) -> str:
     return f"auto-{index}"
 
 
-def max_active_sessions() -> int:
+def max_active_sessions(ceiling: int | None = None) -> int:
     """How many self-queued sessions may be active at once.
 
-    Derived rather than configured: half the parallel ceiling, at least one.
-    The runner is a guest on this platform even when it is idle, and an
-    operator who queues work by hand should always find room next to the
-    automation.
+    Derived rather than configured: half the ceiling in force, at least
+    one. The runner is a guest on this platform even when it is idle, and
+    an operator who queues work by hand should always find room next to the
+    automation — which is why it follows the *current* ceiling and not the
+    configured one. Lowering the limit to two and still letting five
+    triggered sessions through would take that room away, and their higher
+    priorities would win it.
     """
-    return max(1, settings.max_parallel_sessions // 2)
+    limit = settings.max_parallel_sessions if ceiling is None else ceiling
+    return max(1, limit // 2)
+
+
+def mentions_agent(body: str) -> bool:
+    """Whether a comment addresses the agent by name.
+
+    Matched on a word boundary so `@LogosOSSAgentBot` is not this account,
+    and case-insensitively because GitHub logins are.
+    """
+    return re.search(rf"@{re.escape(settings.github_login)}\b", body or "", re.IGNORECASE) is not None
+
+
+def is_bot(login: str) -> bool:
+    """Whether an author is a bot.
+
+    Bots comment a great deal — a review bot can post a dozen notes on one
+    push — and a session per note would be a stampede, not a colleague. Their
+    findings still reach the agent: they are part of the pull request the
+    next review or assignment brings it back to.
+    """
+    return login.endswith("[bot]") or login.lower() in {"github-actions", "coderabbitai"}
+
+
+# --- what the agent is asked to do ----------------------------------------
 
 
 def issue_task(issue: dict[str, Any]) -> str:
-    """The task text for an opened issue.
-
-    The issue's own words are the task; what this adds is the frame the
-    session needs — where the work came from, and that it ends as a draft
-    pull request a person reviews.
-    """
+    """The task text for an issue assigned to the agent."""
     number = issue.get("number")
     title = str(issue.get("title") or "").strip()
     body = str(issue.get("body") or "").strip()
     if len(body) > 6000:
         body = body[:6000] + "\n\n[issue body truncated]"
-    return (
-        f"Work on this repository issue and open a draft pull request with your result.\n\n"
+    return for_task(
+        f"You have been assigned issue #{number}. Work on it and open a draft pull "
+        f"request with your result.\n\n"
         f"Issue #{number}: {title}\n\n"
         f"{body}\n\n"
-        f"Scope your change to what the issue asks for. Add or adjust tests for what you "
-        f"change, and run the test suite and linters of the part of the repository you "
-        f"touched before you finish. If the issue is unclear or turns out to be larger "
-        f"than it looks, do the part you are confident about and say plainly in your "
-        f"final message what you left out and why. Do not reference the issue number in "
-        f"code comments, docstrings, or test names."
+        f"Scope your change to what the issue asks for: the smallest change that "
+        f"answers it, with tests for what you changed. If the issue is unclear or turns "
+        f"out to be larger than it looks, do the part you are confident about and say "
+        f"plainly in your final message what you left out and why."
+    )
+
+
+def takeover_task(number: int, title: str, body: str, branch: str) -> str:
+    """The task text for a pull request handed to the agent."""
+    text = (body or "").strip()
+    if len(text) > 6000:
+        text = text[:6000] + "\n\n[description truncated]"
+    return for_task(
+        f"Pull request #{number} ('{title}') has been assigned to you: somebody wants you "
+        f"to carry it the rest of the way. You are working in a checkout of its own "
+        f"branch `{branch}`, and your commit updates that pull request — do not open a "
+        f"new one, and do not rename or move the branch.\n\n"
+        f"What the pull request says about itself:\n\n{text or '(no description)'}\n\n"
+        f"Read the existing review conversation before you change anything, and start "
+        f"from whatever is still open in it. Bring the change to a state its author would "
+        f"recognise: tests and linters of the part you touched pass, the description "
+        f"still matches what the branch does. Say in your final message what you did and "
+        f"what you deliberately left alone. Do not merge the pull request and do not "
+        f"force-push over anybody else's commits."
     )
 
 
@@ -128,8 +213,8 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
         body = str(comment.get("body") or "").strip()
         if not body:
             continue
-        if len(body) > 3000:
-            body = body[:3000] + " […]"
+        if len(body) > MAX_COMMENT_CHARS:
+            body = body[:MAX_COMMENT_CHARS] + " […]"
         rendered.append(f"- {path}:{line}\n  {body}")
     if not rendered:
         return ""
@@ -143,7 +228,7 @@ def review_task(number: int, title: str, review: dict[str, Any], comments: list[
     if len(body) > 6000:
         body = body[:6000] + "\n\n[review body truncated]"
     inline = _inline_block(comments or [])
-    return (
+    return for_task(
         f"A review on pull request #{number} ('{title}') asked for changes. You are working "
         f"in a checkout of that pull request's own branch, and your commit updates it — "
         f"there is no new pull request to open.\n\n"
@@ -153,9 +238,51 @@ def review_task(number: int, title: str, review: dict[str, Any], comments: list[
         f"Check each point against the current code before you change anything — lines "
         f"move, and some of it may already be addressed. Fix what is still valid, add "
         f"regression coverage for it, and run the tests and linters of the part you "
-        f"touched. Reply to the review in English on GitHub, saying for each point what "
-        f"you changed and how you verified it, or why it needed no change. Do not merge "
-        f"the pull request and do not force-push."
+        f"touched. Write your reply to the review into `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` "
+        f"— in English, saying for each point what you changed and how you verified it, "
+        f"or why it needed no change; the runner posts it for you. Do not merge the pull "
+        f"request and do not force-push."
+    )
+
+
+def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, branch: str | None) -> str:
+    """The task text for comments addressed to the agent.
+
+    The answer is the deliverable. Whether code changes at all is the
+    comment's business: "why does this fail?" wants an explanation, "can you
+    also handle X?" wants a commit. Saying so plainly beats guessing.
+    """
+    rendered = []
+    for comment in comments[:MAX_THREAD_COMMENTS]:
+        author = str((comment.get("user") or {}).get("login") or "somebody")
+        body = str(comment.get("body") or "").strip()
+        if len(body) > MAX_COMMENT_CHARS:
+            body = body[:MAX_COMMENT_CHARS] + " […]"
+        path = comment.get("path")
+        where = f" on {path}:{comment.get('line') or comment.get('original_line') or '?'}" if path else ""
+        rendered.append(f"{author}{where} wrote:\n{body}")
+    conversation = "\n\n---\n\n".join(rendered)
+    if branch:
+        place = (
+            f"You are working in a checkout of that pull request's own branch `{branch}`. "
+            f"If — and only if — answering means changing code, commit it there; it updates "
+            f"the existing pull request rather than opening a new one."
+        )
+    else:
+        place = (
+            "You are working in a checkout of the default branch, and you have no business "
+            "pushing to this pull request — it is somebody else's. Answer in words. If the "
+            "answer needs a code change, say what you would change and why, and leave it to "
+            "the people on the thread."
+        )
+    return for_task(
+        f"You were asked something on #{number} ('{title}').\n\n"
+        f"{conversation}\n\n"
+        f"Write your answer to `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` — the runner posts it in "
+        f"the thread for you, so write it as the reply itself: English, to the point, no "
+        f"preamble about being an agent. Answer what was actually asked; read the code "
+        f"before you claim anything about it, and say plainly when you do not know. "
+        f"{place}"
     )
 
 
@@ -165,14 +292,11 @@ class TriggerPoller:
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
-        # Only reactions to things that happened after this are queued. It
-        # starts one lookback window in the past and then follows the clock,
-        # so a long-running runner reacts to what is new rather than to
-        # everything the label has ever been on.
-        self._since = datetime.now(timezone.utc) - FIRST_PASS_LOOKBACK
         self._last_error: str = ""
         self._last_pass: datetime | None = None
         self._queued_total = 0
+        # login -> may push, for the duration of one pass.
+        self._writers: dict[str, bool] = {}
         # Called after a pass queued something, so the work starts on the
         # next admission rather than at the scheduler's own tick. Set by the
         # service on startup; the poller does not import the session manager
@@ -183,17 +307,17 @@ class TriggerPoller:
 
     async def start(self) -> None:
         if not settings.triggers_enabled:
-            logger.info("repository triggers are off (LOGOS_AGENT_TRIGGERS_ENABLED)")
+            logger.info("repository triggers are off (LOGOS_AGENT_TRIGGERS_ENABLED=false)")
             return
         if not settings.github_token:
             logger.warning("repository triggers are on but no GitHub token is configured; not polling")
             return
         self._task = asyncio.create_task(self._loop(), name="agent-triggers")
         logger.info(
-            "repository triggers on: polling %s every %.0fs for '%s' issues and reviews",
+            "watching %s as %s every %.0fs: assignments, reviews, and comments addressed to it",
             settings.repo_slug,
+            settings.github_login,
             POLL_INTERVAL_S,
-            LABEL,
         )
 
     async def stop(self) -> None:
@@ -215,7 +339,9 @@ class TriggerPoller:
             except Exception as exc:
                 # A failing poll is not a failing runner: sessions an
                 # operator queued keep running, and the next pass tries
-                # again.
+                # again. Nothing is lost by a failure either — a pass reads
+                # the repository's current state, it does not advance a
+                # cursor.
                 self._last_error = str(exc)
                 logger.warning("trigger poll failed: %s", exc)
             try:
@@ -228,34 +354,47 @@ class TriggerPoller:
     async def poll_once(self) -> list[int]:
         """One look at the repository. Returns the sessions queued, if any."""
         now = datetime.now(timezone.utc)
-        room = max_active_sessions() - await db.count_active_trigger_sessions()
+        # Nothing to queue into: the runner is paused, draining, or its
+        # ceiling is zero. The repository is read again next pass, and
+        # nothing is lost by not looking now.
+        control = await controls.current()
+        blocked = control.admission_block()
+        if blocked:
+            # Nothing is queued while the runner is stopped — and nothing is
+            # forgotten either: the comment mark is only moved by a pass
+            # that handled what it saw, so a question asked during a pause is
+            # still in the window when the runner comes back.
+            logger.debug("trigger poll skipped: %s", blocked)
+            self._last_pass = now
+            return []
+        quota = max_active_sessions(control.max_parallel)
+        room = quota - await db.count_active_trigger_sessions()
         if room <= 0:
-            # Nothing is dropped: the window only moves once the pass has
-            # actually looked, so what is skipped here is seen again when a
-            # session finishes.
-            logger.debug("trigger poll skipped: already at %s self-queued sessions", max_active_sessions())
+            logger.debug("trigger poll skipped: already at %s self-queued sessions", quota)
             self._last_pass = now
             return []
 
-        candidates = await self._candidates(since=self._since)
+        # Permission answers are cached per pass: they can change, and a
+        # pass is short enough that reading them once is honest.
+        self._writers = {}
+        candidates = await self._candidates(now)
+        self._last_pass = now
+        self._last_error = ""
         if not candidates:
-            # Nothing was seen, so nothing can be left behind: the window
-            # may follow the clock.
-            self._since = now
-            self._last_pass = now
-            self._last_error = ""
+            # Everything up to now has been looked at, so the comment scan
+            # may move on.
+            await self._mark_comments_scanned(now)
             return []
 
-        handled = await db.handled_trigger_refs(
-            [candidate["ref"] for candidate in candidates],
-            since=now - DEDUP_WINDOW,
-        )
+        # Most urgent first: a pass may only have room for some of them, and
+        # what it takes should be what matters most.
+        candidates.sort(key=lambda candidate: -(candidate.get("urgency").value if candidate.get("urgency") else 50))
+        handled = await db.handled_trigger_refs([candidate["ref"] for candidate in candidates])
         queued: list[int] = []
-        # A candidate this pass could not take on — the ceiling was reached,
-        # no workspace was free, the model policy refused — must stay
-        # visible to the next pass. The window is what makes it visible: the
-        # listings filter by it, so moving it past an unqueued candidate
-        # drops that work for good rather than deferring it.
+        # A candidate this pass could not take on is not recorded anywhere,
+        # so the mark must not move past it — assignments and reviews would
+        # be found again from the repository's state, but a comment would
+        # simply fall out of the window.
         deferred = False
         for candidate in candidates:
             if candidate["ref"] in handled:
@@ -269,80 +408,199 @@ class TriggerPoller:
                 continue
             queued.append(session_id)
             room -= 1
-        self._last_pass = now
-        self._last_error = ""
+            await self._acknowledge(candidate)
         if not deferred:
-            # Only a pass that handled everything it saw may move on. A pass
-            # that raised earlier leaves the window untouched for the same
-            # reason.
-            self._since = now
+            await self._mark_comments_scanned(now)
         if queued and self.on_queued is not None:
             await self.on_queued()
         return queued
 
-    async def _candidates(self, *, since: datetime) -> list[dict[str, Any]]:
-        """What the repository is asking for, oldest signal first."""
+    async def _comment_window(self, now: datetime) -> datetime:
+        """How far back this pass reads comments.
+
+        From the mark the last complete pass left, so a question asked while
+        the runner was paused is still there when it comes back — bounded,
+        because a runner that was gone for a month should not answer a
+        month of conversations at once.
+        """
+        try:
+            mark = await db.comments_scanned_at()
+        except Exception as exc:
+            logger.warning("could not read the comment mark; using the default window: %s", exc)
+            mark = None
+        floor = now - MAX_COMMENT_LOOKBACK
+        if mark is None:
+            return now - COMMENT_LOOKBACK
+        if mark.tzinfo is None:
+            mark = mark.replace(tzinfo=timezone.utc)
+        return max(mark, floor)
+
+    async def _mark_comments_scanned(self, moment: datetime) -> None:
+        try:
+            await db.mark_comments_scanned(moment)
+        except Exception as exc:
+            logger.warning("could not record how far the comment scan got: %s", exc)
+
+    async def _acknowledge(self, candidate: dict[str, Any]) -> None:
+        """React so the person who asked can see their request landed.
+
+        Posted after the session row exists, so the reaction never promises
+        work that is not queued — and best effort, so a reaction GitHub
+        refuses never loses a session that is.
+        """
+        target = candidate.get("reaction")
+        if not target:
+            return
+        try:
+            await github.react(target, github.REACTION_QUEUED)
+        except Exception as exc:
+            logger.info("could not acknowledge %s: %s", candidate["ref"], exc)
+
+    async def _candidates(self, now: datetime) -> list[dict[str, Any]]:
+        """Everything the repository is currently asking this account for."""
+        login = settings.github_login
         found: list[dict[str, Any]] = []
 
-        for issue in await github.labelled_issues(LABEL, since=since):
+        for issue in await github.assigned_issues(login):
             number = issue.get("number")
             if not isinstance(number, int):
                 continue
+            urgency = priority.of("issue", issue.get("labels"))
+            if urgency.refused:
+                logger.info("issue %s is %s; not starting work on it", number, urgency.reason)
+                continue
+            title = str(issue.get("title") or "")
             found.append(
                 {
                     "ref": f"issue-{number}",
                     "kind": "issue",
                     "task": issue_task(issue),
-                    "title": str(issue.get("title") or ""),
+                    "workspace": workspace_name("issue", number, title),
+                    "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
+                    "urgency": urgency,
                 }
             )
 
-        for entry in await github.labelled_pull_requests(LABEL):
-            number = entry.get("number")
-            if not isinstance(number, int):
-                continue
-            title = str(entry.get("title") or "")
-            fresh = [
-                review
-                for review in await github.reviews_since(number, since)
-                # Only a review that asks for changes is work. An approval
-                # or a comment is a conversation, and answering it is a
-                # person's call.
-                if str(review.get("state") or "").upper() == "CHANGES_REQUESTED" and isinstance(review.get("id"), int)
-            ]
-            if not fresh:
-                continue
-            branch = await self._writable_head(number)
-            if branch is None:
-                continue
-            for review in fresh:
+        responsible = await self._responsible_pulls(login)
+        # Inline comments a review task already carries: the repository scan
+        # below sees the same objects, and a second candidate for them would
+        # be a second session writing to one branch about one request.
+        consumed: set[int] = set()
+        for number, pull in responsible.items():
+            branch = pull["branch"]
+            review = await github.latest_changes_requested_review(number)
+            if review is not None:
                 review_id = int(review["id"])
                 comments = await github.review_comments(number, review_id)
+                consumed.update(c["id"] for c in comments if isinstance(c.get("id"), int))
+                if branch is None:
+                    # Nowhere to put the fix: a fork's head, or a protected
+                    # branch. Queueing it anyway would start a session from
+                    # the default branch on a fresh branch of its own, which
+                    # cannot update the pull request its task is about.
+                    logger.info("review on pull request %s has no writable branch; leaving it to a person", number)
+                    continue
+                reviewer = str((review.get("user") or {}).get("login") or "")
+                if not await self._writer(reviewer):
+                    # Anybody may review a public pull request, and a review
+                    # is a request to change code: acting on one from
+                    # outside the repository would let a stranger direct
+                    # what the agent commits.
+                    logger.info(
+                        "review on pull request %s is by %s, who may not write to this repository; "
+                        "leaving it to a person",
+                        number,
+                        reviewer or "an unknown account",
+                    )
+                    continue
                 found.append(
                     {
                         "ref": f"pr-{number}-review-{review_id}",
                         "kind": "review",
-                        "task": review_task(number, title, review, comments),
-                        "title": title,
-                        # The branch the work belongs on. A review session
-                        # updates the pull request it answers; it does not
-                        # open a second one.
+                        "task": review_task(number, pull["title"], review, comments),
                         "branch": branch,
-                        "workspace": f"pr-{number}",
+                        "workspace": workspace_name("pr", number, pull["title"]),
+                        # A submitted review is not a review *comment*: the
+                        # two have independent id sequences, so the
+                        # acknowledgement goes on the pull request itself.
+                        "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
+                        "reply_target": f"issue:{number}",
+                        "urgency": priority.of("review", pull["labels"]),
                     }
                 )
+            elif pull["assigned"] and branch:
+                found.append(
+                    {
+                        "ref": f"pr-{number}-assigned",
+                        "kind": "takeover",
+                        "task": takeover_task(number, pull["title"], pull["body"], branch),
+                        "branch": branch,
+                        "workspace": workspace_name("pr", number, pull["title"]),
+                        "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
+                        "urgency": priority.of("takeover", pull["labels"]),
+                    }
+                )
+
+        found.extend(await self._comment_candidates(now, responsible, consumed))
         return found
 
-    async def _writable_head(self, number: int) -> str | None:
-        """The branch a review session may push, or None if there is none.
+    async def _responsible_pulls(self, login: str) -> dict[int, dict[str, Any]]:
+        """The open pull requests this account has to answer for.
 
-        Two conditions, both about not writing where the runner has no
-        business writing. The head must live in this repository — a fork's
-        branch is not ours to push, and the token could not do it anyway —
-        and it must be under the agent branch prefix, which means the pull
-        request is one the runner opened. A human's branch is exactly what
-        `branch_for()` and the protected-branch rules exist to keep agent
-        pushes away from, and a review on it stays a person's job.
+        Its own, because their reviews are addressed to it, and the ones
+        somebody assigned to it. A head it may not push to is kept anyway,
+        with ``branch`` left None: a question on such a pull request is still
+        answerable, it just cannot be answered with a commit.
+        """
+        pulls: dict[int, dict[str, Any]] = {}
+
+        async def remember(entry: dict[str, Any], *, assigned: bool) -> None:
+            number = entry.get("number")
+            if not isinstance(number, int) or number in pulls:
+                return
+            pulls[number] = {
+                "title": str(entry.get("title") or ""),
+                "body": str(entry.get("body") or ""),
+                "labels": entry.get("labels") or (),
+                "assigned": assigned,
+                "branch": await self._writable_head(number),
+            }
+
+        for entry in await github.assigned_pull_requests(login):
+            await remember(entry, assigned=True)
+        for entry in await github.authored_pull_requests(login):
+            await remember(entry, assigned=False)
+        return pulls
+
+    async def _writer(self, login: str) -> bool:
+        """Whether an account may write to this repository.
+
+        Cached for the pass: one conversation is usually one person, and a
+        lookup per comment would spend requests on the same answer.
+        """
+        key = login.lower()
+        if key not in self._writers:
+            self._writers[key] = await github.may_push(login)
+        return self._writers[key]
+
+    async def _may_direct_changes(self, comments: list[dict[str, Any]]) -> bool:
+        """Whether anyone in this conversation may direct a code change."""
+        for comment in comments:
+            author = str((comment.get("user") or {}).get("login") or "")
+            if author and await self._writer(author):
+                return True
+        return False
+
+    async def _writable_head(self, number: int) -> str | None:
+        """The branch of a pull request the agent may push to, or None.
+
+        Two rules, and only two. The head has to live in this repository —
+        a fork's branch is not ours to push and the token could not do it
+        anyway — and it must not be a protected branch, which no session may
+        ever write to. The agent branch prefix is deliberately *not*
+        required: a pull request handed over by a person keeps its own
+        branch name, because renaming it would abandon the pull request it
+        belongs to.
         """
         try:
             pull = await github.pull_request(number)
@@ -351,19 +609,114 @@ class TriggerPoller:
             return None
         ref, repo = github.head_of(pull)
         if not ref:
-            logger.info("pull request %s has no usable head branch; skipping its review", number)
             return None
         if repo != settings.repo_slug:
             logger.info("pull request %s comes from '%s'; the runner does not push to forks", number, repo or "?")
             return None
-        if not ref.startswith(settings.branch_prefix):
-            logger.info(
-                "pull request %s is on '%s', which is not an agent branch; its review is a person's to answer",
-                number,
-                ref,
-            )
+        if ref in settings.protected_branches or ref.rsplit("/", 1)[-1] in settings.protected_branches:
+            logger.warning("pull request %s targets protected branch '%s'; refusing to work on it", number, ref)
             return None
         return ref
+
+    async def _comment_candidates(
+        self, now: datetime, responsible: dict[int, dict[str, Any]], consumed: set[int]
+    ) -> list[dict[str, Any]]:
+        """Comments the agent should answer, one candidate per conversation.
+
+        Two kinds count: anything on a pull request it is responsible for,
+        and anything anywhere that mentions it by name. Its own comments and
+        those of bots are skipped — the first would be a conversation with
+        itself, the second a stampede.
+
+        A *conversation* is the unit, not a pull request: an inline thread is
+        its own question, asked about one place in the diff and answered
+        there, while ordinary comments on a thread are one running
+        discussion. Grouping every inline thread of a pull request together
+        would answer one of them and leave the rest without a reply.
+
+        Comments already carried by a review task are skipped: they are being
+        worked on, and answering them twice is not answering them better.
+        """
+        since = await self._comment_window(now)
+        threads: dict[tuple[str, int], dict[str, Any]] = {}
+
+        def consider(comment: dict[str, Any], number: int, *, root: int | None) -> None:
+            author = str((comment.get("user") or {}).get("login") or "")
+            if not author or author.lower() == settings.github_login.lower() or is_bot(author):
+                return
+            comment_id = comment.get("id")
+            if not isinstance(comment_id, int) or comment_id in consumed:
+                return
+            body = str(comment.get("body") or "")
+            if number not in responsible and not mentions_agent(body):
+                return
+            key = ("inline", root) if root is not None else ("issue", number)
+            thread = threads.setdefault(
+                key,
+                {"number": number, "comments": [], "newest_id": comment_id, "newest_at": None, "root": root},
+            )
+            thread["comments"].append(comment)
+            # Newest by time, not by id: issue comments and review comments
+            # have independent id sequences, so a newer one of either kind
+            # can carry a smaller number than an older one of the other. Ids
+            # decide only between two comments that carry no timestamp,
+            # which within one thread means one kind and one sequence.
+            written = github.created_at_of(comment)
+            best = thread["newest_at"]
+            if written is not None and (best is None or written >= best):
+                thread["newest_at"], thread["newest_id"] = written, comment_id
+            elif written is None and best is None and comment_id > thread["newest_id"]:
+                thread["newest_id"] = comment_id
+
+        for comment in await github.recent_issue_comments(since):
+            number = github.issue_number_of(comment)
+            if number is not None:
+                consider(comment, number, root=None)
+        for comment in await github.recent_review_comments(since):
+            number = github.pull_number_of(comment)
+            if number is not None:
+                consider(comment, number, root=github.thread_root_of(comment))
+
+        candidates: list[dict[str, Any]] = []
+        for (kind, key), thread in threads.items():
+            number = thread["number"]
+            pull = responsible.get(number)
+            title = pull["title"] if pull else f"#{number}"
+            # Anybody may comment on a public repository; not everybody may
+            # direct a change to it. A conversation with no writer in it is
+            # answered in words and gets no branch, so the credentialed
+            # finalizer cannot be made to push on a stranger's say-so.
+            branch = pull["branch"] if pull else None
+            if branch is not None and not await self._may_direct_changes(thread["comments"]):
+                logger.info("comments on #%s come from outside the repository; answering without a branch", number)
+                branch = None
+            newest = thread["newest_id"]
+            inline = kind == "inline"
+            candidates.append(
+                {
+                    # The reference names the conversation and its latest
+                    # word, so a later comment in it is new work and the same
+                    # one never is. An inline thread carries its root, since
+                    # one pull request has many of them.
+                    "ref": (f"thread-{number}-inline-{key}-{newest}" if inline else f"thread-{number}-issue-{newest}"),
+                    "kind": "comment",
+                    "task": thread_task(number, title, thread["comments"], branch=branch),
+                    "branch": branch,
+                    "workspace": workspace_name("pr", number, title) if branch else None,
+                    "urgency": priority.of("comment", pull["labels"] if pull else ()),
+                    "reaction": (
+                        f"/repos/{settings.repo_slug}/pulls/comments/{newest}"
+                        if inline
+                        else f"/repos/{settings.repo_slug}/issues/comments/{newest}"
+                    ),
+                    # An inline question is answered in its own thread, where
+                    # the person who asked it is looking.
+                    "reply_target": (f"review_comment:{number}:{key}" if inline else f"issue:{number}"),
+                }
+            )
+        return candidates
+
+    # --- queueing ---------------------------------------------------------
 
     async def _queue(self, candidate: dict[str, Any]) -> int | None:
         """Queue one session, making a workspace for it if none is free."""
@@ -371,15 +724,23 @@ class TriggerPoller:
         if not policy.ok:
             logger.info("not queueing %s: %s", candidate["ref"], policy.detail)
             return None
+        urgency = candidate.get("urgency") or priority.of(candidate["kind"])
+        if urgency.refused:
+            # Checked here rather than per source: a review, a handover and
+            # a question can all carry `blocked` or `wontfix` just as an
+            # issue can, and this is the one place every kind passes
+            # through.
+            logger.info("not queueing %s: %s", candidate["ref"], urgency.reason)
+            return None
         branch = candidate.get("branch")
         workspace_id = await self._free_workspace(
             base_branch=branch or "main",
             preferred_name=candidate.get("workspace"),
         )
         if workspace_id is None:
-            # Every workspace is busy and the ceiling is reached. The
-            # candidate is not recorded as handled, so the next pass — after
-            # a session has finished — picks it up again.
+            # Every workspace is busy and the ceiling is reached. Nothing is
+            # recorded, so the next pass — after a session has finished —
+            # finds this again.
             logger.info("not queueing %s: no free workspace", candidate["ref"])
             return None
         try:
@@ -388,12 +749,13 @@ class TriggerPoller:
                 task=candidate["task"],
                 model=None,
                 created_by=CREATED_BY,
-                # A review session pushes to the pull request's own branch,
-                # so the work lands where the review was written. Opening a
-                # second pull request for it would answer a review with a
-                # different pull request.
+                # Work on an existing branch updates its pull request, and a
+                # question is answered in words: only an assigned issue is
+                # fresh work that needs a pull request of its own. A comment
+                # session with no branch would otherwise open one for an
+                # answer nobody asked to be a pull request.
                 branch=branch,
-                open_pull_request=branch is None,
+                open_pull_request=candidate["kind"] == "issue",
                 # A session the runner queued by itself does not touch a
                 # shared environment: deploying is an operator's decision,
                 # made per session in the UI.
@@ -401,6 +763,13 @@ class TriggerPoller:
                 screenshot_paths=[],
                 trigger_kind=candidate["kind"],
                 trigger_ref=candidate["ref"],
+                reply_target=candidate.get("reply_target"),
+                # Kept on the row because the stages that follow — started,
+                # and possibly failed — are reacted to by the launcher,
+                # minutes later and across a restart.
+                reaction_target=candidate.get("reaction"),
+                priority=urgency.value,
+                priority_reason=urgency.reason,
             )
         except ValueError as exc:
             logger.warning("could not queue a session for %s: %s", candidate["ref"], exc)
@@ -432,11 +801,13 @@ class TriggerPoller:
         if len(workspaces) < settings.max_parallel_sessions:
             name = preferred_name or _next_auto_name({str(w.get("name") or "") for w in workspaces})
             try:
-                created = await db.create_workspace(name=name, base_branch=base_branch, created_by=CREATED_BY)
+                created = await db.create_workspace(
+                    name=name, base_branch=base_branch, created_by=CREATED_BY, ephemeral=True
+                )
             except ValueError:
                 # The name belongs to a workspace that is currently
                 # occupied — most often the one for this very pull request,
-                # already working on an earlier review.
+                # already working on an earlier request.
                 logger.info("workspace '%s' is taken; deferring", name)
                 return None
             logger.info("created workspace '%s' on '%s' for triggered work", name, base_branch)
@@ -450,13 +821,19 @@ class TriggerPoller:
 
     # --- what the UI shows ------------------------------------------------
 
-    def status(self) -> dict[str, Any]:
+    def status(self, ceiling: int | None = None) -> dict[str, Any]:
+        """What the UI shows about the automation.
+
+        ``ceiling`` is the parallel ceiling in force; without it the quota
+        shown would be the configured one, which is not the number that
+        decides anything once an operator has lowered it.
+        """
         return {
             "enabled": settings.triggers_enabled,
             "polling": self._task is not None and not self._task.done(),
-            "label": LABEL,
+            "account": settings.github_login,
             "poll_interval_s": POLL_INTERVAL_S,
-            "max_active_sessions": max_active_sessions(),
+            "max_active_sessions": max_active_sessions(ceiling),
             "last_pass": self._last_pass.isoformat() if self._last_pass else None,
             "queued_total": self._queued_total,
             "last_error": self._last_error,
@@ -472,14 +849,17 @@ async def active_trigger_sessions() -> int:
 
 
 __all__ = [
-    "DEDUP_WINDOW",
-    "FIRST_PASS_LOOKBACK",
-    "LABEL",
+    "COMMENT_LOOKBACK",
     "POLL_INTERVAL_S",
+    "REPLY_FILE",
     "TriggerPoller",
     "active_trigger_sessions",
+    "is_bot",
     "issue_task",
     "max_active_sessions",
+    "mentions_agent",
     "poller",
     "review_task",
+    "takeover_task",
+    "thread_task",
 ]

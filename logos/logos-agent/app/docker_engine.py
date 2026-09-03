@@ -112,12 +112,12 @@ async def ensure_network(name: str, *, internal: bool = False) -> None:
     operator removing it while nothing runs.
     """
     try:
-        existing = await _request("GET", f"/networks/{name}")
+        response = await _request("GET", f"/networks/{name}")
     except DockerError as exc:
         if exc.status != 404:
             raise
     else:
-        actual = bool(existing.get("Internal", False))
+        actual = bool(response.json().get("Internal", False))
         if actual != internal:
             raise DockerError(
                 409,
@@ -137,6 +137,24 @@ async def ensure_network(name: str, *, internal: bool = False) -> None:
             "Labels": {"logos.agent": "session-network"},
         },
     )
+
+
+async def image_present(image: str) -> bool:
+    """Whether an image is on this host already.
+
+    Sessions run an image the registry publishes on every build of the
+    default branch. Between a merge and that build finishing — or when a
+    deployment has never pulled it — the first session dies with a bare
+    `404: No such image`, which reads like a bug in the runner rather than
+    a missing artefact. Asking first turns that into a sentence.
+    """
+    try:
+        await _request("GET", f"/images/{image}/json")
+        return True
+    except DockerError as exc:
+        if exc.status == 404:
+            return False
+        raise
 
 
 async def create_session_container(

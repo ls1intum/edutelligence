@@ -24,14 +24,14 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from . import capacity, db, docker_engine, github, model_policy
-from .config import settings
+from . import capacity, controls, db, docker_engine, github, model_policy
+from .config import REPLY_FILE, settings
 from .schemas import EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,18 @@ _BRANCH_SAFE = re.compile(r"[^a-zA-Z0-9_-]")
 # a stopped helper container to be reaped, short enough that a wedged Docker
 # call cannot hold the cancel API open.
 _CANCEL_LAUNCH_WAIT_S = 60.0
+
+# GitHub rejects a comment body longer than 65536 characters; the margin
+# leaves room for the truncation note.
+_MAX_REPLY_CHARS = 60000
+
+# How often an undelivered answer is retried before it is left alone.
+_MAX_REPLY_ATTEMPTS = 5
+
+# How long a workspace the runner created must have existed before it may be
+# swept away. It covers the gap between a session being queued into a fresh
+# workspace and being claimed, in which neither is active yet.
+_WORKSPACE_IDLE_GRACE = timedelta(minutes=10)
 
 
 def container_name(session_id: int) -> str:
@@ -155,6 +167,8 @@ class SessionManager:
         # other's run and photograph the other's revision.
         self._deploy_screenshot_lock = asyncio.Lock()
         self._last_reading: capacity.Reading = capacity.UNKNOWN
+        # Set once the session image has been seen on this host.
+        self._image_present = False
 
     # --- lifecycle --------------------------------------------------------
 
@@ -349,6 +363,22 @@ class SessionManager:
             except Exception:
                 logger.exception("scheduler pass failed")
             try:
+                # Answers that did not reach GitHub when their session
+                # settled. Beside the pass rather than inside it: a pass is
+                # about admitting and yielding, and every session creation
+                # schedules one of those.
+                await self.deliver_pending_replies()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("retrying undelivered answers failed")
+            try:
+                await self.sweep_workspaces()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("removing finished workspaces failed")
+            try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=settings.scheduler_interval_s)
             except asyncio.TimeoutError:
                 pass
@@ -356,9 +386,22 @@ class SessionManager:
     async def scheduler_pass(self) -> None:
         reading = await capacity.read_load()
         self._last_reading = reading
+        # What an operator has asked for right now — the kill switch and the
+        # ceiling they set — read before anything is decided.
+        control = await controls.current()
 
         running = await db.sessions_in_status(SessionStatus.RUNNING)
         paused = await db.sessions_in_status(SessionStatus.PAUSED)
+
+        if control.paused:
+            # The hard half of the kill switch: hand the platform back
+            # everything the runner holds. Paused, not cancelled — the work
+            # survives, and releasing the switch resumes it mid-task.
+            # Draining is the other half and deliberately does none of this:
+            # it lets what is running finish and only stops admission.
+            for session in running:
+                await self._pause(session, control.admission_block())
+            return
 
         # 1. Give capacity back first. Yielding always takes precedence over
         #    admitting, so a burst of user traffic is never met by the runner
@@ -372,9 +415,24 @@ class SessionManager:
         # 2. Resume what was paused, oldest first.
         if paused:
             may_resume, why = capacity.resume_decision(reading)
+            if may_resume and not control.may_resume():
+                may_resume, why = False, control.admission_block()
             if may_resume:
+                # Room is counted per session, not once for the batch: with
+                # four paused sessions and a ceiling of two, checking only
+                # before the loop would resume all four and put the runner
+                # over the ceiling an operator just set.
+                live = len(running)
                 for session in paused:
+                    if live >= control.max_parallel:
+                        logger.info(
+                            "not resuming session %s: %s sessions is the ceiling in force",
+                            session["id"],
+                            control.max_parallel,
+                        )
+                        break
                     await self._resume(session, why)
+                    live += 1
                     reading = await capacity.read_load()
                     self._last_reading = reading
                     if not capacity.resume_decision(reading)[0]:
@@ -403,7 +461,16 @@ class SessionManager:
                 return
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
-            may_start, why = capacity.start_decision(reading, running=len(running), paused=len(paused))
+            blocked = control.admission_block()
+            if blocked:
+                # Draining, paused, or a ceiling of zero: nothing new starts.
+                return
+            may_start, why = capacity.start_decision(
+                reading,
+                running=len(running),
+                paused=len(paused),
+                max_parallel=control.max_parallel,
+            )
             if not may_start:
                 return
             claimed = await db.claim_queued_sessions(1)
@@ -516,17 +583,38 @@ class SessionManager:
             await self._settle(sid, exit_code=None, error="workspace disappeared")
             return
 
-        # A session queued against an existing branch — a review session
-        # updating the pull request it answers — carries it on the row. Every
-        # other session gets the branch derived from its id. Both go through
-        # the same check below: a preset branch is no more trusted than a
-        # derived one, and it is the only place a bug could aim a push at a
-        # protected branch.
-        branch = str(session.get("branch_name") or "") or branch_for(sid, workspace["name"])
-        if branch.rsplit("/", 1)[-1] in settings.protected_branches or not branch.startswith(settings.branch_prefix):
-            # Cannot happen with the derivation above, but the check is cheap
-            # and this is the one place where a bug would push to main.
+        # A session queued against an existing branch — a review answered, or
+        # a pull request handed over — carries it on the row and keeps that
+        # name: renaming somebody's branch would abandon the pull request it
+        # belongs to. Everything else gets the branch derived from the
+        # session id, under the runner's own prefix.
+        taken_over = str(session.get("branch_name") or "")
+        branch = taken_over or branch_for(sid, workspace["name"])
+        if branch in settings.protected_branches or branch.rsplit("/", 1)[-1] in settings.protected_branches:
+            # This is the one place where a bug would push to main.
             await self._settle(sid, exit_code=None, error=f"refusing branch '{branch}'")
+            return
+        if not taken_over and not branch.startswith(settings.branch_prefix):
+            # The prefix binds branches the runner creates; it says nothing
+            # about one it was handed.
+            await self._settle(sid, exit_code=None, error=f"refusing branch '{branch}'")
+            return
+
+        # The image every phase of this session runs. It is published by the
+        # build of the default branch, so a deployment can be a few minutes
+        # ahead of its registry — and a session that dies with a bare
+        # `404: No such image` looks like a broken runner rather than an
+        # artefact that is not there yet.
+        if not await self._workspace_image_present():
+            await self._settle(
+                sid,
+                exit_code=None,
+                error=(
+                    f"the session image '{settings.workspace_image}' is not available on this host. "
+                    f"It is published by the build of the default branch — wait for that build, or "
+                    f"pull the image — and queue the session again."
+                ),
+            )
             return
 
         # The model is checked again here, against the policy this pass
@@ -641,6 +729,27 @@ class SessionManager:
 
         await db.add_event(sid, EventKind.STATUS, {"status": "running", "branch": branch})
         self._supervise(sid, container_id)
+        # The queue acknowledged the request; this says it is being worked
+        # on now — the difference a person on the other end of a comment
+        # actually wants to know.
+        await self._react(session, github.REACTION_RUNNING)
+
+    async def _workspace_image_present(self) -> bool:
+        """Whether the session image is on this host, remembered once it is.
+
+        Checked per launch until it succeeds: an image does not vanish, so
+        one positive answer stands for the life of the process, while a
+        negative one is worth re-asking every time — that is the state that
+        changes when the registry catches up.
+        """
+        if self._image_present:
+            return True
+        try:
+            self._image_present = await docker_engine.image_present(settings.workspace_image)
+        except Exception as exc:
+            logger.warning("could not check for the session image: %s", exc)
+            return True  # let the launch try and report the real error
+        return self._image_present
 
     async def _still_ours(self, session_id: int) -> bool:
         """Whether the row is still the 'starting' one this launch claimed."""
@@ -677,6 +786,10 @@ class SessionManager:
             # /artifacts is its output root; there is no per-session prefix
             # to get wrong.
             "LOGOS_ARTIFACT_DIR": "/artifacts",
+            # Where an answer goes when the session was asked something. The
+            # task text names the same file; this is what makes it available
+            # to anything else in the container that wants it.
+            "LOGOS_SESSION_REPLY_FILE": f"/artifacts/{REPLY_FILE}",
         }
         if model:
             for key in (
@@ -921,6 +1034,21 @@ class SessionManager:
 
     # --- settlement -------------------------------------------------------
 
+    async def _react(self, session: dict[str, Any] | None, content: str) -> None:
+        """Show on the thread how far this session's work has got.
+
+        Best effort in both directions: a reaction that does not appear
+        costs nothing, and one that is already there is answered with a 200,
+        so a resumed or re-settled session leaves no duplicates.
+        """
+        target = str((session or {}).get("reaction_target") or "")
+        if not target:
+            return
+        try:
+            await github.react(target, content)
+        except Exception as exc:
+            logger.info("could not react on %s: %s", target, exc)
+
     async def _settle(self, session_id: int, *, exit_code: int | None, error: str | None) -> None:
         """Record the outcome of a finished session and clean up after it."""
         if exit_code == 0 and not error:
@@ -1011,6 +1139,20 @@ class SessionManager:
         if result.get("pr_url"):
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
 
+        if not succeeded:
+            # Somebody is looking at a thread that has been marked as picked
+            # up and started. Saying that it did not work out belongs there
+            # too — an answer that never comes is the worst of the three.
+            await self._react(await db.get_session(session_id), github.REACTION_FAILED)
+
+        # Somebody asked this session a question. The agent phase holds no
+        # GitHub credential, so it wrote the answer into its artefact
+        # directory and this is where the answer is posted — by the process
+        # that does hold the token. Posted even for a failed session: a
+        # partial answer beats silence on a thread where a person is
+        # waiting.
+        await self._post_reply(session_id)
+
         deploy: str | None = None
         after_run_id: int | None = None
         if succeeded:
@@ -1029,6 +1171,109 @@ class SessionManager:
                 await self._capture_screenshots(session_id, deploy, after_run_id)
         else:
             await self._cleanup_container(session_id)
+
+    async def sweep_workspaces(self) -> None:
+        """Remove the workspaces the runner made for work that is finished.
+
+        A workspace is a Docker volume holding a working copy. One created
+        for a piece of triggered work has no meaning once that work is done,
+        and left behind they fill the parallel ceiling with checkouts nobody
+        is using — the ceiling counts workspaces, not sessions. Operators'
+        workspaces are never touched: they made them, they keep them.
+
+        The idle grace is what keeps this from deleting a workspace out from
+        under the session it was just created for: between queueing and
+        claiming, that session is not active yet either.
+        """
+        cutoff = datetime.now(timezone.utc) - _WORKSPACE_IDLE_GRACE
+        try:
+            disposable = await db.disposable_workspaces(cutoff)
+        except Exception as exc:
+            logger.warning("could not look for finished workspaces: %s", exc)
+            return
+        for workspace in disposable:
+            name, volume = workspace.get("name"), workspace.get("volume_name")
+            # The volume goes first, the row is retired second: a failure in
+            # between leaves the workspace un-archived, so the next sweep
+            # finds it again and tries the volume once more. Retiring first
+            # would leave a volume nothing knows about.
+            try:
+                await docker_engine.remove_volume(str(volume), force=True)
+            except Exception as exc:
+                logger.warning("could not remove the volume of finished workspace '%s': %s", name, exc)
+                continue
+            if await db.archive_workspace(int(workspace["id"])):
+                logger.info("retired finished workspace '%s' and reclaimed its volume", name)
+
+    async def deliver_pending_replies(self) -> None:
+        """Try again for answers that did not reach GitHub the first time.
+
+        Delivery happens once when a session settles, and a timeout or a 5xx
+        at that moment would otherwise lose the answer for good: the trigger
+        reference counts as handled, so nothing looks at it again. Every
+        scheduler pass gives the few outstanding ones another go, until they
+        land or the attempts run out.
+        """
+        try:
+            owing = await db.sessions_owing_a_reply(_MAX_REPLY_ATTEMPTS)
+        except Exception as exc:
+            logger.warning("could not look for undelivered answers: %s", exc)
+            return
+        for row in owing:
+            await self._post_reply(int(row["id"]))
+
+    async def _post_reply(self, session_id: int) -> None:
+        """Post the answer a session wrote, if it was asked for one."""
+        session = await db.get_session(session_id)
+        target = str((session or {}).get("reply_target") or "")
+        if not target:
+            return
+        if (session or {}).get("reply_posted_at"):
+            return
+        path = artifact_dir(session_id) / REPLY_FILE
+        try:
+            body = path.read_text().strip()
+        except OSError:
+            logger.info("session %s was asked a question but wrote no answer", session_id)
+            return
+        if not body:
+            logger.info("session %s wrote an empty answer; nothing to post", session_id)
+            return
+        if len(body) > _MAX_REPLY_CHARS:
+            # GitHub refuses a comment above its length limit outright, and
+            # an answer nobody receives is worse than a shortened one on a
+            # thread where somebody is waiting.
+            body = body[:_MAX_REPLY_CHARS].rstrip() + "\n\n_[answer truncated]_"
+            logger.info("the answer of session %s was truncated to fit a GitHub comment", session_id)
+        try:
+            url = await self._send_reply(target, body)
+        except Exception as exc:
+            # Counted, not given up on: the next scheduler pass tries again
+            # until it lands or the attempts run out.
+            await db.record_reply_attempt(session_id, delivered=False)
+            logger.warning("could not post the answer of session %s (will retry): %s", session_id, exc)
+            await db.add_event(session_id, EventKind.ERROR, {"error": f"could not post the reply: {exc}"})
+            return
+        await db.record_reply_attempt(session_id, delivered=True)
+        await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True})
+        logger.info("session %s answered at %s", session_id, url)
+
+    @staticmethod
+    async def _send_reply(target: str, body: str) -> str:
+        """Post one answer where its question was asked.
+
+        ``target`` is what the trigger recorded: ``issue:<n>`` for a thread,
+        or ``review_comment:<n>:<id>`` to answer inside an inline review
+        thread — where the question was asked, and where its author is
+        looking.
+        """
+        kind, _, rest = target.partition(":")
+        if kind == "issue":
+            return await github.post_issue_comment(int(rest), body)
+        if kind == "review_comment":
+            number, _, comment_id = rest.partition(":")
+            return await github.reply_to_review_comment(int(number), int(comment_id), body)
+        raise ValueError(f"unknown reply target '{target}'")
 
     def _read_result(self, session_id: int) -> dict[str, Any]:
         """Read the result file the container writes before it exits.

@@ -332,43 +332,49 @@ async def _get_all(path: str, params: dict[str, Any] | None = None) -> list[Any]
     return collected
 
 
-async def labelled_issues(label: str, *, since: datetime) -> list[dict[str, Any]]:
-    """Open issues carrying ``label`` that were updated since ``since``.
+async def _assigned(login: str) -> list[dict[str, Any]]:
+    """Every open issue and pull request assigned to an account.
 
-    Pull requests are issues to this endpoint and are filtered out here: a
-    pull request carrying the label is picked up through its reviews, not as
-    a fresh piece of work.
+    One listing for both: to this endpoint a pull request *is* an issue, and
+    the entries it returns carry the number and title, which is all the
+    callers need. No time filter — assignment is the signal, and a session
+    that already answered one is remembered by its reference, so an issue
+    assigned months ago is picked up once and then left alone.
     """
     payload = await _get_all(
         f"/repos/{settings.repo_slug}/issues",
-        {
-            "labels": label,
-            "state": "open",
-            "since": since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "sort": "created",
-            "direction": "desc",
-        },
+        {"assignee": login, "state": "open", "sort": "updated", "direction": "desc"},
     )
-    return [item for item in payload if isinstance(item, dict) and "pull_request" not in item]
+    return [item for item in payload if isinstance(item, dict)]
 
 
-async def labelled_pull_requests(label: str) -> list[dict[str, Any]]:
-    """Open pull requests carrying ``label``.
+async def assigned_issues(login: str) -> list[dict[str, Any]]:
+    """Open issues assigned to an account — pull requests excluded."""
+    return [item for item in await _assigned(login) if "pull_request" not in item]
 
-    The issues endpoint is the one that filters by label, so pull requests
-    are read through it too — the entries it returns for them carry the
-    number, which is all the review lookup needs.
+
+async def assigned_pull_requests(login: str) -> list[dict[str, Any]]:
+    """Open pull requests assigned to an account."""
+    return [item for item in await _assigned(login) if "pull_request" in item]
+
+
+async def authored_pull_requests(login: str) -> list[dict[str, Any]]:
+    """Open pull requests an account opened.
+
+    Its own pull requests are the ones whose reviews it has to answer, and
+    they are not necessarily assigned to it — GitHub does not assign an
+    author to their own pull request.
     """
     payload = await _get_all(
-        f"/repos/{settings.repo_slug}/issues",
-        {
-            "labels": label,
-            "state": "open",
-            "sort": "updated",
-            "direction": "desc",
-        },
+        f"/repos/{settings.repo_slug}/pulls",
+        {"state": "open", "sort": "updated", "direction": "desc"},
     )
-    return [item for item in payload if isinstance(item, dict) and "pull_request" in item]
+    wanted = login.strip().lower()
+    return [
+        pull
+        for pull in payload
+        if isinstance(pull, dict) and str(((pull.get("user") or {}).get("login")) or "").lower() == wanted
+    ]
 
 
 async def pull_request(number: int) -> dict[str, Any]:
@@ -377,25 +383,57 @@ async def pull_request(number: int) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-async def reviews_since(number: int, since: datetime) -> list[dict[str, Any]]:
-    """Reviews submitted on a pull request after ``since``.
+async def latest_changes_requested_review(number: int) -> dict[str, Any] | None:
+    """The open request for changes on a pull request, if there is one.
 
-    The reviews endpoint returns oldest first and ignores a direction
-    parameter, so every page is read and filtered here — asking for the last
-    few would return the *first* few, and on a long-running pull request the
-    newest review is on the last page, not the first.
+    GitHub tracks an opinion *per reviewer*, and so does this. Each
+    reviewer's latest opinionated review — `APPROVED` or
+    `CHANGES_REQUESTED` — is their current position; a `COMMENTED` review is
+    not an opinion and does not clear one, and a `DISMISSED` review is a
+    withdrawn one. The newest request for changes among the reviewers who
+    currently hold that position is the work.
+
+    A single globally newest review would get this wrong in both
+    directions: reviewer B approving would appear to withdraw reviewer A's
+    objection, and anybody's passing comment would bury it.
+
+    Every page is read: the endpoint answers oldest-first and ignores a
+    direction parameter, so on a long-running pull request the newest
+    review is on the last page, not the first.
     """
     payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews")
     if not isinstance(payload, list):
-        return []
-    fresh: list[dict[str, Any]] = []
+        return None
+
+    # Per reviewer: their latest opinionated review, in submission order.
+    positions: dict[str, tuple[datetime | None, dict[str, Any]]] = {}
     for review in payload:
-        if not isinstance(review, dict):
+        if not isinstance(review, dict) or not isinstance(review.get("id"), int):
+            continue
+        state = str(review.get("state") or "").upper()
+        if state not in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            # COMMENTED and PENDING say nothing about whether the reviewer
+            # is still asking for changes.
+            continue
+        author = str((review.get("user") or {}).get("login") or "")
+        if not author:
             continue
         submitted = _parse_time(review.get("submitted_at"))
-        if submitted is not None and submitted > since:
-            fresh.append(review)
-    return fresh
+        held = positions.get(author)
+        if held is None or submitted is None or held[0] is None or submitted >= held[0]:
+            positions[author] = (submitted, review)
+
+    outstanding = [
+        (submitted, review)
+        for submitted, review in positions.values()
+        if str(review.get("state") or "").upper() == "CHANGES_REQUESTED"
+    ]
+    if not outstanding:
+        return None
+    # The newest of the open objections: one session answers the review it
+    # names, and the others are seen again once it has.
+    outstanding.sort(key=lambda item: (item[0] is not None, item[0] or datetime.min.replace(tzinfo=timezone.utc)))
+    return outstanding[-1][1]
 
 
 async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
@@ -409,6 +447,172 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     """
     payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews/{review_id}/comments")
     return [comment for comment in payload if isinstance(comment, dict)]
+
+
+async def recent_issue_comments(since: datetime) -> list[dict[str, Any]]:
+    """Every issue and pull-request comment in the repository since ``since``.
+
+    One repository-wide listing rather than one request per thread: the
+    agent has to notice a question on a pull request nobody assigned it, and
+    walking every open thread to find that would cost a request each.
+    """
+    return [
+        comment
+        for comment in await _get_all(
+            f"/repos/{settings.repo_slug}/issues/comments",
+            {"since": _stamp(since), "sort": "created", "direction": "desc"},
+        )
+        if isinstance(comment, dict)
+    ]
+
+
+async def recent_review_comments(since: datetime) -> list[dict[str, Any]]:
+    """Every inline review comment in the repository since ``since``."""
+    return [
+        comment
+        for comment in await _get_all(
+            f"/repos/{settings.repo_slug}/pulls/comments",
+            {"since": _stamp(since), "sort": "created", "direction": "desc"},
+        )
+        if isinstance(comment, dict)
+    ]
+
+
+def issue_number_of(comment: dict[str, Any]) -> int | None:
+    """The issue or pull request an issue comment belongs to.
+
+    The repository-wide listing does not carry the number as a field; it is
+    the last segment of the thread's API url.
+    """
+    url = str(comment.get("issue_url") or "")
+    return _trailing_number(url)
+
+
+def pull_number_of(comment: dict[str, Any]) -> int | None:
+    """The pull request an inline review comment belongs to."""
+    url = str(comment.get("pull_request_url") or "")
+    return _trailing_number(url)
+
+
+def thread_root_of(comment: dict[str, Any]) -> int | None:
+    """The inline thread a review comment belongs to.
+
+    A reply carries the id of the comment that started the thread; the
+    starter carries its own. Answering a line-specific question means
+    answering *in that thread*, so the root is what identifies it — a whole
+    pull request's inline comments are several conversations, not one.
+    """
+    root = comment.get("in_reply_to_id")
+    if isinstance(root, int):
+        return root
+    own = comment.get("id")
+    return own if isinstance(own, int) else None
+
+
+def created_at_of(comment: dict[str, Any]) -> datetime | None:
+    """When a comment was written.
+
+    Issue comments and review comments have independent id sequences, so a
+    newer comment can carry a smaller id than an older one of the other
+    kind. Time is the only order the two share.
+    """
+    return _parse_time(comment.get("created_at"))
+
+
+def _trailing_number(url: str) -> int | None:
+    tail = url.rstrip("/").rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# Repository permissions that mean "may change this code". GitHub's
+# `read` and `none` do not.
+_WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
+
+
+async def may_push(login: str) -> bool:
+    """Whether an account may write to this repository.
+
+    On a public repository anybody can comment, review, and ask the agent
+    for things. What they cannot do is push — and a session that commits on
+    their say-so would push for them. So the ability to direct code changes
+    is checked against the repository's own collaborator permissions, not
+    inferred from being able to type in a comment box.
+
+    A lookup that fails answers False: an unknown permission is not a
+    permission.
+    """
+    if not login:
+        return False
+    try:
+        payload = await _get(f"/repos/{settings.repo_slug}/collaborators/{login}/permission")
+    except GitHubError as exc:
+        # 404 is the ordinary answer for "not a collaborator".
+        logger.info("could not establish repository permission for %s: %s", login, exc)
+        return False
+    return str(payload.get("permission") or "").lower() in _WRITE_PERMISSIONS
+
+
+# What a session's stage looks like on a thread. GitHub's palette is fixed
+# — +1, -1, laugh, confused, heart, hooray, rocket, eyes — so there is no
+# hourglass to wait with: eyes means seen and in the queue, a rocket means
+# it is being worked on now, and a shrug means it did not work out. Three
+# reactions, no notifications, and a person can see where their request is
+# without asking.
+REACTION_QUEUED = "eyes"
+REACTION_RUNNING = "rocket"
+REACTION_FAILED = "confused"
+
+
+async def react(path: str, content: str = REACTION_QUEUED) -> bool:
+    """Leave a reaction, so a person can see their request was picked up.
+
+    ``path`` is the API path of the thing reacted to — an issue, an issue
+    comment, or an inline review comment. Returns whether the reaction is
+    there now; a duplicate (GitHub answers 200 instead of 201) counts, since
+    the point is the state, not who created it.
+    """
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(f"{_API}{path}/reactions", headers=_headers(), json={"content": content})
+    if response.status_code in (200, 201):
+        return True
+    raise GitHubError(f"reaction on {path} failed ({response.status_code}): {response.text[:200]}")
+
+
+async def post_issue_comment(number: int, body: str) -> str:
+    """Answer in an issue or pull-request thread. Returns the comment url."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{_API}/repos/{settings.repo_slug}/issues/{number}/comments",
+            headers=_headers(),
+            json={"body": body},
+        )
+    if response.status_code != 201:
+        raise GitHubError(f"comment on #{number} failed ({response.status_code}): {response.text[:200]}")
+    return str(response.json().get("html_url") or "")
+
+
+async def reply_to_review_comment(number: int, comment_id: int, body: str) -> str:
+    """Answer inside an inline review thread. Returns the comment url.
+
+    The reply lands in the thread the question was asked in, which is where
+    its author is looking — a top-level comment would answer a line-specific
+    question somewhere else entirely.
+    """
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{_API}/repos/{settings.repo_slug}/pulls/{number}/comments/{comment_id}/replies",
+            headers=_headers(),
+            json={"body": body},
+        )
+    if response.status_code != 201:
+        raise GitHubError(
+            f"reply to comment {comment_id} on #{number} failed ({response.status_code}): {response.text[:200]}"
+        )
+    return str(response.json().get("html_url") or "")
 
 
 def head_of(pull: dict[str, Any]) -> tuple[str, str]:

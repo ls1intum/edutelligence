@@ -138,14 +138,23 @@ def parse_scheduler_state(payload: dict) -> Reading:
     )
 
 
-def start_decision(reading: Reading, *, running: int, paused: int) -> tuple[bool, str]:
-    """Whether another session may start now, and why."""
+def start_decision(reading: Reading, *, running: int, paused: int, max_parallel: int | None = None) -> tuple[bool, str]:
+    """Whether another session may start now, and why.
+
+    ``max_parallel`` is the ceiling in force at this moment: an operator can
+    lower it while the runner is running (see :mod:`controls`), so the
+    decision takes it as an argument rather than reading the configured
+    value here.
+    """
+    ceiling = settings.max_parallel_sessions if max_parallel is None else max_parallel
     if not reading.ok:
         return False, f"capacity unknown ({reading.detail})"
     if not reading.reclaimable:
         return False, f"nothing to reclaim ({reading.detail})"
-    if running + paused >= settings.max_parallel_sessions:
-        return False, (f"at the parallel-session ceiling " f"({running + paused}/{settings.max_parallel_sessions})")
+    if ceiling <= 0:
+        return False, "the parallel ceiling is set to zero"
+    if running + paused >= ceiling:
+        return False, (f"at the parallel-session ceiling " f"({running + paused}/{ceiling})")
     if reading.queue_total > 0:
         return False, f"users are queueing ({reading.queue_total} waiting)"
     if reading.load >= settings.start_below_load:

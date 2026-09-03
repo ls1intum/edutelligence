@@ -24,5 +24,6 @@
     <include file="liquibase/changelog/018_model_aliases.xml"/>
     <include file="liquibase/changelog/019_latency_observations.xml"/>
     <include file="liquibase/changelog/020_agent_sessions.xml"/>
+    <include file="liquibase/changelog/021_agent_controls.xml"/>
 
 </databaseChangeLog>

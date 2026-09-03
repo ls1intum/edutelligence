@@ -447,6 +447,92 @@ class TestLaunchAndSupervision:
         assert removed.count("cid-7") >= 1
 
 
+class TestReactionsOnAThread:
+    """What a person watching their own comment gets to see.
+
+    Three states, and GitHub's fixed palette to say them in: the queueing
+    pass leaves an eye when the work is accepted, the launch adds a rocket
+    when it actually starts, and a session that fails says so rather than
+    leaving a thread that looks like it is still being worked on.
+    """
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_a_starting_session_says_so_on_its_thread(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        reactions: list = []
+        starts: list = []
+        container_ids = iter(["cid-prepare", "cid-7"])
+
+        async def fake_create(**_kwargs):
+            return next(container_ids)
+
+        async def fake_start(cid):
+            starts.append(cid)
+
+        async def fake_react(path, content="eyes"):
+            reactions.append((path, content))
+            return True
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(
+            sessions.docker_engine,
+            "volume_mountpoint",
+            self._async_value("/var/lib/docker/volumes/logos_agent_artifacts/_data"),
+        )
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", self._async_value(0))
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(TestLaunchAndSupervision.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+        monkeypatch.setattr(sessions.github, "react", fake_react)
+        # On the class: an instance attribute would outlive the test and
+        # shadow the patches other tests make on the class.
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", lambda *_args, **_kwargs: None)
+
+        session = dict(TestLaunchAndSupervision.SESSION)
+        session["reaction_target"] = "/repos/ls1intum/edutelligence/issues/comments/9001"
+
+        await sessions.manager._launch(session)
+
+        assert reactions == [(session["reaction_target"], sessions.github.REACTION_RUNNING)]
+
+    async def test_a_session_nobody_asked_for_reacts_nowhere(self, monkeypatch):
+        # Sessions started from the page have no thread behind them.
+        from app import sessions
+
+        async def refuse(*_args, **_kwargs):
+            raise AssertionError("a session with no target must not react")
+
+        monkeypatch.setattr(sessions.github, "react", refuse)
+
+        await sessions.manager._react({"id": 7}, sessions.github.REACTION_RUNNING)
+
+    async def test_a_reaction_github_refuses_does_not_fail_the_session(self, monkeypatch):
+        from app import sessions
+
+        async def broken(*_args, **_kwargs):
+            raise RuntimeError("403")
+
+        monkeypatch.setattr(sessions.github, "react", broken)
+
+        # No exception: the work is what matters, the emoji is not.
+        await sessions.manager._react({"reaction_target": "/x"}, sessions.github.REACTION_FAILED)
+
+
 class TestAgentPhaseIsolation:
     """What the untrusted agent phase may hold and reach.
 
@@ -2867,3 +2953,405 @@ class TestRestartReconciliation:
         assert stopped == ["cid-x"]
         assert removed == ["cid-x"]
         assert supervised == []
+
+
+class TestReplyDelivery:
+    """An answer that GitHub refused once is not an answer lost.
+
+    Delivery happens when a session settles, and its trigger counts as
+    handled from then on — so without a retry a single timeout would leave
+    somebody waiting on a thread forever.
+    """
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_a_failed_delivery_is_recorded_as_pending(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("the answer")
+        attempts: list = []
+
+        async def failing_reply(_target, _body):
+            raise RuntimeError("502 from GitHub")
+
+        async def record(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(failing_reply))
+
+        await sessions.SessionManager()._post_reply(7)
+
+        assert attempts == [(7, False)]
+
+    async def test_a_pending_answer_is_tried_again(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("the answer")
+        posted: list = []
+        attempts: list = []
+
+        async def owing(_max_attempts):
+            return [{"id": 7, "reply_target": "issue:772", "reply_attempts": 1}]
+
+        async def send(target, body):
+            posted.append((target, body))
+            return "https://github.com/x/y#c9"
+
+        async def record(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        monkeypatch.setattr(sessions.db, "sessions_owing_a_reply", owing)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        await sessions.SessionManager().deliver_pending_replies()
+
+        assert posted == [("issue:772", "the answer")]
+        assert attempts == [(7, True)]
+
+    async def test_a_delivered_answer_is_not_posted_twice(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("the answer")
+        posted: list = []
+
+        async def send(target, body):
+            posted.append(target)
+            return "url"
+
+        monkeypatch.setattr(
+            sessions.db,
+            "get_session",
+            self._async_value({"reply_target": "issue:772", "reply_posted_at": "2026-09-02T18:00:00Z"}),
+        )
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", self._async_value(None))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        await sessions.SessionManager()._post_reply(7)
+
+        assert posted == []
+
+    async def test_an_oversized_answer_is_shortened_rather_than_refused(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("x" * 80_000)
+        posted: list = []
+
+        async def send(_target, body):
+            posted.append(body)
+            return "url"
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", self._async_value(None))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        await sessions.SessionManager()._post_reply(7)
+
+        # GitHub rejects a body over 65 536 characters outright, and a
+        # rejected answer is no answer.
+        assert len(posted[0]) < 65_000
+        assert posted[0].endswith("_[answer truncated]_")
+
+
+class TestOperatorControls:
+    """The kill switch, from the scheduler's side."""
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_pausing_hands_back_what_the_runner_holds(self, monkeypatch, tmp_path):
+        from app import capacity, controls, sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        paused: list = []
+        claimed: list = []
+
+        async def stopped():
+            return {"mode": "paused", "mode_reason": "incident", "max_parallel": None, "updated_by": "tobias"}
+
+        async def fake_pause(cid, **_kwargs):
+            paused.append(cid)
+            return True
+
+        async def fake_claim(_limit):
+            claimed.append(1)
+            return []
+
+        monkeypatch.setattr(controls.db, "get_controls", stopped)
+        controls.forget()
+        monkeypatch.setattr(
+            sessions.capacity,
+            "read_load",
+            self._async_value(capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)),
+        )
+        monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", self._async_value(True))
+
+        await sessions.SessionManager().scheduler_pass()
+
+        # Running work is handed back, and nothing is admitted — but nothing
+        # is cancelled either, so releasing the switch resumes it.
+        assert paused == ["cid-7"]
+        assert claimed == []
+
+    async def test_draining_stops_admission_without_pausing_anything(self, monkeypatch, tmp_path):
+        from app import capacity, controls, sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        claimed: list = []
+
+        async def drained():
+            return {"mode": "draining", "mode_reason": "before a deploy", "max_parallel": None, "updated_by": "t"}
+
+        async def fake_claim(_limit):
+            claimed.append(1)
+            return []
+
+        monkeypatch.setattr(controls.db, "get_controls", drained)
+        controls.forget()
+        monkeypatch.setattr(
+            sessions.capacity,
+            "read_load",
+            self._async_value(capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)),
+        )
+        paused: list = []
+
+        async def fake_pause(cid, **_kwargs):
+            paused.append(cid)
+            return True
+
+        monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+
+        await sessions.SessionManager().scheduler_pass()
+
+        # Nothing new is admitted, and the session already running is left
+        # alone — that is what separates draining from pausing.
+        assert claimed == []
+        assert paused == []
+
+
+class TestWorkspaceHousekeeping:
+    """Workspaces the runner made for itself do not accumulate."""
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_a_finished_workspace_gives_back_its_volume_and_keeps_its_history(self, monkeypatch):
+        from app import sessions
+
+        removed_volumes: list = []
+        archived: list = []
+        deleted: list = []
+
+        async def disposable(_cutoff):
+            return [{"id": 3, "name": "issue-812-oom", "volume_name": "logos_agent_ws_issue-812-oom"}]
+
+        async def archive(workspace_id):
+            archived.append(workspace_id)
+            return True
+
+        async def delete(workspace_id):
+            deleted.append(workspace_id)
+            return True
+
+        async def remove_volume(name, **_kwargs):
+            removed_volumes.append(name)
+
+        monkeypatch.setattr(sessions.db, "disposable_workspaces", disposable)
+        monkeypatch.setattr(sessions.db, "archive_workspace", archive)
+        monkeypatch.setattr(sessions.db, "delete_workspace", delete)
+        monkeypatch.setattr(sessions.docker_engine, "remove_volume", remove_volume)
+
+        await sessions.SessionManager().sweep_workspaces()
+
+        assert removed_volumes == ["logos_agent_ws_issue-812-oom"]
+        assert archived == [3]
+        # Deleting the row would cascade into every finished session in it:
+        # the history, the trigger references that keep assignments from
+        # being worked twice, and any answer still waiting to be delivered.
+        assert deleted == []
+
+    async def test_a_volume_that_could_not_be_removed_is_tried_again(self, monkeypatch):
+        from app import sessions
+
+        archived: list = []
+
+        async def disposable(_cutoff):
+            return [{"id": 3, "name": "issue-812", "volume_name": "vol"}]
+
+        async def archive(workspace_id):
+            archived.append(workspace_id)
+            return True
+
+        async def failing_remove(_name, **_kwargs):
+            raise RuntimeError("volume is in use")
+
+        monkeypatch.setattr(sessions.db, "disposable_workspaces", disposable)
+        monkeypatch.setattr(sessions.db, "archive_workspace", archive)
+        monkeypatch.setattr(sessions.docker_engine, "remove_volume", failing_remove)
+
+        await sessions.SessionManager().sweep_workspaces()
+
+        # Not archived, so the next sweep finds it and tries the volume
+        # again — archiving first would leave a volume nothing tracks.
+        assert archived == []
+
+    async def test_a_workspace_that_just_took_work_is_left_alone(self, monkeypatch):
+        from app import sessions
+
+        async def disposable(_cutoff):
+            return [{"id": 3, "name": "issue-812", "volume_name": "vol"}]
+
+        async def refuses(_workspace_id):
+            # A session was accepted into it between the query and here.
+            return False
+
+        async def remove_volume(_name, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "disposable_workspaces", disposable)
+        monkeypatch.setattr(sessions.db, "archive_workspace", refuses)
+        monkeypatch.setattr(sessions.docker_engine, "remove_volume", remove_volume)
+
+        # The archive refuses under the same row lock a session creation
+        # takes, so nothing is lost by the volume already being gone: the
+        # next preparation clones it again.
+        await sessions.SessionManager().sweep_workspaces()
+
+
+class TestMissingSessionImage:
+    """A missing image is an artefact that is not there, not a runner bug."""
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_the_session_says_what_is_missing(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        settled: list = []
+        created: list = []
+
+        async def no_image(_image):
+            return False
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid"
+
+        async def fake_settle(_self, sid, *, exit_code, error):
+            settled.append((sid, error))
+
+        monkeypatch.setattr(sessions.docker_engine, "image_present", no_image)
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", self._async_value(None))
+        monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", self._async_value("/vol"))
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(
+            sessions.db,
+            "get_workspace",
+            self._async_value({"id": 1, "name": "issue-812", "base_branch": "main", "volume_name": "vol"}),
+        )
+        monkeypatch.setattr(sessions.SessionManager, "_settle", fake_settle)
+
+        await sessions.SessionManager()._launch(
+            {"id": 7, "workspace_id": 1, "task": "a task", "model": None, "screenshot_paths": []}
+        )
+
+        assert created == []
+        assert len(settled) == 1
+        message = settled[0][1]
+        assert "not available on this host" in message and "build of the default branch" in message
+
+
+class TestResumeCeiling:
+    """An operator's ceiling holds for resumed sessions too.
+
+    Resuming is where it is easiest to overshoot: the check is naturally
+    written once, before a loop that then resumes everything.
+    """
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_only_as_many_are_resumed_as_the_ceiling_allows(self, monkeypatch, tmp_path):
+        from app import capacity, controls, sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        resumed: list = []
+
+        async def ceiling_of_two():
+            return {"mode": "running", "mode_reason": "", "max_parallel": 2, "updated_by": "tobias"}
+
+        async def in_status(status):
+            if status is SessionStatus.PAUSED:
+                return [{"id": i, "container_id": f"cid-{i}"} for i in (1, 2, 3, 4)]
+            return []
+
+        async def fake_unpause(cid, **_kwargs):
+            resumed.append(cid)
+            return True
+
+        monkeypatch.setattr(controls.db, "get_controls", ceiling_of_two)
+        controls.forget()
+        monkeypatch.setattr(
+            sessions.capacity,
+            "read_load",
+            self._async_value(capacity.Reading(load=0.0, busy_slots=0, total_slots=10, queue_total=0, ok=True)),
+        )
+        monkeypatch.setattr(sessions.db, "sessions_in_status", in_status)
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.docker_engine, "connect_network", self._async_value(True))
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", fake_unpause)
+
+        await sessions.SessionManager().scheduler_pass()
+
+        # Four were paused and the platform is idle; the ceiling is what
+        # stops the fourth, third and — here — everything past the second.
+        assert resumed == ["cid-1", "cid-2"]
