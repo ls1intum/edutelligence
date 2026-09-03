@@ -108,7 +108,7 @@ class TestDecodeOnlyTtftIngestion:
     learned_ttft in ETTFT is the decode-only first-token time."""
 
     def _lane_with_tpot(self, model: str = "test-model", tpot_hist=None) -> dict:
-        return {"model": model, "backend_metrics": {"tpot_histogram": tpot_hist or _tpot_histogram()}}
+        return {"model": model, "backend_metrics": {"tpot_histogram": _tpot_histogram() if tpot_hist is None else tpot_hist}}
 
     def test_tpot_p50_recorded_as_ttft(self):
         store = MagicMock()
