@@ -32,7 +32,7 @@ import httpx
 
 from . import attachments, capacity, controls, db, docker_engine, github, model_policy, triggers
 from .config import REPLY_FILE, settings
-from .schemas import EventKind, SessionStatus
+from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -743,7 +743,15 @@ class SessionManager:
         if not attached:
             logger.error("session %s could not be reattached to the session network; leaving it paused", sid)
             return False
-        if not await docker_engine.unpause_container(container_id):
+        try:
+            thawed = await docker_engine.unpause_container(container_id)
+        except Exception as exc:
+            # A Docker answer nobody expected must not take the scheduler
+            # pass down with it: everything behind this session — resuming,
+            # admitting, sweeping — would stop with it.
+            logger.error("could not resume session %s: %s", sid, exc)
+            return False
+        if not thawed:
             logger.info("session %s could not be resumed; its container is not running", sid)
             return False
         if await db.transition_session(sid, SessionStatus.RUNNING):
@@ -1505,11 +1513,22 @@ class SessionManager:
             # and updates the result file before settlement reads it.
             status = ((await db.get_session(session_id)) or {}).get("status")
             if status not in (SessionStatus.RUNNING.value, SessionStatus.FINALIZING.value):
-                # A competing actor (a cancel, a second settlement) reached
-                # the row first: it is no longer ours to finish. Give the
-                # container back and record nothing.
-                logger.warning("settlement of session %s found the row in %r; only cleaning up", session_id, status)
-                await self._cleanup_container(session_id)
+                # A competing actor reached the row first: it is no longer
+                # ours to finish, and nothing is recorded. Whether the
+                # container may be removed depends on *which* actor.
+                logger.warning("settlement of session %s found the row in %r; not recording it", session_id, status)
+                if status in {state.value for state in TERMINAL_STATUSES}:
+                    # Cancelled or already settled: the row is finished and
+                    # the container is a leftover.
+                    await self._cleanup_container(session_id)
+                else:
+                    # Paused, or starting again: the session is alive and
+                    # somebody else owns it. Removing its container here is
+                    # how a paused session ends up with nothing to thaw —
+                    # unresumable, holding a workspace, and blocking the
+                    # queue behind it. Left alone, whoever owns the row
+                    # decides what happens to it.
+                    logger.info("leaving the container of session %s alone: its row is %r", session_id, status)
                 return
             if status == SessionStatus.RUNNING.value:
                 # Claim the non-pausable finalizing state *before* the

@@ -4230,3 +4230,70 @@ class TestAPausedSessionThatCannotComeBack:
         # Nothing was resumed, so the pass has not spent its turn: the work
         # behind the stuck session gets its chance.
         assert admitted == [37]
+
+
+class TestWhoseContainerIsIt:
+    """Settlement may only clear up after a row that is finished.
+
+    Production: a settlement raced the pauser, found the row in 'paused',
+    declined to record anything — and removed the container anyway. The
+    session was then unresumable, held its workspace, and blocked the queue
+    behind it. Removing somebody else's container is the one thing a
+    settlement that has decided not to own the row must not do.
+    """
+
+    @staticmethod
+    def install(monkeypatch, tmp_path, status: str):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        removed: list = []
+
+        async def get_session(_session_id):
+            return {"id": 34, "status": status, "container_id": "cid-34"}
+
+        async def cleanup(_self, session_id):
+            removed.append(session_id)
+
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
+        monkeypatch.setattr(sessions.SessionManager, "_cleanup_container", cleanup)
+        return removed
+
+    async def test_a_paused_row_keeps_its_container(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        removed = self.install(monkeypatch, tmp_path, "paused")
+
+        await sessions.manager._settle(34, exit_code=0, error=None)
+
+        assert removed == []
+
+    async def test_a_cancelled_row_gives_its_container_back(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        removed = self.install(monkeypatch, tmp_path, "cancelled")
+
+        await sessions.manager._settle(34, exit_code=0, error=None)
+
+        # Finished for good: the container is a leftover.
+        assert removed == [34]
+
+    async def test_a_resume_that_throws_does_not_take_the_pass_with_it(self, monkeypatch):
+        from app import sessions
+
+        async def exists(_container_id):
+            return "running", None
+
+        async def attach(_network, _container_id):
+            return True
+
+        async def explodes(_container_id):
+            raise sessions.docker_engine.DockerError(500, "something nobody expected")
+
+        monkeypatch.setattr(sessions.docker_engine, "container_state", exists)
+        monkeypatch.setattr(sessions.docker_engine, "connect_network", attach)
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", explodes)
+
+        # Everything behind this session — resuming the rest, admitting,
+        # sweeping — would otherwise stop with it.
+        assert await sessions.manager._resume({"id": 34, "container_id": "cid-34"}, "load 0%") is False
