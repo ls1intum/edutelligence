@@ -2669,3 +2669,48 @@ async def test_sharded_checkpoint_skipped_for_speculative_lane(monkeypatch, tmp_
     plain = LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
     await handle._maybe_prepare_sharded_checkpoint(plain)
     assert handle._sharded_model_dir is not None
+
+
+@pytest.mark.asyncio
+async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeypatch, tmp_path) -> None:
+    """A rejection recorded for the current vLLM sends the lane straight to the
+    full checkpoint — no conversion attempt.
+
+    The record lives on disk (a sidecar the invalidation wrote earlier), not in
+    the handle: this is a freshly-constructed handle with no in-memory state,
+    modelling a worker that restarted after the original failure. Without the
+    persistent record the lane would spend minutes re-converting a checkpoint
+    the loader is about to refuse again.
+    """
+    from logos_worker_node import sharded_checkpoint as sc
+
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(),
+        vllm_engine_config=VllmEngineConfig(sharded_checkpoint_enabled=True),
+    )
+    monkeypatch.setattr(handle, "_resolve_persistent_cache_root", lambda _cfg: str(tmp_path))
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "vllm")
+    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.8.0")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.8-27B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+
+    # A prior run rejected this conversion: the checkpoint dir is gone, the
+    # sidecar is what remains on disk.
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "Qwen/Qwen3.8-27B", 2)
+    sc.record_rejection(target, vllm_version="0.8.0")
+
+    def _boom(*_a, **_k):  # a rejected checkpoint must not be re-converted
+        raise AssertionError("a rejected checkpoint must not trigger a re-conversion")
+
+    monkeypatch.setattr(sc, "_run_conversion_subprocess", _boom)
+
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None, "the lane must serve the full checkpoint"
+    # The record is still on disk — it was not consumed into the handle.
+    assert sc.rejection_state(target, current_version="0.8.0") == "skip"

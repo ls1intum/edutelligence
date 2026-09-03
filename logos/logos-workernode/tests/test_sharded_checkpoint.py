@@ -275,3 +275,131 @@ def test_spawn_does_not_retry_twice_for_the_same_reason(tmp_path: Path, monkeypa
     with pytest.raises(RuntimeError, match="exited during startup"):
         asyncio.run(handle.spawn(lane))
     assert len(attempts) == 2
+
+
+# ---------------------------------------------------------------------------
+# Remembering a rejected conversion
+#
+# A conversion can complete — marker written, shards on disk — and still be
+# refused by the loader (a quantization whose weight layout does not survive
+# the round trip). The worker discards the shards, but the knowledge "this
+# (model, tp) is unusable" used to die with the directory: every later spawn
+# re-converted from scratch (minutes of GPU time), failed the same way, and
+# discarded again. The rejection must now outlive the removal — across spawns
+# and across worker restarts — and be scoped to the vLLM version that recorded
+# it, so a newer vLLM gets one retry.
+# ---------------------------------------------------------------------------
+
+
+def test_rejection_path_is_a_sibling_of_the_checkpoint(tmp_path: Path) -> None:
+    d = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 4)
+    # Sibling, not child: the invalidation rmtree's the checkpoint dir, so the
+    # record must live beside it to outlast the conversion it describes.
+    assert sc.rejection_path(d) == d.with_name("tp4.rejected")
+    assert sc.rejection_path(d).parent == d.parent
+
+
+def test_invalidate_records_a_versioned_rejection(tmp_path: Path) -> None:
+    d = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    d.mkdir(parents=True)
+    (d / sc._COMPLETION_MARKER).write_text("ok")
+
+    assert sc.invalidate_sharded_checkpoint(d, vllm_version="0.8.0", reason="size mismatch") is True
+    assert not d.exists(), "the checkpoint itself must still be removed"
+
+    rec = sc.read_rejection(d)
+    assert rec is not None
+    assert rec["vllm_version"] == "0.8.0"
+    assert rec["reason"] == "size mismatch"
+
+
+def test_invalidate_with_nothing_cached_records_nothing(tmp_path: Path) -> None:
+    d = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    assert sc.invalidate_sharded_checkpoint(d) is False
+    assert not sc.rejection_path(d).exists(), "no checkpoint removed → no rejection to record"
+    assert sc.rejection_state(d) == "none"
+
+
+def test_rejection_state_none_without_a_sidecar(tmp_path: Path) -> None:
+    d = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    assert sc.rejection_state(d) == "none"
+
+
+def _recorded(tmp_path: Path, version: str) -> Path:
+    # Simulate a prior worker having rejected this conversion: the checkpoint
+    # dir is gone and only the sidecar remains on disk — the state a restarted
+    # worker inherits.
+    d = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    sc.record_rejection(d, vllm_version=version)
+    return d
+
+
+def test_rejection_state_skips_for_the_recording_version(tmp_path: Path) -> None:
+    d = _recorded(tmp_path, "0.8.0")
+    assert sc.rejection_state(d, current_version="0.8.0") == "skip"
+
+
+def test_rejection_state_skips_when_the_current_version_is_unknown(tmp_path: Path) -> None:
+    # Conservative: the vLLM version cannot be confirmed, so no re-conversion
+    # gamble — a rejected checkpoint is one we do not rebuild on a hunch.
+    d = _recorded(tmp_path, "0.8.0")
+    assert sc.rejection_state(d, current_version="") == "skip"
+
+
+def test_rejection_state_skips_when_the_recorded_version_is_unknown(tmp_path: Path) -> None:
+    d = _recorded(tmp_path, "")
+    assert sc.rejection_state(d, current_version="0.9.0") == "skip"
+
+
+def test_rejection_state_retries_when_the_vllm_version_changed(tmp_path: Path) -> None:
+    d = _recorded(tmp_path, "0.8.0")
+    assert sc.rejection_state(d, current_version="0.9.0") == "retry"
+    # The stale record is discarded so the conversion can run — and, if it is
+    # rejected again, a fresh record for the new version is left behind.
+    assert not sc.rejection_path(d).exists()
+    assert sc.rejection_state(d, current_version="0.9.0") == "none"
+
+
+def test_ensure_does_not_reconvert_a_rejected_checkpoint(tmp_path: Path, monkeypatch) -> None:
+    """The regression: a rejection recorded for the current vLLM must make the
+    next ensure() skip the conversion entirely, not rebuild and re-reject it."""
+    _recorded(tmp_path, "0.8.0")
+    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.8.0")
+
+    def _boom(*_a, **_k):  # the converter must never be launched
+        raise AssertionError("a rejected checkpoint must not be re-converted")
+
+    monkeypatch.setattr(sc, "_run_conversion_subprocess", _boom)
+    result = sc.ensure_sharded_checkpoint(model="org/Model-A", tensor_parallel_size=2, cache_root=str(tmp_path))
+    assert result is None
+
+
+def test_ensure_reconverts_when_the_vllm_version_changed(tmp_path: Path, monkeypatch) -> None:
+    """A newer vLLM gets exactly one retry: the stale rejection is cleared and
+    the conversion runs again (an upstream fix may have landed)."""
+    _recorded(tmp_path, "0.8.0")
+    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.9.0")
+
+    def _convert(cmd, env, log_path, timeout_s, cancel_event):
+        out = Path(cmd[cmd.index("--output") + 1])
+        (out / "model-rank-0-part-0.safetensors").write_text("weights")
+        return True
+
+    monkeypatch.setattr(sc, "_run_conversion_subprocess", _convert)
+    result = sc.ensure_sharded_checkpoint(model="org/Model-A", tensor_parallel_size=2, cache_root=str(tmp_path))
+    assert result is not None
+
+
+def test_rejection_survives_a_worker_restart(tmp_path: Path, monkeypatch) -> None:
+    """The record is on disk, not in any handle: a fresh ensure() (no shared
+    in-memory state) still honours a rejection written by a prior run."""
+    d = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    sc.record_rejection(d, vllm_version="")  # version-unknown → skips regardless
+    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.8.0")
+
+    def _boom(*_a, **_k):
+        raise AssertionError("restart must not re-convert a previously-rejected checkpoint")
+
+    monkeypatch.setattr(sc, "_run_conversion_subprocess", _boom)
+    result = sc.ensure_sharded_checkpoint(model="org/Model-A", tensor_parallel_size=2, cache_root=str(tmp_path))
+    assert result is None

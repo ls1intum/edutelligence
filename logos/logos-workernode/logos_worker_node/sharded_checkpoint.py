@@ -30,6 +30,7 @@ checkpoint already exists it is returned immediately. On any failure it returns
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -44,6 +45,7 @@ logger = logging.getLogger("logos_worker_node.sharded_checkpoint")
 
 _SHARDED_CACHE_SUBDIR = ".sharded_cache"
 _COMPLETION_MARKER = ".logos_sharded_complete"
+_REJECTION_SUFFIX = ".rejected"
 DEFAULT_MAX_FILE_SIZE_BYTES = 5 * 1024**3
 
 _CONVERT_ENTRYPOINT = Path(__file__).with_name("_sharded_convert.py")
@@ -85,7 +87,7 @@ def is_sharded_checkpoint_ready(directory: Path) -> bool:
         return False
 
 
-def invalidate_sharded_checkpoint(directory: Path) -> bool:
+def invalidate_sharded_checkpoint(directory: Path, vllm_version: str = "", reason: str = "") -> bool:
     """Discard a sharded checkpoint that vLLM refused to load.
 
     The conversion can complete — shard files written, marker placed — and
@@ -95,6 +97,12 @@ def invalidate_sharded_checkpoint(directory: Path) -> bool:
     so; only a lane trying to serve them finds out. Removing the directory
     puts the model back on the full checkpoint and lets a later conversion,
     against a newer vLLM, try again.
+
+    The rejection is also recorded alongside the (now-gone) directory, keyed
+    on ``vllm_version`` and ``reason`` when provided, so a later spawn — and a
+    later worker process — sees that this (model, tp) was rejected and does not
+    spend minutes rebuilding a conversion the loader is going to refuse again.
+    See :func:`rejection_state`.
 
     Returns True when something was removed.
     """
@@ -108,7 +116,117 @@ def invalidate_sharded_checkpoint(directory: Path) -> bool:
             logger.error("[sharded] could not fully remove %s — it still looks ready", directory)
             return False
         logger.warning("[sharded] discarded unusable sharded checkpoint: %s", directory)
+        # Record *after* a confirmed removal, so a no-op invalidation (nothing
+        # cached) never plants a rejection for a checkpoint that never was.
+        record_rejection(directory, vllm_version=vllm_version, reason=reason)
         return True
+
+
+def rejection_path(directory: Path) -> Path:
+    """Path of the rejection record for ``directory``.
+
+    A *sibling* of the checkpoint directory (``tp<N>.rejected``), deliberately
+    outside it: :func:`invalidate_sharded_checkpoint` ``rmtree``s the directory
+    on removal, so the record has to live beside it to outlast the very
+    conversion it describes.
+    """
+    return directory.with_name(directory.name + _REJECTION_SUFFIX)
+
+
+def current_vllm_version() -> str:
+    """The vLLM version installed in this worker, or ``""`` when unknown.
+
+    The rejection record is keyed on this, so a (model, tp) that one vLLM
+    refuses to load is remembered for exactly that version and re-tried once it
+    changes (an upstream fix may have landed). ``""`` — rather than an
+    exception — is returned when vLLM is not importable or has no metadata, so
+    callers can treat it uniformly as "version unknown".
+    """
+    try:
+        import importlib.metadata as md
+
+        return md.version("vllm") or ""
+    except Exception:  # noqa: BLE001
+        # Missing metadata (vLLM absent) must read as "unknown", not crash spawn.
+        return ""
+
+
+def record_rejection(directory: Path, vllm_version: str = "", reason: str = "") -> bool:
+    """Persist that ``directory``'s conversion was rejected by the loader.
+
+    Best-effort: failing to record only reverts to the pre-record behaviour
+    (the next spawn re-converts and re-rejects) and must not turn an otherwise
+    successful invalidation into a failure. The record is written atomically
+    (temp file + rename) so a crash mid-write can never leave a torn sidecar
+    that :func:`read_rejection` would misparse.
+    """
+    payload = {
+        "vllm_version": vllm_version or "",
+        "reason": reason or "",
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    path = rejection_path(directory)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        logger.exception("[sharded] could not record rejection for %s", directory)
+        return False
+
+
+def read_rejection(directory: Path) -> dict | None:
+    """The rejection record for ``directory``, or ``None`` if absent/corrupt."""
+    try:
+        with open(rejection_path(directory), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def rejection_state(directory: Path, current_version: str | None = None) -> str:
+    """Whether a previously-recorded rejection of ``directory`` should stand.
+
+    Returns one of:
+
+      * ``"none"``  — no rejection recorded; a conversion may proceed.
+      * ``"skip"``  — a rejection is recorded for the current vLLM, or for a
+        version that cannot be compared; do not re-convert, serve the full
+        checkpoint instead.
+      * ``"retry"`` — a rejection is recorded for a *different, known* vLLM;
+        the sidecar is removed and a conversion may run again (an upstream fix
+        may have landed since the rejection).
+
+    ``current_version`` overrides the detected version when given (tests); pass
+    ``""`` for an explicitly-unknown current version, ``None`` to detect it.
+
+    The comparison is deliberately conservative: it retries only when *both*
+    the recorded and current versions are known and differ. When either is
+    unknown it skips, so the re-conversion loop can never be reintroduced just
+    because the version could not be determined.
+    """
+    rec = read_rejection(directory)
+    if rec is None:
+        return "none"
+    recorded = str(rec.get("vllm_version") or "").strip()
+    if current_version is None:
+        current_version = current_vllm_version()
+    current = (current_version or "").strip()
+    if recorded and current and recorded != current:
+        # The vLLM that recorded the rejection is no longer the one serving —
+        # the rejection may no longer hold. Clear it (idempotent: a sibling
+        # lane may have done the same first) so the conversion is retried.
+        try:
+            rejection_path(directory).unlink(missing_ok=True)
+        except OSError:
+            pass
+        return "retry"
+    return "skip"
 
 
 def _lock_for(directory: Path) -> threading.Lock:
@@ -307,6 +425,18 @@ def ensure_sharded_checkpoint(
     target = sharded_checkpoint_dir(cache_root, model, tp)
     if is_sharded_checkpoint_ready(target):
         return target
+    if rejection_state(target) == "skip":
+        # A conversion for this (model, tp) was built and the loader rejected
+        # it, for the vLLM that is installed now. Rebuilding it would only
+        # reproduce the same bad shards after minutes of GPU time, so go
+        # straight to the full checkpoint the caller would fall back to anyway.
+        logger.info(
+            "[sharded] %s (tp=%d) has a checkpoint the loader rejected for this vLLM — "
+            "not re-converting; caller serves the full checkpoint",
+            model,
+            tp,
+        )
+        return None
 
     if not _CONVERT_ENTRYPOINT.is_file():
         logger.error("[sharded] converter entrypoint missing: %s", _CONVERT_ENTRYPOINT)

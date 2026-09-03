@@ -735,15 +735,39 @@ class VllmProcessHandle:
         log_blob = "\n".join(self._recent_logs).lower()
         return any(frag in log_blob for frag in self._BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS)
 
+    def _sharded_rejection_reason(self) -> str:
+        """A short, greppable reason line for the sharded-checkpoint rejection record.
+
+        The first recent log line that named the sharded loader (or one of the
+        known "shards are wrong" payload messages) is the line that told us the
+        checkpoint — not the model or the GPU — was the problem; record it so a
+        later reader of the sidecar sees *why* the conversion was rejected.
+        Truncated so the sidecar stays small.
+        """
+        for line in self._recent_logs or []:
+            low = line.lower()
+            if any(frag in low for frag in self._BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS):
+                return " ".join(line.split())[:300]
+        return "vLLM rejected the pre-sharded checkpoint"
+
     def _invalidate_sharded_checkpoint(self, lane_config: LaneConfig) -> bool:
-        """Remove the sharded checkpoint this lane just failed to load."""
+        """Remove the sharded checkpoint this lane just failed to load.
+
+        Also records the rejection (version-scoped) so later spawns — and later
+        worker processes — do not rebuild a conversion the loader is going to
+        refuse again; see ``sharded_checkpoint.rejection_state``.
+        """
         directory = self._sharded_model_dir
         if not directory:
             return False
         try:
             from logos_worker_node import sharded_checkpoint as sc  # noqa: PLC0415
 
-            removed = sc.invalidate_sharded_checkpoint(Path(directory))
+            removed = sc.invalidate_sharded_checkpoint(
+                Path(directory),
+                vllm_version=sc.current_vllm_version(),
+                reason=self._sharded_rejection_reason(),
+            )
         except Exception:  # noqa: BLE001
             logger.exception("[%s] Failed to discard sharded checkpoint %s", self.lane_id, directory)
             return False
@@ -1656,6 +1680,21 @@ class VllmProcessHandle:
                 lane_config.model,
                 tp,
                 target,
+            )
+            return
+
+        if sc.rejection_state(target) == "skip":
+            # A conversion for this (model, tp) was already built and the loader
+            # rejected it for the vLLM that is installed now (recorded on the
+            # earlier failure). Rebuilding it here would burn minutes of GPU
+            # time to reproduce the same unusable shards and fail the same way,
+            # so go straight to the full checkpoint — no conversion attempt.
+            logger.info(
+                "[%s] serving %s (tp=%d) from the full checkpoint — its sharded "
+                "checkpoint was rejected by this vLLM",
+                self.lane_id,
+                lane_config.model,
+                tp,
             )
             return
 
