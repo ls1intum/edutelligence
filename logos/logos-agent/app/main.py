@@ -217,7 +217,8 @@ async def get_models(_: Principal = Depends(require_agent_operator)) -> dict[str
 @app.get("/triggers", tags=["capacity"])
 async def get_triggers(_: Principal = Depends(require_agent_operator)) -> dict[str, object]:
     """Whether the runner reacts to the repository, and what it has done."""
-    status = triggers.poller.status()
+    control = await controls.current()
+    status = triggers.poller.status(control.max_parallel)
     status["active_sessions"] = await triggers.active_trigger_sessions()
     return status
 

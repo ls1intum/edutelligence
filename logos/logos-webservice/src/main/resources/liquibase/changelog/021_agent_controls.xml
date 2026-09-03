@@ -33,6 +33,12 @@
                 mode TEXT NOT NULL DEFAULT 'running',
                 mode_reason TEXT,
                 max_parallel INTEGER,
+                -- How far the comment scan has got. Assignments and reviews
+                -- are read from the repository's current state, but comments
+                -- are a stream: without a mark, a question asked while the
+                -- runner was stopped would fall out of the lookback window
+                -- and never be answered.
+                comments_scanned_at TIMESTAMPTZ,
                 updated_by TEXT,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -117,6 +123,24 @@
                 ALTER TABLE agent_workspaces DROP COLUMN IF EXISTS archived_at;
                 ALTER TABLE agent_workspaces DROP COLUMN IF EXISTS ephemeral;
             ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Where a session reacts, so a person can see where their request is.
+
+         A reaction is the cheapest status there is: it appears on the
+         comment somebody wrote, needs no notification, and says whether the
+         request is waiting or being worked on. The queueing pass knows the
+         thing that was reacted to, but the launch happens minutes later in
+         another process — so the target is kept on the row rather than in
+         the poller's memory, and survives a restart with it. -->
+    <changeSet id="021-agent-session-reaction-target" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="reaction_target"/></not>
+        </preConditions>
+        <sql>ALTER TABLE agent_sessions ADD COLUMN reaction_target TEXT;</sql>
+        <rollback>
+            <sql>ALTER TABLE agent_sessions DROP COLUMN IF EXISTS reaction_target;</sql>
         </rollback>
     </changeSet>
 

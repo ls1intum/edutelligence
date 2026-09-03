@@ -729,6 +729,10 @@ class SessionManager:
 
         await db.add_event(sid, EventKind.STATUS, {"status": "running", "branch": branch})
         self._supervise(sid, container_id)
+        # The queue acknowledged the request; this says it is being worked
+        # on now — the difference a person on the other end of a comment
+        # actually wants to know.
+        await self._react(session, github.REACTION_RUNNING)
 
     async def _workspace_image_present(self) -> bool:
         """Whether the session image is on this host, remembered once it is.
@@ -1030,6 +1034,21 @@ class SessionManager:
 
     # --- settlement -------------------------------------------------------
 
+    async def _react(self, session: dict[str, Any] | None, content: str) -> None:
+        """Show on the thread how far this session's work has got.
+
+        Best effort in both directions: a reaction that does not appear
+        costs nothing, and one that is already there is answered with a 200,
+        so a resumed or re-settled session leaves no duplicates.
+        """
+        target = str((session or {}).get("reaction_target") or "")
+        if not target:
+            return
+        try:
+            await github.react(target, content)
+        except Exception as exc:
+            logger.info("could not react on %s: %s", target, exc)
+
     async def _settle(self, session_id: int, *, exit_code: int | None, error: str | None) -> None:
         """Record the outcome of a finished session and clean up after it."""
         if exit_code == 0 and not error:
@@ -1119,6 +1138,12 @@ class SessionManager:
 
         if result.get("pr_url"):
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
+
+        if not succeeded:
+            # Somebody is looking at a thread that has been marked as picked
+            # up and started. Saying that it did not work out belongs there
+            # too — an answer that never comes is the worst of the three.
+            await self._react(await db.get_session(session_id), github.REACTION_FAILED)
 
         # Somebody asked this session a question. The agent phase holds no
         # GitHub credential, so it wrote the answer into its artefact

@@ -153,6 +153,7 @@ class FakeDb:
         self.active_triggers = active_triggers
         self.created: list[dict] = []
         self.next_id = 100
+        self.comment_mark = None
 
     def install(self, monkeypatch):
         async def count_active_trigger_sessions():
@@ -189,7 +190,15 @@ class FakeDb:
             self.next_id += 1
             return self.next_id
 
+        async def comments_scanned_at():
+            return self.comment_mark
+
+        async def mark_comments_scanned(moment):
+            self.comment_mark = moment
+
         for name, fn in [
+            ("comments_scanned_at", comments_scanned_at),
+            ("mark_comments_scanned", mark_comments_scanned),
             ("count_active_trigger_sessions", count_active_trigger_sessions),
             ("handled_trigger_refs", handled_trigger_refs),
             ("list_workspaces", list_workspaces),
@@ -567,6 +576,132 @@ class TestCommentWindow:
         # state; comments are a stream, and without a bound the first pass
         # after a restart would read years of them.
         assert timedelta(hours=12) <= triggers.COMMENT_LOOKBACK <= timedelta(days=2)
+
+
+class TestTheCommentMark:
+    """Where the comment scan got to, kept across stops.
+
+    A question asked while the runner is paused has to still be there when
+    it comes back: nothing else remembers it. An assignment or a review is
+    read from the repository's current state on every pass, but a comment
+    older than the window is simply gone.
+    """
+
+    async def test_a_finished_pass_records_how_far_it_got(self, monkeypatch):
+        FakeRepo().install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.comment_mark is not None
+
+    async def test_a_stopped_runner_forgets_nothing(self, monkeypatch):
+        FakeRepo(assigned_issues=[issue(812)]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        async def paused():
+            return {"mode": "paused", "mode_reason": "incident", "max_parallel": None, "updated_by": "tobias"}
+
+        monkeypatch.setattr(controls.db, "get_controls", paused)
+        controls.forget()
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        # Moving the mark here would drop every question asked during the
+        # pause out of the window before anyone could answer it.
+        assert fake_db.comment_mark is None
+
+    async def test_work_left_for_the_next_pass_holds_the_mark(self, monkeypatch):
+        FakeRepo(assigned_issues=[issue(812), issue(813)]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+        ceiling(monkeypatch, 1)
+
+        queued = await triggers.TriggerPoller().poll_once()
+
+        assert len(queued) == 1
+        assert fake_db.comment_mark is None
+
+    async def test_the_window_starts_where_the_last_pass_stopped(self, monkeypatch):
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        now = datetime.now(timezone.utc)
+        fake_db.comment_mark = now - timedelta(days=3)
+
+        window = await triggers.TriggerPoller()._comment_window(now)
+
+        # Three days beyond the ordinary lookback, because that is how long
+        # the runner was down and those questions are still unanswered.
+        assert window == fake_db.comment_mark
+
+    async def test_a_long_absence_does_not_wake_up_to_a_month_of_talk(self, monkeypatch):
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        now = datetime.now(timezone.utc)
+        fake_db.comment_mark = now - timedelta(days=90)
+
+        window = await triggers.TriggerPoller()._comment_window(now)
+
+        assert window == now - triggers.MAX_COMMENT_LOOKBACK
+
+    async def test_without_a_mark_the_ordinary_window_applies(self, monkeypatch):
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        now = datetime.now(timezone.utc)
+
+        assert await triggers.TriggerPoller()._comment_window(now) == now - triggers.COMMENT_LOOKBACK
+
+
+class TestWhatTheUiIsTold:
+    def test_the_quota_shown_is_the_one_in_force(self):
+        # An operator who lowers the ceiling to 2 and still reads "up to 6"
+        # on the page has been told a number that decides nothing.
+        lowered = triggers.poller.status(2)["max_active_sessions"]
+        configured = triggers.poller.status()["max_active_sessions"]
+
+        assert lowered <= 2
+        assert lowered <= configured
+
+
+class TestReactions:
+    """What a person sees on the thread they wrote in."""
+
+    async def test_a_queued_request_is_acknowledged(self, monkeypatch):
+        repo = FakeRepo(assigned_issues=[issue(812)])
+        repo.install(monkeypatch)
+        FakeDb().install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert repo.reactions == [(f"/repos/{REPO}/issues/812", triggers.github.REACTION_QUEUED)]
+
+    async def test_nothing_is_acknowledged_that_was_not_queued(self, monkeypatch):
+        # The reaction is a promise that the work is in the queue: a refused
+        # session must not leave one behind.
+        repo = FakeRepo(assigned_issues=[issue(812)])
+        repo.install(monkeypatch)
+        FakeDb().install(monkeypatch)
+        allow_models(monkeypatch, ok=False)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        assert repo.reactions == []
+
+    async def test_the_session_carries_where_to_react_next(self, monkeypatch):
+        # The later stages are reacted to by the launcher, in another
+        # process and possibly after a restart.
+        FakeRepo(assigned_issues=[issue(812)]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created[0]["reaction_target"] == f"/repos/{REPO}/issues/812"
 
 
 class TestReviewRouting:

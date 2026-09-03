@@ -447,6 +447,92 @@ class TestLaunchAndSupervision:
         assert removed.count("cid-7") >= 1
 
 
+class TestReactionsOnAThread:
+    """What a person watching their own comment gets to see.
+
+    Three states, and GitHub's fixed palette to say them in: the queueing
+    pass leaves an eye when the work is accepted, the launch adds a rocket
+    when it actually starts, and a session that fails says so rather than
+    leaving a thread that looks like it is still being worked on.
+    """
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_a_starting_session_says_so_on_its_thread(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        reactions: list = []
+        starts: list = []
+        container_ids = iter(["cid-prepare", "cid-7"])
+
+        async def fake_create(**_kwargs):
+            return next(container_ids)
+
+        async def fake_start(cid):
+            starts.append(cid)
+
+        async def fake_react(path, content="eyes"):
+            reactions.append((path, content))
+            return True
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(
+            sessions.docker_engine,
+            "volume_mountpoint",
+            self._async_value("/var/lib/docker/volumes/logos_agent_artifacts/_data"),
+        )
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", self._async_value(0))
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(TestLaunchAndSupervision.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+        monkeypatch.setattr(sessions.github, "react", fake_react)
+        # On the class: an instance attribute would outlive the test and
+        # shadow the patches other tests make on the class.
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", lambda *_args, **_kwargs: None)
+
+        session = dict(TestLaunchAndSupervision.SESSION)
+        session["reaction_target"] = "/repos/ls1intum/edutelligence/issues/comments/9001"
+
+        await sessions.manager._launch(session)
+
+        assert reactions == [(session["reaction_target"], sessions.github.REACTION_RUNNING)]
+
+    async def test_a_session_nobody_asked_for_reacts_nowhere(self, monkeypatch):
+        # Sessions started from the page have no thread behind them.
+        from app import sessions
+
+        async def refuse(*_args, **_kwargs):
+            raise AssertionError("a session with no target must not react")
+
+        monkeypatch.setattr(sessions.github, "react", refuse)
+
+        await sessions.manager._react({"id": 7}, sessions.github.REACTION_RUNNING)
+
+    async def test_a_reaction_github_refuses_does_not_fail_the_session(self, monkeypatch):
+        from app import sessions
+
+        async def broken(*_args, **_kwargs):
+            raise RuntimeError("403")
+
+        monkeypatch.setattr(sessions.github, "react", broken)
+
+        # No exception: the work is what matters, the emoji is not.
+        await sessions.manager._react({"reaction_target": "/x"}, sessions.github.REACTION_FAILED)
+
+
 class TestAgentPhaseIsolation:
     """What the untrusted agent phase may hold and reach.
 

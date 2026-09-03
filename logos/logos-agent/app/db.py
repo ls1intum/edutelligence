@@ -142,7 +142,8 @@ async def get_controls() -> dict[str, Any] | None:
                 await db.execute(
                     text(
                         """
-                    SELECT mode, mode_reason, max_parallel, updated_by, updated_at
+                    SELECT mode, mode_reason, max_parallel, comments_scanned_at,
+                           updated_by, updated_at
                       FROM agent_controls WHERE id = 1
                     """
                     )
@@ -340,6 +341,30 @@ async def get_workspace(workspace_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+async def comments_scanned_at() -> datetime | None:
+    """How far the comment scan has got, across restarts."""
+    async with sessionmaker()() as db:
+        return (
+            await db.execute(text("SELECT comments_scanned_at FROM agent_controls WHERE id = 1"))
+        ).scalar_one_or_none()
+
+
+async def mark_comments_scanned(moment: datetime) -> None:
+    """Remember that comments up to this point have been dealt with."""
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                INSERT INTO agent_controls (id, comments_scanned_at, updated_at)
+                VALUES (1, :moment, :now)
+                ON CONFLICT (id) DO UPDATE SET comments_scanned_at = :moment
+                """
+            ),
+            {"moment": moment, "now": _now()},
+        )
+        await db.commit()
+
+
 async def disposable_workspaces(idle_before: datetime) -> list[dict[str, Any]]:
     """Ephemeral workspaces whose work is done and whose volume can go.
 
@@ -487,6 +512,7 @@ async def create_session(
     trigger_ref: str | None = None,
     branch: str | None = None,
     reply_target: str | None = None,
+    reaction_target: str | None = None,
     priority: int = 50,
     priority_reason: str | None = None,
 ) -> int:
@@ -515,11 +541,12 @@ async def create_session(
                         (workspace_id, task, model, status, created_by,
                          open_pull_request, deploy_to_dev, screenshot_paths,
                          trigger_kind, trigger_ref, branch_name, reply_target,
-                         priority, priority_reason)
+                         reaction_target, priority, priority_reason)
                     VALUES
                         (:workspace_id, :task, :model, 'queued', :created_by,
                          :open_pr, :deploy, CAST(:paths AS jsonb),
                          :trigger_kind, :trigger_ref, :branch, :reply_target,
+                         :reaction_target,
                          :priority, :priority_reason)
                     RETURNING id
                     """
@@ -540,6 +567,7 @@ async def create_session(
                     # the session id.
                     "branch": branch,
                     "reply_target": reply_target,
+                    "reaction_target": reaction_target,
                     "priority": priority,
                     "priority_reason": priority_reason,
                 },
@@ -663,6 +691,7 @@ _SESSION_SELECT = """
            s.started_at, s.finished_at, s.exit_code, s.error,
            s.container_id, s.open_pull_request, s.deploy_to_dev,
            s.screenshot_paths, s.trigger_kind, s.trigger_ref, s.reply_target,
+           s.reaction_target,
            s.priority, s.priority_reason,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,

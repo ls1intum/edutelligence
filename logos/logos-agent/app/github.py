@@ -556,7 +556,18 @@ async def may_push(login: str) -> bool:
     return str(payload.get("permission") or "").lower() in _WRITE_PERMISSIONS
 
 
-async def react(path: str, content: str = "eyes") -> bool:
+# What a session's stage looks like on a thread. GitHub's palette is fixed
+# — +1, -1, laugh, confused, heart, hooray, rocket, eyes — so there is no
+# hourglass to wait with: eyes means seen and in the queue, a rocket means
+# it is being worked on now, and a shrug means it did not work out. Three
+# reactions, no notifications, and a person can see where their request is
+# without asking.
+REACTION_QUEUED = "eyes"
+REACTION_RUNNING = "rocket"
+REACTION_FAILED = "confused"
+
+
+async def react(path: str, content: str = REACTION_QUEUED) -> bool:
     """Leave a reaction, so a person can see their request was picked up.
 
     ``path`` is the API path of the thing reacted to — an issue, an issue

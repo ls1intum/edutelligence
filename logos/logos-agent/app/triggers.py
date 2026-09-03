@@ -15,9 +15,11 @@ No labels, no separate vocabulary. **Consent is per item:** nothing is picked
 up because it exists, only because somebody assigned it, reviewed its work,
 or asked it something by name.
 
-**It says it heard you.** The moment a session is queued, the runner reacts
-with 👀 on the thing that triggered it — so a question does not sit there
-looking ignored while the platform waits for idle GPUs.
+**It says where your request is.** The moment a session is queued — after the
+row exists, never before — the runner reacts with 👀 on what triggered it. A
+🚀 follows when the session actually starts, and a 😕 if it fails, so a
+thread never sits there looking either ignored or eternally in progress.
+GitHub's palette has no hourglass; these are the three states it can say.
 
 **It can answer.** The agent phase holds no GitHub credential, so it writes
 its answer to a file in its artefact directory and the runner posts it when
@@ -61,12 +63,16 @@ logger = logging.getLogger(__name__)
 # to stay far inside GitHub's rate limits (a pass is a handful of requests).
 POLL_INTERVAL_S = 120.0
 
-# How far back a pass looks for comments. Assignments and reviews need no
-# window — they are read from the current state of the repository — but
-# comments are a stream, and without a bound the first pass after a restart
-# would read years of them. A day is generous for "somebody asked something
-# and is waiting"; anything older is not a live question.
+# How far back a pass looks for comments when it has no mark of its own —
+# the first pass on a fresh deployment. Assignments and reviews need no
+# window (they are read from the repository's current state), but comments
+# are a stream, and without a bound the first pass would read years of them.
 COMMENT_LOOKBACK = timedelta(hours=24)
+
+# How far back the scan will ever reach, even with a mark that old. A runner
+# stopped for a week should answer what it missed; one that was gone for a
+# month should not wake up and reply to a month of conversations.
+MAX_COMMENT_LOOKBACK = timedelta(days=7)
 
 # At most this many comments are carried into one task, and this much of each.
 MAX_THREAD_COMMENTS = 20
@@ -354,6 +360,10 @@ class TriggerPoller:
         control = await controls.current()
         blocked = control.admission_block()
         if blocked:
+            # Nothing is queued while the runner is stopped — and nothing is
+            # forgotten either: the comment mark is only moved by a pass
+            # that handled what it saw, so a question asked during a pause is
+            # still in the window when the runner comes back.
             logger.debug("trigger poll skipped: %s", blocked)
             self._last_pass = now
             return []
@@ -371,6 +381,9 @@ class TriggerPoller:
         self._last_pass = now
         self._last_error = ""
         if not candidates:
+            # Everything up to now has been looked at, so the comment scan
+            # may move on.
+            await self._mark_comments_scanned(now)
             return []
 
         # Most urgent first: a pass may only have room for some of them, and
@@ -378,35 +391,68 @@ class TriggerPoller:
         candidates.sort(key=lambda candidate: -(candidate.get("urgency").value if candidate.get("urgency") else 50))
         handled = await db.handled_trigger_refs([candidate["ref"] for candidate in candidates])
         queued: list[int] = []
+        # A candidate this pass could not take on is not recorded anywhere,
+        # so the mark must not move past it — assignments and reviews would
+        # be found again from the repository's state, but a comment would
+        # simply fall out of the window.
+        deferred = False
         for candidate in candidates:
-            if room <= 0:
-                # Left for the next pass: nothing here is consumed by being
-                # seen, so what does not fit now is found again.
-                break
             if candidate["ref"] in handled:
+                continue
+            if room <= 0:
+                deferred = True
                 continue
             session_id = await self._queue(candidate)
             if session_id is None:
+                deferred = True
                 continue
             queued.append(session_id)
             room -= 1
             await self._acknowledge(candidate)
+        if not deferred:
+            await self._mark_comments_scanned(now)
         if queued and self.on_queued is not None:
             await self.on_queued()
         return queued
 
-    async def _acknowledge(self, candidate: dict[str, Any]) -> None:
-        """React with 👀 so the person who asked can see it landed.
+    async def _comment_window(self, now: datetime) -> datetime:
+        """How far back this pass reads comments.
 
-        Best effort: a missing reaction is a cosmetic loss, and the work is
-        already queued. Anything else would make a failed reaction lose a
-        session.
+        From the mark the last complete pass left, so a question asked while
+        the runner was paused is still there when it comes back — bounded,
+        because a runner that was gone for a month should not answer a
+        month of conversations at once.
+        """
+        try:
+            mark = await db.comments_scanned_at()
+        except Exception as exc:
+            logger.warning("could not read the comment mark; using the default window: %s", exc)
+            mark = None
+        floor = now - MAX_COMMENT_LOOKBACK
+        if mark is None:
+            return now - COMMENT_LOOKBACK
+        if mark.tzinfo is None:
+            mark = mark.replace(tzinfo=timezone.utc)
+        return max(mark, floor)
+
+    async def _mark_comments_scanned(self, moment: datetime) -> None:
+        try:
+            await db.mark_comments_scanned(moment)
+        except Exception as exc:
+            logger.warning("could not record how far the comment scan got: %s", exc)
+
+    async def _acknowledge(self, candidate: dict[str, Any]) -> None:
+        """React so the person who asked can see their request landed.
+
+        Posted after the session row exists, so the reaction never promises
+        work that is not queued — and best effort, so a reaction GitHub
+        refuses never loses a session that is.
         """
         target = candidate.get("reaction")
         if not target:
             return
         try:
-            await github.react(target)
+            await github.react(target, github.REACTION_QUEUED)
         except Exception as exc:
             logger.info("could not acknowledge %s: %s", candidate["ref"], exc)
 
@@ -591,7 +637,7 @@ class TriggerPoller:
         Comments already carried by a review task are skipped: they are being
         worked on, and answering them twice is not answering them better.
         """
-        since = now - COMMENT_LOOKBACK
+        since = await self._comment_window(now)
         threads: dict[tuple[str, int], dict[str, Any]] = {}
 
         def consider(comment: dict[str, Any], number: int, *, root: int | None) -> None:
@@ -718,6 +764,10 @@ class TriggerPoller:
                 trigger_kind=candidate["kind"],
                 trigger_ref=candidate["ref"],
                 reply_target=candidate.get("reply_target"),
+                # Kept on the row because the stages that follow — started,
+                # and possibly failed — are reacted to by the launcher,
+                # minutes later and across a restart.
+                reaction_target=candidate.get("reaction"),
                 priority=urgency.value,
                 priority_reason=urgency.reason,
             )
@@ -771,13 +821,19 @@ class TriggerPoller:
 
     # --- what the UI shows ------------------------------------------------
 
-    def status(self) -> dict[str, Any]:
+    def status(self, ceiling: int | None = None) -> dict[str, Any]:
+        """What the UI shows about the automation.
+
+        ``ceiling`` is the parallel ceiling in force; without it the quota
+        shown would be the configured one, which is not the number that
+        decides anything once an operator has lowered it.
+        """
         return {
             "enabled": settings.triggers_enabled,
             "polling": self._task is not None and not self._task.done(),
             "account": settings.github_login,
             "poll_interval_s": POLL_INTERVAL_S,
-            "max_active_sessions": max_active_sessions(),
+            "max_active_sessions": max_active_sessions(ceiling),
             "last_pass": self._last_pass.isoformat() if self._last_pass else None,
             "queued_total": self._queued_total,
             "last_error": self._last_error,

@@ -278,13 +278,26 @@ anyway: GitHub only assigns collaborators.
 
 Only a **changes-requested** review is work — an approval or a plain comment
 is not, and an approval submitted after a change request withdraws it.
-Comments are read from the last 24 hours: assignments and reviews are read
-from the repository's current state, but comments are a stream, and without a
-bound the first pass after a restart would read years of them.
+Comments are read from where the last complete pass stopped — a mark kept in
+the database, so a question asked while the runner was paused is still found
+when it comes back. Assignments and reviews are read from the repository's
+current state and need no window; comments are a stream, so a fresh
+deployment starts with the last 24 hours and no pass ever reaches back
+further than a week.
 
-**It says it heard you.** The moment a session is queued it reacts with 👀 on
-what triggered it, so a question does not sit there looking ignored while the
-platform waits for idle GPUs.
+**It says where your request is.** Three reactions, on the comment you
+wrote:
+
+| | |
+|---|---|
+| 👀 | accepted and in the queue |
+| 🚀 | being worked on right now |
+| 😕 | it did not work out — the session failed |
+
+👀 is posted *after* the session row exists, so it is never a promise of work
+that is not queued; and because the row is what the queue is, a restart
+changes nothing about it. GitHub's reaction palette is fixed and has no
+hourglass, so these three are the states it can show.
 
 **It can answer.** The agent phase holds no GitHub credential, so it writes
 its answer into its artefact directory and the runner posts it when the
