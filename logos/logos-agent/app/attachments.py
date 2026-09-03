@@ -103,15 +103,26 @@ def is_public(url: str) -> bool:
 
 
 def urls_in(text: str) -> list[str]:
-    """Every image URL a request refers to that GitHub itself serves."""
-    found: list[str] = []
+    """Every image URL a request refers to that GitHub itself serves.
+
+    In the order the request mentions them, not in the order the patterns
+    happen to run: the files are numbered from this list and the prompt
+    lists them by that number, so "the first screenshot" has to mean the
+    first one in the text — even in a comment that mixes an `<img>` tag with
+    a markdown image.
+    """
+    seen: set[str] = set()
+    found: list[tuple[int, str]] = []
     for pattern in (_MARKDOWN, _HTML, _BARE):
-        for url in pattern.findall(text or ""):
-            cleaned = url.rstrip(".,)")
-            if cleaned in found or not from_github(cleaned):
+        for match in pattern.finditer(text or ""):
+            url = (match.group(1) if match.groups() else match.group(0)).rstrip(".,)")
+            if url in seen or not from_github(url):
                 continue
-            found.append(cleaned)
-    return found[:MAX_IMAGES]
+            seen.add(url)
+            found.append((match.start(), url))
+    # Cut after ordering rather than during: which five a request gets is
+    # its first five, whichever notation they were written in.
+    return [url for _, url in sorted(found)[:MAX_IMAGES]]
 
 
 def name_for(index: int, content_type: str) -> str:

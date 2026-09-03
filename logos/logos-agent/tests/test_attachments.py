@@ -61,3 +61,30 @@ class TestWhereARedirectMayLead:
         # A hop into the runner's own network is not a picture.
         assert not attachments.is_public("https://logos-orchestrator/x.png")
         assert not attachments.is_public("https://logos-db.local/x.png")
+
+
+class TestOrderAndCount:
+    """The files are numbered from this list, and the prompt lists them by
+    that number — so "the first screenshot" has to mean the first one in the
+    request, whichever notation it was written in."""
+
+    def test_the_request_s_own_order_is_kept(self):
+        body = f'<img src="{ATTACHMENT}1" />\n' f"and earlier in the reading order comes this one: ![a]({ATTACHMENT}2)"
+
+        assert attachments.urls_in(body) == [f"{ATTACHMENT}1", f"{ATTACHMENT}2"]
+
+    def test_a_markdown_image_before_a_tag_stays_first(self):
+        body = f'![a]({ATTACHMENT}1) then <img src="{ATTACHMENT}2">'
+
+        assert attachments.urls_in(body) == [f"{ATTACHMENT}1", f"{ATTACHMENT}2"]
+
+    def test_the_same_url_twice_is_one_picture(self):
+        assert attachments.urls_in(f"![a]({ATTACHMENT}) and again ![a]({ATTACHMENT})") == [ATTACHMENT]
+
+    def test_a_request_full_of_pictures_gets_the_first_few(self):
+        body = " ".join(f"![x]({ATTACHMENT}{index})" for index in range(20))
+
+        taken = attachments.urls_in(body)
+
+        assert len(taken) == attachments.MAX_IMAGES
+        assert taken[0] == f"{ATTACHMENT}0"
