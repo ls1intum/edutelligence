@@ -53,7 +53,10 @@ jobs:
       - name: Create .env file
         run: |
           echo "ENVIRONMENT=${{ matrix.environment }}" > .env
-          echo "IMAGE_TAG=${{ inputs.image-tag }}" >> .env
+          # Through the environment and quoted: the tag comes from whoever
+          # dispatched the workflow, and a shell line built by substitution
+          # is a shell line they get to help write.
+          echo "IMAGE_TAG=$WORKSPACE_IMAGE_TAG" >> .env
           echo "REGISTRY=${{ vars.LOGOS_HARBOR_REGISTRY }}/logos" >> .env
 
           echo "$SECRETS_CONTEXT" | jq -r '
@@ -85,6 +88,7 @@ jobs:
         env:
           VARS_CONTEXT: ${{ toJson(vars) }}
           SECRETS_CONTEXT: ${{ toJson(secrets) }}
+          WORKSPACE_IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
 
       - name: Copy .env file to VM
         uses: appleboy/scp-action@v1.0.0
