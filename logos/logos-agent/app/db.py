@@ -762,11 +762,15 @@ async def abandon_reply(session_id: int, *, attempts: int) -> None:
 
 
 async def count_active_trigger_sessions() -> int:
-    """Active sessions the runner queued by itself.
+    """Self-queued sessions that are occupying capacity right now.
 
-    The ceiling this feeds is separate from the parallel-session ceiling: a
-    person asking for work must not find the queue already full of the
-    runner's own ideas.
+    Queued ones are deliberately not counted. The ceiling this feeds is
+    about how much of the platform the automation may be *using*, and a
+    queued session uses nothing — it is a piece of work waiting its turn,
+    which is what a queue is for and what the page shows. Counting the
+    queue against the ceiling meant the runner refused to write down work
+    it had already found, so nothing was ever waiting: the backlog lived in
+    the repository, invisible.
     """
     async with sessionmaker()() as db:
         count = (
@@ -777,7 +781,7 @@ async def count_active_trigger_sessions() -> int:
                      WHERE trigger_ref IS NOT NULL AND status = ANY(:active)
                     """
                 ),
-                {"active": [s.value for s in ACTIVE_STATUSES]},
+                {"active": [s.value for s in ACTIVE_STATUSES if s is not SessionStatus.QUEUED]},
             )
         ).scalar_one()
     return int(count or 0)
@@ -832,7 +836,7 @@ async def list_sessions(
     return [dict(r) for r in rows]
 
 
-async def next_queued_session() -> dict[str, Any] | None:
+async def next_queued_session(*, include_triggered: bool = True) -> dict[str, Any] | None:
     """The session a claim would take next, without taking it.
 
     Admission decides against a capacity reading, and the reading has to be
@@ -850,6 +854,7 @@ async def next_queued_session() -> dict[str, Any] | None:
                     SELECT s.id, s.model, s.workspace_id
                       FROM agent_sessions s
                      WHERE s.status = 'queued'
+                       AND (:include_triggered OR s.trigger_ref IS NULL)
                        AND NOT EXISTS (
                              SELECT 1 FROM agent_sessions busy
                               WHERE busy.workspace_id = s.workspace_id
@@ -860,12 +865,13 @@ async def next_queued_session() -> dict[str, Any] | None:
                     """
                     ),
                     {
+                        "include_triggered": include_triggered,
                         "occupying": [
                             SessionStatus.STARTING.value,
                             SessionStatus.RUNNING.value,
                             SessionStatus.PAUSED.value,
                             SessionStatus.FINALIZING.value,
-                        ]
+                        ],
                     },
                 )
             )
@@ -875,7 +881,7 @@ async def next_queued_session() -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
+async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -> list[dict[str, Any]]:
     """Take up to `limit` startable queued sessions and mark them starting.
 
     A session is startable only when no other session is already occupying its
@@ -896,6 +902,10 @@ async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
                         """
                     SELECT s.id FROM agent_sessions s
                      WHERE s.status = 'queued'
+                       -- The automation may fill the platform, but not the
+                       -- last places in it: with its quota used up, only
+                       -- work a person queued is claimable.
+                       AND (:include_triggered OR s.trigger_ref IS NULL)
                        AND NOT EXISTS (
                              SELECT 1 FROM agent_sessions busy
                               WHERE busy.workspace_id = s.workspace_id
@@ -926,6 +936,7 @@ async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
                     ),
                     {
                         "limit": limit,
+                        "include_triggered": include_triggered,
                         "occupying": [
                             SessionStatus.STARTING.value,
                             SessionStatus.RUNNING.value,

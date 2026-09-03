@@ -515,7 +515,9 @@ class TestBounds:
         assert triggers.max_active_sessions(4) == 3
         assert len(queued) == 3
 
-    async def test_nothing_is_queued_while_the_ceiling_is_full(self, monkeypatch):
+    async def test_nothing_is_queued_while_the_automation_is_full(self, monkeypatch):
+        # The quota counts what is *running*: with it used up, the pass adds
+        # nothing and the repository keeps the rest until a session ends.
         FakeRepo(assigned_issues=[issue(1)]).install(monkeypatch)
         fake_db = FakeDb(active_triggers=99)
         fake_db.install(monkeypatch)
@@ -535,24 +537,22 @@ class TestBounds:
     async def test_what_does_not_fit_now_is_found_again(self, monkeypatch):
         # Nothing is consumed by being seen: a pass reads the repository's
         # current state, so what it could not take on is still there.
-        repo = FakeRepo(assigned_issues=[issue(number) for number in range(1, 6)])
+        repo = FakeRepo(assigned_issues=[issue(1), issue(2), issue(3)])
         repo.install(monkeypatch)
         fake_db = FakeDb(
-            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in range(1, 8)]
+            workspaces=[{"id": i, "name": f"w{i}", "active_sessions": 0, "base_branch": "main"} for i in range(1, 6)]
         )
         fake_db.install(monkeypatch)
         allow_models(monkeypatch)
-        ceiling(monkeypatch, 4)
+        ceiling(monkeypatch, 2)
         poller = triggers.TriggerPoller()
 
         first = await poller.poll_once()
-        fake_db.active_triggers = 0  # the first three finished
+        fake_db.active_triggers = 0  # the first one finished
         second = await poller.poll_once()
 
-        # Three fit under the ceiling in force; the other two were left
-        # where they were and the next pass found them again.
-        assert len(first) == 3 and len(second) == 2
-        assert {c["trigger_ref"] for c in fake_db.created} == {f"issue-{n}" for n in range(1, 6)}
+        assert len(first) == 1 and len(second) == 1
+        assert {c["trigger_ref"] for c in fake_db.created} == {"issue-1", "issue-2"}
 
 
 class TestWorkspaceNaming:
@@ -624,11 +624,13 @@ class TestTheCommentMark:
         assert fake_db.comment_mark is None
 
     async def test_work_left_for_the_next_pass_holds_the_mark(self, monkeypatch):
+        # One workspace, two pieces of work: the second is left where it
+        # was, so the mark must not move past the comments this pass saw.
         FakeRepo(assigned_issues=[issue(812), issue(813)]).install(monkeypatch)
         fake_db = FakeDb()
         fake_db.install(monkeypatch)
         allow_models(monkeypatch)
-        ceiling(monkeypatch, 1)
+        ceiling(monkeypatch, 2)
 
         queued = await triggers.TriggerPoller().poll_once()
 

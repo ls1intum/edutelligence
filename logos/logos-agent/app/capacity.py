@@ -104,6 +104,44 @@ async def read_load(timeout_s: float = 5.0, lane: frozenset[tuple[str, str]] | N
     return parse_scheduler_state(payload, lane=lane)
 
 
+def _live(model: dict, capacity: int) -> tuple[int, int, float]:
+    """What a model is really doing: in flight, waiting, and how full it is.
+
+    The engine's own numbers where it reports them, the orchestrator's
+    ledger only as a fallback. They disagree in production — a lane the
+    ledger counted as serving two requests reported none running and an
+    empty KV cache — and the ledger is the one that cannot see inside vLLM.
+
+    The third figure is the one that matters most and has no slot count in
+    it at all: the KV cache. A model can be three requests into a
+    twenty-request allowance and still have no room for a fourth, because
+    concurrency there is bounded by cache, not by a number in a
+    configuration file. Whichever of the two is worse is the pressure.
+    """
+    signals = model.get("scheduler_signals") or {}
+    if not isinstance(signals, dict):
+        signals = {}
+
+    def number(*keys: str) -> float | None:
+        for key in keys:
+            value = signals.get(key)
+            if isinstance(value, (int, float)):
+                return float(value)
+        return None
+
+    running = number("requests_running_current")
+    ledger_active = float(model.get("active") or 0)
+    active = int(min(running if running is not None else ledger_active, capacity))
+
+    waiting = number("queue_waiting_current")
+    queue = int(waiting if waiting is not None else float(model.get("queue_depth") or 0))
+
+    cache = number("gpu_cache_usage_percent_max", "gpu_cache_usage_percent_avg")
+    by_slots = (active / capacity) if capacity else 0.0
+    pressure = max(by_slots, (cache or 0.0) / 100.0)
+    return active, queue, pressure
+
+
 def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None = None) -> Reading:
     """Turn the orchestrator's debug payload into a single load figure.
 
@@ -157,8 +195,8 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
             capacity = int(model.get("max_capacity") or 0)
             if capacity <= 0:
                 continue
-            active = min(int(model.get("active") or 0), capacity)
-            queue_total += int(model.get("queue_depth") or 0)
+            active, waiting, pressure = _live(model, capacity)
+            queue_total += waiting
             fleet_total += capacity
             fleet_busy += active
             if wanted and (str(provider_id), str(model_id)) not in wanted:
@@ -166,9 +204,10 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
             total += capacity
             busy += active
             name = str(model.get("model_name") or model_id)
-            slots = per_model.setdefault(name, [0, 0])
+            slots = per_model.setdefault(name, [0, 0, 0.0])
             slots[0] += active
             slots[1] += capacity
+            slots[2] = max(slots[2], pressure)
 
     fell_back = False
     if wanted and total == 0 and fleet_total > 0:
@@ -192,20 +231,24 @@ def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None
             reclaimable=False,
         )
 
-    if wanted and not fell_back and len(per_model) > 1:
+    if wanted and not fell_back and per_model:
         # The busiest of them decides. Being kept out of an idle model
         # because another is full costs this runner some capacity; letting a
         # session into a full one costs a user their turn.
-        name, (model_busy, model_total) = max(
-            per_model.items(), key=lambda item: (item[1][0] / item[1][1]) if item[1][1] else 0.0
-        )
+        name, (model_busy, model_total, pressure) = max(per_model.items(), key=lambda item: item[1][2])
+        where = f" on {name}" if len(per_model) > 1 else ""
+        detail = f"{model_busy}/{model_total} requests in flight{where}"
+        if model_total and pressure > (model_busy / model_total):
+            # The KV cache is what actually fills up: a model can be at
+            # three of twenty requests and still have no room for a fourth.
+            detail = f"{pressure:.0%} of the KV cache in use{where} ({model_busy} requests in flight)"
         return Reading(
-            load=model_busy / model_total,
+            load=min(pressure, 1.0),
             busy_slots=model_busy,
             total_slots=model_total,
             queue_total=queue_total,
             ok=True,
-            detail=f"{model_busy}/{model_total} slots busy on {name}, the busiest model this runner may use",
+            detail=detail,
         )
 
     if not wanted:

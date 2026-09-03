@@ -298,7 +298,8 @@ class TestTheLaneWeAreServedBy:
         reading = capacity.parse_scheduler_state(payload, lane=frozenset({("15", "97"), ("15", "37")}))
 
         assert reading.load == 1.0
-        assert "busiest" in reading.detail
+        # And it says which model it is talking about.
+        assert "Qwen/Qwen3.8-27B" in reading.detail
 
 
 class TestNotReactingToItself:
@@ -351,3 +352,70 @@ class TestNotReactingToItself:
         reading = capacity.without_our_own(self.busy(busy_slots=5), running_sessions=2)
 
         assert "besides this runner's 2" in reading.detail
+
+
+class TestWhatTheEngineSaysItself:
+    """vLLM's own numbers, not the ledger's guess at them.
+
+    In production a lane the orchestrator counted as serving two requests
+    reported none running and an empty cache. The ledger is the one that
+    cannot see inside the engine.
+    """
+
+    @staticmethod
+    def one(**signals):
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {
+                            "97": {
+                                "model_name": "Qwen/Qwen3.8-27B",
+                                "active": signals.pop("active", 0),
+                                "queue_depth": signals.pop("queue_depth", 0),
+                                "max_capacity": 20,
+                                "loaded": True,
+                                "scheduler_signals": signals,
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+    LANE = frozenset({("15", "97")})
+
+    def test_the_engine_outranks_the_ledger(self):
+        # The ledger says two are in flight; the engine says none are.
+        payload = self.one(active=2, requests_running_current=0.0, gpu_cache_usage_percent_avg=0.0)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        assert reading.busy_slots == 0 and reading.load == 0.0
+
+    def test_a_full_cache_is_a_full_model(self):
+        # Three of twenty "slots", and no room for a fourth: concurrency is
+        # bounded by the cache, not by a number in a configuration file.
+        payload = self.one(active=3, requests_running_current=3.0, gpu_cache_usage_percent_max=94.0)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        assert reading.load == 0.94
+        assert "KV cache" in reading.detail
+
+    def test_the_engine_s_queue_is_the_queue(self):
+        payload = self.one(queue_depth=0, requests_running_current=20.0, queue_waiting_current=4.0)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        assert reading.queue_total == 4 and reading.saturated
+
+    def test_a_lane_that_reports_nothing_falls_back_to_the_ledger(self):
+        # Not every provider reports engine signals; the ledger is still an
+        # answer, just a worse one.
+        payload = self.one(active=5, queue_depth=1)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        assert reading.busy_slots == 5 and reading.queue_total == 1

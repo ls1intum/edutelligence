@@ -39,10 +39,12 @@ does not produce a second pull request next week, and an answered question
 is not answered twice. Only the *newest* changes-requested review of a pull
 request is work; the older ones were answered by it.
 
-**Bounded.** Self-queued sessions may use the parallel ceiling less a couple
-of places kept for people, so an operator queueing work by hand always finds
-room — triggered sessions carry higher priorities and would otherwise win
-every slot.
+**Bounded, and written down.** Self-queued sessions may *run* up to the
+parallel ceiling less a couple of places kept for people — triggered
+sessions carry higher priorities and would otherwise win every slot. What
+does not fit is queued rather than forgotten: it becomes a row, in priority
+order, visible on the page as work waiting its turn. A workspace holds one
+session at a time, so the backlog is bounded by the pool of them.
 """
 
 from __future__ import annotations
@@ -409,10 +411,15 @@ class TriggerPoller:
             logger.debug("trigger poll skipped: %s", blocked)
             self._last_pass = now
             return []
+        # How much of the platform the automation may hold at once. Queued
+        # sessions are not counted against it: they are work waiting its
+        # turn, which is what the queue on the page is for, and refusing to
+        # write them down is what kept that queue permanently empty while
+        # the backlog sat invisible in the repository.
         quota = max_active_sessions(control.max_parallel)
         room = quota - await db.count_active_trigger_sessions()
         if room <= 0:
-            logger.debug("trigger poll skipped: already at %s self-queued sessions", quota)
+            logger.debug("trigger poll skipped: already running %s self-queued sessions", quota)
             self._last_pass = now
             return []
 

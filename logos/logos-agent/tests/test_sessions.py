@@ -2095,7 +2095,7 @@ class TestClaimToLaunchWindow:
 
         reading = capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)
 
-        async def fake_claim(_limit):
+        async def fake_claim(_limit, *, include_triggered: bool = True):
             states[5] = "starting"
             return [session_row]
 
@@ -2204,7 +2204,7 @@ class TestOverlappingAdmission:
             # Always a fresh read, like the database: whatever is true now.
             return [{"id": sid, "workspace_id": sid} for sid, state in states.items() if state == status.value]
 
-        async def fake_claim(limit):
+        async def fake_claim(limit, *, include_triggered: bool = True):
             claimed = []
             while limit > 0 and queue:
                 session = queue.pop(0)
@@ -2257,7 +2257,7 @@ class TestOverlappingAdmission:
         async def fake_in_status(status):
             return [{"id": sid, "workspace_id": sid} for sid, state in states.items() if state == status.value]
 
-        async def fake_claim(limit):
+        async def fake_claim(limit, *, include_triggered: bool = True):
             claimed = []
             while limit > 0 and queue:
                 session = queue.pop(0)
@@ -2328,7 +2328,7 @@ class TestOverlappingAdmission:
         async def fake_in_status(status):
             return [{"id": sid, "workspace_id": sid} for sid, state in states.items() if state == status.value]
 
-        async def fake_claim(limit):
+        async def fake_claim(limit, *, include_triggered: bool = True):
             claimed = []
             while limit > 0 and queue:
                 session = queue.pop(0)
@@ -3650,7 +3650,7 @@ class TestOperatorControls:
             paused.append(cid)
             return True
 
-        async def fake_claim(_limit):
+        async def fake_claim(_limit, *, include_triggered: bool = True):
             claimed.append(1)
             return []
 
@@ -3685,7 +3685,7 @@ class TestOperatorControls:
         async def drained():
             return {"mode": "draining", "mode_reason": "before a deploy", "max_parallel": None, "updated_by": "t"}
 
-        async def fake_claim(_limit):
+        async def fake_claim(_limit, *, include_triggered: bool = True):
             claimed.append(1)
             return []
 
@@ -3944,10 +3944,10 @@ class TestAdmissionMeasuresTheRightLane:
             lanes.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
-        async def peek():
+        async def peek(*, include_triggered: bool = True):
             return {"id": 7, "model": "model-b", "workspace_id": 1}
 
-        async def claim(_limit):
+        async def claim(_limit, *, include_triggered: bool = True):
             return []
 
         async def none(_status):
@@ -3980,7 +3980,7 @@ class TestAdmissionMeasuresTheRightLane:
         async def none(_status):
             return []
 
-        async def refuse(_limit):
+        async def refuse(_limit, *, include_triggered: bool = True):
             raise AssertionError("nothing is queued; there is nothing to claim")
 
         monkeypatch.setattr(capacity, "read_load", read_load)
@@ -4058,7 +4058,7 @@ class TestPicturesTravelWithTheRequest:
         assert await sessions.manager._collect_attachments(30, "![shot](https://example.com/a.png)") == []
 
 
-async def _peek():
+async def _peek(*, include_triggered: bool = True):
     """What admission looks at before it measures: any queued session.
 
     The tests that stub the claim are about admission, not about which row

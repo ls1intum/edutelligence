@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from . import attachments, capacity, controls, db, docker_engine, github, model_policy
+from . import attachments, capacity, controls, db, docker_engine, github, model_policy, triggers
 from .config import REPLY_FILE, settings
 from .schemas import EventKind, SessionStatus
 
@@ -629,7 +629,13 @@ class SessionManager:
             # Admitting it against another model's load is how a queued
             # session enters a full lane on an idle one's figure — the
             # launch checks permission afterwards, never capacity.
-            candidate = await db.next_queued_session()
+            # The automation may fill the platform but not the last places
+            # in it: with its quota used up, only work a person queued is
+            # claimable. The quota is about what is *running*, so the
+            # backlog behind it stays queued and visible.
+            triggered = await db.count_active_trigger_sessions()
+            include_triggered = triggered < triggers.max_active_sessions(control.max_parallel)
+            candidate = await db.next_queued_session(include_triggered=include_triggered)
             if candidate is None:
                 return
             wanted = admission_policy.resolve(candidate.get("model"))
@@ -650,7 +656,7 @@ class SessionManager:
             )
             if not may_start:
                 return
-            claimed = await db.claim_queued_sessions(1)
+            claimed = await db.claim_queued_sessions(1, include_triggered=include_triggered)
             # The claim is what makes these rows this pass's to launch, so
             # the launch record is taken here rather than inside _launch:
             # the event write below is an await, and a cancel landing in it
