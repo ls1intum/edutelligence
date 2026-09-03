@@ -178,7 +178,43 @@ def issue_task(issue: dict[str, Any]) -> str:
     )
 
 
-def takeover_task(number: int, title: str, body: str, branch: str) -> str:
+def conversation_block(entries: list[dict[str, Any]], missing: list[str] | None = None) -> str:
+    """What has been said on a pull request, as the agent has to read it.
+
+    Written into the task because the sandbox cannot fetch it: an agent told
+    to "start from what is still open in the review" and given no review
+    reconstructs one from the diff, which is guesswork dressed up as work.
+
+    ``missing`` names the sources that could not be read. A failed listing
+    looks exactly like an empty one, and the task says this conversation is
+    all there is — so when it is not, it has to say that instead.
+    """
+    rendered: list[str] = []
+    for entry in entries:
+        author = str(entry.get("author") or "somebody")
+        body = str(entry.get("body") or "").strip()
+        state = str(entry.get("state") or "")
+        path = entry.get("path")
+        where = f" on {path}:{entry.get('line') or '?'}" if path else ""
+        verdict = f" ({state})" if state else ""
+        if not body:
+            body = f"(no text — {state or 'no verdict'})"
+        if len(body) > MAX_COMMENT_CHARS:
+            body = body[:MAX_COMMENT_CHARS] + " […]"
+        rendered.append(f"{author}{where}{verdict} wrote:\n{body}")
+    gap = ""
+    if missing:
+        gap = (
+            f"Some of the conversation could not be read ({', '.join(missing)}); what "
+            f"follows is incomplete. Treat a point you cannot see as unresolved rather "
+            f"than as absent, and say so in your final message.\n\n"
+        )
+    if not rendered:
+        return gap or "Nothing has been said on it yet.\n\n"
+    return gap + "The conversation so far, oldest first:\n\n" + "\n\n---\n\n".join(rendered) + "\n\n"
+
+
+def takeover_task(number: int, title: str, body: str, branch: str, conversation: str = "") -> str:
     """The task text for a pull request handed to the agent."""
     text = (body or "").strip()
     if len(text) > 6000:
@@ -189,12 +225,14 @@ def takeover_task(number: int, title: str, body: str, branch: str) -> str:
         f"branch `{branch}`, and your commit updates that pull request — do not open a "
         f"new one, and do not rename or move the branch.\n\n"
         f"What the pull request says about itself:\n\n{text or '(no description)'}\n\n"
-        f"Read the existing review conversation before you change anything, and start "
-        f"from whatever is still open in it. Bring the change to a state its author would "
-        f"recognise: tests and linters of the part you touched pass, the description "
-        f"still matches what the branch does. Say in your final message what you did and "
-        f"what you deliberately left alone. Do not merge the pull request and do not "
-        f"force-push over anybody else's commits."
+        f"{conversation}"
+        f"That conversation is all of it — you cannot fetch more, so work from it and "
+        f"from the branch. Check each point against the current code before you change "
+        f"anything: some of it has usually been addressed already. Bring the change to a "
+        f"state its author would recognise: tests and linters of the part you touched "
+        f"pass, the description still matches what the branch does. Say in your final "
+        f"message what you did and what you deliberately left alone. Do not merge the "
+        f"pull request and do not force-push over anybody else's commits."
     )
 
 
@@ -441,6 +479,40 @@ class TriggerPoller:
         except Exception as exc:
             logger.warning("could not record how far the comment scan got: %s", exc)
 
+    async def _conversation(self, number: int) -> tuple[list[dict[str, Any]], list[str]]:
+        """The conversation a handover may act on, and what is missing from it.
+
+        Anybody may comment on a public pull request, and a takeover session
+        can push to its branch — so a comment is only allowed into the task
+        if its author could have made that change themselves. The same rule
+        the review path already applies: a stranger may say anything, but
+        not through the agent's commit access.
+
+        What is dropped is named rather than silently removed, because the
+        agent is told this conversation is complete.
+        """
+        try:
+            entries, missing = await github.pull_request_conversation(number)
+        except Exception as exc:
+            logger.info("could not read the conversation of #%s: %s", number, exc)
+            return [], ["the conversation"]
+        allowed: list[dict[str, Any]] = []
+        outsiders = 0
+        for entry in entries:
+            author = str(entry.get("author") or "")
+            if author and await self._writer(author):
+                allowed.append(entry)
+            else:
+                outsiders += 1
+        if outsiders:
+            logger.info(
+                "left %s comment(s) on #%s out of the handover task: their authors may not write here",
+                outsiders,
+                number,
+            )
+            missing = [*missing, f"{outsiders} comment(s) from accounts without write access"]
+        return allowed, missing
+
     async def _acknowledge(self, candidate: dict[str, Any]) -> None:
         """React so the person who asked can see their request landed.
 
@@ -477,6 +549,11 @@ class TriggerPoller:
                     "task": issue_task(issue),
                     "workspace": workspace_name("issue", number, title),
                     "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
+                    # Every session says something back on the thread it came
+                    # from — including an issue session that concluded there
+                    # is nothing to change, which is otherwise a silent
+                    # success nobody hears about.
+                    "reply_target": f"issue:{number}",
                     "urgency": urgency,
                 }
             )
@@ -533,7 +610,13 @@ class TriggerPoller:
                     {
                         "ref": f"pr-{number}-assigned",
                         "kind": "takeover",
-                        "task": takeover_task(number, pull["title"], pull["body"], branch),
+                        "task": takeover_task(
+                            number,
+                            pull["title"],
+                            pull["body"],
+                            branch,
+                            conversation_block(*await self._conversation(number)),
+                        ),
                         "branch": branch,
                         "workspace": workspace_name("pr", number, pull["title"]),
                         "reaction": f"/repos/{settings.repo_slug}/issues/{number}",

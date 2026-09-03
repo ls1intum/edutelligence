@@ -78,6 +78,33 @@ export class Agents implements OnInit {
   pauseReason = signal('');
   /** What is typed in the limit field, until it is applied. */
   limitDraft = signal('');
+
+  /**
+   * What the slider stands at: the value being dragged if there is one,
+   * otherwise the limit in force — the override, or the configured value
+   * when nothing overrides it.
+   */
+  readonly limitShown = computed(() => {
+    const draft = this.limitDraft().trim();
+    if (draft !== '' && Number.isFinite(Number(draft))) return Number(draft);
+    const state = this.controls();
+    return state?.max_parallel_override ?? state?.max_parallel_configured ?? 0;
+  });
+
+  /**
+   * How far the slider goes. The configured value is the normal working
+   * point, so the scale reaches past it without running to the schema's
+   * hundred, which no deployment has the capacity for.
+   */
+  readonly limitCeiling = computed(() => {
+    const state = this.controls();
+    const configured = state?.max_parallel_configured ?? 10;
+    // Never below what is actually set: a stored override of 80 against a
+    // scale that stops at 20 would show 80 in the label, clamp the control
+    // to 20, and lower the limit on the first touch of it.
+    const inForce = Math.max(state?.max_parallel_override ?? 0, this.limitShown());
+    return Math.min(100, Math.max(20, configured * 2, inForce));
+  });
   creatingWorkspace = signal(false);
 
   readonly workspaceOptions = computed<AppSelectOption[]>(() =>
@@ -115,12 +142,32 @@ export class Agents implements OnInit {
 
   loadPercent = computed(() => Math.round((this.capacity()?.load ?? 0) * 100));
 
+  /**
+   * The session occupying each workspace, by workspace id.
+   *
+   * A workspace runs one session at a time — that is what makes the parallel
+   * ceiling a count of workspaces — so the list can say which one rather
+   * than only that it is taken.
+   */
+  private readonly occupants = computed(() => {
+    const byWorkspace = new Map<number, AgentSession>();
+    for (const session of this.activeSessions()) {
+      if (!byWorkspace.has(session.workspace_id)) byWorkspace.set(session.workspace_id, session);
+    }
+    return byWorkspace;
+  });
+
+  occupantOf(workspace: AgentWorkspace): AgentSession | undefined {
+    return this.occupants().get(workspace.id);
+  }
+
   // ── lifecycle ────────────────────────────────────────────────────────────
   async ngOnInit(): Promise<void> {
     await this.refresh();
     const timer = setInterval(() => void this.tick(), POLL_MS);
     this.destroyRef.onDestroy(() => {
       clearInterval(timer);
+      this.stopStream();
       this.resetScreenshots();
     });
   }
@@ -264,21 +311,105 @@ export class Agents implements OnInit {
     if (this.selectedId() === session.id) {
       this.selectedId.set(null);
       this.events.set([]);
+      this.stopStream();
       this.resetScreenshots();
       return;
     }
     this.selectedId.set(session.id);
     this.events.set([]);
     this.lastEventId = 0;
+    this.stopStream();
     this.resetScreenshots();
     await this.loadEvents();
+    // The load is asynchronous, and the selection may have moved on while
+    // it ran. Opening the stream anyway would leave a connection nobody
+    // holds the handle to — untracked, unabortable, and read by the server
+    // for as long as it stays open.
+    if (this.selectedId() !== session.id) return;
+    this.startStream(session.id);
+  }
+
+  /**
+   * Follow an open session's output as it is written.
+   *
+   * The four-second poll is what made a working session look like a stalled
+   * one: the agent prints a line and it appears whenever the next poll
+   * happens to run. The stream carries each event as the runner writes it;
+   * polling stays as the fallback, so a proxy that will not hold a long
+   * response degrades to what it did before rather than to nothing.
+   */
+  private startStream(sessionId: number): void {
+    // Whatever was streaming stops first: two controllers in `this.stream`
+    // would leave the older connection with no way to abort it.
+    this.stopStream();
+    const controller = new AbortController();
+    this.stream = controller;
+    void (async () => {
+      try {
+        for await (const event of this.agentService.streamEvents(
+          sessionId,
+          this.lastEventId,
+          controller.signal,
+        )) {
+          if (this.selectedId() !== sessionId) return;
+          if (event.id <= this.lastEventId) continue;
+          this.lastEventId = event.id;
+          this.events.update((existing) => [...existing, event]);
+          if (event.kind === 'screenshot') void this.loadScreenshots();
+        }
+      } catch {
+        // Aborted, refused, or dropped: the poll keeps the page correct, so
+        // there is nothing to report and nothing to retry here.
+      } finally {
+        if (this.stream === controller) this.stream = null;
+      }
+    })();
+  }
+
+  private stopStream(): void {
+    this.stream?.abort();
+    this.stream = null;
+  }
+
+  private stream: AbortController | null = null;
+  retrying = signal<number | null>(null);
+
+  /**
+   * Queue a finished session's work again.
+   *
+   * A session that failed keeps its task, its workspace and — for work the
+   * runner took on itself — the branch and the thread it belongs to. What
+   * came from the repository is not queued a second time by the poller
+   * either: the trigger counts as handled the moment a session exists for
+   * it, so without this the request was simply gone.
+   */
+  async retry(session: AgentSession): Promise<void> {
+    if (this.retrying() !== null) return;
+    this.retrying.set(session.id);
+    try {
+      const fresh = await this.agentService.retrySession(session.id);
+      await this.refresh({ quiet: true });
+      // Only if the person is still looking at what they retried: opening
+      // the new session over a selection they made in the meantime would
+      // clear that transcript and abort its stream.
+      if (this.selectedId() === session.id) await this.select(fresh);
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not queue that work again.'));
+    } finally {
+      this.retrying.set(null);
+    }
   }
 
   private async loadEvents(): Promise<void> {
     const id = this.selectedId();
     if (id === null) return;
     try {
-      const fresh = await this.agentService.getEvents(id, this.lastEventId);
+      const answer = await this.agentService.getEvents(id, this.lastEventId);
+      // Filtered against the cursor as it is *now*, not as it was when the
+      // request went out: the stream appends while this is in flight, and
+      // an event both of them saw would otherwise be shown twice.
+      const fresh = answer.filter((event) => event.id > this.lastEventId);
+      if (this.selectedId() !== id) return;
       if (fresh.length > 0) {
         this.lastEventId = fresh[fresh.length - 1].id;
         this.events.update((existing) => [...existing, ...fresh]);

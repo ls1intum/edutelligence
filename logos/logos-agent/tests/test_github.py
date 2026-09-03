@@ -675,3 +675,67 @@ class TestThreadIdentity:
 
     def test_a_comment_without_a_time_says_so(self):
         assert github.created_at_of({}) is None
+
+
+class TestTheConversationHandedToASession:
+    """What a takeover is told, and what it is told is missing.
+
+    The task states that the conversation it carries is all of it, because
+    the sandbox cannot fetch more. Anything left out therefore has to be
+    named — a silent omission turns that sentence into a false one.
+    """
+
+    @staticmethod
+    def install(monkeypatch, *, reviews=None, inline=None, discussion=None, truncated=()):
+        async def _get_all_bounded(path, params=None):
+            if path.endswith("/reviews"):
+                if isinstance(reviews, Exception):
+                    raise reviews
+                return reviews or [], "reviews" in truncated
+            if path.endswith("/pulls/772/comments"):
+                return inline or [], "inline" in truncated
+            return discussion or [], "discussion" in truncated
+
+        monkeypatch.setattr(github, "_get_all_bounded", _get_all_bounded)
+
+    @staticmethod
+    def comment(index: int) -> dict:
+        return {
+            "user": {"login": "wasnertobias"},
+            "body": f"point {index}",
+            "created_at": f"2026-09-0{index % 9 + 1}T10:00:00Z",
+        }
+
+    async def test_a_complete_conversation_reports_nothing_missing(self, monkeypatch):
+        self.install(monkeypatch, discussion=[self.comment(1), self.comment(2)])
+
+        entries, missing = await github.pull_request_conversation(772)
+
+        assert len(entries) == 2 and missing == []
+
+    async def test_older_comments_that_do_not_fit_are_declared(self, monkeypatch):
+        # An unanswered early review comment is exactly what falls off the
+        # end when a discussion runs long.
+        self.install(monkeypatch, discussion=[self.comment(index) for index in range(10)])
+
+        entries, missing = await github.pull_request_conversation(772, limit=4)
+
+        assert len(entries) == 4
+        assert missing and "6 older comment(s)" in missing[0]
+
+    async def test_a_listing_that_hit_its_page_ceiling_is_named(self, monkeypatch):
+        # Two thousand entries read out of more is incomplete context, and
+        # the oldest part at that: what is gone is the part still open.
+        self.install(monkeypatch, discussion=[self.comment(1)], truncated=("discussion",))
+
+        _, missing = await github.pull_request_conversation(772)
+
+        assert missing and "comments beyond the first" in missing[0]
+
+    async def test_a_source_that_failed_is_named(self, monkeypatch):
+        self.install(monkeypatch, reviews=RuntimeError("502"), discussion=[self.comment(1)])
+
+        entries, missing = await github.pull_request_conversation(772)
+
+        assert len(entries) == 1
+        assert "reviews" in missing

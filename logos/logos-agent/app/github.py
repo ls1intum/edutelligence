@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from . import attachments
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -315,21 +316,34 @@ async def _get_all(path: str, params: dict[str, Any] | None = None) -> list[Any]
     the *oldest* entries: on a pull request with more than a hundred reviews,
     reading one page would miss every new one, permanently.
     """
+    collected, _ = await _get_all_bounded(path, params)
+    return collected
+
+
+async def _get_all_bounded(path: str, params: dict[str, Any] | None = None) -> tuple[list[Any], bool]:
+    """The same listing, and whether the page ceiling cut it short.
+
+    A caller that tells an agent "this is the whole conversation" needs the
+    second half of that answer: two thousand entries read out of more is
+    incomplete context, and indistinguishable from a complete read without
+    it.
+    """
     collected: list[Any] = []
-    for page in range(1, _MAX_PAGES + 1):
+    for _ in range(_MAX_PAGES):
+        page = len(collected) // _PAGE_SIZE + 1
         payload = await _get(path, {**(params or {}), "per_page": _PAGE_SIZE, "page": page})
         if not isinstance(payload, list):
-            break
+            return collected, False
         collected.extend(payload)
         if len(payload) < _PAGE_SIZE:
-            return collected
+            return collected, False
     logger.warning(
         "listing %s hit the %s-page ceiling (%s items); newer entries beyond it were not read",
         path,
         _MAX_PAGES,
         len(collected),
     )
-    return collected
+    return collected, True
 
 
 async def _assigned(login: str) -> list[dict[str, Any]]:
@@ -447,6 +461,152 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     """
     payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews/{review_id}/comments")
     return [comment for comment in payload if isinstance(comment, dict)]
+
+
+# GitHub answers an attachment link with a redirect to signed storage, and
+# that storage may take a few hops to reach.
+_MAX_REDIRECTS = 5
+
+
+async def fetch_image(url: str, *, max_bytes: int) -> tuple[bytes, str] | None:
+    """Download an image a request refers to, or None if it is not one.
+
+    Authenticated, because an attachment on a private repository needs the
+    token; bounded, because this is a fetch of a URL that came out of text a
+    stranger can write. Redirects are followed — GitHub answers attachment
+    links with one — and anything that is not an image, or is too big, is
+    left alone.
+    """
+    if not attachments.from_github(url):
+        # The only URLs worth following are the ones GitHub serves itself.
+        # Everything else in an issue body is a host its author chose.
+        logger.info("not fetching %s: not a GitHub attachment", url)
+        return None
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        target = url
+        for _ in range(_MAX_REDIRECTS):
+            # Derived per hop rather than carried along: the credential goes
+            # to GitHub or to nobody.
+            headers = _headers() if attachments.may_carry_the_token(target) else {}
+            async with client.stream("GET", target, headers=headers) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location", "")
+                    if not location:
+                        return None
+                    target = str(httpx.URL(target).join(location))
+                    if not attachments.is_public(target):
+                        # A redirect into the runner's own network is not a
+                        # picture; it is the fetch being aimed at us.
+                        logger.info("refusing to follow %s to %s", url, target)
+                        return None
+                    continue
+                if response.status_code != 200:
+                    logger.info("could not fetch %s: %s", url, response.status_code)
+                    return None
+                content_type = response.headers.get("content-type", "")
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        logger.info("attachment %s is larger than %s bytes; leaving it", url, max_bytes)
+                        return None
+                return bytes(body), content_type
+    logger.info("gave up following redirects for %s", url)
+    return None
+
+
+async def open_pull_request_for(branch: str) -> dict[str, Any] | None:
+    """The open pull request whose head is this branch, if there is one.
+
+    What decides whether a workspace is still needed: while a pull request
+    is open its work is not finished, however long the checkout has been
+    idle, and the conversation kept beside that checkout is what the next
+    review continues rather than starting over.
+    """
+    if not branch:
+        return None
+    owner = settings.repo_slug.split("/", 1)[0]
+    try:
+        payload = await _get(
+            f"/repos/{settings.repo_slug}/pulls",
+            {"head": f"{owner}:{branch}", "state": "open", "per_page": 1},
+        )
+    except GitHubError as exc:
+        logger.info("could not establish whether '%s' still has an open pull request: %s", branch, exc)
+        raise
+    if isinstance(payload, list) and payload:
+        return payload[0]
+    return None
+
+
+async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[list[dict[str, Any]], list[str]]:
+    """Everything said on a pull request, oldest last, and what is missing.
+
+    The second half of the answer is the point: a source that failed reads
+    exactly like a source with nothing in it, and the task built from this
+    tells the agent the conversation is complete. A transient failure would
+    then hide requested changes behind a sentence saying nothing is hidden.
+
+    The agent phase holds no GitHub credential and has no network, so a
+    conversation it is asked to continue has to travel with its task. Asking
+    it to "read the review" without this is asking it to spend its turns
+    discovering that it cannot.
+
+    Three sources, because GitHub keeps them apart: submitted reviews (a
+    verdict and often an empty body), the inline comments that carry what
+    those reviews actually said, and the discussion under the pull request.
+    """
+    reviews, inline, discussion = await asyncio.gather(
+        _get_all_bounded(f"/repos/{settings.repo_slug}/pulls/{number}/reviews"),
+        _get_all_bounded(f"/repos/{settings.repo_slug}/pulls/{number}/comments"),
+        _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments"),
+        return_exceptions=True,
+    )
+    entries: list[dict[str, Any]] = []
+    missing: list[str] = []
+
+    def add(answer: object, kind: str) -> None:
+        if not isinstance(answer, tuple):
+            # One source failing is not worth losing the other two over: a
+            # partial conversation still beats none — as long as it says so.
+            logger.info("could not read the %s of #%s: %s", kind, number, answer)
+            missing.append(kind)
+            return
+        items, truncated = answer
+        if truncated:
+            # More than the listing ceiling: what was read is the oldest
+            # part, so the newest — the part still open — is what is gone.
+            missing.append(f"{kind} beyond the first {len(items)}")
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            body = str(item.get("body") or "").strip()
+            state = str(item.get("state") or "").replace("_", " ").lower()
+            if not body and state not in ("changes requested", "approved"):
+                continue
+            entries.append(
+                {
+                    "kind": kind,
+                    "author": str((item.get("user") or {}).get("login") or "somebody"),
+                    "at": _parse_time(item.get("submitted_at") or item.get("created_at")),
+                    "path": item.get("path"),
+                    "line": item.get("line") or item.get("original_line"),
+                    "state": state,
+                    "body": body,
+                }
+            )
+
+    add(reviews, "reviews")
+    add(inline, "inline comments")
+    add(discussion, "comments")
+    entries.sort(key=lambda entry: entry["at"] or datetime.min.replace(tzinfo=timezone.utc))
+    # The newest are the ones still open; an old conversation is history.
+    # Said rather than silently dropped, though: an early review comment
+    # nobody answered is exactly the kind of thing that falls off the end,
+    # and the task built from this claims to be complete.
+    if len(entries) > limit:
+        missing = [*missing, f"{len(entries) - limit} older comment(s), beyond what fits in a task"]
+    return entries[-limit:], missing
 
 
 async def recent_issue_comments(since: datetime) -> list[dict[str, Any]]:

@@ -21,8 +21,10 @@
           >{{ cap.busy_slots }}/{{ cap.total_slots }} serving slots busy</span
         >
         <span class="capacity__sessions">
-          {{ cap.sessions_running }} running · {{ cap.sessions_paused }} paused ·
-          {{ cap.sessions_queued }} queued (max {{ cap.max_parallel }})
+          <!-- The ceiling belongs to what runs. The queue is not capped:
+               waiting work is what the ceiling exists to produce. -->
+          {{ cap.sessions_running }}/{{ cap.max_parallel }} running ·
+          {{ cap.sessions_paused }} paused · {{ cap.sessions_queued }} waiting
         </span>
       </div>
       <p class="capacity__reason">
@@ -120,26 +122,43 @@
         />
       </label>
 
-      <label class="controls__field">
-        <span class="field__label">Sessions at once</span>
-        <input
-          class="input input--narrow"
-          type="number"
-          min="0"
-          max="100"
-          [placeholder]="String(ctl.max_parallel_configured)"
-          [ngModel]="limitDraft()"
-          (ngModelChange)="limitDraft.set($event === null ? '' : String($event))"
-          (blur)="applyLimit(limitDraft())"
-          (keydown.enter)="applyLimit(limitDraft())"
-          [disabled]="controlBusy()"
-          aria-label="How many sessions may run at once"
-        />
-        <span class="field__hint">
-          Applied when you leave the field. Empty uses the configured
-          {{ ctl.max_parallel_configured }}; zero drains without pausing.
+      <div class="controls__field">
+        <span class="field__label">
+          Sessions at once
+          <span class="field__value">{{ limitShown() }}</span>
+          @if (ctl.max_parallel_override === null) {
+            <span class="field__optional">(configured)</span>
+          }
         </span>
-      </label>
+        <div class="slider">
+          <input
+            class="slider__track"
+            type="range"
+            min="0"
+            [max]="limitCeiling()"
+            step="1"
+            [value]="limitShown()"
+            (input)="limitDraft.set($any($event.target).value)"
+            (change)="applyLimit(limitDraft())"
+            [disabled]="controlBusy()"
+            aria-label="How many sessions may run at once"
+          />
+          @if (ctl.max_parallel_override !== null) {
+            <button
+              class="btn btn--link"
+              (click)="applyLimit('')"
+              [disabled]="controlBusy()"
+              title="Go back to the limit this deployment was configured with"
+            >
+              Reset to {{ ctl.max_parallel_configured }}
+            </button>
+          }
+        </div>
+        <span class="field__hint">
+          Takes effect on the next scheduler pass. Zero drains without pausing:
+          nothing new starts, what runs finishes.
+        </span>
+      </div>
     </section>
   }
 
@@ -315,7 +334,9 @@
         <span [class]="statusClass(session.status)">{{ statusLabel(session) }}</span>
         <span class="session__task">{{ taskPreview(session.task) }}</span>
         <span class="session__meta">
-          <span class="session__workspace">{{ session.workspace_name }}</span>
+          <span class="session__workspace" title="The working copy this session runs in">
+            <i class="pi pi-folder" aria-hidden="true"></i> {{ session.workspace_name }}
+          </span>
           <span class="session__duration">{{ duration(session) }}</span>
         </span>
       </button>
@@ -351,7 +372,16 @@
             </div>
             <div>
               <dt>Tokens</dt>
-              <dd>{{ session.tokens_in }} in / {{ session.tokens_out }} out</dd>
+              <dd>
+                @if (session.tokens_in || session.tokens_out) {
+                  {{ session.tokens_in }} in / {{ session.tokens_out }} out
+                } @else {
+                  <!-- A running session that has not reported yet has no
+                       number: a zero would read as "spent nothing", which is
+                       a claim, and the wrong one. -->
+                  —
+                }
+              </dd>
             </div>
           </dl>
 
@@ -368,6 +398,18 @@
             session.status === 'finalizing'
           ) {
             <button class="btn btn--danger" (click)="cancel(session)">Cancel session</button>
+          } @else {
+            <!-- A session that failed took its request with it: the trigger
+                 counts as handled, so the poller will not find that issue,
+                 review or question again. This is the way back. -->
+            <button
+              class="btn"
+              (click)="retry(session)"
+              [disabled]="retrying() !== null"
+              title="Queue the same work again — same task, workspace and branch"
+            >
+              {{ retrying() === session.id ? 'Queueing…' : 'Run again' }}
+            </button>
           }
 
           @if (session.error) {
@@ -405,7 +447,14 @@
         <li class="workspace">
           <span class="workspace__name">{{ workspace.name }}</span>
           <span class="workspace__branch">from {{ workspace.base_branch }}</span>
-          @if (workspace.active_sessions > 0) {
+          @if (occupantOf(workspace); as busy) {
+            <!-- Which session is in there, not merely that one is: a
+                 workspace runs one session at a time, and "busy" left the
+                 other half of that sentence to be guessed. -->
+            <button class="btn btn--link workspace__busy" (click)="select(busy)">
+              session #{{ busy.id }} · {{ taskPreview(busy.task) }}
+            </button>
+          } @else if (workspace.active_sessions > 0) {
             <span class="workspace__busy">busy</span>
           } @else {
             <button class="btn btn--ghost" (click)="deleteWorkspace(workspace)">Delete</button>

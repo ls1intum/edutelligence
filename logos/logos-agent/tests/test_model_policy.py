@@ -184,3 +184,65 @@ class TestLoad:
         policy = await model_policy.load()
         assert not policy.ok
         assert policy.unknown
+
+
+class TestTheLane:
+    """Which deployments a capacity reading may count.
+
+    A model name is not enough: the same model is served by providers this
+    key has no permission for, and counting their idle slots would make a
+    busy lane look free.
+    """
+
+    def test_the_reachable_local_deployments_are_kept(self):
+        policy = model_policy.evaluate(
+            [
+                {"provider_id": 15, "model_id": 97, "model_name": "Qwen/Qwen3.8-27B", "provider_type": "logosnode"},
+                {"provider_id": 61, "model_id": 97, "model_name": "Qwen/Qwen3.8-27B", "provider_type": "logosnode"},
+            ]
+        )
+
+        assert policy.lane() == frozenset({("15", "97"), ("61", "97")})
+
+    def test_a_cloud_tainted_model_brings_no_lane(self):
+        policy = model_policy.evaluate(
+            [
+                {"provider_id": 15, "model_id": 97, "model_name": "gpt-4o", "provider_type": "logosnode"},
+                {"provider_id": 3, "model_id": 97, "model_name": "gpt-4o", "provider_type": "azure"},
+            ]
+        )
+
+        # The policy refuses anyway; the lane must not quietly say otherwise.
+        assert policy.ok is False
+        assert policy.lane() == frozenset()
+
+    def test_an_unevaluated_policy_has_no_lane(self):
+        assert model_policy.UNKNOWN.lane() == frozenset()
+
+    def test_a_lane_can_be_asked_for_by_model(self):
+        policy = model_policy.evaluate(
+            [
+                {"provider_id": 15, "model_id": 97, "model_name": "Qwen/Qwen3.8-27B", "provider_type": "logosnode"},
+                {"provider_id": 15, "model_id": 37, "model_name": "openai/gpt-oss-120b", "provider_type": "logosnode"},
+            ]
+        )
+
+        assert policy.lane("Qwen/Qwen3.8-27B") == frozenset({("15", "97")})
+        assert policy.lane("openai/gpt-oss-120b") == frozenset({("15", "37")})
+
+    def test_a_model_the_key_cannot_reach_has_no_lane(self):
+        # Fails closed: measuring the fleet for a model nobody granted would
+        # be an answer to a different question.
+        policy = model_policy.evaluate(
+            [{"provider_id": 15, "model_id": 97, "model_name": "Qwen/Qwen3.8-27B", "provider_type": "logosnode"}]
+        )
+
+        assert policy.lane("something/else") == frozenset()
+
+    def test_one_offered_model_needs_no_naming(self):
+        policy = model_policy.evaluate(
+            [{"provider_id": 15, "model_id": 97, "model_name": "Qwen/Qwen3.8-27B", "provider_type": "logosnode"}]
+        )
+
+        # The ordinary deployment: one model, so the default resolves it.
+        assert policy.lane() == frozenset({("15", "97")})
