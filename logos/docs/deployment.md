@@ -14,8 +14,9 @@ results, Compose files, and host configuration do not trigger an image rebuild.
 Pushes to `main` and releases continue to rebuild the worker image.
 
 One exception: `logos-workernode-mlx` (Apple Silicon) is published to **public
-GHCR** at `ghcr.io/ls1intum/edutelligence/logos-workernode-mlx`, so a Mac can
-bootstrap without Harbor credentials. It is also the only image that is never
+GHCR** at `ghcr.io/ls1intum/logos-workernode-mlx` (org-level package, matching
+the `build-workernode-mlx` job and the `bootstrap-macos.sh` default), so a Mac
+can bootstrap without Harbor credentials. It is also the only image that is never
 run as a container — see the MLX section below.
 
 | Environment | Workflow | Trigger | Nodes (GitHub environments) |
