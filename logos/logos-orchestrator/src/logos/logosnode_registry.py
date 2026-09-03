@@ -16,9 +16,6 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 from fastapi import WebSocket
 
 from logos.monitoring import prometheus_metrics as prom
-
-if TYPE_CHECKING:
-    from logos.pipeline.latency_store import LatencyStore
 from logos.terminal_logging import (
     BOLD,
     CYAN,
@@ -32,6 +29,9 @@ from logos.terminal_logging import (
     render_section,
     wrap_plain,
 )
+
+if TYPE_CHECKING:
+    from logos.pipeline.latency_store import LatencyStore
 
 logger = logging.getLogger(__name__)
 

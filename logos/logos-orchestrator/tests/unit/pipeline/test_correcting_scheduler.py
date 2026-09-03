@@ -389,6 +389,40 @@ def test_estimate_ettft_no_lane_uses_prior_when_no_learned_value():
 
 
 @pytest.mark.asyncio
+async def test_learned_ttft_breaks_tie_between_warm_providers():
+    """Two warm providers with no queue: the one with lower learned TTFT wins.
+
+    ETTFT for a warm model with no queue = 0 (overhead) + 0 (queue_wait) + TTFT.
+    Without TTFT the scores are identical and provider selection is arbitrary.
+    """
+    store = LatencyStore()
+    store.record_ttft("model-a", 10, 0.5)   # provider 10: fast
+    store.record_ttft("model-a", 20, 2.0)   # provider 20: slow
+
+    logosnode = MockLogosNodeFacade()
+    for pid in (10, 20):
+        logosnode.set_view(1, pid, _make_view(model_id=1, model_name="model-a", provider_id=pid))
+        logosnode.set_reserve(1, pid, True)
+
+    scheduler = ClassificationCorrectingScheduler(
+        queue_manager=PriorityQueueManager(),
+        logosnode_facade=logosnode,
+        azure_facade=MockAzureFacade(),
+        latency_store=store,
+    )
+    request = _make_request(
+        [(1, 1.0, 5)],
+        [
+            {"model_id": 1, "provider_id": 10, "type": "logosnode"},
+            {"model_id": 1, "provider_id": 20, "type": "logosnode"},
+        ],
+    )
+    result = await scheduler.schedule(request)
+    assert result is not None
+    assert result.provider_id == 10
+
+
+@pytest.mark.asyncio
 async def test_schedule_attaches_warmth_state_to_result():
     """Immediate-select path propagates the decision-time warmth state."""
     logosnode = MockLogosNodeFacade()

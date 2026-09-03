@@ -10,6 +10,7 @@ logosnode + Azure (or two logosnode providers) produces separate scored candidat
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -479,8 +480,16 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                                 _p = _profiles[_no_lane_model_name]
                                 _nl_vram_mb = _p.estimate_vram_mb()
                                 _nl_tp_size = int(_p.tensor_parallel_size or 1)
-                        except (KeyError, Exception):
+                        except KeyError:
                             pass
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "Unexpected error reading model profile for no-lane estimate"
+                                " model=%s provider=%s",
+                                model_id,
+                                provider_id,
+                                exc_info=True,
+                            )
                         cold_s = self._latency_store.get_overhead_s(
                             _no_lane_model_name,
                             provider_id,
@@ -547,6 +556,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             # context-aware _estimate_reclaim_overhead_s() is more accurate than
             # a static prior.
             overhead_overrides: dict[ReadinessTier, float] | None = None
+            learned_ttft: Optional[float] = None
             if self._latency_store is not None:
                 model_name_for_store = view.model_name or ""
                 _store_kwargs = dict(
@@ -568,8 +578,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 learned_e2e = self._latency_store.get_e2e_latency_s(model_name_for_store, provider_id)
                 if learned_e2e is not None:
                     observed_e2e_p50_s = learned_e2e
+                # Learned TTFT for this provider — added once to the estimate
+                # for this request (queue_wait already embeds TTFT of preceding
+                # requests via e2e_p50 as service time, so no double-counting).
+                learned_ttft = self._latency_store.get_ttft_s(model_name_for_store, provider_id)
 
-            return estimate_ettft_local(
+            estimate = estimate_ettft_local(
                 view,
                 effective_parallel=effective_parallel,
                 generation_time_s=DEFAULT_GENERATION_TIME_S,
@@ -581,6 +595,13 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 all_provider_lanes=all_provider_lanes,
                 overhead_overrides=overhead_overrides,
             )
+            if learned_ttft is not None and estimate.tier != ReadinessTier.UNAVAILABLE:
+                estimate = dataclasses.replace(
+                    estimate,
+                    expected_wait_s=estimate.expected_wait_s + learned_ttft,
+                    reasoning=f"{estimate.reasoning} + TTFT {learned_ttft:.2f}s",
+                )
+            return estimate
 
         if provider_type == "azure":
             try:
