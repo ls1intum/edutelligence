@@ -118,7 +118,7 @@ async def health() -> dict[str, object]:
 
 @app.get("/capacity", response_model=CapacityState, tags=["capacity"])
 async def get_capacity(_: Principal = Depends(require_agent_operator)) -> CapacityState:
-    reading = await capacity.read_load(models=model_policy.current().local_models)
+    reading = await capacity.read_load(lane=model_policy.current().lane())
     counts = await db.count_sessions_by_status()
     running = counts.get(SessionStatus.RUNNING.value, 0)
     paused = counts.get(SessionStatus.PAUSED.value, 0)

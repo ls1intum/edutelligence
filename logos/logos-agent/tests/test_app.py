@@ -211,3 +211,63 @@ class TestScreenshotContainment:
             await get_screenshot(session_id=7, name="nope.png", _=None)
 
         assert exc.value.status_code == 404
+
+
+class TestTheEndpointsThatCombineModules:
+    """Routes that assemble their answer from several modules.
+
+    Checking that the app *builds* does not exercise a single handler, so a
+    function called with an argument it no longer takes passes every other
+    test in this suite and raises on the first authenticated request. These
+    call the handlers with their dependencies stubbed — not to pin the
+    numbers, which the modules' own tests do, but to make signature drift
+    between them fail here instead of in production.
+    """
+
+    async def test_capacity_answers(self, monkeypatch):
+        from app import capacity, db, model_policy
+
+        async def counts():
+            return {"running": 1, "queued": 2, "paused": 0}
+
+        async def policy():
+            return model_policy.ModelPolicy(
+                local_models=frozenset({"local-model"}),
+                offered=("local-model",),
+                local_deployments=frozenset({("15", "97")}),
+                ok=True,
+                unknown=False,
+                detail="one local model",
+            )
+
+        async def reading(timeout_s: float = 5.0, lane=None):
+            assert lane == frozenset({("15", "97")}), "the reading must be taken on the runner's own lane"
+            return capacity.Reading(load=0.1, busy_slots=2, total_slots=20, queue_total=0, ok=True)
+
+        monkeypatch.setattr(db, "count_sessions_by_status", counts)
+        monkeypatch.setattr(model_policy, "refresh", policy)
+        monkeypatch.setattr(model_policy, "_current", await policy())
+        monkeypatch.setattr(capacity, "read_load", reading)
+
+        state = await main.get_capacity()
+
+        assert state.sessions_running == 1 and state.sessions_queued == 2
+        assert state.may_start is True
+
+    async def test_triggers_answers_with_the_quota_in_force(self, monkeypatch):
+        from app import controls, db
+
+        async def stored():
+            return {"mode": "running", "mode_reason": "", "max_parallel": 2, "updated_by": "tobias"}
+
+        async def active():
+            return 1
+
+        monkeypatch.setattr(controls.db, "get_controls", stored)
+        monkeypatch.setattr(db, "count_active_trigger_sessions", active)
+        controls.forget()
+
+        status = await main.get_triggers()
+
+        assert status["active_sessions"] == 1
+        assert status["max_active_sessions"] <= 2
