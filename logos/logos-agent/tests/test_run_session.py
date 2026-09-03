@@ -811,3 +811,47 @@ class TestCommitSubjects:
         monkeypatch.delenv("LOGOS_SESSION_SUBJECT", raising=False)
 
         assert run_session._commit_subject("") == "`Logos`: Update from an agent session"
+
+
+class TestTranscriptLines:
+    """What a person watching a session gets to read.
+
+    Three lines of "[tool] Bash" say nothing: not which file was read, not
+    which command ran, not whether the agent is looking at the right thing
+    at all. The name is the least interesting part of a tool call.
+    """
+
+    def test_a_command_is_shown(self):
+        line = run_session._tool_line({"name": "Bash", "input": {"command": "npm run build"}})
+
+        assert line == "[tool] Bash: npm run build"
+
+    def test_a_path_reads_as_the_repository_sees_it(self):
+        line = run_session._tool_line({"name": "Read", "input": {"file_path": "/workspace/repo/app/db.py"}})
+
+        assert line == "[tool] Read: app/db.py"
+
+    def test_a_partial_read_says_where(self):
+        line = run_session._tool_line(
+            {"name": "Read", "input": {"file_path": "/workspace/repo/app/db.py", "offset": 400}}
+        )
+
+        assert line == "[tool] Read: app/db.py:400"
+
+    def test_a_multi_line_command_stays_one_line(self):
+        line = run_session._tool_line({"name": "Bash", "input": {"command": "cd x\nmake test\n"}})
+
+        assert "\n" not in line and line == "[tool] Bash: cd x make test"
+
+    def test_a_long_command_is_cut(self):
+        line = run_session._tool_line({"name": "Bash", "input": {"command": "x" * 500}})
+
+        assert len(line) < 200 and line.endswith("…")
+
+    def test_an_unfamiliar_tool_still_says_something(self):
+        line = run_session._tool_line({"name": "Whatever", "input": {"thing": "a value"}})
+
+        assert line == "[tool] Whatever: a value"
+
+    def test_a_tool_with_nothing_to_show_is_still_named(self):
+        assert run_session._tool_line({"name": "Whatever", "input": {}}) == "[tool] Whatever"

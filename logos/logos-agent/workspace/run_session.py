@@ -707,13 +707,86 @@ def _render_event(event: dict) -> None:
             if block.get("type") == "text" and block.get("text", "").strip():
                 print(block["text"].strip(), flush=True)
             elif block.get("type") == "tool_use":
-                print(f"[tool] {block.get('name')}", flush=True)
+                print(_tool_line(block), flush=True)
         _report_usage(message)
     elif kind == "result":
         subtype = event.get("subtype", "")
         print(f"[result] {subtype}", flush=True)
     elif kind == "system" and event.get("subtype") == "init":
         print(f"[agent] model={event.get('model')}", flush=True)
+
+
+# How much of a tool call fits on one transcript line. Long enough for a git
+# command or a path, short enough that a wall of them is still readable.
+_TOOL_DETAIL = 140
+
+
+def _tool_line(block: dict) -> str:
+    """One transcript line for one tool call.
+
+    "[tool] Bash" three times in a row tells a reader nothing — not which
+    file was read, not which command ran, not whether the agent is looking
+    at the right thing at all. The name is the least interesting part of the
+    call; what it was given is the part somebody watching wants.
+    """
+    name = str(block.get("name") or "tool")
+    args = block.get("input")
+    detail = _tool_detail(name, args if isinstance(args, dict) else {})
+    return f"[tool] {name}: {detail}" if detail else f"[tool] {name}"
+
+
+def _tool_detail(name: str, args: dict) -> str:
+    """The part of a tool call worth showing."""
+    if name == "Bash":
+        return _one_line(args.get("command"))
+    if name in ("Read", "NotebookEdit"):
+        where = _short_path(args.get("file_path") or args.get("notebook_path"))
+        offset = args.get("offset")
+        return f"{where}:{offset}" if where and isinstance(offset, int) else where
+    if name in ("Edit", "Write"):
+        return _short_path(args.get("file_path"))
+    if name == "Grep":
+        pattern = _one_line(args.get("pattern"))
+        where = _short_path(args.get("path"))
+        return f"{pattern} in {where}" if where else pattern
+    if name == "Glob":
+        return _one_line(args.get("pattern"))
+    if name in ("WebFetch", "WebSearch"):
+        return _one_line(args.get("url") or args.get("query"))
+    if name == "Task":
+        return _one_line(args.get("description") or args.get("subagent_type"))
+    if name == "TodoWrite":
+        todos = args.get("todos")
+        if isinstance(todos, list):
+            doing = next(
+                (
+                    str(item.get("content") or "")
+                    for item in todos
+                    if isinstance(item, dict) and item.get("status") == "in_progress"
+                ),
+                "",
+            )
+            return _one_line(f"{len(todos)} steps, on '{doing}'" if doing else f"{len(todos)} steps")
+    # An unfamiliar tool: show whatever short string it was given rather
+    # than nothing at all.
+    for value in args.values():
+        if isinstance(value, str) and value.strip():
+            return _one_line(value)
+    return ""
+
+
+def _one_line(value: object) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[: _TOOL_DETAIL - 1] + "…" if len(text) > _TOOL_DETAIL else text
+
+
+def _short_path(value: object) -> str:
+    """A path as it reads in the repository, not as it sits in the container."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    prefix = f"{CHECKOUT}/"
+    return _one_line(text[len(prefix) :] if text.startswith(prefix) else text)
 
 
 def usage_totals(usage: dict[str, object]) -> tuple[int, int, float]:
