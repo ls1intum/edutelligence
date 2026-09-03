@@ -166,14 +166,14 @@ def is_bot(login: str) -> bool:
 # --- what the agent is asked to do ----------------------------------------
 
 
-def issue_task(issue: dict[str, Any]) -> str:
+async def issue_task(issue: dict[str, Any]) -> str:
     """The task text for an issue assigned to the agent."""
     number = issue.get("number")
     title = str(issue.get("title") or "").strip()
     body = str(issue.get("body") or "").strip()
     if len(body) > 6000:
         body = body[:6000] + "\n\n[issue body truncated]"
-    return for_task(
+    return await for_task(
         f"You have been assigned issue #{number}. Work on it and open a draft pull "
         f"request with your result.\n\n"
         f"Issue #{number}: {title}\n\n"
@@ -221,12 +221,12 @@ def conversation_block(entries: list[dict[str, Any]], missing: list[str] | None 
     return gap + "The conversation so far, oldest first:\n\n" + "\n\n---\n\n".join(rendered) + "\n\n"
 
 
-def takeover_task(number: int, title: str, body: str, branch: str, conversation: str = "") -> str:
+async def takeover_task(number: int, title: str, body: str, branch: str, conversation: str = "") -> str:
     """The task text for a pull request handed to the agent."""
     text = (body or "").strip()
     if len(text) > 6000:
         text = text[:6000] + "\n\n[description truncated]"
-    return for_task(
+    return await for_task(
         f"Pull request #{number} ('{title}') has been assigned to you: somebody wants you "
         f"to carry it the rest of the way. You are working in a checkout of its own "
         f"branch `{branch}`, and your commit updates that pull request — do not open a "
@@ -266,14 +266,16 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
     return "Inline comments:\n\n" + "\n\n".join(rendered[:30]) + "\n\n"
 
 
-def review_task(number: int, title: str, review: dict[str, Any], comments: list[dict[str, Any]] | None = None) -> str:
+async def review_task(
+    number: int, title: str, review: dict[str, Any], comments: list[dict[str, Any]] | None = None
+) -> str:
     """The task text for a review that asked a pull request for changes."""
     reviewer = str((review.get("user") or {}).get("login") or "a reviewer")
     body = str(review.get("body") or "").strip()
     if len(body) > 6000:
         body = body[:6000] + "\n\n[review body truncated]"
     inline = _inline_block(comments or [])
-    return for_task(
+    return await for_task(
         f"A review on pull request #{number} ('{title}') asked for changes. You are working "
         f"in a checkout of that pull request's own branch, and your commit updates it — "
         f"there is no new pull request to open.\n\n"
@@ -290,7 +292,7 @@ def review_task(number: int, title: str, review: dict[str, Any], comments: list[
     )
 
 
-def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, branch: str | None) -> str:
+async def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, branch: str | None) -> str:
     """The task text for comments addressed to the agent.
 
     The answer is the deliverable. Whether code changes at all is the
@@ -320,7 +322,7 @@ def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, bran
             "answer needs a code change, say what you would change and why, and leave it to "
             "the people on the thread."
         )
-    return for_task(
+    return await for_task(
         f"You were asked something on #{number} ('{title}').\n\n"
         f"{conversation}\n\n"
         f"Write your answer to `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` — the runner posts it in "
@@ -558,7 +560,7 @@ class TriggerPoller:
                 {
                     "ref": f"issue-{number}",
                     "kind": "issue",
-                    "task": issue_task(issue),
+                    "task": await issue_task(issue),
                     "workspace": workspace_name("issue", number, title),
                     "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
                     # Every session says something back on the thread it came
@@ -606,7 +608,7 @@ class TriggerPoller:
                     {
                         "ref": f"pr-{number}-review-{review_id}",
                         "kind": "review",
-                        "task": review_task(number, pull["title"], review, comments),
+                        "task": await review_task(number, pull["title"], review, comments),
                         "branch": branch,
                         "workspace": workspace_name("pr", number, pull["title"]),
                         # A submitted review is not a review *comment*: the
@@ -622,7 +624,7 @@ class TriggerPoller:
                     {
                         "ref": f"pr-{number}-assigned",
                         "kind": "takeover",
-                        "task": takeover_task(
+                        "task": await takeover_task(
                             number,
                             pull["title"],
                             pull["body"],
@@ -795,7 +797,7 @@ class TriggerPoller:
                     # one pull request has many of them.
                     "ref": (f"thread-{number}-inline-{key}-{newest}" if inline else f"thread-{number}-issue-{newest}"),
                     "kind": "comment",
-                    "task": thread_task(number, title, thread["comments"], branch=branch),
+                    "task": await thread_task(number, title, thread["comments"], branch=branch),
                     "branch": branch,
                     "workspace": workspace_name("pr", number, title) if branch else None,
                     "urgency": priority.of("comment", pull["labels"] if pull else ()),

@@ -19,7 +19,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
 
-from . import capacity, controls, db, docker_engine, github, model_policy, pulse, triggers
+from . import capacity, controls, conventions, db, docker_engine, github, model_policy, pulse, triggers
 from .auth import Principal, require_agent_operator
 from .config import settings
 from .schemas import (
@@ -28,6 +28,8 @@ from .schemas import (
     ControlState,
     ControlUpdate,
     EventKind,
+    InstructionState,
+    InstructionUpdate,
     QueueMove,
     SessionCreate,
     SessionEvent,
@@ -114,6 +116,37 @@ async def health() -> dict[str, object]:
         "database": database_ok,
         "docker": docker_ok,
     }
+
+
+# --- what every session is told -------------------------------------------
+
+
+@app.get("/instructions", response_model=InstructionState, tags=["capacity"])
+async def get_instructions(_: Principal = Depends(require_agent_operator)) -> InstructionState:
+    """The standing text appended to every task, as it stands now."""
+    return InstructionState(**vars(await conventions.current()))
+
+
+@app.put("/instructions", response_model=InstructionState, tags=["capacity"])
+async def put_instructions(
+    body: InstructionUpdate,
+    principal: Principal = Depends(require_agent_operator),
+) -> InstructionState:
+    """Change what every session is told, without a deployment.
+
+    These are prompts: the part of an unattended agent most worth adjusting
+    after watching it work, and the part least worth waiting for a release
+    to adjust. A half that is reset goes back to what the code ships with,
+    which is not the same as an empty one — empty is somebody deciding that
+    nothing should be said there.
+    """
+    state = await conventions.set_instructions(
+        house_rules=None if body.reset_house_rules else body.house_rules,
+        environment_notes=None if body.reset_environment_notes else body.environment_notes,
+        by=principal.username or "an operator",
+    )
+    logger.info("agent instructions changed by %s", principal.username)
+    return InstructionState(**vars(state))
 
 
 # --- capacity -------------------------------------------------------------

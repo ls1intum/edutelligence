@@ -132,6 +132,56 @@ async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+async def get_instructions() -> dict[str, Any] | None:
+    """The standing instructions, or None when the row is missing."""
+    async with sessionmaker()() as db:
+        row = (
+            (
+                await db.execute(
+                    text(
+                        """
+                        SELECT house_rules, environment_notes, updated_by, updated_at
+                          FROM agent_instructions WHERE id = 1
+                        """
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row else None
+
+
+async def set_instructions(*, house_rules: str | None, environment_notes: str | None, updated_by: str) -> None:
+    """Store the standing instructions. Null clears an override.
+
+    Both halves are written together, because the page edits them together
+    and a partial write would make "cleared" and "unchanged" the same
+    request.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                INSERT INTO agent_instructions (id, house_rules, environment_notes, updated_by, updated_at)
+                VALUES (1, :house_rules, :environment_notes, :updated_by, :now)
+                ON CONFLICT (id) DO UPDATE SET
+                    house_rules = :house_rules,
+                    environment_notes = :environment_notes,
+                    updated_by = :updated_by,
+                    updated_at = :now
+                """
+            ),
+            {
+                "house_rules": house_rules,
+                "environment_notes": environment_notes,
+                "updated_by": updated_by,
+                "now": _now(),
+            },
+        )
+        await db.commit()
+
+
 # --- what an operator changed while the runner was running ----------------
 
 

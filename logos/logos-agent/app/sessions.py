@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from . import attachments, capacity, controls, db, docker_engine, github, model_policy, triggers
+from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers
 from .config import REPLY_FILE, settings
 from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
@@ -935,7 +935,13 @@ class SessionManager:
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
                 image=settings.workspace_image,
-                env=self._session_env(session, branch, continuing=continuing, images=images),
+                env=self._session_env(
+                    session,
+                    branch,
+                    continuing=continuing,
+                    images=images,
+                    notes=(await conventions.current()).environment_notes,
+                ),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
                 session_id=sid,
@@ -1069,6 +1075,7 @@ class SessionManager:
         *,
         continuing: bool = False,
         images: list[str] | None = None,
+        notes: str = "",
     ) -> dict[str, str]:
         """The environment the untrusted agent phase runs with.
 
@@ -1090,6 +1097,11 @@ class SessionManager:
             # Where the pictures from the request are. The sandbox cannot
             # fetch them; it can read them.
             "LOGOS_SESSION_IMAGES": ",".join(images or []),
+            # The half of the prompt that describes this container. Passed
+            # in rather than baked into the session script so an operator
+            # can adjust it — and so the page can show exactly what was
+            # handed over.
+            "LOGOS_SESSION_ENVIRONMENT_NOTES": notes or "",
             # The agent's model traffic goes to Logos itself, so it is
             # authenticated, policy-checked, and billed like any other
             # caller. It is pointed at the gateway, not at the orchestrator:
@@ -1493,7 +1505,46 @@ class SessionManager:
             logger.info("could not count the attempts on %s; keeping the answer owed: %s", ref, exc)
             return True
 
-    async def take_up_again(self, session: dict[str, Any], *, by: str = "the runner") -> int | None:
+    def _watch_the_checks(self, session: dict[str, Any], pushed_sha: str) -> None:
+        """Follow the checks of what this session pushed, and act on red.
+
+        A session ends minutes before its pull request's checks conclude, so
+        it never learns that its change failed them — the linters it could
+        not run, a test it did not think to run, a build it broke. Nobody
+        told it, and the next thing that happened was a person finding a red
+        pull request.
+
+        Watched in the background because it takes minutes: the session is
+        settled, its workspace is free, and what comes of this is a fresh
+        attempt with the failure in its task.
+        """
+        branch = str(session.get("branch_name") or "")
+        if not branch or not session.get("trigger_ref"):
+            # A session queued by a person is that person's to follow up.
+            return
+        asyncio.create_task(self._take_up_a_red_build(session, branch, pushed_sha))
+
+    async def _take_up_a_red_build(self, session: dict[str, Any], branch: str, pushed_sha: str) -> None:
+        try:
+            status, detail = await github.wait_for_pr_builds(branch, pushed_sha)
+        except Exception as exc:
+            logger.info("could not follow the checks of session %s: %s", session.get("id"), exc)
+            return
+        if status == "success":
+            logger.info("the checks of session %s passed", session.get("id"))
+            return
+        logger.info("the checks of session %s did not pass (%s); taking the work up again", session.get("id"), status)
+        await self.take_up_again(
+            session,
+            note=(
+                f"Your last change to `{branch}` is on the pull request, and its checks did not pass "
+                f"({status}). This is that same piece of work, one round later:\n\n> {detail[:1500]}\n\n"
+                "Fix what the checks are complaining about. `pre-commit run --files <what you changed>` "
+                "runs the same hooks CI does, and it works in here."
+            ),
+        )
+
+    async def take_up_again(self, session: dict[str, Any], *, by: str = "the runner", note: str = "") -> int | None:
         """Queue this session's work once more, from where it came from.
 
         The same task, workspace, branch, thread and urgency; a new row, so
@@ -1516,7 +1567,7 @@ class SessionManager:
         try:
             new_id = await db.create_session(
                 workspace_id=int(session["workspace_id"]),
-                task=str(session["task"]),
+                task=f"{note.strip()}\n\n{session['task']}" if note.strip() else str(session["task"]),
                 model=session.get("model"),
                 created_by=by,
                 open_pull_request=bool(session.get("open_pull_request")),
@@ -1673,6 +1724,12 @@ class SessionManager:
             # up and started. Saying that it did not work out belongs there
             # too — an answer that never comes is the worst of the three.
             await self._react(session_row, github.REACTION_FAILED)
+
+        # A session finds out what its own change did to the checks — the one
+        # thing it could never learn from inside the sandbox, and the thing
+        # a person would notice within a minute of pushing.
+        if succeeded and result.get("pushed_sha"):
+            self._watch_the_checks(session_row, str(result["pushed_sha"]))
 
         # Somebody asked this session a question. The agent phase holds no
         # GitHub credential, so it wrote the answer into its artefact

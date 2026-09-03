@@ -486,6 +486,12 @@ def build_prompt(task: str) -> str:
             "Look at them before you decide anything — on a visual report they "
             "are usually the whole description.\n"
         )
+    # What this container is, as the runner describes it — an operator can
+    # adjust that text, and the page shows exactly what was handed over. The
+    # text below is the fallback for a session started by an older runner.
+    notes = os.environ.get("LOGOS_SESSION_ENVIRONMENT_NOTES", "").strip()
+    if notes:
+        return f"{task}{pictures}\n\n{notes}\n"
     return (
         f"{task}"
         f"{pictures}\n\n"
@@ -501,8 +507,12 @@ def build_prompt(task: str) -> str:
         "does — 'Cancel the queued request when the client goes away', not "
         "'Fixed stuff' and not a description of the task you were given. No "
         "body, no bullet points, no issue numbers.\n"
-        "- Run the project's tests or linters for the code you touch, and fix "
-        "what you break.\n"
+        "- Run the project's tests for the code you touch, and fix what you "
+        "break.\n"
+        "- Run `pre-commit run --files <the files you changed>` before you "
+        "finish and fix what it reports. The hooks are installed in this "
+        "image, so it works without a network; CI runs the same ones, and a "
+        "session that skips this hands somebody a red pull request.\n"
         "- If the task turns out to be impossible or already done, say so "
         "plainly instead of inventing changes.\n"
         f"- Changing nothing is a legitimate outcome, but it is never a silent "

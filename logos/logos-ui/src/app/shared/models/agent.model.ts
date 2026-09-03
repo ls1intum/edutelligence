@@ -50,6 +50,15 @@ export interface AgentSession {
   priority_reason: string | null;
 }
 
+/** The standing text every session is given, and whether it is the default. */
+export interface AgentInstructions {
+  house_rules: string;
+  environment_notes: string;
+  house_rules_default: boolean;
+  environment_notes_default: boolean;
+  updated_by: string;
+}
+
 export interface AgentEvent {
   id: number;
   session_id: number;

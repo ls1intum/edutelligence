@@ -187,6 +187,31 @@ survive a restart, and both are visible to whoever finds the runner stopped.
 | **Pause everything** | Running sessions are paused on the next pass and the capacity goes back to the platform. Nothing is cancelled: resuming picks the work up mid-task. |
 | **Sessions at once** | A ceiling for now, overriding the configured one. Zero drains without pausing. |
 
+## What the agent is told, and changing it
+
+Every task carries two standing blocks: the **house rules** — the conventions
+the agent works to — and the **environment notes**, which describe the
+container it works in. Both ship as defaults in code and can be edited on the
+page, taking effect on the next session rather than the next deployment.
+They are prompts, and prompts are the part of an unattended agent most worth
+adjusting after watching a few sessions: every line in the defaults is there
+because a session went wrong without it.
+
+Each session shows the exact text it was handed, so a surprising session can
+be read rather than guessed at.
+
+**It can run the repository's own hooks.** `pre-commit`'s hook environments
+are installed into the session image at build time, where there is a network
+to install them with — a session has none, and without this the instruction
+to lint before finishing was one the agent could not follow. Sessions were
+pushing unformatted code and learning nothing about it.
+
+**And it finds out when its change turned the checks red.** A session ends
+minutes before its pull request's checks conclude, so it never saw the one
+verdict a person would notice immediately. The runner follows the checks of
+what the session pushed, and a red one becomes another attempt with the
+failure in its task.
+
 ## What gets worked on first
 
 An operator can overrule it. The queue on the page carries three controls on

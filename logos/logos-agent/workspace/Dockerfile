@@ -75,6 +75,22 @@ RUN npm install -g \
 RUN npx --yes playwright@${PLAYWRIGHT_VERSION} install chromium \
   && chmod -R a+rX /opt/playwright
 
+# The repository's own linters, installed at build time because a session has
+# no network to install them with. Without this an agent cannot run what the
+# house rules ask it to run: `pre-commit` fetches every hook from GitHub the
+# first time, `pip install black` reaches PyPI, and the sandbox reaches
+# neither. Sessions were pushing unformatted code and finding out from a red
+# check nobody told them about.
+#
+# The environments are keyed by hook repository and revision, so they are
+# reused as long as the pinned revisions in the config match. When they stop
+# matching, the session's `pre-commit run` says so rather than silently
+# skipping — which is why the config is copied in and resolved here, not
+# guessed.
+ENV PRE_COMMIT_HOME=/opt/pre-commit
+COPY logos/.pre-commit-config.yaml /tmp/hooks/.pre-commit-config.yaml
+RUN uv tool install --python 3.13 pre-commit   && ln -sf /root/.local/bin/pre-commit /usr/local/bin/pre-commit   && cd /tmp/hooks   && git init -q .   && git config user.email agent@logos.invalid   && git config user.name agent   && pre-commit install-hooks   && chmod -R a+rX /opt/pre-commit /root/.local   && chmod a+rx /root   && rm -rf /tmp/hooks
+
 # Unprivileged user. The runner starts the container as `agent`; nothing in a
 # session ever runs as root.
 RUN useradd --create-home --shell /bin/bash --uid 10001 agent \

@@ -163,6 +163,27 @@ class SessionSummary(BaseModel):
     priority_reason: str | None = None
 
 
+class InstructionState(BaseModel):
+    """The standing text every session is given."""
+
+    house_rules: str
+    environment_notes: str
+    # Whether each half is what the code ships with, or somebody's decision.
+    house_rules_default: bool
+    environment_notes_default: bool
+    updated_by: str = ""
+
+
+class InstructionUpdate(BaseModel):
+    """New standing text. A null half goes back to the shipped default."""
+
+    house_rules: str | None = Field(default=None, max_length=20000)
+    environment_notes: str | None = Field(default=None, max_length=20000)
+    # Told apart from "leave it alone": the page always sends both halves.
+    reset_house_rules: bool = False
+    reset_environment_notes: bool = False
+
+
 class QueueMove(BaseModel):
     """Where an operator wants a queued session to sit.
 

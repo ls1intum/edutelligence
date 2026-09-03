@@ -25,6 +25,9 @@
 !logos/logos-agent/app
 !logos/logos-agent/workspace/run_session.py
 !logos/logos-agent/workspace/screenshot.js
+# The session image installs the repository's own hook environments at build
+# time, because a session has no network to install them with.
+!logos/.pre-commit-config.yaml
 # The model gateway's nginx configuration, shipped in its image rather than
 # bind-mounted: a deployment copies only the compose file to its VM.
 !logos/agent-gateway/nginx.conf

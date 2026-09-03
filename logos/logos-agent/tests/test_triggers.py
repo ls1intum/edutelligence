@@ -757,10 +757,10 @@ class TestWhatTheAgentIsTold:
         task = fake_db.created[0]["task"]
         assert "incomplete" in task and "reviews" in task
 
-    def test_the_task_says_the_conversation_is_complete(self):
+    async def test_the_task_says_the_conversation_is_complete(self):
         # Otherwise it goes looking for the rest of it through a network it
         # does not have.
-        task = triggers.takeover_task(772, "A change", "", "logos/agent/x", "")
+        task = await triggers.takeover_task(772, "A change", "", "logos/agent/x", "")
         assert "cannot fetch more" in task
 
 
@@ -1104,12 +1104,12 @@ class TestUrgency:
 class TestTaskConventions:
     """Every task carries what a new colleague would be told."""
 
-    def test_each_kind_of_task_carries_the_house_rules(self):
+    async def test_each_kind_of_task_carries_the_house_rules(self):
         tasks = [
-            triggers.issue_task(issue(1)),
-            triggers.takeover_task(2, "t", "b", "logos/agent/x"),
-            triggers.review_task(3, "t", review(1), []),
-            triggers.thread_task(4, "t", [{"body": "q", "user": {"login": "a"}}], branch=None),
+            await triggers.issue_task(issue(1)),
+            await triggers.takeover_task(2, "t", "b", "logos/agent/x"),
+            await triggers.review_task(3, "t", review(1), []),
+            await triggers.thread_task(4, "t", [{"body": "q", "user": {"login": "a"}}], branch=None),
         ]
         for task in tasks:
             assert "How work is done here" in task
