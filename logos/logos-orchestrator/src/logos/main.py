@@ -1118,7 +1118,7 @@ def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
 
 
 def _record_rate_limit_admission(request_id: Optional[str], admitted: bool) -> None:
-    """Persist whether the key's rate limiter admitted the request (issue #672).
+    """Persist whether the key's rate limiter admitted the request.
 
     Same monitoring semantics as `_discard_in_flight`: failures are logged
     and never break the request path.
@@ -4592,10 +4592,10 @@ async def _execute_resource_mode(
             rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
             allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
             # Persist the admission decision before execution: the /me/keys
-            # usage window (issue #672) counts an admitted request while it is
-            # still running, and must skip the ones this check rejects — the
-            # log row already carries timestamp_forwarding from scheduling, so
-            # without the flag a rejected request would show up as usage.
+            # usage window counts an admitted request while it is still
+            # running, and must skip the ones this check rejects — the log row
+            # already carries timestamp_forwarding from scheduling, so without
+            # the flag a rejected request would show up as usage.
             _record_rate_limit_admission(result.scheduling_stats.get("request_id") or request_id, allowed)
             if not allowed:
                 try:

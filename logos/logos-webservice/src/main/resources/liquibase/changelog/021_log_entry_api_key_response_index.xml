@@ -5,7 +5,7 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- Issue #672, part two. The same /me/keys usage window
+    <!-- The same /me/keys usage window
          (ApiKeyRepository.findRateLimitUsageForUser) that migration 020 indexes
          also cuts the token metric on timestamp_response — requests count when
          they complete, so a request admitted just before the window edge but

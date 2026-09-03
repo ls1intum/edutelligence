@@ -299,9 +299,9 @@ class MonitoringRecorder:
         """Persist whether this key's rate limiter admitted the request.
 
         Written at the admission decision (``check_and_record``), before
-        execution: the per-key usage window (issue #672) must count an
-        admitted request while it is still running, and must skip the ones
-        the limiter rejects after scheduling — the log row already carries
+        execution: the per-key usage window must count an admitted request
+        while it is still running, and must skip the ones the limiter rejects
+        after scheduling — the log row already carries
         ``timestamp_forwarding`` from ``record_scheduled``, so without this
         flag a rejected request would show up as usage. Keys without a limit
         are never checked; their rows keep the column NULL, which the usage

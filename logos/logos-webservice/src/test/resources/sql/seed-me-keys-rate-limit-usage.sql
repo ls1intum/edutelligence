@@ -1,4 +1,4 @@
--- Rate-limit usage fixture (issue #672), layered on top of seed-me-keys.sql.
+-- Rate-limit usage fixture, layered on top of seed-me-keys.sql.
 --
 -- Requests count when the limiter charges the RPM slot: admission, i.e.
 -- timestamp_forwarding. Tokens count when the limiter's record_tokens runs:

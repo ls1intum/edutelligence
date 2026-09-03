@@ -5,7 +5,7 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- Issue #672: the /me/keys page shows each key's request/token usage
+    <!-- The /me/keys page shows each key's request/token usage
          inside the limiter's window. The window query
          (ApiKeyRepository.findRateLimitUsageForUser) counts rows by
          timestamp_forwarding, but the orchestrator writes that column during
@@ -38,9 +38,10 @@
          (api_key_id, timestamp_forwarding) lets it seek straight to the recent
          slice of each key.
 
-         Numbered 020 on purpose: 018/019 are claimed by the in-flight
-         Ollama-removal branch (#865), and LiquibaseChangelogOrderTest requires
-         strictly increasing numbers in master.xml.
+         Numbered 020 on purpose: 018 is taken on main by the model-alias
+         change, 019 stays free for the in-flight Ollama-removal branch, and
+         LiquibaseChangelogOrderTest requires strictly increasing numbers in
+         master.xml.
 
          Runs outside a transaction so CONCURRENTLY can build the index without
          locking log_entry against the logos-orchestrator, which keeps writing

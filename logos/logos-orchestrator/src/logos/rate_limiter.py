@@ -37,10 +37,10 @@ class InMemoryRateLimiter:
     def check_and_record(self, key: str, config: RateLimitConfig) -> Tuple[bool, str]:
         # The TPM check runs before the RPM slot is recorded. A request the
         # TPM limit rejects must not consume an RPM slot: the /me/keys usage
-        # window (issue #672) displays admitted requests only, so a TPM
-        # reject that still appended its RPM timestamp would leave the
-        # displayed RPM below the enforced one — the UI showing headroom
-        # while the limiter keeps returning 429.
+        # window displays admitted requests only, so a TPM reject that still
+        # appended its RPM timestamp would leave the displayed RPM below the
+        # enforced one — the UI showing headroom while the limiter keeps
+        # returning 429.
         now = time.monotonic()
         cutoff = now - config.window_seconds
 

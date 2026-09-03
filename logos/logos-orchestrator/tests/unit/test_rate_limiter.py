@@ -1,4 +1,4 @@
-"""Behavior tests for InMemoryRateLimiter (issue #672)."""
+"""Behavior tests for InMemoryRateLimiter."""
 
 import logos.rate_limiter as rl
 from logos.rate_limiter import InMemoryRateLimiter, RateLimitConfig
@@ -31,11 +31,11 @@ def test_tpm_rejects_when_recorded_tokens_fill_the_window():
 
 
 def test_tpm_reject_does_not_consume_an_rpm_slot(monkeypatch):
-    # Regression (issue #672): the /me/keys RPM figure counts admitted
-    # requests only, while the limiter enforces over its request window. If
-    # a TPM reject appended its RPM timestamp anyway, the enforced RPM would
-    # include requests the display excludes, so the UI could show headroom
-    # while the limiter keeps rejecting.
+    # Regression: the /me/keys RPM figure counts admitted requests only,
+    # while the limiter enforces over its request window. If a TPM reject
+    # appended its RPM timestamp anyway, the enforced RPM would include
+    # requests the display excludes, so the UI could show headroom while the
+    # limiter keeps rejecting.
     limiter = InMemoryRateLimiter()
     cfg = RateLimitConfig(rpm=2, tpm=100)
     limiter.record_tokens("k", 100)  # fill the TPM window

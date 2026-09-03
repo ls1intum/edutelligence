@@ -143,8 +143,8 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
     List<MyKeyProjection> findKeysForUser(@Param("userId") int userId);
 
     /**
-     * Per-key request and token counts inside one rate-limit window (issue
-     * #672), split the way the orchestrator's limiter enforces the limits:
+     * Per-key request and token counts inside one rate-limit window, split
+     * the way the orchestrator's limiter enforces the limits:
      * per key, and cloud vs. local by the provider type the request was
      * actually served on ({@code logosnode} is local, everything else
      * cloud).
