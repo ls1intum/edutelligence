@@ -342,8 +342,8 @@ def test_malformed_usage_tokens_are_skipped_not_fatal(monkeypatch):
 
 
 def test_record_rate_limit_admission_persists_the_flag_both_ways(monkeypatch):
-    """Issue #672: the /me/keys usage window must be able to tell an admitted
-    request from one the limiter rejected after scheduling. Both verdicts are
+    """The /me/keys usage window must be able to tell an admitted request
+    from one the limiter rejected after scheduling. Both verdicts are
     persisted verbatim — the DB layer drops None fields, so False must reach
     it as False, not be swallowed like an unset value."""
     recorder, calls = _make_recorder(monkeypatch, {}, {})

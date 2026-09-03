@@ -6,7 +6,7 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- Issue #672: the /me/keys page shows each key's request/token usage
+    <!-- The /me/keys page shows each key's request/token usage
          inside the limiter's window. The window query
          (ApiKeyRepository.findRateLimitUsageForUser) counts rows by
          timestamp_forwarding, but the orchestrator writes that column during

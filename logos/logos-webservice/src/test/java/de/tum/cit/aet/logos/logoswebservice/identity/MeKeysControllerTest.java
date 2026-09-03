@@ -69,7 +69,7 @@ class MeKeysControllerTest {
            .andExpect(jsonPath("$[0].team.budget_used_micro_cents").value(0));
     }
 
-    // GET /me/keys — rate limit usage (issue #672)
+    // GET /me/keys — rate limit usage
 
     @Test
     void getMyKeys_keepsUnknownRateLimitUsageDistinctFromZero() throws Exception {
