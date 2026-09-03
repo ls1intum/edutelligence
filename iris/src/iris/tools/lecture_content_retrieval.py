@@ -45,7 +45,7 @@ def create_tool_lecture_content_retrieval(
     del callback
 
     def citation_hint(cite_type: str, entity_id, content: str, **coordinates) -> str:
-        """Return the line telling the model how to cite this paragraph."""
+        """Return the header suffix naming this paragraph's citation handle."""
         if citation_registry is None or not content:
             return ""
         handle = citation_registry.register(

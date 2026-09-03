@@ -49,11 +49,11 @@ def format_faqs(retrieved_faqs, citation_registry=None):
         if citation_registry is not None:
             content = " ".join(part for part in (question, answer) if part).strip()
             if content:
-                # Kept outside the FAQ brackets so the handle's own brackets do
-                # not nest and confuse the model.
+                # Appended after the FAQ block so the handle's own brackets do
+                # not nest inside it.
                 handle = citation_registry.register(
                     CITE_TYPE_FAQ, faq_id, content, dedup_key=f"faq:{faq_id}"
                 )
-                res += f" Citation id: {handle}\n"
+                res += f" Citation id: {handle}"
         result += res
     return result

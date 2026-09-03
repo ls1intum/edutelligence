@@ -3,8 +3,8 @@
 ``LectureRetrieval.fetch_context_content`` looks up the exact slide page chunks
 and transcription segments referenced by the student's current position so they
 can be pasted directly into the prompt, independently of the RAG lecture tool.
-Each position is also registered with the citation registry, so the answer model
-can cite what the student is looking at without calling the retrieval tool.
+That prompt context stays descriptive only; inline citation handles are reserved
+for actual lecture/FAQ retrieval tool results.
 """
 
 # pylint: skip-file
@@ -117,8 +117,8 @@ def test_fetch_context_content_suppresses_unreleased_unit():
     pipeline._fetch_transcriptions_by_timestamp.assert_not_called()
 
 
-def test_current_view_content_is_stored_for_citations():
-    """Current-view content must land in the citation storage without the tool."""
+def test_current_view_content_is_stored_without_inline_citation_ids():
+    """Current-view content stays available without inflating the initial prompt."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
     page_chunk = _make_page_chunk(3, "Page 3 content")
@@ -147,11 +147,11 @@ def test_current_view_content_is_stored_for_citations():
     # corresponding material directly below it.
     assert blocks == [
         "The student is currently viewing page 3 of the lecture slides of the "
-        "lecture unit Test Unit (lecture unit ID: 1, Citation id: [cite:1]). "
+        "lecture unit Test Unit (lecture unit ID: 1). "
         "The content of this slide:"
         "\n---\nPage 3 content\n---",
         "The student is currently at 50.0 seconds in the lecture video of the "
-        "lecture unit Test Unit (lecture unit ID: 1, Citation id: [cite:2]). "
+        "lecture unit Test Unit (lecture unit ID: 1). "
         "The transcript at this point:\n---\nTranscript 45-55\n---",
     ]
     stored = state.lecture_content_storage["current_view"]
@@ -186,7 +186,7 @@ def test_multiple_chunks_on_same_page_share_one_block():
     # Both chunks of page 2 are bundled into a single block under one position.
     assert blocks == [
         "The student is currently viewing page 2 of the lecture slides of the "
-        "lecture unit Test Unit (lecture unit ID: 1, Citation id: [cite:1]). "
+        "lecture unit Test Unit (lecture unit ID: 1). "
         "The content of this slide:"
         "\n---\nFirst half\nSecond half\n---"
     ]
@@ -249,14 +249,14 @@ def test_only_ingested_positions_are_described():
 
     assert blocks == [
         "The student is currently viewing page 3 of the lecture slides of the "
-        "lecture unit Test Unit (lecture unit ID: 1, Citation id: [cite:1]). "
+        "lecture unit Test Unit (lecture unit ID: 1). "
         "The content of this slide:"
         "\n---\nPage 3 content\n---",
     ]
 
 
-def test_each_viewed_position_gets_its_own_citation_handle():
-    """Two viewed pages must be citable independently of each other."""
+def test_each_viewed_position_remains_separately_described():
+    """Two viewed pages remain separate prompt blocks without inline ids."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
     retriever = MagicMock()
@@ -265,7 +265,6 @@ def test_each_viewed_position_gets_its_own_citation_handle():
         [],
     )
 
-    registry = CitationRegistry()
     state = SimpleNamespace(
         lecture_contexts=[
             SlidesContextDTO(type="slides", lectureUnitId=1, page=3),
@@ -273,7 +272,7 @@ def test_each_viewed_position_gets_its_own_citation_handle():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
-        citation_registry=registry,
+        citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -282,11 +281,5 @@ def test_each_viewed_position_gets_its_own_citation_handle():
 
     blocks = pipeline._build_current_view(state)
 
-    assert "Citation id: [cite:1]" in blocks[0]
-    assert "Citation id: [cite:2]" in blocks[1]
-    # Both handles resolve to their own page of the same lecture unit.
-    # Without an enricher the keyword and summary fields stay empty, but the
-    # page coordinates the client links to differ per handle.
-    assert registry.render("a[cite:1] b[cite:2]", final=True) == (
-        "a[cite:L:1:3::::] b[cite:L:1:5::::]"
-    )
+    assert "Citation id:" not in blocks[0]
+    assert "Citation id:" not in blocks[1]

@@ -39,7 +39,6 @@ from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_registry import (
-    CITE_TYPE_LECTURE,
     CitationEnricher,
     CitationRegistry,
 )
@@ -621,9 +620,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         in the vector database are included — otherwise Iris can neither see nor
         retrieve the material and could not actually be context-aware about it.
 
-        The content is also stored in ``lecture_content_storage`` so answers about
-        the current position get lecture citations even when the agent never calls
-        the lecture retrieval tool.
+        The content is also stored in ``lecture_content_storage`` so other
+        consumers can see what the student is currently looking at.
 
         Returns:
             A list of blocks (position + content). Empty when there is no current
@@ -664,15 +662,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         }
 
         # Store the content so other consumers can still see what the student is
-        # looking at. Citations no longer read it: the chunks are registered
-        # below and cited inline by their handle.
+        # looking at. Inline citation handles are reserved for actual retrieval
+        # tool output to keep the initial prompt closer to main.
         state.lecture_content_storage["current_view"] = LectureRetrievalDTO(
             lecture_unit_segments=[],
             lecture_transcriptions=list(transcriptions),
             lecture_unit_page_chunks=list(page_chunks),
         )
-
-        registry = state.citation_registry
 
         # Group the page chunks by slide page so all chunks of one page are
         # bundled into a single block under that page's position description.
@@ -692,20 +688,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             if not chunks:
                 continue
             text = "\n".join(chunk.page_text_content for chunk in chunks)
-            # The chunks of one page share a block, so they share one handle:
-            # registering the merged text keeps the keyword and summary aligned
-            # with what the model actually read.
-            handle = registry.register(
-                CITE_TYPE_LECTURE,
-                unit_id,
-                text,
-                page=page,
-                dedup_key=f"view-page:{unit_id}:{page}",
-            )
             blocks.append(
                 f"The student is currently viewing page {page} of the lecture "
                 f"slides of the lecture unit {names[unit_id]} "
-                f"(lecture unit ID: {unit_id}, Citation id: {handle}). "
+                f"(lecture unit ID: {unit_id}). "
                 f"The content of this slide:\n---\n{text}\n---"
             )
         for t in context_timestamps:
@@ -720,19 +706,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             if not segments:
                 continue
             text = "\n".join(tr.segment_text for tr in segments)
-            handle = registry.register(
-                CITE_TYPE_LECTURE,
-                unit_id,
-                text,
-                page=segments[0].page_number,
-                start=int(min(tr.segment_start_time for tr in segments)),
-                end=int(max(tr.segment_end_time for tr in segments)),
-                dedup_key=f"view-video:{unit_id}:{timestamp}",
-            )
             blocks.append(
                 f"The student is currently at {timestamp} seconds in the "
                 f"lecture video of the lecture unit {names[unit_id]} "
-                f"(lecture unit ID: {unit_id}, Citation id: {handle}). "
+                f"(lecture unit ID: {unit_id}). "
                 f"The transcript at this point:\n---\n{text}\n---"
             )
 
