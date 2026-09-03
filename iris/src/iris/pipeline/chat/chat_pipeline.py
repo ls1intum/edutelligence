@@ -133,7 +133,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     DEPENDENCIES = [
         # Citations only need the small keyword/summary model now that the
         # answer model places them itself, and that model is not variant-bound.
-        Dep("citation_pipeline"),
+        Dep("citation_enricher"),
         Dep("session_title_generation_pipeline"),
         Dep("interaction_suggestion_pipeline", variant="course"),
         Dep("interaction_suggestion_pipeline", variant="exercise"),

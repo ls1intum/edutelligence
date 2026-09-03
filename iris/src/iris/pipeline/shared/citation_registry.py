@@ -55,7 +55,7 @@ TRAILING_HANDLE_FRAGMENT_PATTERN = re.compile(r"\[(?:c(?:i(?:t(?:e(?::\d*)?)?)?)
 CITE_TYPE_LECTURE = "L"
 CITE_TYPE_FAQ = "F"
 
-_PIPELINE_ID = "citation_pipeline"
+_PIPELINE_ID = "citation_enricher"
 
 
 def _format_part(value) -> str:
