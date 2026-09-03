@@ -14,7 +14,7 @@
          'logosnode' would silently point requests at workers that do not
          have the Ollama engine anymore. Fix the data (re-type as
          'logosnode' or delete the row), then restart. -->
-    <changeSet id="019-refuse-ollama-typed-providers" author="wasnertobias">
+    <changeSet id="021-refuse-ollama-typed-providers" author="wasnertobias">
         <sql splitStatements="false">
             DO $$
             DECLARE
