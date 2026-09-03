@@ -96,6 +96,22 @@ class _FakeCache:
         # pending-lane reserve regression asserts the footprint was already
         # in the floor when the copy was admitted.
         self.floor_at_ensure_cached: float | None = None
+        # Cache-use reservations (see ModelRamCache.reserve_cache_use):
+        # calibration reads an entry with no lane handle behind it.
+        self._cache_use_refs: dict[str, int] = {}
+
+    def reserve_cache_use(self, model: str) -> None:  # noqa: ANN001
+        self._cache_use_refs[model] = self._cache_use_refs.get(model, 0) + 1
+
+    def release_cache_use(self, model: str) -> None:  # noqa: ANN001
+        refs = self._cache_use_refs.get(model, 0)
+        if refs <= 1:
+            self._cache_use_refs.pop(model, None)
+        else:
+            self._cache_use_refs[model] = refs - 1
+
+    def cache_use_reservations(self) -> set[str]:
+        return set(self._cache_use_refs)
 
     def model_size_bytes(self, name: str) -> int:
         return self._sizes.get(name, 0)
@@ -397,6 +413,72 @@ def test_live_process_protection_follows_the_actual_hf_home_choice() -> None:
     # not read the tmpfs copy, so the entry is no longer protected.
     source_backed = _FakeLaneManager({"b": _FakeHandle("b", "org/b", ProcessState.RUNNING, ram_cache=False)})
     assert worker_main._lane_models_with_live_processes(source_backed) == set()
+
+
+# ── _lane_can_sleep (post-override configuration) ────────────────────────────
+
+
+def test_lane_can_sleep_is_derived_from_the_post_override_config() -> None:
+    """Regression: the reserve decision must use the flag the spawned process
+    will actually honour — the FINAL post-override configuration. The incoming
+    (pre-override) lane config is what pending and static lanes still carry
+    when the re-plan reads them, and _apply_model_vllm_overrides only runs at
+    spawn, after the cache copy is admitted. Judging sleep capability from the
+    pre-override config omits exactly the lanes an override flips: a
+    pre-override sleep-off lane the engine override turns ON is sleepable and
+    must enter the reserve, a pre-override sleep-on lane it turns OFF must not,
+    and the worker-wide kill switch wins over both."""
+    base = AppConfig(logos=LogosConfig(capabilities_models=[]))
+
+    def lane(flag: bool) -> LaneConfig:
+        return LaneConfig(model="org/m", vllm=True, vllm_config=VllmConfig(enable_sleep_mode=flag))
+
+    # No override: the lane's own flag decides.
+    assert worker_main._lane_can_sleep(base, lane(False)) is False
+    assert worker_main._lane_can_sleep(base, lane(True)) is True
+
+    # Override flips a pre-override sleep-OFF lane ON — it spawns sleepable.
+    override_on = AppConfig(logos=LogosConfig(capabilities_models=[]))
+    override_on.engines.vllm.model_overrides = {"org/m": {"enable_sleep_mode": True}}
+    assert worker_main._lane_can_sleep(override_on, lane(False)) is True
+
+    # Override flips a pre-override sleep-ON lane OFF.
+    override_off = AppConfig(logos=LogosConfig(capabilities_models=[]))
+    override_off.engines.vllm.model_overrides = {"org/m": {"enable_sleep_mode": False}}
+    assert worker_main._lane_can_sleep(override_off, lane(True)) is False
+
+    # The kill switch wins over an override that would re-enable sleep.
+    kill = AppConfig(logos=LogosConfig(capabilities_models=[]))
+    kill.engines.vllm.disable_sleep_mode = True
+    kill.engines.vllm.model_overrides = {"org/m": {"enable_sleep_mode": True}}
+    assert worker_main._lane_can_sleep(kill, lane(True)) is False
+
+
+def test_replan_reserves_a_lane_the_engine_override_makes_sleepable(monkeypatch) -> None:
+    """End to end for the same regression: a static lane whose pre-override
+    config pins enable_sleep_mode=false, with an engine override that flips it
+    on at spawn. The lane's sleeping footprint must already be in the reserve
+    before/while its cache copy is admitted — derived from the post-override
+    configuration, not the pre-override flag the lane still carries."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    model = "org/override-flip"
+    # Pre-override config: sleep OFF (what the re-plan sees on the static lane).
+    static = [LaneConfig(model=model, vllm=True, vllm_config=VllmConfig(enable_sleep_mode=False))]
+    app = _app(
+        _FakeCache(cached=[model], sizes={model: _mb(20_000)}),
+        _FakeRegistry({}),
+        _FakeLaneManager({}),
+        [],
+        static_lanes=static,
+    )
+    # Post-override reality: the engine override flips the lane ON at spawn.
+    app.state.config.engines.vllm.model_overrides = {model: {"enable_sleep_mode": True}}
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # The footprint entered the reserve from the post-override configuration.
+    assert app.state.model_cache.floor_mb == pytest.approx(20_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
 def test_replan_reaches_plan_when_lane_ids_is_property(monkeypatch) -> None:
@@ -1226,6 +1308,47 @@ def test_replan_still_protects_the_copy_of_a_ram_cache_backed_lane(monkeypatch) 
 
     assert cache.reclaimed[-1] == []
     assert cache.is_cached("org/big") is True
+
+
+def test_replan_never_evicts_a_model_under_calibration(monkeypatch) -> None:
+    """Regression: calibration reads its model's tmpfs entry (ensure_cached_sync
+    + vLLM probes from the cached HF_HOME) with NEITHER a lane handle NOR a
+    startup reservation behind it, so the live-lane protection set is blind to
+    it — while a calibrated candidate keeps the plan non-empty, a tight tick
+    omits the uncalibrated target and reclaim deletes its tree mid-session. The
+    cache-use reservation held for the whole calibration session must pin the
+    entry in the meantime, and release it (making it evictable again) once the
+    session ends."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(50_000.0))
+
+    registry = _FakeRegistry(
+        {
+            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            "org/big": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
+        }
+    )
+    sizes = {"org/small": _mb(8_000), "org/big": _mb(48_000)}
+    cache = _FakeCache(cached=["org/small", "org/big"], sizes=sizes)
+    # No lanes at all: big's only reader is a calibration session for it, so
+    # nothing but the session's reservation can protect the tree.
+    app = _app(cache, registry, _FakeLaneManager({}), ["org/small", "org/big"])
+
+    cache.reserve_cache_use("org/big")
+    try:
+        asyncio.run(worker_main._replan_ram_cache_once(app))
+    finally:
+        cache.release_cache_use("org/big")
+
+    # The plan skips big (host too tight), but the reservation spares its tree.
+    assert cache.reclaimed[-1] == []
+    assert cache.is_cached("org/big") is True
+
+    # Session over: the same re-plan is now free to give big's RAM back.
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    assert cache.reclaimed[-1] == ["org/big"]
+    assert cache.is_cached("org/big") is False
+    assert cache.is_cached("org/small") is True
 
 
 def test_replan_does_not_evict_a_model_whose_lane_is_starting(monkeypatch) -> None:

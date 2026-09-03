@@ -329,24 +329,47 @@ async def _auto_calibrate_if_needed(
         model_profiles._load_persisted()
 
 
+def _lane_sleep_mode(cfg: AppConfig, lane: LaneConfig) -> bool:
+    """The ``enable_sleep_mode`` the lane's spawned process will actually honour.
+
+    Derived from the FINAL post-override configuration, not the incoming one:
+    ``LaneManager._apply_model_vllm_overrides`` runs at spawn — AFTER the
+    lane's cache copy is admitted (pending and static lanes still carry their
+    pre-override ``vllm_config`` when the re-plan reads them) — and folds the
+    worker-wide ``disable_sleep_mode`` kill switch and the per-model
+    ``engines.vllm.model_overrides`` on top of the lane's own flag. Judging
+    sleep capability from the pre-override configuration omits (or counts)
+    exactly the lanes an override flips, so the sleep reserve must use the
+    same decision the spawn will make.
+    """
+    if not cfg.engines or not cfg.engines.vllm:
+        return bool(lane.vllm_config and lane.vllm_config.enable_sleep_mode)
+    # Applied last at spawn, so the kill switch wins over a per-model
+    # override that would re-enable sleep.
+    if cfg.engines.vllm.disable_sleep_mode:
+        return False
+    overrides = cfg.engines.vllm.model_overrides.get(lane.model) or {}
+    if "enable_sleep_mode" in overrides:
+        return bool(overrides["enable_sleep_mode"])
+    return bool(lane.vllm_config and lane.vllm_config.enable_sleep_mode)
+
+
 def _lane_can_sleep(cfg: AppConfig, lane: LaneConfig) -> bool:
     """Whether a specific lane is sleep-capable.
 
     A lane can only sleep if it is a vLLM lane whose effective
-    ``vllm_config.enable_sleep_mode`` is true — the same predicate
-    ``LaneManager.sleeping_model_counts`` uses to probe what is actually
-    asleep, so the sleep reserve and the asleep count agree on what
+    (post-override) ``vllm_config.enable_sleep_mode`` is true — the same
+    predicate ``LaneManager.sleeping_model_counts`` uses to probe what is
+    actually asleep, so the sleep reserve and the asleep count agree on what
     "sleepable" means. Non-vLLM lanes, and vLLM lanes pinned to sleep-mode-off,
     can never sleep and so never enter the reserve (counting them would inflate
     the floor and evict or reject cache entries for no gain). The worker-wide
-    ``disable_sleep_mode`` kill switch and per-model overrides are folded in
-    via ``model_can_sleep``.
+    ``disable_sleep_mode`` kill switch and the per-model engine overrides are
+    applied exactly as at spawn — see ``_lane_sleep_mode``.
     """
     if not lane.vllm:
         return False
-    if not model_can_sleep(cfg, lane.model):
-        return False
-    return bool(lane.vllm_config and lane.vllm_config.enable_sleep_mode)
+    return _lane_sleep_mode(cfg, lane)
 
 
 def _sleepable_lane_replicas(cfg: AppConfig, lane_manager: LaneManager | None = None) -> dict[str, int]:
@@ -531,13 +554,19 @@ async def _apply_ram_cache_plan(
     the HF_HOME it was started with, and a lane waking from sleep_l2 re-reads
     them — pulling that directory out would turn a wake into a failed lane.
 
+    The same protection covers a model under calibration: its probes read the
+    tmpfs entry with no lane behind it, and a cache-use reservation (see
+    ``ModelRamCache.reserve_cache_use``) is what keeps the tree alive while
+    they run.
+
     The corner where *every* model the plan would evict is protected (all
-    cached models currently serve a live lane) is decided in favour of the
-    lanes: the protection is what keeps wakes and restarts correct, and the
-    cache genuinely has no RAM to give back while its copies are in use by
-    live processes. That is a pressure state the cache cannot relieve, so it
-    is logged as a warning instead of staying silent — the operator's lever
-    there is stopping (not just sleeping) a lane.
+    cached models currently serve a live lane or a running calibration) is
+    decided in favour of the lanes: the protection is what keeps wakes,
+    restarts, and calibration probes correct, and the cache genuinely has no
+    RAM to give back while its copies are in use by live processes. That is
+    a pressure state the cache cannot relieve, so it is logged as a warning
+    instead of staying silent — the operator's lever there is stopping (not
+    just sleeping) a lane or cancelling the calibration.
 
     Returns the names of the models that were evicted.
     """
@@ -553,9 +582,10 @@ async def _apply_ram_cache_plan(
         if spared:
             logger.warning(
                 "RAM cache cannot free host RAM right now: the plan no longer "
-                "covers %d model(s), but all of them are read by live lanes "
-                "(evicting would break their wakes and restarts). They are "
-                "released as soon as those lanes sleep or stop: %s",
+                "covers %d model(s), but all of them are read by a live lane "
+                "or a running calibration (evicting would break their wakes, "
+                "restarts, or probes). They are released as soon as those "
+                "lanes sleep or stop, or the calibration finishes: %s",
                 len(spared),
                 spared,
             )
@@ -730,7 +760,13 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
         asleep=asleep,
     )
 
-    reclaimed = await _apply_ram_cache_plan(model_cache, plan, _lane_models_with_live_processes(lane_manager))
+    # Union in the calibration reservations: a model under calibration reads
+    # its tmpfs entry with no lane handle or startup reservation behind it
+    # (see ModelRamCache.reserve_cache_use), so only the reservation pins it
+    # while a probe is running — reclaiming mid-session would rmtree the tree
+    # out from under the probe.
+    protected = _lane_models_with_live_processes(lane_manager) | model_cache.cache_use_reservations()
+    reclaimed = await _apply_ram_cache_plan(model_cache, plan, protected)
     if reclaimed:
         logger.info(
             "Re-planned RAM cache: host_ram_available=%.0fMB, reserved_for_sleep=%.0fMB "

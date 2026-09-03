@@ -3152,105 +3152,117 @@ def calibrate_with_tp_escalation(
     # blacklisted.  Pass the cache object through; it will call
     # ensure_cached_sync only when needed.
     _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
-    cal_kwargs: dict[str, Any] = dict(
-        vllm_binary=vllm_binary,
-        port=port,
-        log_dir=log_dir,
-        sleep_level=sleep_level,
-        ready_timeout_s=ready_timeout_s,
-        nccl_p2p_available=nccl_p2p_available,
-        model_cache=_mc,
-        cancel_event=cancel_event,
-    )
+    if _mc is not None:
+        # The probes below read this model's tmpfs entry, but calibration
+        # has no lane handle and no startup reservation, so the re-plan's
+        # live-lane protection set cannot see it. Reserve the entry for
+        # the whole session so a tick between probes cannot reclaim it
+        # out from under a running probe.
+        _mc.reserve_cache_use(model_name)
+    try:
 
-    tp = max_tp
-    current_plan = {**plan, "tensor_parallel_size": tp}
-    result = _try_calibrate(current_plan, **cal_kwargs)
-
-    # Auto-retry with --trust-remote-code when vLLM demands it.
-    # vLLM phrasings seen in the wild:
-    #   "Please pass the argument `trust_remote_code=True`..."
-    #   "The repository ... contains custom code which must be executed..."
-    _err = result.error or ""
-    if not result.success and ("trust_remote_code=True" in _err or "contains custom code" in _err):
-        logger.info(
-            "  %s requires trust_remote_code — adding flag and retrying",
-            model_name,
+        cal_kwargs: dict[str, Any] = dict(
+            vllm_binary=vllm_binary,
+            port=port,
+            log_dir=log_dir,
+            sleep_level=sleep_level,
+            ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
+            model_cache=_mc,
+            cancel_event=cancel_event,
         )
-        extra = list(plan.get("extra_args") or [])
-        if "--trust-remote-code" not in extra:
-            extra.append("--trust-remote-code")
-        plan = {**plan, "extra_args": extra}
+
+        tp = max_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
 
-    # If max tp fails, try the configured (original) tp before giving up.
-    # Models may have attention-head counts that aren't divisible by max_tp
-    # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-    _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
-        result.error or ""
-    )
-    if not result.success and not _fatal and tp > original_tp:
-        logger.info(
-            "  %s failed at max tp=%d — falling back to configured tp=%d",
-            model_name,
-            tp,
-            original_tp,
+        # Auto-retry with --trust-remote-code when vLLM demands it.
+        # vLLM phrasings seen in the wild:
+        #   "Please pass the argument `trust_remote_code=True`..."
+        #   "The repository ... contains custom code which must be executed..."
+        _err = result.error or ""
+        if not result.success and ("trust_remote_code=True" in _err or "contains custom code" in _err):
+            logger.info(
+                "  %s requires trust_remote_code — adding flag and retrying",
+                model_name,
+            )
+            extra = list(plan.get("extra_args") or [])
+            if "--trust-remote-code" not in extra:
+                extra.append("--trust-remote-code")
+            plan = {**plan, "extra_args": extra}
+            current_plan = {**plan, "tensor_parallel_size": tp}
+            result = _try_calibrate(current_plan, **cal_kwargs)
+
+        # If max tp fails, try the configured (original) tp before giving up.
+        # Models may have attention-head counts that aren't divisible by max_tp
+        # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
+        _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
+            result.error or ""
         )
-        tp = original_tp
-        current_plan = {**plan, "tensor_parallel_size": tp}
-        result = _try_calibrate(current_plan, **cal_kwargs)
+        if not result.success and not _fatal and tp > original_tp:
+            logger.info(
+                "  %s failed at max tp=%d — falling back to configured tp=%d",
+                model_name,
+                tp,
+                original_tp,
+            )
+            tp = original_tp
+            current_plan = {**plan, "tensor_parallel_size": tp}
+            result = _try_calibrate(current_plan, **cal_kwargs)
 
-    if not result.success or _fatal:
-        return result
+        if not result.success or _fatal:
+            return result
 
-    # Max tp succeeded — now binary-search down to find minimum tp.
-    if tp > original_tp:
-        logger.info(
-            "  %s works at tp=%d — searching for minimum tp (from %d)",
-            model_name,
-            tp,
-            original_tp,
-        )
-    best_result = result
-    best_tp = tp
+        # Max tp succeeded — now binary-search down to find minimum tp.
+        if tp > original_tp:
+            logger.info(
+                "  %s works at tp=%d — searching for minimum tp (from %d)",
+                model_name,
+                tp,
+                original_tp,
+            )
+        best_result = result
+        best_tp = tp
 
-    # Binary search: try progressively smaller tp values.
-    # tp must be a power of 2 in vLLM, so we halve each step.
-    low_tp = original_tp
-    high_tp = tp
-    while low_tp < high_tp:
-        if cancel_event is not None and cancel_event.is_set():
-            break
-        mid_tp = high_tp // 2
-        if mid_tp < low_tp:
-            break
-        logger.info(
-            "  %s trying tp=%d (search range %d–%d)",
-            model_name,
-            mid_tp,
-            low_tp,
-            high_tp,
-        )
-        mid_plan = {**plan, "tensor_parallel_size": mid_tp}
-        mid_result = _try_calibrate(mid_plan, **cal_kwargs)
-        if mid_result.success:
-            best_result = mid_result
-            best_tp = mid_tp
-            high_tp = mid_tp
-        else:
-            low_tp = mid_tp * 2
+        # Binary search: try progressively smaller tp values.
+        # tp must be a power of 2 in vLLM, so we halve each step.
+        low_tp = original_tp
+        high_tp = tp
+        while low_tp < high_tp:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            mid_tp = high_tp // 2
+            if mid_tp < low_tp:
+                break
+            logger.info(
+                "  %s trying tp=%d (search range %d–%d)",
+                model_name,
+                mid_tp,
+                low_tp,
+                high_tp,
+            )
+            mid_plan = {**plan, "tensor_parallel_size": mid_tp}
+            mid_result = _try_calibrate(mid_plan, **cal_kwargs)
+            if mid_result.success:
+                best_result = mid_result
+                best_tp = mid_tp
+                high_tp = mid_tp
+            else:
+                low_tp = mid_tp * 2
 
-    if best_tp != original_tp:
-        logger.info(
-            "  %s optimal tp=%d (configured=%d, max=%d)",
-            model_name,
-            best_tp,
-            original_tp,
-            max_tp,
-        )
+        if best_tp != original_tp:
+            logger.info(
+                "  %s optimal tp=%d (configured=%d, max=%d)",
+                model_name,
+                best_tp,
+                original_tp,
+                max_tp,
+            )
 
-    return best_result
+        return best_result
+    finally:
+        if _mc is not None:
+            _mc.release_cache_use(model_name)
 
 
 def auto_calibrate_models(
