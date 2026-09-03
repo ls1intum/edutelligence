@@ -246,3 +246,39 @@ class TestTheLane:
 
         # The ordinary deployment: one model, so the default resolves it.
         assert policy.lane() == frozenset({("15", "97")})
+
+
+class TestAliases:
+    """A session can be created with a name the platform does not use.
+
+    The scheduler's figures are keyed by the model's canonical name, and a
+    count under any other key matches no lane — the discount would then
+    quietly do nothing and the runner would go back to pausing itself.
+    """
+
+    ROWS = [
+        {
+            "provider_id": 15,
+            "model_id": 97,
+            "model_name": "Qwen/Qwen3.8-27B",
+            "aliases": "qwen-big",
+            "provider_type": "logosnode",
+        }
+    ]
+
+    def test_an_alias_resolves_to_the_name_the_platform_uses(self):
+        policy = model_policy.evaluate(self.ROWS)
+
+        assert policy.canonical("qwen-big") == "Qwen/Qwen3.8-27B"
+        assert policy.canonical("Qwen/Qwen3.8-27B") == "Qwen/Qwen3.8-27B"
+
+    def test_an_unknown_name_is_left_as_it_is(self):
+        policy = model_policy.evaluate(self.ROWS)
+
+        assert policy.canonical("something/else") == "something/else"
+        assert policy.canonical(None) == ""
+
+    def test_the_lane_can_still_be_asked_for_by_alias(self):
+        policy = model_policy.evaluate(self.ROWS)
+
+        assert policy.lane("qwen-big") == frozenset({("15", "97")})

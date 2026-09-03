@@ -63,16 +63,24 @@ session is never resumed into a permission it no longer has. The **queue** is
 deliberately not filtered — models share GPUs, so a person waiting on any of
 them is a person this runner gets out of the way of.
 
-**Minus its own share.** The orchestrator reports how busy a model is; it
-does not report *who* is keeping it busy, and nothing in its payload could
-say. So the runner subtracts itself: a running session has at most one
-request outstanding, either being served or waiting for a slot, and that
-many are taken off the figures before anything is decided. Without it a
-runner reads its own sessions as user traffic — it pauses itself for them,
-the load it reacted to leaves with them, it resumes, and it does it again —
-and its own sessions queueing read as "users are queueing", which is the
-signal that means stop everything. A real user waiting still shows, and
-still stops it.
+**Minus its own share, where that is the right question.** The orchestrator
+reports how busy a model is; it does not report *who* is keeping it busy,
+and nothing in its payload could say. So the runner estimates: a running
+session has at most one request outstanding, per model, and that many come
+off the figures.
+
+Whether to *hand capacity back* is a question about other people, so it is
+decided on that adjusted figure. Without it a runner reads its own sessions
+as user traffic — it pauses itself for them, the load it reacted to leaves
+with them, it resumes, and it does it again — and its own sessions queueing
+read as "users are queueing", the signal that means stop everything. A real
+user waiting still shows, and still stops it.
+
+Whether to *take more on* is a question about the model, and the estimate is
+an upper bound: a running session may be between turns, running tests,
+making no request at all. Subtracting too much there would add work to a
+lane that is genuinely busy, so admission uses the figure as measured. What
+bounds the runner's own concurrency is the parallel ceiling, not the load.
 
 | Condition | What happens |
 |---|---|

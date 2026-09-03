@@ -104,7 +104,10 @@ def _ours_by_model(running: list[dict[str, Any]], policy: model_policy.ModelPoli
     """
     counted: dict[str, int] = {}
     for session in running:
-        name = policy.resolve(session.get("model"))
+        # Under the name the platform's own figures use: a session created
+        # with an alias would otherwise be counted under a key that matches
+        # no lane, and the discount would quietly do nothing.
+        name = policy.canonical(policy.resolve(session.get("model")))
         if name:
             counted[name] = counted.get(name, 0) + 1
     return counted
@@ -540,13 +543,25 @@ class SessionManager:
         running = await db.sessions_in_status(SessionStatus.RUNNING)
         paused = await db.sessions_in_status(SessionStatus.PAUSED)
 
-        # The platform's load, minus this runner's own share of it — counted
-        # per model, because five sessions on one model say nothing about
-        # another. Without it the runner reads its own sessions as user
-        # traffic: it pauses itself, the load it reacted to vanishes with
-        # them, it resumes, and it does it again.
-        reading = await capacity.read_load(lane=policy.lane(), ours=_ours_by_model(running, policy))
-        self._last_reading = reading
+        # Two readings of the same moment, because the two decisions are
+        # not the same question.
+        #
+        # Whether to *hand capacity back* is a question about other people:
+        # counting our own sessions there makes the runner pause itself, and
+        # the load it reacted to leaves with them, and it resumes, and does
+        # it again. So that decision is made on the platform's load minus
+        # our own share of it, per model.
+        #
+        # Whether to *take more* is a question about the model: it does not
+        # matter who filled it, and our own share is an estimate — a running
+        # session may be between turns, running tests, making no request at
+        # all. Over-subtracting there would let the runner add work to a
+        # lane that is genuinely busy, so admission uses the figure as
+        # measured. Our own concurrency is bounded by the parallel ceiling,
+        # not by this.
+        measured = await capacity.read_load(lane=policy.lane())
+        reading = capacity.without_our_own(measured, _ours_by_model(running, policy))
+        self._last_reading = measured
 
         if control.paused:
             # The hard half of the kill switch: hand the platform back
@@ -599,11 +614,9 @@ class SessionManager:
                     # reading that counts it would stop the batch on its own
                     # load — leaving the rest paused for nothing.
                     resumed = await db.sessions_in_status(SessionStatus.RUNNING)
-                    reading = await capacity.read_load(
-                        lane=policy.lane(),
-                        ours=_ours_by_model(resumed, policy),
-                    )
-                    self._last_reading = reading
+                    measured = await capacity.read_load(lane=policy.lane())
+                    reading = capacity.without_our_own(measured, _ours_by_model(resumed, policy))
+                    self._last_reading = measured
                     if not capacity.resume_decision(reading)[0]:
                         break
                 if woken:
@@ -650,10 +663,8 @@ class SessionManager:
             wanted = admission_policy.resolve(candidate.get("model"))
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
-            reading = await capacity.read_load(
-                lane=admission_policy.lane(wanted),
-                ours=_ours_by_model(running, admission_policy),
-            )
+            # As measured: adding to a lane is a question about the lane.
+            reading = await capacity.read_load(lane=admission_policy.lane(wanted))
             self._last_reading = reading
             blocked = control.admission_block()
             if blocked:

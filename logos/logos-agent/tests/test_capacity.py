@@ -448,3 +448,47 @@ class TestNotReactingToItself:
         reading = capacity.parse_scheduler_state(self.busy(4.0), lane=self.LANE)
 
         assert reading.busy_slots == 4
+
+
+class TestWhichDecisionGetsTheDiscount:
+    """Handing capacity back and taking more are different questions.
+
+    Whether to pause is about other people: counting our own sessions there
+    makes the runner stop for itself. Whether to admit is about the model:
+    it does not matter who filled it, and our share is an estimate — a
+    running session may be between turns, making no request at all.
+    """
+
+    @staticmethod
+    def busy(busy_slots: int, queue: int = 0) -> capacity.Reading:
+        return capacity.Reading(load=busy_slots / 10, busy_slots=busy_slots, total_slots=10, queue_total=queue, ok=True)
+
+    def test_our_own_load_comes_off(self):
+        reading = capacity.without_our_own(self.busy(5), {"qwen": 2})
+
+        assert reading.busy_slots == 3 and reading.load == 0.3
+
+    def test_our_own_queueing_is_not_a_user_waiting(self):
+        reading = capacity.without_our_own(self.busy(2, queue=1), {"qwen": 3})
+
+        assert reading.queue_total == 0
+
+    def test_a_user_waiting_behind_us_still_counts(self):
+        reading = capacity.without_our_own(self.busy(2, queue=3), {"qwen": 3})
+
+        assert reading.queue_total == 2 and reading.saturated
+
+    def test_nothing_of_ours_changes_nothing(self):
+        before = self.busy(4)
+
+        assert capacity.without_our_own(before, {}) is before
+
+    def test_an_unreadable_platform_is_left_alone(self):
+        assert capacity.without_our_own(capacity.UNKNOWN, {"qwen": 3}) is capacity.UNKNOWN
+
+    def test_it_never_subtracts_more_than_is_there(self):
+        # The count is an upper bound on what is ours: a session between
+        # turns has no request outstanding.
+        reading = capacity.without_our_own(self.busy(1, queue=0), {"qwen": 9})
+
+        assert reading.busy_slots == 0 and reading.queue_total == 0

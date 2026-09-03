@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 
@@ -179,7 +179,7 @@ def parse_scheduler_state(
     another, and subtracting them there would turn somebody else's busy
     lane into an idle-looking one.
     """
-    mine = {name.strip().lower(): count for name, count in (ours or {}).items()}
+    mine = {str(name).strip().lower(): int(count) for name, count in (ours or {}).items()}
     if lane is not None and not lane:
         # A key that reaches no local deployment has no lane to measure and
         # nothing it could legitimately run on. Refusing here rather than
@@ -310,6 +310,35 @@ def parse_scheduler_state(
         queue_total=queue_total,
         ok=True,
         detail=f"{busy}/{total} slots busy{lane_note}",
+    )
+
+
+def without_our_own(reading: Reading, ours: Mapping[str, int]) -> Reading:
+    """The reading again, with this runner's own requests taken out.
+
+    A convenience over re-reading the platform: the per-model discount lives
+    in :func:`parse_scheduler_state`, and this applies it to a reading that
+    was already taken — used where reacting to our own load is the mistake
+    (pausing, resuming) and not where it would flatter us (admitting).
+
+    The count is an estimate. A running session may be between turns with no
+    request outstanding at all, so this is an upper bound on what is ours:
+    right for deciding not to pause, wrong for deciding to add more.
+    """
+    total_ours = sum(max(0, count) for count in (ours or {}).values())
+    if total_ours <= 0 or not reading.ok:
+        return reading
+    serving = min(total_ours, reading.busy_slots)
+    waiting = min(total_ours - serving, reading.queue_total)
+    if serving == 0 and waiting == 0:
+        return reading
+    busy = reading.busy_slots - serving
+    return replace(
+        reading,
+        load=(busy / reading.total_slots) if reading.total_slots else reading.load,
+        busy_slots=busy,
+        queue_total=reading.queue_total - waiting,
+        detail=f"{busy}/{reading.total_slots} in flight besides this runner's {total_ours}",
     )
 
 
