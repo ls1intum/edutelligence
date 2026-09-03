@@ -52,12 +52,16 @@ That filter matters. A fleet holds embedding models, rerankers and chat models
 that share nothing but a building, and summing them answers a question nobody
 asked — "6 of 120 slots busy" reads as an idle platform when all six of those
 requests are on the one model the agent is served by, which is half its lane.
-So the ratio counts the models the runner's key can reach, and falls back to
-the fleet-wide figure only when none of them is resident: there is nothing of
-ours to measure then, and the older signal is the better of the two answers
-available. The **queue** is deliberately not filtered — models share GPUs, so
-a person waiting on any of them is a person this runner gets out of the way
-of.
+So the ratio counts the deployments the runner's key can reach — by provider
+and model id, not by name, because the same model is served by providers this
+key has no permission for and their idle slots would make a busy lane look
+free. It falls back to the fleet-wide figure only when none of those
+deployments is resident: there is nothing of ours to measure then, and the
+older signal is the better of the two answers available. A key that reaches
+*nothing* is a different question and is refused outright, so a paused
+session is never resumed into a permission it no longer has. The **queue** is
+deliberately not filtered — models share GPUs, so a person waiting on any of
+them is a person this runner gets out of the way of.
 
 | Condition | What happens |
 |---|---|

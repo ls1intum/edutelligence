@@ -506,6 +506,11 @@ async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[li
     add(discussion, "comments")
     entries.sort(key=lambda entry: entry["at"] or datetime.min.replace(tzinfo=timezone.utc))
     # The newest are the ones still open; an old conversation is history.
+    # Said rather than silently dropped, though: an early review comment
+    # nobody answered is exactly the kind of thing that falls off the end,
+    # and the task built from this claims to be complete.
+    if len(entries) > limit:
+        missing = [*missing, f"{len(entries) - limit} older comment(s), beyond what fits in a task"]
     return entries[-limit:], missing
 
 

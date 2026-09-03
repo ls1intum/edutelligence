@@ -249,13 +249,48 @@ class SessionManager:
 
     async def _freeze_running(self) -> None:
         running = await db.sessions_in_status(SessionStatus.RUNNING)
-        if not running:
+        if running:
+            logger.info("standing down: pausing %s running session(s)", len(running))
+            await asyncio.gather(
+                *(self._pause(session, "the runner is restarting") for session in running),
+                return_exceptions=True,
+            )
+        await self._freeze_starting()
+
+    async def _freeze_starting(self) -> None:
+        """Freeze containers whose row has not caught up with them yet.
+
+        A launch stores the container id as part of the move to running, so
+        between the start and that move there is a live agent the row knows
+        nothing about — and `_pause` cannot help, because a starting row may
+        not become paused. The container is frozen anyway, without touching
+        the row: the restart reconciliation already knows this shape (a
+        paused container under a starting row) and normalizes it through
+        running, so the session resumes rather than losing its turn to the
+        gateway being replaced.
+        """
+        starting = {int(session["id"]) for session in await db.sessions_in_status(SessionStatus.STARTING)}
+        if not starting:
             return
-        logger.info("standing down: pausing %s running session(s)", len(running))
-        await asyncio.gather(
-            *(self._pause(session, "the runner is restarting") for session in running),
-            return_exceptions=True,
-        )
+        try:
+            containers = await docker_engine.list_managed_containers()
+        except Exception as exc:
+            logger.warning("could not look for starting containers before shutting down: %s", exc)
+            return
+        for container in containers:
+            labels = container.get("Labels") or {}
+            if labels.get("logos.agent.helper"):
+                continue
+            label = labels.get("logos.agent.session") or ""
+            if not label.isdigit() or int(label) not in starting:
+                continue
+            if (container.get("State") or "").lower() != "running":
+                continue
+            try:
+                await docker_engine.pause_container(container.get("Id", ""))
+                logger.info("froze the container of starting session %s for the restart", label)
+            except Exception as exc:
+                logger.warning("could not freeze the container of starting session %s: %s", label, exc)
 
     async def _reconcile(self) -> None:
         """Re-attach to reality after a restart.
@@ -449,7 +484,7 @@ class SessionManager:
         # Measured on the lane these sessions are served by, not on the
         # whole fleet: an embedding model being idle says nothing about
         # whether another agent session is safe to start.
-        reading = await capacity.read_load(models=model_policy.current().local_models)
+        reading = await capacity.read_load(lane=model_policy.current().lane())
         self._last_reading = reading
         # What an operator has asked for right now — the kill switch and the
         # ceiling they set — read before anything is decided.
@@ -498,7 +533,7 @@ class SessionManager:
                         break
                     await self._resume(session, why)
                     live += 1
-                    reading = await capacity.read_load(models=model_policy.current().local_models)
+                    reading = await capacity.read_load(lane=model_policy.current().lane())
                     self._last_reading = reading
                     if not capacity.resume_decision(reading)[0]:
                         break
@@ -515,15 +550,18 @@ class SessionManager:
         #    under the lock makes every claim pay for its own observation;
         #    the backlog drains at one fresh reading per admission.
         async with self._admission_lock:
-            reading = await capacity.read_load(models=model_policy.current().local_models)
-            self._last_reading = reading
             # Permissions are data: the agent key can be granted a cloud
             # provider long after this service started, so the local-only
             # policy is re-established on the pass that would spend it, not
-            # once at startup.
+            # once at startup. Re-established *before* the load is read,
+            # because the policy is what says which lane to read: a key
+            # moved from one local model to another would otherwise be
+            # admitted against the load of the model it no longer uses.
             policy = await model_policy.refresh()
             if not policy.ok:
                 return
+            reading = await capacity.read_load(lane=policy.lane())
+            self._last_reading = reading
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
             blocked = control.admission_block()
@@ -1097,6 +1135,8 @@ class SessionManager:
         # what it is for.
         lines: asyncio.Queue[str | None] = asyncio.Queue(maxsize=LOG_QUEUE_MAX)
 
+        reader_done = asyncio.Event()
+
         async def read() -> None:
             # The stream is followed in its own task so the writer below can
             # wake on a timeout: awaiting the iterator directly would block
@@ -1112,7 +1152,9 @@ class SessionManager:
                 # Never blocking on a full queue: the end-of-stream marker
                 # is what lets the writer finish, and waiting for room in a
                 # queue nobody is draining any more would hang the task
-                # that is trying to end.
+                # that is trying to end. The flag is what the writer really
+                # goes by, because a full queue drops the marker.
+                reader_done.set()
                 try:
                     lines.put_nowait(None)
                 except asyncio.QueueFull:
@@ -1135,6 +1177,11 @@ class SessionManager:
                     line = await asyncio.wait_for(lines.get(), timeout=LOG_FLUSH_S)
                 except (TimeoutError, asyncio.TimeoutError):
                     await flush()
+                    if reader_done.is_set() and lines.empty():
+                        # The stream ended and everything it produced has
+                        # been written. Waiting for a marker that a full
+                        # queue swallowed would wait forever.
+                        return
                     continue
                 if line is None:
                     await flush()

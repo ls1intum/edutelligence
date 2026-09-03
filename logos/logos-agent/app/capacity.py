@@ -15,11 +15,16 @@ spare to give away.
 fleet answers a question nobody asked: an embedding model, a reranker and a
 120B chat model share nothing but a building, and "1 of 60 slots busy" says
 only that most of the fleet is asleep. What decides whether another agent
-session is safe to start is the model that session will actually be served
-by — so the reading is filtered to the models the runner's own key can
-reach, and falls back to the fleet-wide figure only when none of them is
-resident (there is nothing of ours to measure, and the old signal is the
-better of the two available answers).
+session is safe to start is the deployment that session will actually be
+served by — so the reading counts exactly the deployments the runner's key
+can reach, by provider and model id rather than by name. A name is not
+enough: the same model is served by providers this key has no permission
+for, and their idle slots would make a busy lane look free.
+
+It falls back to the fleet-wide figure only when none of those deployments
+is resident — there is nothing of ours to measure then, and the older signal
+is the better of the two available answers. A key that reaches *nothing*
+is a different thing entirely, and fails closed.
 """
 
 from __future__ import annotations
@@ -60,12 +65,13 @@ class Reading:
 UNKNOWN = Reading(load=1.0, busy_slots=0, total_slots=0, queue_total=0, ok=False, detail="orchestrator unreachable")
 
 
-async def read_load(timeout_s: float = 5.0, models: frozenset[str] | None = None) -> Reading:
+async def read_load(timeout_s: float = 5.0, lane: frozenset[tuple[str, str]] | None = None) -> Reading:
     """Ask the orchestrator how busy the serving lane we would use is.
 
-    ``models`` are the names the runner's key can be served by; without them
-    the reading is fleet-wide, which is what it was before and what it falls
-    back to when none of ours is loaded.
+    ``lane`` holds the (provider id, model id) pairs the runner's key can be
+    served by. ``None`` asks for the fleet-wide figure, which is what this
+    answered before it knew about lanes; an empty set says the key reaches
+    nothing at all, which is not the same question and is refused.
     """
     if not settings.agent_api_key:
         return Reading(
@@ -95,22 +101,37 @@ async def read_load(timeout_s: float = 5.0, models: frozenset[str] | None = None
         logger.warning("capacity read failed: %s", exc)
         return UNKNOWN
 
-    return parse_scheduler_state(payload, models=models)
+    return parse_scheduler_state(payload, lane=lane)
 
 
-def parse_scheduler_state(payload: dict, models: frozenset[str] | None = None) -> Reading:
+def parse_scheduler_state(payload: dict, lane: frozenset[tuple[str, str]] | None = None) -> Reading:
     """Turn the orchestrator's debug payload into a single load figure.
 
     Kept separate from the HTTP call so it can be tested against recorded
     payloads, and so a change in the orchestrator's shape surfaces as a test
     failure rather than as a runner that silently believes the fleet is idle.
 
-    ``models`` narrows the ratio to the lane the runner's sessions are served
-    by. The queue is deliberately *not* narrowed: models share GPUs, so a
-    person waiting on any of them is a person this runner should get out of
-    the way of.
+    ``lane`` narrows the ratio to the deployments the runner's sessions are
+    served by, matched on the payload's own provider and model ids. The
+    queue is deliberately *not* narrowed: models share GPUs, so a person
+    waiting on any of them is a person this runner should get out of the way
+    of.
     """
-    wanted = {name.strip().lower() for name in (models or frozenset()) if name and name.strip()}
+    if lane is not None and not lane:
+        # A key that reaches no local deployment has no lane to measure and
+        # nothing it could legitimately run on. Refusing here rather than
+        # measuring the fleet keeps a paused session from being resumed into
+        # a permission it no longer has.
+        return Reading(
+            load=1.0,
+            busy_slots=0,
+            total_slots=0,
+            queue_total=int(payload.get("queue_total") or 0),
+            ok=True,
+            detail="the runner's key reaches no local deployment",
+            reclaimable=False,
+        )
+    wanted = set(lane or ())
     queue_total = int(payload.get("queue_total") or 0)
     providers = ((payload.get("logosnode") or {}).get("providers")) or {}
 
@@ -118,9 +139,9 @@ def parse_scheduler_state(payload: dict, models: frozenset[str] | None = None) -
     total = 0
     fleet_busy = 0
     fleet_total = 0
-    for provider in providers.values():
+    for provider_id, provider in providers.items():
         deployments = (provider or {}).get("models") or {}
-        for model in deployments.values():
+        for model_id, model in deployments.items():
             if not isinstance(model, dict):
                 continue
             # Only loaded models hold capacity. An unloaded one contributes
@@ -136,7 +157,7 @@ def parse_scheduler_state(payload: dict, models: frozenset[str] | None = None) -
             queue_total += int(model.get("queue_depth") or 0)
             fleet_total += capacity
             fleet_busy += active
-            if wanted and str(model.get("model_name") or "").strip().lower() not in wanted:
+            if wanted and (str(provider_id), str(model_id)) not in wanted:
                 continue
             total += capacity
             busy += active

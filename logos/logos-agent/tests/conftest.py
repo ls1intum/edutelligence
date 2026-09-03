@@ -33,6 +33,10 @@ def local_model_policy(monkeypatch):
     policy = model_policy.ModelPolicy(
         local_models=frozenset({"local-model"}),
         offered=("local-model",),
+        # The lane a capacity reading is taken on. An empty one means the
+        # key reaches nothing, which fails closed — right in production,
+        # and not what any of these tests are about.
+        local_deployments=frozenset({("1", "1")}),
         ok=True,
         unknown=False,
         detail="test policy: one local model",

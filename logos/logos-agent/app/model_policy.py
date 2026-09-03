@@ -85,12 +85,28 @@ class ModelPolicy:
     # The local model names without their aliases, in display order. This is
     # what the UI offers and what a single-model deployment defaults to.
     offered: tuple[str, ...] = ()
+    # The exact deployments behind those names, as (provider id, model id).
+    # A name is not enough to measure load with: the same model is served by
+    # providers this key cannot reach, and counting their idle slots would
+    # make a busy lane look free.
+    local_deployments: frozenset[tuple[str, str]] = frozenset()
     ok: bool = False
     detail: str = "model policy not evaluated yet"
     # Set when the policy could not be established at all (no database, no
     # key). Distinguished from a clean 'nothing reachable' so the UI and the
     # logs can say which it was.
     unknown: bool = True
+
+    def lane(self) -> frozenset[tuple[str, str]] | None:
+        """The deployments a session of this runner would be served by.
+
+        An empty set means the key reaches nothing, which capacity reads as
+        "no lane" and fails closed on — the same answer as a policy that
+        could not be established at all. ``None`` is reserved for "do not
+        filter", which only a caller without a policy has any business
+        asking for.
+        """
+        return self.local_deployments if self.ok else frozenset()
 
     @property
     def default_model(self) -> str:
@@ -182,8 +198,29 @@ def classify(rows: Iterable[dict[str, Any]]) -> tuple[frozenset[str], frozenset[
     return local_only, frozenset(cloud), offered
 
 
+def _deployments_of(rows: Iterable[dict[str, Any]], local_names: frozenset[str]) -> frozenset[tuple[str, str]]:
+    """The (provider, model) pairs behind the locally served names.
+
+    Keyed the way the scheduler's own payload is keyed, so a load reading
+    can count exactly these deployments and nothing else.
+    """
+    pairs: set[tuple[str, str]] = set()
+    for row in rows:
+        if not is_local_provider_type(row.get("provider_type")):
+            continue
+        names = _names_of(row)
+        if not names or names[0] not in local_names:
+            continue
+        provider_id, model_id = row.get("provider_id"), row.get("model_id")
+        if provider_id is None or model_id is None:
+            continue
+        pairs.add((str(provider_id), str(model_id)))
+    return frozenset(pairs)
+
+
 def evaluate(rows: Iterable[dict[str, Any]]) -> ModelPolicy:
     """Turn reachable deployments into the runner's local-only decision."""
+    rows = list(rows)
     local, cloud, offered = classify(rows)
     if cloud:
         listed = ", ".join(sorted(cloud)[:8])
@@ -209,6 +246,7 @@ def evaluate(rows: Iterable[dict[str, Any]]) -> ModelPolicy:
         local_models=local,
         cloud_models=frozenset(),
         offered=offered,
+        local_deployments=_deployments_of(rows, local),
         ok=True,
         unknown=False,
         detail=f"{len(offered)} locally served model(s) reachable, no cloud provider",

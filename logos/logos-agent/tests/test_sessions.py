@@ -586,6 +586,39 @@ class TestStandingDown:
         # that cannot be frozen in time is left running, as before.
         await asyncio.wait_for(sessions.manager._stand_down(), timeout=2.0)
 
+    async def test_a_container_whose_row_is_still_starting_is_frozen_too(self, monkeypatch):
+        # Between the container start and the move to running, the row has
+        # no container id and may not become paused — but the agent is live
+        # and talking to a gateway that is about to be replaced.
+        from app import sessions
+
+        paused: list = []
+
+        async def rows(status):
+            return [{"id": 9}] if status is sessions.SessionStatus.STARTING else []
+
+        async def containers():
+            return [
+                {"Id": "cid-9", "State": "running", "Labels": {"logos.agent.session": "9"}},
+                {"Id": "cid-helper", "State": "running", "Labels": {"logos.agent.helper": "prepare"}},
+                {"Id": "cid-8", "State": "exited", "Labels": {"logos.agent.session": "8"}},
+            ]
+
+        async def fake_pause(cid, **_kwargs):
+            paused.append(cid)
+            return True
+
+        monkeypatch.setattr(sessions.db, "sessions_in_status", rows)
+        monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", containers)
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setitem(sessions.manager._supervisors, 9, None)
+
+        await sessions.manager._stand_down()
+
+        # Only the live session container: not the helper, not a container
+        # that has already exited.
+        assert paused == ["cid-9"]
+
     async def test_an_unreadable_database_does_not_break_shutdown(self, monkeypatch):
         from app import sessions
 
@@ -627,6 +660,30 @@ class TestBackpressure:
         await asyncio.wait_for(sessions.manager._collect_logs(7, "cid-7"), timeout=5.0)
 
         assert written == [f"line {index}" for index in range(20)]
+
+    async def test_the_end_of_the_stream_is_not_lost_to_a_full_queue(self, monkeypatch):
+        # With no room for the end-of-stream marker, the writer has to go by
+        # the reader being finished instead — waiting for a marker that was
+        # dropped would wait forever.
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "LOG_FLUSH_S", 0.01)
+        monkeypatch.setattr(sessions, "LOG_QUEUE_MAX", 1)
+        monkeypatch.setattr(sessions, "LOG_BATCH_LINES", 50)
+        written: list[str] = []
+
+        async def add_event(_session_id, _kind, payload):
+            written.extend(payload["lines"])
+
+        async def one_line(_cid, **_kwargs):
+            yield "the only line"
+
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.docker_engine, "stream_logs", one_line)
+
+        await asyncio.wait_for(sessions.manager._collect_logs(7, "cid-7"), timeout=5.0)
+
+        assert written == ["the only line"]
 
 
 class TestAnAnswerThatWasNeverWritten:
@@ -1091,7 +1148,7 @@ class TestAgentPhaseIsolation:
         paused: list = []
         events: list = []
 
-        async def fake_reading(_timeout_s=5.0, models=None):
+        async def fake_reading(_timeout_s=5.0, lane=None):
             return capacity.Reading(load=0.99, busy_slots=10, total_slots=10, queue_total=0, ok=True)
 
         async def fake_in_status(status):
@@ -2008,7 +2065,7 @@ class TestOverlappingAdmission:
         decided_loads: list = []
         real_start_decision = capacity.start_decision
 
-        async def fake_read_load(models=None):
+        async def fake_read_load(lane=None):
             return readings.pop(0) if len(readings) > 1 else readings[0]
 
         def spy_start_decision(reading, **kwargs):

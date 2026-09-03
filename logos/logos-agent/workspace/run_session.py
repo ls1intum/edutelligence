@@ -450,24 +450,25 @@ _spent = {"in": 0, "out": 0}
 
 
 def _report_usage(message: dict) -> None:
-    """Print what this turn cost, if it changed the running total.
+    """Print what has been spent so far, when it changes.
 
-    Input tokens are the context the model was given, so the largest turn is
-    the honest figure for a session rather than the sum of every turn's
-    re-read of the same conversation. Output tokens do add up: each turn
-    writes something new.
+    Both sides accumulate, because that is what the agent is charged for and
+    what the result file reports at the end: a turn's input is billed as
+    input even though most of it is the conversation being re-read. Taking
+    the largest turn instead would read lower here than in the final total,
+    and a number that jumps when the session ends is worse than no number.
     """
     usage = message.get("usage")
     if not isinstance(usage, dict):
         return
-    context = sum(
+    read = sum(
         value
         for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
         if isinstance(value := usage.get(key), int)
     )
     written = usage.get("output_tokens")
     before = dict(_spent)
-    _spent["in"] = max(_spent["in"], context)
+    _spent["in"] += read
     _spent["out"] += written if isinstance(written, int) else 0
     if _spent != before:
         print(f"[usage] in={_spent['in']} out={_spent['out']}", flush=True)
