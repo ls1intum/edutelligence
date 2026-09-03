@@ -3087,14 +3087,19 @@ class TestWorkspaceHousekeeping:
 
         return fake
 
-    async def test_a_finished_workspace_and_its_volume_are_removed(self, monkeypatch):
+    async def test_a_finished_workspace_gives_back_its_volume_and_keeps_its_history(self, monkeypatch):
         from app import sessions
 
         removed_volumes: list = []
+        archived: list = []
         deleted: list = []
 
         async def disposable(_cutoff):
             return [{"id": 3, "name": "issue-812-oom", "volume_name": "logos_agent_ws_issue-812-oom"}]
+
+        async def archive(workspace_id):
+            archived.append(workspace_id)
+            return True
 
         async def delete(workspace_id):
             deleted.append(workspace_id)
@@ -3104,18 +3109,46 @@ class TestWorkspaceHousekeeping:
             removed_volumes.append(name)
 
         monkeypatch.setattr(sessions.db, "disposable_workspaces", disposable)
+        monkeypatch.setattr(sessions.db, "archive_workspace", archive)
         monkeypatch.setattr(sessions.db, "delete_workspace", delete)
         monkeypatch.setattr(sessions.docker_engine, "remove_volume", remove_volume)
 
         await sessions.SessionManager().sweep_workspaces()
 
-        assert deleted == [3]
         assert removed_volumes == ["logos_agent_ws_issue-812-oom"]
+        assert archived == [3]
+        # Deleting the row would cascade into every finished session in it:
+        # the history, the trigger references that keep assignments from
+        # being worked twice, and any answer still waiting to be delivered.
+        assert deleted == []
+
+    async def test_a_volume_that_could_not_be_removed_is_tried_again(self, monkeypatch):
+        from app import sessions
+
+        archived: list = []
+
+        async def disposable(_cutoff):
+            return [{"id": 3, "name": "issue-812", "volume_name": "vol"}]
+
+        async def archive(workspace_id):
+            archived.append(workspace_id)
+            return True
+
+        async def failing_remove(_name, **_kwargs):
+            raise RuntimeError("volume is in use")
+
+        monkeypatch.setattr(sessions.db, "disposable_workspaces", disposable)
+        monkeypatch.setattr(sessions.db, "archive_workspace", archive)
+        monkeypatch.setattr(sessions.docker_engine, "remove_volume", failing_remove)
+
+        await sessions.SessionManager().sweep_workspaces()
+
+        # Not archived, so the next sweep finds it and tries the volume
+        # again — archiving first would leave a volume nothing tracks.
+        assert archived == []
 
     async def test_a_workspace_that_just_took_work_is_left_alone(self, monkeypatch):
         from app import sessions
-
-        removed: list = []
 
         async def disposable(_cutoff):
             return [{"id": 3, "name": "issue-812", "volume_name": "vol"}]
@@ -3124,16 +3157,17 @@ class TestWorkspaceHousekeeping:
             # A session was accepted into it between the query and here.
             return False
 
-        async def remove_volume(name, **_kwargs):
-            removed.append(name)
+        async def remove_volume(_name, **_kwargs):
+            return None
 
         monkeypatch.setattr(sessions.db, "disposable_workspaces", disposable)
-        monkeypatch.setattr(sessions.db, "delete_workspace", refuses)
+        monkeypatch.setattr(sessions.db, "archive_workspace", refuses)
         monkeypatch.setattr(sessions.docker_engine, "remove_volume", remove_volume)
 
+        # The archive refuses under the same row lock a session creation
+        # takes, so nothing is lost by the volume already being gone: the
+        # next preparation clones it again.
         await sessions.SessionManager().sweep_workspaces()
-
-        assert removed == []
 
 
 class TestMissingSessionImage:
@@ -3183,3 +3217,55 @@ class TestMissingSessionImage:
         assert len(settled) == 1
         message = settled[0][1]
         assert "not available on this host" in message and "build of the default branch" in message
+
+
+class TestResumeCeiling:
+    """An operator's ceiling holds for resumed sessions too.
+
+    Resuming is where it is easiest to overshoot: the check is naturally
+    written once, before a loop that then resumes everything.
+    """
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    async def test_only_as_many_are_resumed_as_the_ceiling_allows(self, monkeypatch, tmp_path):
+        from app import capacity, controls, sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        resumed: list = []
+
+        async def ceiling_of_two():
+            return {"mode": "running", "mode_reason": "", "max_parallel": 2, "updated_by": "tobias"}
+
+        async def in_status(status):
+            if status is SessionStatus.PAUSED:
+                return [{"id": i, "container_id": f"cid-{i}"} for i in (1, 2, 3, 4)]
+            return []
+
+        async def fake_unpause(cid, **_kwargs):
+            resumed.append(cid)
+            return True
+
+        monkeypatch.setattr(controls.db, "get_controls", ceiling_of_two)
+        controls.forget()
+        monkeypatch.setattr(
+            sessions.capacity,
+            "read_load",
+            self._async_value(capacity.Reading(load=0.0, busy_slots=0, total_slots=10, queue_total=0, ok=True)),
+        )
+        monkeypatch.setattr(sessions.db, "sessions_in_status", in_status)
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.docker_engine, "connect_network", self._async_value(True))
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", fake_unpause)
+
+        await sessions.SessionManager().scheduler_pass()
+
+        # Four were paused and the platform is idle; the ceiling is what
+        # stops the fourth, third and — here — everything past the second.
+        assert resumed == ["cid-1", "cid-2"]

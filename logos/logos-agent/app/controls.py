@@ -90,8 +90,16 @@ class Controls:
 
 DEFAULT = Controls()
 
-_cached: Controls = DEFAULT
+# What the runner assumes before it has ever managed to read its controls:
+# nothing may start, and nothing resumes. A process restarted during a
+# database outage must not decide that the persisted `paused` it cannot see
+# means `running` — the whole point of persisting the switch is that a
+# restart does not release it.
+UNREAD = Controls(mode=PAUSED, mode_reason="the runner has not read its controls yet")
+
+_cached: Controls = UNREAD
 _read_at: float = 0.0
+_ever_read: bool = False
 
 
 def cached() -> Controls:
@@ -106,16 +114,19 @@ async def current() -> Controls:
     controls are an operator's intent, and forgetting a pause because of a
     transient error would be the wrong way to fail.
     """
-    global _cached, _read_at
+    global _cached, _read_at, _ever_read
     now = time.monotonic()
-    if now - _read_at < _CACHE_S:
+    if _ever_read and now - _read_at < _CACHE_S:
         return _cached
     try:
         row = await db.get_controls()
     except Exception as exc:
+        # Keep whatever was last known — which, before the first successful
+        # read, is the state that blocks everything.
         logger.warning("could not read the runner controls; keeping the previous reading: %s", exc)
         return _cached
     _read_at = now
+    _ever_read = True
     if row is None:
         _cached = DEFAULT
         return _cached
@@ -159,13 +170,14 @@ async def _refresh() -> Controls:
 
 
 def forget() -> None:
-    """Drop the cache. For tests, and for a restart's first read."""
-    global _cached, _read_at
-    _cached, _read_at = DEFAULT, 0.0
+    """Drop the cache, back to the state that has read nothing."""
+    global _cached, _read_at, _ever_read
+    _cached, _read_at, _ever_read = UNREAD, 0.0, False
 
 
 __all__ = [
     "DRAINING",
+    "UNREAD",
     "MODES",
     "PAUSED",
     "RUNNING",

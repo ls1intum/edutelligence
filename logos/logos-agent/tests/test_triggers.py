@@ -13,7 +13,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from app import triggers
+from app import controls, triggers
 
 AGENT = "LogosOSSAgent"
 REPO = "ls1intum/edutelligence"
@@ -207,6 +207,16 @@ def allow_models(monkeypatch, ok: bool = True):
             self.detail = "test policy"
 
     monkeypatch.setattr(triggers.model_policy, "current", lambda: Policy())
+
+
+def ceiling(monkeypatch, limit: int):
+    """Set the ceiling an operator would have set, at runtime."""
+
+    async def stored():
+        return {"mode": "running", "mode_reason": "", "max_parallel": limit, "updated_by": "tobias"}
+
+    monkeypatch.setattr(controls.db, "get_controls", stored)
+    controls.forget()
 
 
 def agent_account(monkeypatch):
@@ -479,16 +489,14 @@ class TestBounds:
         )
         fake_db.install(monkeypatch)
         allow_models(monkeypatch)
-        monkeypatch.setattr(
-            triggers,
-            "settings",
-            replace(triggers.settings, github_login=AGENT, repo_slug=REPO, max_parallel_sessions=4),
-        )
+        ceiling(monkeypatch, 4)
 
         queued = await triggers.TriggerPoller().poll_once()
 
-        # Half the parallel ceiling, so an operator always has room.
-        assert triggers.max_active_sessions() == 2
+        # Half the ceiling *in force*, so an operator always has room — and
+        # it follows what they set at runtime, not what the environment
+        # configured.
+        assert triggers.max_active_sessions(4) == 2
         assert len(queued) == 2
 
     async def test_nothing_is_queued_while_the_ceiling_is_full(self, monkeypatch):
@@ -518,11 +526,7 @@ class TestBounds:
         )
         fake_db.install(monkeypatch)
         allow_models(monkeypatch)
-        monkeypatch.setattr(
-            triggers,
-            "settings",
-            replace(triggers.settings, github_login=AGENT, repo_slug=REPO, max_parallel_sessions=4),
-        )
+        ceiling(monkeypatch, 4)
         poller = triggers.TriggerPoller()
 
         first = await poller.poll_once()
@@ -868,3 +872,38 @@ class TestTaskConventions:
             assert "How work is done here" in task
             assert "Never merge a pull request" in task
             assert "fails on the unfixed code" in task
+
+
+class TestRefusalAppliesToEveryKind:
+    """`blocked` is an answer, whatever kind of work carries it."""
+
+    async def test_a_blocked_pull_request_is_not_taken_over(self, monkeypatch):
+        FakeRepo(assigned_pulls=[dict(pull(864), labels=[{"name": "blocked"}])]).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        assert fake_db.created == []
+
+    async def test_a_review_on_a_blocked_pull_request_is_not_worked(self, monkeypatch):
+        FakeRepo(
+            authored_pulls=[dict(pull(772), labels=[{"name": "wontfix"}])],
+            reviews={772: review(5)},
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []
+
+    async def test_a_question_on_a_stale_thread_is_left_alone(self, monkeypatch):
+        FakeRepo(
+            authored_pulls=[dict(pull(772), labels=[{"name": "stale"}])],
+            issue_comments=[comment(9200, 772, f"@{AGENT} still relevant?")],
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        assert await triggers.TriggerPoller().poll_once() == []

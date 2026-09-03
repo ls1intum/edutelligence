@@ -417,11 +417,22 @@ class SessionManager:
             may_resume, why = capacity.resume_decision(reading)
             if may_resume and not control.may_resume():
                 may_resume, why = False, control.admission_block()
-            elif may_resume and control.max_parallel < len(running) + 1:
-                may_resume, why = False, "the parallel ceiling was lowered"
             if may_resume:
+                # Room is counted per session, not once for the batch: with
+                # four paused sessions and a ceiling of two, checking only
+                # before the loop would resume all four and put the runner
+                # over the ceiling an operator just set.
+                live = len(running)
                 for session in paused:
+                    if live >= control.max_parallel:
+                        logger.info(
+                            "not resuming session %s: %s sessions is the ceiling in force",
+                            session["id"],
+                            control.max_parallel,
+                        )
+                        break
                     await self._resume(session, why)
+                    live += 1
                     reading = await capacity.read_load()
                     self._last_reading = reading
                     if not capacity.resume_decision(reading)[0]:
@@ -1157,15 +1168,17 @@ class SessionManager:
             return
         for workspace in disposable:
             name, volume = workspace.get("name"), workspace.get("volume_name")
-            if not await db.delete_workspace(int(workspace["id"])):
-                # A session was accepted into it between the query and here.
-                continue
+            # The volume goes first, the row is retired second: a failure in
+            # between leaves the workspace un-archived, so the next sweep
+            # finds it again and tries the volume once more. Retiring first
+            # would leave a volume nothing knows about.
             try:
                 await docker_engine.remove_volume(str(volume), force=True)
             except Exception as exc:
-                logger.warning("workspace '%s' is gone but its volume %s is not: %s", name, volume, exc)
+                logger.warning("could not remove the volume of finished workspace '%s': %s", name, exc)
                 continue
-            logger.info("removed finished workspace '%s' and its volume", name)
+            if await db.archive_workspace(int(workspace["id"])):
+                logger.info("retired finished workspace '%s' and reclaimed its volume", name)
 
     async def deliver_pending_replies(self) -> None:
         """Try again for answers that did not reach GitHub the first time.

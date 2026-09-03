@@ -128,13 +128,16 @@
           min="0"
           max="100"
           [placeholder]="String(ctl.max_parallel_configured)"
-          [ngModel]="ctl.max_parallel_override"
-          (ngModelChange)="applyLimit($event === null ? '' : String($event))"
+          [ngModel]="limitDraft()"
+          (ngModelChange)="limitDraft.set($event === null ? '' : String($event))"
+          (blur)="applyLimit(limitDraft())"
+          (keydown.enter)="applyLimit(limitDraft())"
           [disabled]="controlBusy()"
           aria-label="How many sessions may run at once"
         />
         <span class="field__hint">
-          Empty uses the configured {{ ctl.max_parallel_configured }}. Zero drains without pausing.
+          Applied when you leave the field. Empty uses the configured
+          {{ ctl.max_parallel_configured }}; zero drains without pausing.
         </span>
       </label>
     </section>

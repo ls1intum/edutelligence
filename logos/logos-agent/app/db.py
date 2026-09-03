@@ -216,7 +216,16 @@ async def create_workspace(name: str, base_branch: str, created_by: str, *, ephe
                     INSERT INTO agent_workspaces
                         (name, base_branch, volume_name, created_by, ephemeral)
                     VALUES (:name, :base_branch, :volume, :created_by, :ephemeral)
-                    ON CONFLICT (name) DO NOTHING
+                    -- An archived workspace of the same name is revived
+                    -- rather than collided with: the name identifies the
+                    -- work (an issue, a pull request), and its history is
+                    -- worth keeping across the gap. A live one is left
+                    -- alone, which is what makes the name unique.
+                    ON CONFLICT (name) DO UPDATE
+                       SET archived_at = NULL,
+                           base_branch = EXCLUDED.base_branch,
+                           ephemeral = EXCLUDED.ephemeral
+                     WHERE agent_workspaces.archived_at IS NOT NULL
                     RETURNING id, name, base_branch, volume_name, created_by,
                               created_at, ephemeral
                     """
@@ -251,6 +260,7 @@ async def list_workspaces() -> list[dict[str, Any]]:
                            COUNT(s.id) FILTER (WHERE s.status = ANY(:active)) AS active_sessions
                       FROM agent_workspaces w
                       LEFT JOIN agent_sessions s ON s.workspace_id = w.id
+                     WHERE w.archived_at IS NULL
                      GROUP BY w.id
                      ORDER BY w.created_at DESC
                     """
@@ -331,17 +341,20 @@ async def get_workspace(workspace_id: int) -> dict[str, Any] | None:
 
 
 async def disposable_workspaces(idle_before: datetime) -> list[dict[str, Any]]:
-    """Ephemeral workspaces whose work is done.
+    """Ephemeral workspaces whose work is done and whose volume can go.
 
     A workspace the runner made for one piece of triggered work has no
     meaning once that work has finished, and left behind they fill the
     parallel ceiling with checkouts nobody is using. An operator's
     workspace is never in this list: they made it, they keep it.
 
-    ``idle_before`` guards the moment between a session being queued and
-    being claimed: a workspace created seconds ago has no active session
-    yet either, and removing it would delete the working copy out from
-    under the session it was made for.
+    Idle is measured from when the last session in it *finished*, not from
+    when the workspace was created — a workspace made an hour ago whose
+    session ended a minute ago is not idle. A workspace that never ran
+    anything falls back to its creation time, which also covers the gap
+    between a session being queued into a fresh workspace and being
+    claimed: neither is active yet, and sweeping then would delete the
+    working copy out from under the session it was made for.
     """
     async with sessionmaker()() as db:
         rows = (
@@ -352,12 +365,17 @@ async def disposable_workspaces(idle_before: datetime) -> list[dict[str, Any]]:
                     SELECT w.id, w.name, w.volume_name
                       FROM agent_workspaces w
                      WHERE w.ephemeral = TRUE
-                       AND w.created_at < :idle_before
+                       AND w.archived_at IS NULL
                        AND NOT EXISTS (
                              SELECT 1 FROM agent_sessions s
                               WHERE s.workspace_id = w.id
                                 AND s.status = ANY(:active)
                            )
+                       AND COALESCE(
+                             (SELECT MAX(s.finished_at) FROM agent_sessions s
+                               WHERE s.workspace_id = w.id),
+                             w.created_at
+                           ) < :idle_before
                      ORDER BY w.id
                     """
                     ),
@@ -368,6 +386,52 @@ async def disposable_workspaces(idle_before: datetime) -> list[dict[str, Any]]:
             .all()
         )
     return [dict(row) for row in rows]
+
+
+async def archive_workspace(workspace_id: int) -> bool:
+    """Retire a workspace without deleting anything that happened in it.
+
+    The row stays: `agent_sessions.workspace_id` cascades, so deleting it
+    would take every finished session in it — their events, their trigger
+    references, their pending replies — and with the references gone, work
+    that is still assigned would be queued all over again. Archiving keeps
+    the history and the name while giving back the only thing worth
+    reclaiming, which is the volume.
+
+    Refuses while the workspace is occupied, under the same row lock
+    :func:`create_session` takes, so a session accepted a moment ago is
+    never archived out from under itself.
+    """
+    async with sessionmaker()() as db:
+        existing = (
+            await db.execute(
+                text("SELECT id FROM agent_workspaces WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
+                {"id": workspace_id},
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            await db.rollback()
+            return False
+        active = (
+            await db.execute(
+                text(
+                    """
+                    SELECT COUNT(*) FROM agent_sessions
+                     WHERE workspace_id = :id AND status = ANY(:active)
+                    """
+                ),
+                {"id": workspace_id, "active": [s.value for s in ACTIVE_STATUSES]},
+            )
+        ).scalar_one()
+        if active:
+            await db.rollback()
+            return False
+        await db.execute(
+            text("UPDATE agent_workspaces SET archived_at = :now WHERE id = :id"),
+            {"id": workspace_id, "now": _now()},
+        )
+        await db.commit()
+    return True
 
 
 async def delete_workspace(workspace_id: int) -> bool:
@@ -667,13 +731,20 @@ async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
                            )
-                       -- Only the oldest queued session of each workspace is a
-                       -- candidate, so one workspace cannot take several slots
-                       -- in a single pass and then collide with itself.
+                       -- One candidate per workspace, so a workspace cannot
+                       -- take several slots in a pass and then collide with
+                       -- itself — and it is that workspace's most urgent
+                       -- queued session, oldest among equals. Picking the
+                       -- oldest outright would hide a security fix behind a
+                       -- typo that happened to be queued into the same
+                       -- checkout first, and the global order below could
+                       -- never correct it.
                        AND s.id = (
-                             SELECT min(peer.id) FROM agent_sessions peer
+                             SELECT peer.id FROM agent_sessions peer
                               WHERE peer.workspace_id = s.workspace_id
                                 AND peer.status = 'queued'
+                              ORDER BY peer.priority DESC, peer.created_at, peer.id
+                              LIMIT 1
                            )
                      -- Most urgent first, oldest among equals: sessions are
                      -- admitted one per capacity reading, so this order is

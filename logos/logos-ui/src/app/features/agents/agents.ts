@@ -76,6 +76,8 @@ export class Agents implements OnInit {
 
   newWorkspaceName = signal('');
   pauseReason = signal('');
+  /** What is typed in the limit field, until it is applied. */
+  limitDraft = signal('');
   creatingWorkspace = signal(false);
 
   readonly workspaceOptions = computed<AppSelectOption[]>(() =>
@@ -166,7 +168,12 @@ export class Agents implements OnInit {
     // runner wants to see it paused on the next tick, not on the next
     // manual refresh.
     try {
-      this.controls.set(await this.agentService.getControls());
+      const state = await this.agentService.getControls();
+      this.controls.set(state);
+      if (!this.controlBusy()) {
+        this.limitDraft.set(String(state.max_parallel_override ?? ''));
+        this.pauseReason.set(state.mode_reason);
+      }
     } catch {
       this.controls.set(null);
     }
@@ -181,7 +188,11 @@ export class Agents implements OnInit {
     this.controlBusy.set(true);
     try {
       const reason = mode === 'running' ? '' : this.pauseReason().trim();
-      this.controls.set(await this.agentService.setControls({ mode, reason }));
+      const state = await this.agentService.setControls({ mode, reason });
+      this.controls.set(state);
+      // Follow the server: after a resume the reason is gone, and a later
+      // pause must not silently send the old one again.
+      this.pauseReason.set(state.mode_reason);
       await this.refresh({ quiet: true });
     } catch (err: unknown) {
       this.error.set(this.messageOf(err, 'Could not change the runner controls.'));
@@ -197,17 +208,34 @@ export class Agents implements OnInit {
     return 'Running';
   });
 
-  /** Change how many sessions may run at once, from now on. */
+  /**
+   * Change how many sessions may run at once, from now on.
+   *
+   * Called when the field is left or Enter is pressed, never on each
+   * keystroke: submitting per character disables the input mid-number, so
+   * "25" could not be typed at all.
+   */
   async applyLimit(value: string): Promise<void> {
     if (this.controlBusy()) return;
     const trimmed = value.trim();
+    let body: { max_parallel?: number; clear_max_parallel?: boolean };
+    if (trimmed === '') {
+      body = { clear_max_parallel: true };
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed)) {
+        // Nothing to send: an unparseable field is a typo, not an
+        // instruction, and null would silently mean "no change".
+        this.limitDraft.set(String(this.controls()?.max_parallel_override ?? ''));
+        return;
+      }
+      body = { max_parallel: Math.max(0, Math.min(100, Math.round(parsed))) };
+    }
     this.controlBusy.set(true);
     try {
-      const body =
-        trimmed === ''
-          ? { clear_max_parallel: true }
-          : { max_parallel: Math.max(0, Math.min(100, Number(trimmed))) };
-      this.controls.set(await this.agentService.setControls(body));
+      const state = await this.agentService.setControls(body);
+      this.controls.set(state);
+      this.limitDraft.set(String(state.max_parallel_override ?? ''));
       await this.refresh({ quiet: true });
     } catch (err: unknown) {
       this.error.set(this.messageOf(err, 'Could not change the session limit.'));

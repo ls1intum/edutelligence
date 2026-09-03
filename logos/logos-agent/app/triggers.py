@@ -115,15 +115,19 @@ def _next_auto_name(existing: set[str]) -> str:
     return f"auto-{index}"
 
 
-def max_active_sessions() -> int:
+def max_active_sessions(ceiling: int | None = None) -> int:
     """How many self-queued sessions may be active at once.
 
-    Derived rather than configured: half the parallel ceiling, at least one.
-    The runner is a guest on this platform even when it is idle, and an
-    operator who queues work by hand should always find room next to the
-    automation.
+    Derived rather than configured: half the ceiling in force, at least
+    one. The runner is a guest on this platform even when it is idle, and
+    an operator who queues work by hand should always find room next to the
+    automation — which is why it follows the *current* ceiling and not the
+    configured one. Lowering the limit to two and still letting five
+    triggered sessions through would take that room away, and their higher
+    priorities would win it.
     """
-    return max(1, settings.max_parallel_sessions // 2)
+    limit = settings.max_parallel_sessions if ceiling is None else ceiling
+    return max(1, limit // 2)
 
 
 def mentions_agent(body: str) -> bool:
@@ -347,14 +351,16 @@ class TriggerPoller:
         # Nothing to queue into: the runner is paused, draining, or its
         # ceiling is zero. The repository is read again next pass, and
         # nothing is lost by not looking now.
-        blocked = (await controls.current()).admission_block()
+        control = await controls.current()
+        blocked = control.admission_block()
         if blocked:
             logger.debug("trigger poll skipped: %s", blocked)
             self._last_pass = now
             return []
-        room = max_active_sessions() - await db.count_active_trigger_sessions()
+        quota = max_active_sessions(control.max_parallel)
+        room = quota - await db.count_active_trigger_sessions()
         if room <= 0:
-            logger.debug("trigger poll skipped: already at %s self-queued sessions", max_active_sessions())
+            logger.debug("trigger poll skipped: already at %s self-queued sessions", quota)
             self._last_pass = now
             return []
 
@@ -673,6 +679,13 @@ class TriggerPoller:
             logger.info("not queueing %s: %s", candidate["ref"], policy.detail)
             return None
         urgency = candidate.get("urgency") or priority.of(candidate["kind"])
+        if urgency.refused:
+            # Checked here rather than per source: a review, a handover and
+            # a question can all carry `blocked` or `wontfix` just as an
+            # issue can, and this is the one place every kind passes
+            # through.
+            logger.info("not queueing %s: %s", candidate["ref"], urgency.reason)
+            return None
         branch = candidate.get("branch")
         workspace_id = await self._free_workspace(
             base_branch=branch or "main",

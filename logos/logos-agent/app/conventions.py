@@ -57,29 +57,6 @@ Working within the sandbox:
 """.strip()
 
 
-# Traps in GitHub's API that cost real time when they are met for the first
-# time. Only added to tasks that will read the API.
-GITHUB_API_NOTES = """
---- Reading GitHub's API ---
-
-- Comment and review listings answer OLDEST FIRST and ignore a `direction`
-  parameter. `per_page=5` gives you the five oldest, not the newest: page
-  through to the end, or filter by time, when you want what is recent.
-- A review's id is not a review-comment id, and issue-comment ids and
-  review-comment ids are separate sequences. Never use one where the other
-  is expected — the request fails, or worse, hits something else.
-- A freshly created comment can answer 404 on a direct read for a minute or
-  two. Check the listing rather than concluding it was not created.
-- When posting a body from a file, pass it as a value, not as a file
-  reference: `-f "body=$(cat file)"`. `-f body=@file` posts the literal
-  string "@file". Read the comment back afterwards and check it starts with
-  your text.
-""".strip()
-
-
-def for_task(task: str, *, reads_github_api: bool = False) -> str:
+def for_task(task: str) -> str:
     """One task, followed by the conventions it has to hold to."""
-    parts = [task.strip(), HOUSE_RULES]
-    if reads_github_api:
-        parts.append(GITHUB_API_NOTES)
-    return "\n\n".join(parts)
+    return f"{task.strip()}\n\n{HOUSE_RULES}"

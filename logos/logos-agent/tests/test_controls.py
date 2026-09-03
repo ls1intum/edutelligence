@@ -208,3 +208,41 @@ class TestAdmission:
 
         assert capacity.start_decision(reading, running=3, paused=0)[0] is False
         assert capacity.start_decision(reading, running=2, paused=0)[0] is True
+
+
+class TestBeforeAnythingIsKnown:
+    """A runner that has not read its controls does not assume it may work.
+
+    Persisting the switch is pointless if a restart during a database
+    outage quietly releases it.
+    """
+
+    async def test_an_unread_runner_blocks_everything(self, monkeypatch):
+        async def broken():
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(controls.db, "get_controls", broken)
+        controls.forget()
+
+        state = await controls.current()
+
+        assert state.admission_block()
+        assert state.may_resume() is False
+
+    async def test_the_first_successful_read_takes_over(self, monkeypatch):
+        answers = [
+            RuntimeError("connection refused"),
+            {"mode": "running", "mode_reason": "", "max_parallel": None, "updated_by": ""},
+        ]
+
+        async def flaky():
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(controls.db, "get_controls", flaky)
+        controls.forget()
+
+        assert (await controls.current()).admission_block()
+        assert (await controls.current()).admission_block() == ""

@@ -81,8 +81,12 @@ from having several workspaces; the ceiling across all of them is
 Workspaces the runner creates for triggered work are named after it —
 `issue-812-oom-on-startup`, `pr-772-add-an-agent-runner` — which is also what
 appears in the branch (`logos/agent/issue-812-oom-on-startup/session-42`) and
-in the workspace list. They are removed once their work is finished, together
-with their volume; an operator's own workspaces are never touched.
+in the workspace list. Once their work is finished their volume is reclaimed and the workspace is
+retired — the row stays, because every finished session hangs off it, and
+deleting it would take their history, the trigger references that keep
+assigned work from being done twice, and any answer still waiting to be
+delivered. An operator's own workspaces are never touched, and a retired one
+is revived if the same issue comes back.
 
 This is enforced twice: the admission query skips workspaces that are occupied,
 and a partial unique index in the schema rejects a second active session for a
