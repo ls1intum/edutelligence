@@ -43,13 +43,18 @@ def global_timeout_s(default: float) -> float:
     return value if value > 0 else default
 
 
-def remaining_queue_wait_s(ingress_at: float | None) -> float | None:
+def remaining_queue_wait_s(ingress_at: float | None, request_timeout_s: float | None = None) -> float | None:
     """Queue-wait budget left for a request that entered the orchestrator at
     ``ingress_at`` (a ``time.monotonic()`` stamp taken at request ingress).
 
-    ``DEFAULT_QUEUE_WAIT_TIMEOUT_S`` is a whole-request budget: auth, the
-    worker reconnect wait and classification all happen before enqueue and
-    count against it, so the scheduler may only wait with what is left.
+    The budget is the client's whole-request window minus what has already
+    been spent: auth, the worker reconnect wait and classification all happen
+    before enqueue and count against it, so the scheduler may only wait with
+    what is left. The window is the *smaller* of the request's own
+    ``timeout_s`` — the value the client actually waits on — and the
+    default/global window, so a request with a 30s timeout that already spent
+    25s before reaching the queue may only wait 5s, not the full 30s on top.
+    A non-positive or invalid ``request_timeout_s`` is treated as absent.
     Without an ingress stamp (async jobs, tests) there is no client
     watchdog to beat, so ``None`` is returned and the scheduler keeps
     the plain window.
@@ -62,4 +67,11 @@ def remaining_queue_wait_s(ingress_at: float | None) -> float | None:
     if ingress_at is None:
         return None
     window = global_timeout_s(DEFAULT_QUEUE_WAIT_TIMEOUT_S)
+    if request_timeout_s is not None:
+        try:
+            value = float(request_timeout_s)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            window = min(window, value)
     return max(0.0, window - (time.monotonic() - ingress_at))

@@ -114,10 +114,12 @@ class FcfScheduler(BaseScheduler):
             # Recompute the client budget now, immediately before the wait,
             # rather than trusting a value fixed at request construction: the
             # synchronous selection above ran after construction and spent
-            # part of the window too, so only what is left at this instant may
-            # be spent waiting here (queue-timeout 429 stays ahead of the
+            # part of the window too. The window is the request's own
+            # timeout_s when it is smaller than the default, since that is
+            # what the client waits on, so only what is left at this instant
+            # may be spent waiting here (queue-timeout 429 stays ahead of the
             # client's watchdog).
-            remaining = remaining_queue_wait_s(request.ingress_at)
+            remaining = remaining_queue_wait_s(request.ingress_at, request.timeout_s)
             if remaining is not None:
                 timeout = min(timeout, remaining)
             result = await asyncio.wait_for(future, timeout=timeout)

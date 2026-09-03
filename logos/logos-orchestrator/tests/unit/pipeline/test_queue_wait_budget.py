@@ -47,13 +47,14 @@ def _make_scheduler():
     return scheduler
 
 
-def _make_request(request_id: str, ingress_at=None) -> SchedulingRequest:
+def _make_request(request_id: str, ingress_at=None, timeout_s=None) -> SchedulingRequest:
     return SchedulingRequest(
         request_id=request_id,
         payload={"model": "m"},
         deployments=[{"model_id": MODEL_ID, "provider_id": PROVIDER_ID, "type": "logosnode"}],
         classified_models=[(MODEL_ID, 1.0, 5)],
         ingress_at=ingress_at,
+        timeout_s=timeout_s,
     )
 
 
@@ -137,3 +138,27 @@ async def test_synchronous_scheduling_time_counts_against_the_budget(monkeypatch
     assert excinfo.value.timeout_s < 2.5
     # And end to end the 429 still lands inside the client window.
     assert time.monotonic() - ingress_at <= 5.0 + 1.5
+
+
+async def test_short_request_timeout_binds_the_remaining_budget():
+    """A request timeout shorter than the default window is the client budget.
+
+    The client waits ``timeout_s`` seconds in total, not ``timeout_s`` on top
+    of whatever it already spent on auth, reconnect and scoring: with a 4s
+    timeout and 2.5s already spent, the scheduler may only wait the ~1.5s
+    left, not the full 4s again (which would deliver the 429 ~6.5s after
+    ingress, after the client gave up at 4s).
+    """
+    scheduler = _make_scheduler()
+    ingress_at = time.monotonic() - 2.5  # pre-queue work already spent 2.5s
+    wait = await _queue_request(scheduler, _make_request("req-1", ingress_at=ingress_at, timeout_s=4.0))
+    with pytest.raises(QueueTimeoutError) as excinfo:
+        await asyncio.wait_for(wait, timeout=10.0)
+    # The cap must be the ~1.5s left of the 4s request budget at wait time,
+    # not the full 4s request timeout.
+    assert excinfo.value.timeout_s < 3.0
+    # And end to end the 429 still lands at or before the client's own
+    # timeout, not after it.
+    assert time.monotonic() - ingress_at <= 4.0 + 1.5
+    # The entry must not linger in the queue after the timeout.
+    assert scheduler._queue_mgr.get_total_depth_all() == 0
