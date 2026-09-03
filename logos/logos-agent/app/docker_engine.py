@@ -112,12 +112,12 @@ async def ensure_network(name: str, *, internal: bool = False) -> None:
     operator removing it while nothing runs.
     """
     try:
-        existing = await _request("GET", f"/networks/{name}")
+        response = await _request("GET", f"/networks/{name}")
     except DockerError as exc:
         if exc.status != 404:
             raise
     else:
-        actual = bool(existing.get("Internal", False))
+        actual = bool(response.json().get("Internal", False))
         if actual != internal:
             raise DockerError(
                 409,

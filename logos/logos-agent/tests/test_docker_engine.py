@@ -71,8 +71,8 @@ class TestNetworkIsolation:
         async def fake_request(method, path, **kwargs):
             calls.append((method, path))
             if method == "GET":
-                return {"Name": "logos-agent-net", "Internal": True}
-            return {}
+                return _FakeResponse({"Name": "logos-agent-net", "Internal": True})
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
 
@@ -84,8 +84,8 @@ class TestNetworkIsolation:
     async def test_a_plain_bridge_is_refused_rather_than_used(self, monkeypatch):
         async def fake_request(method, path, **kwargs):
             if method == "GET":
-                return {"Name": "logos-agent-net", "Internal": False}
-            return {}
+                return _FakeResponse({"Name": "logos-agent-net", "Internal": False})
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
 
@@ -99,7 +99,7 @@ class TestNetworkIsolation:
             if method == "GET":
                 raise docker_engine.DockerError(404, "no such network")
             created.update(kwargs.get("json") or {})
-            return {}
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
 
@@ -117,7 +117,7 @@ class TestPauseReportsReality:
 
     async def test_a_successful_pause_is_reported(self, monkeypatch):
         async def fake_request(method, path, **kwargs):
-            return {}
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
         assert await docker_engine.pause_container("cid") is True
@@ -153,7 +153,7 @@ class TestNetworkDetach:
 
         async def fake_request(method, path, **kwargs):
             sent.update({"method": method, "path": path, "json": kwargs.get("json")})
-            return {}
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
 

@@ -456,7 +456,12 @@ services:
   # it is also where the model credential lives, injected into the traffic
   # so the session containers never carry it. See agent-gateway/nginx.conf.
   logos-agent-gateway:
-    image: nginx:1.28-alpine
+    # The nginx configuration is baked into this image, not mounted from the
+    # host: a deployment copies only the compose file to its VM, so a bind
+    # mount of ./agent-gateway/nginx.conf resolved to a missing path there,
+    # Docker created an empty directory in its place, and the gateway served
+    # its stock configuration and failed its health check forever.
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent-gateway:${IMAGE_TAG:-latest}
     container_name: logos-agent-gateway
     restart: unless-stopped
     profiles: ["agent"]
@@ -472,16 +477,12 @@ services:
     depends_on:
       - logos-orchestrator
     environment:
-      # The Logos key the gateway injects into the agent's model calls. It
-      # is substituted into the nginx configuration by the image's envsubst
-      # at container start (the file is mounted as a template for exactly
-      # this), so it never has to be passed to a session container.
+      # The Logos key the gateway injects into the agent's model calls. The
+      # image ships the configuration as a template, and its entrypoint runs
+      # envsubst at container start, so the key enters the running
+      # configuration here and never has to be passed to a session
+      # container — nor does it sit in an image layer.
       LOGOS_AGENT_API_KEY: "${LOGOS_AGENT_API_KEY:-}"
-    volumes:
-      # Mounted into /etc/nginx/templates/ so the image's envsubst renders
-      # ${LOGOS_AGENT_API_KEY} into the live configuration at startup;
-      # nginx's own $variables are left untouched.
-      - ./agent-gateway/nginx.conf:/etc/nginx/templates/default.conf.template:ro
     networks:
       - internal
       - agent
