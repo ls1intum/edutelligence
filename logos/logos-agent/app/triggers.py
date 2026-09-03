@@ -166,7 +166,7 @@ def is_bot(login: str) -> bool:
 # --- what the agent is asked to do ----------------------------------------
 
 
-async def issue_task(issue: dict[str, Any]) -> str:
+async def issue_task(issue: dict[str, Any], conversation: str = "") -> str:
     """The task text for an issue assigned to the agent."""
     number = issue.get("number")
     title = str(issue.get("title") or "").strip()
@@ -177,7 +177,9 @@ async def issue_task(issue: dict[str, Any]) -> str:
         f"You have been assigned issue #{number}. Work on it and open a draft pull "
         f"request with your result.\n\n"
         f"Issue #{number}: {title}\n\n"
-        f"{body}\n\n"
+        f"{body or '(no description in the issue body)'}\n\n"
+        f"{conversation}"
+        f"That is the whole issue as it stands — you cannot fetch more of it. "
         f"Scope your change to what the issue asks for: the smallest change that "
         f"answers it, with tests for what you changed. If the issue is unclear or turns "
         f"out to be larger than it looks, do the part you are confident about and say "
@@ -493,6 +495,38 @@ class TriggerPoller:
         except Exception as exc:
             logger.warning("could not record how far the comment scan got: %s", exc)
 
+    async def _issue_conversation(self, number: int, issue: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+        """What has been said under an issue, and what was left out.
+
+        An issue's description is not always in its body: a title, an empty
+        body and the whole report in the first comment is an ordinary way to
+        file one, and a session handed the title alone can only say that it
+        was handed the title alone.
+
+        Kept: the people who may write to the repository, and the person who
+        opened the issue — who is usually the one with the details, and
+        whose report is why anybody assigned this. Everybody else is a
+        stranger commenting on a public issue, and this session will push a
+        branch.
+        """
+        try:
+            entries, missing = await github.issue_conversation(number)
+        except Exception as exc:
+            logger.info("could not read the conversation of issue #%s: %s", number, exc)
+            return [], ["the issue's comments"]
+        reporter = str((issue.get("user") or {}).get("login") or "").lower()
+        allowed: list[dict[str, Any]] = []
+        outsiders = 0
+        for entry in entries:
+            author = str(entry.get("author") or "")
+            if author and (author.lower() == reporter or await self._writer(author)):
+                allowed.append(entry)
+            else:
+                outsiders += 1
+        if outsiders:
+            missing = [*missing, f"{outsiders} comment(s) from accounts without write access"]
+        return allowed, missing
+
     async def _conversation(self, number: int) -> tuple[list[dict[str, Any]], list[str]]:
         """The conversation a handover may act on, and what is missing from it.
 
@@ -560,7 +594,10 @@ class TriggerPoller:
                 {
                     "ref": f"issue-{number}",
                     "kind": "issue",
-                    "task": await issue_task(issue),
+                    "task": await issue_task(
+                        issue,
+                        conversation_block(*await self._issue_conversation(number, issue)),
+                    ),
                     "workspace": workspace_name("issue", number, title),
                     "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
                     # Every session says something back on the thread it came

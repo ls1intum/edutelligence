@@ -366,6 +366,15 @@ that is not queued; and because the row is what the queue is, a restart
 changes nothing about it. GitHub's reaction palette is fixed and has no
 hourglass, so these three are the states it can show.
 
+**An issue is its thread, not its body.** A title, an empty body and the
+whole report in the first comment is an ordinary way to file one, and a
+session handed the title alone can only say so — which is exactly what
+happened on an issue whose description was a maintainer's comment. The
+comments travel with the task now: the people who may write to the
+repository, and the person who opened it, who is usually the one with the
+details. A passer-by on a public issue is left out and counted, because the
+session that reads this will push a branch.
+
 **It can see what you attached.** An issue whose whole description is a
 screenshot is unreadable to a sandbox with no network — the agent met one of
 those with `WebFetch`, was refused, read code for an hour and changed

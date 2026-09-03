@@ -543,6 +543,19 @@ async def open_pull_request_for(branch: str) -> dict[str, Any] | None:
     return None
 
 
+async def issue_conversation(number: int, *, limit: int = 40) -> tuple[list[dict[str, Any]], list[str]]:
+    """What has been said under an issue, oldest last, and what is missing.
+
+    An issue's description is not always in its body. A title and an empty
+    body with the whole report in the first comment is an ordinary way to
+    file one — and a session handed the title alone can only say that it
+    was handed the title alone.
+    """
+    answer = await _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments")
+    entries, missing = _as_conversation({"comments": answer}, number)
+    return entries[-limit:], missing
+
+
 async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[list[dict[str, Any]], list[str]]:
     """Everything said on a pull request, oldest last, and what is missing.
 
@@ -566,6 +579,25 @@ async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[li
         _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments"),
         return_exceptions=True,
     )
+    entries, missing = _as_conversation({"reviews": reviews, "inline comments": inline, "comments": discussion}, number)
+    entries.sort(key=lambda entry: entry["at"] or datetime.min.replace(tzinfo=timezone.utc))
+    # The newest are the ones still open; an old conversation is history.
+    # Said rather than silently dropped, though: an early review comment
+    # nobody answered is exactly the kind of thing that falls off the end,
+    # and the task built from this claims to be complete.
+    if len(entries) > limit:
+        missing = [*missing, f"{len(entries) - limit} older comment(s), beyond what fits in a task"]
+    return entries[-limit:], missing
+
+
+def _as_conversation(sources: dict[str, object], number: int) -> tuple[list[dict[str, Any]], list[str]]:
+    """Normalise GitHub's several comment shapes into one list.
+
+    Reviews, inline comments and plain discussion are three endpoints with
+    three shapes; a session reads one conversation. The second return value
+    names the sources that could not be read, because a failed listing looks
+    exactly like an empty one.
+    """
     entries: list[dict[str, Any]] = []
     missing: list[str] = []
 
@@ -600,17 +632,10 @@ async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[li
                 }
             )
 
-    add(reviews, "reviews")
-    add(inline, "inline comments")
-    add(discussion, "comments")
+    for kind, answer in sources.items():
+        add(answer, kind)
     entries.sort(key=lambda entry: entry["at"] or datetime.min.replace(tzinfo=timezone.utc))
-    # The newest are the ones still open; an old conversation is history.
-    # Said rather than silently dropped, though: an early review comment
-    # nobody answered is exactly the kind of thing that falls off the end,
-    # and the task built from this claims to be complete.
-    if len(entries) > limit:
-        missing = [*missing, f"{len(entries) - limit} older comment(s), beyond what fits in a task"]
-    return entries[-limit:], missing
+    return entries, missing
 
 
 async def recent_issue_comments(since: datetime) -> list[dict[str, Any]]:
