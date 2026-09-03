@@ -403,6 +403,68 @@ def test_unresolvable_engine_version_keeps_the_rejection(tmp_path: Path, monkeyp
     assert sc.ensure_sharded_checkpoint(model="org/Model-A", tensor_parallel_size=2, cache_root=str(tmp_path)) is None
 
 
+def test_ensure_retries_conversion_after_deleting_the_record(tmp_path: Path, monkeypatch) -> None:
+    """Deleting the record is the documented escape hatch: an operator forces a
+    conversion attempt even under an unchanged engine build (e.g. the earlier
+    failure was a flaky disk write, not the layout)."""
+    monkeypatch.setattr(sc, "_current_engine_versions", lambda: {"vllm": "0.27.1"})
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+    sc.invalidate_sharded_checkpoint(target)
+    assert sc.is_sharded_checkpoint_rejected(target) is True
+    (target.parent / sc._REJECTED_MARKER).unlink()
+
+    def _fake_convert(cmd, env, log_path, timeout_s, cancel_event):
+        out = Path(cmd[cmd.index("--output") + 1])
+        (out / "model-rank-0-part-0.safetensors").write_text("weights")
+        return True
+
+    monkeypatch.setattr(sc, "_run_conversion_subprocess", _fake_convert)
+    out = sc.ensure_sharded_checkpoint(model="org/Model-A", tensor_parallel_size=2, cache_root=str(tmp_path))
+    assert out is not None
+    assert sc.is_sharded_checkpoint_ready(out)
+
+
+def test_unreadable_rejection_record_does_not_block_conversion(tmp_path: Path, monkeypatch) -> None:
+    # A corrupted record must not wedge the model: the safe default is to try
+    # the conversion again, not to assume a rejection we cannot read.
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.parent.mkdir(parents=True)
+    (target.parent / sc._REJECTED_MARKER).write_text("{not json", encoding="utf-8")
+
+    def _fake_convert(cmd, env, log_path, timeout_s, cancel_event):
+        out = Path(cmd[cmd.index("--output") + 1])
+        (out / "model-rank-0-part-0.safetensors").write_text("weights")
+        return True
+
+    monkeypatch.setattr(sc, "_run_conversion_subprocess", _fake_convert)
+    out = sc.ensure_sharded_checkpoint(model="org/Model-A", tensor_parallel_size=2, cache_root=str(tmp_path))
+    assert out is not None
+    assert sc.is_sharded_checkpoint_ready(out)
+
+
+def test_ready_checkpoint_wins_over_a_stale_rejection_record(tmp_path: Path, monkeypatch) -> None:
+    # A leftover record must not shadow a checkpoint that exists and is ready
+    # — e.g. the operator deleted the tp directory and re-converted it under
+    # the same build, and this time the loader accepted it.
+    monkeypatch.setattr(sc, "_current_engine_versions", lambda: {"vllm": "0.27.1"})
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+    sc.invalidate_sharded_checkpoint(target)
+    assert sc.is_sharded_checkpoint_rejected(target) is True
+
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+
+    def _boom(*_a, **_k):
+        raise AssertionError("a ready checkpoint must be served, not re-converted")
+
+    monkeypatch.setattr(sc, "_run_conversion_subprocess", _boom)
+    assert sc.ensure_sharded_checkpoint(model="org/Model-A", tensor_parallel_size=2, cache_root=str(tmp_path)) == target
+
+
 def test_fresh_handle_after_rejection_serves_full_checkpoint_without_converting(
     tmp_path: Path, monkeypatch
 ) -> None:
