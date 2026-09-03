@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Tables for the agent runner (logos/logos-agent). A workspace is one
+         working copy on one Docker volume; a session is one agent run inside
+         it. Only one session may occupy a workspace at a time, which the
+         runner enforces when it admits queued work — parallelism comes from
+         running several workspaces. -->
+    <changeSet id="020-agent-workspaces" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="agent_workspaces"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE agent_workspaces (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                base_branch TEXT NOT NULL DEFAULT 'main',
+                volume_name TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS agent_workspaces CASCADE;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="020-agent-sessions" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="agent_sessions"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE agent_sessions (
+                id SERIAL PRIMARY KEY,
+                workspace_id INTEGER NOT NULL
+                    REFERENCES agent_workspaces(id) ON DELETE CASCADE,
+
+                task TEXT NOT NULL,
+                model TEXT,
+                status TEXT NOT NULL DEFAULT 'queued',
+
+                -- What the session is allowed to do when it finishes.
+                open_pull_request BOOLEAN NOT NULL DEFAULT TRUE,
+                deploy_to_dev BOOLEAN NOT NULL DEFAULT FALSE,
+                screenshot_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+                -- Execution state.
+                container_id TEXT,
+                branch_name TEXT,
+                pr_url TEXT,
+
+                created_by TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                finished_at TIMESTAMPTZ,
+                deployed_at TIMESTAMPTZ,
+
+                exit_code INTEGER,
+                error TEXT,
+
+                -- Usage, mirrored from the agent's own report. Authoritative
+                -- accounting stays in the request log like any other caller.
+                tokens_in BIGINT NOT NULL DEFAULT 0,
+                tokens_out BIGINT NOT NULL DEFAULT 0,
+                cost_eur NUMERIC(12, 6) NOT NULL DEFAULT 0,
+
+                CONSTRAINT agent_sessions_status_check CHECK (status IN (
+                    'queued', 'starting', 'running', 'paused', 'finalizing',
+                    'succeeded', 'failed', 'cancelled'
+                ))
+            );
+
+            -- The scheduler's hot path: find queued work, and find whichever
+            -- session currently occupies a workspace.
+            CREATE INDEX idx_agent_sessions_status_created
+                ON agent_sessions(status, created_at);
+            CREATE INDEX idx_agent_sessions_workspace_status
+                ON agent_sessions(workspace_id, status);
+
+            -- At most one session may occupy a workspace. Enforced here as
+            -- well as in the admission query, because a bug in the scheduler
+            -- would otherwise corrupt a working copy rather than raise.
+            -- Finalizing occupies it too: the finalizer container runs git
+            -- in the same working copy on the same volume.
+            CREATE UNIQUE INDEX uq_agent_sessions_active_workspace
+                ON agent_sessions(workspace_id)
+             WHERE status IN ('starting', 'running', 'paused', 'finalizing');
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS agent_sessions CASCADE;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="020-agent-events" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="agent_events"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE agent_events (
+                id BIGSERIAL PRIMARY KEY,
+                session_id INTEGER NOT NULL
+                    REFERENCES agent_sessions(id) ON DELETE CASCADE,
+                ts TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                kind TEXT NOT NULL,
+                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+                CONSTRAINT agent_events_kind_check CHECK (kind IN (
+                    'log', 'status', 'pull_request', 'deploy',
+                    'screenshot', 'capacity', 'error'
+                ))
+            );
+
+            -- The UI tails a session by asking for events after an id, so the
+            -- index has to serve (session, id) ordering directly.
+            CREATE INDEX idx_agent_events_session_id
+                ON agent_events(session_id, id);
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS agent_events CASCADE;</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- The agent reports its spend in US dollars (Claude Code's
+         `total_cost_usd`), and it was stored in a column named for euros.
+         Nothing converted it, so the number was right and its label was
+         wrong — which is worse than either, because an accounting figure
+         that names the wrong currency is believed. The authoritative
+         accounting stays in the request log; this column is the session's
+         own report of what it spent. -->
+    <changeSet id="020-agent-session-cost-usd" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="agent_sessions" columnName="cost_eur"/>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_sessions RENAME COLUMN cost_eur TO cost_usd;
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+                ALTER TABLE agent_sessions RENAME COLUMN cost_usd TO cost_eur;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Where a session came from, when the runner queued it by itself in
+         response to something on GitHub (an opened issue, a review asking
+         for changes). The reference is the thing reacted to — 'issue-812',
+         'pr-772-review-5085681761' — and it is what keeps the reaction
+         idempotent: a poll that sees the same event again finds the session
+         it already queued instead of queueing a second one. Sessions a
+         person created leave both columns null. -->
+    <changeSet id="020-agent-session-triggers" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="trigger_ref"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_sessions ADD COLUMN trigger_kind TEXT;
+            ALTER TABLE agent_sessions ADD COLUMN trigger_ref TEXT;
+
+            -- The dedup lookup asks "is there already a session for this
+            -- reference", newest first.
+            CREATE INDEX idx_agent_sessions_trigger_ref
+                ON agent_sessions(trigger_ref, created_at DESC)
+             WHERE trigger_ref IS NOT NULL;
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+                DROP INDEX IF EXISTS idx_agent_sessions_trigger_ref;
+                ALTER TABLE agent_sessions DROP COLUMN IF EXISTS trigger_ref;
+                ALTER TABLE agent_sessions DROP COLUMN IF EXISTS trigger_kind;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
