@@ -641,8 +641,9 @@ class SessionManager:
             # in it: with its quota used up, only work a person queued is
             # claimable. The quota is about what is *running*, so the
             # backlog behind it stays queued and visible.
+            quota = triggers.max_active_sessions(control.max_parallel)
             triggered = await db.count_active_trigger_sessions()
-            include_triggered = triggered < triggers.max_active_sessions(control.max_parallel)
+            include_triggered = triggered < quota
             candidate = await db.next_queued_session(include_triggered=include_triggered)
             if candidate is None:
                 return
@@ -670,7 +671,11 @@ class SessionManager:
             # peek and here the candidate can be cancelled, or something
             # more urgent on another model can arrive, and either would be
             # started against a reading of somebody else's lane.
-            taken = await db.claim_session(int(candidate["id"]))
+            # The quota is checked again inside the claim, against a count
+            # taken in the same statement: this one was read before the
+            # capacity call above, and another scheduler could have used the
+            # room in between.
+            taken = await db.claim_session(int(candidate["id"]), trigger_quota=quota)
             claimed = [taken] if taken else []
             # The claim is what makes these rows this pass's to launch, so
             # the launch record is taken here rather than inside _launch:
@@ -1442,6 +1447,22 @@ class SessionManager:
 
     # --- settlement -------------------------------------------------------
 
+    @staticmethod
+    async def _may_try_again(session: dict[str, Any]) -> bool:
+        """Whether this request has attempts left at all.
+
+        Distinguishes "the replacement failed to be created" from "this
+        request has had its three goes": the first is worth waiting for, the
+        second would keep a settled session owing an answer forever.
+        """
+        ref = str(session.get("trigger_ref") or "")
+        if not ref:
+            return False
+        try:
+            return await db.attempts_for_trigger(ref) < _MAX_ATTEMPTS_PER_REQUEST
+        except Exception:
+            return False
+
     async def take_up_again(self, session: dict[str, Any], *, by: str = "the runner") -> int | None:
         """Queue this session's work once more, from where it came from.
 
@@ -1763,8 +1784,15 @@ class SessionManager:
             # with again, quietly, and the thread hears from the attempt
             # that has something to report.
             logger.info("session %s left no answer; taking the work up again instead of saying so", session_id)
+            replacement = await self.take_up_again(session or {})
+            if replacement is None and await self._may_try_again(session or {}):
+                # The replacement could not be created — a database that
+                # blinked, not a decision. Left owing an answer, so the next
+                # sweep tries again: abandoning it first is how a request
+                # disappears between two failures.
+                logger.info("session %s could not be taken up again yet; leaving it owing an answer", session_id)
+                return
             await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
-            await self.take_up_again(session or {})
             return
         if len(body) > _MAX_REPLY_CHARS:
             # GitHub refuses a comment above its length limit outright, and

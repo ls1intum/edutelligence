@@ -836,6 +836,29 @@ async def list_sessions(
     return [dict(r) for r in rows]
 
 
+def _renumbered(order: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Priorities that put this list in exactly this order.
+
+    Spread across the range the column allows rather than nudged by one:
+    a queue whose top row is already at the maximum has no room above it,
+    and a move that cannot change the order is a move that did not happen.
+    Only rows whose number actually changes are written.
+    """
+    count = len(order)
+    if count == 0:
+        return []
+    step = max(1, 100 // (count + 1))
+    for index, row in enumerate(order):
+        row["priority"] = max(0, min(100, 100 - (index + 1) * step))
+    return order
+
+
+async def _one_session(session_id: int) -> dict[str, Any] | None:
+    async with sessionmaker()() as db:
+        row = (await db.execute(text(_SESSION_SELECT + " WHERE s.id = :id"), {"id": session_id})).mappings().first()
+    return dict(row) if row else None
+
+
 async def move_in_queue(session_id: int, move: str, *, by: str) -> dict[str, Any] | None:
     """Put a queued session somewhere else in the queue.
 
@@ -875,24 +898,29 @@ async def move_in_queue(session_id: int, move: str, *, by: str) -> dict[str, Any
         if at is None:
             await db.rollback()
             return None
-        if move == "first":
-            target = max((row["priority"] for row in order), default=50) + 1 if at > 0 else order[at]["priority"]
-        elif move == "up":
-            target = order[at - 1]["priority"] + 1 if at > 0 else order[at]["priority"]
-        else:
-            target = order[at + 1]["priority"] - 1 if at + 1 < len(order) else order[at]["priority"]
-        target = max(0, min(100, target))
-        await db.execute(
-            text(
-                """
-                UPDATE agent_sessions
-                   SET priority = :priority,
-                       priority_reason = :reason
-                 WHERE id = :id AND status = 'queued'
-                """
-            ),
-            {"id": session_id, "priority": target, "reason": f"moved in the queue by {by}"},
-        )
+        # The move expressed as a position, so the boundaries cannot swallow
+        # it: at 100 there is no "one above", and clamping would leave the
+        # order exactly as it was while telling the operator it had moved.
+        wanted = {"first": 0, "up": max(at - 1, 0), "down": min(at + 1, len(order) - 1)}[move]
+        if wanted == at:
+            await db.rollback()
+            return await _one_session(session_id)
+        moved = order.pop(at)
+        order.insert(wanted, moved)
+        reason = f"moved in the queue by {by}"
+        for position, row in enumerate(_renumbered(order)):
+            await db.execute(
+                text(
+                    """
+                    UPDATE agent_sessions
+                       SET priority = :priority,
+                           priority_reason = CASE WHEN id = :moved THEN :reason ELSE priority_reason END
+                     WHERE id = :id AND status = 'queued'
+                    """
+                ),
+                {"id": row["id"], "priority": row["priority"], "moved": session_id, "reason": reason},
+            )
+            del position
         row = (await db.execute(text(_SESSION_SELECT + " WHERE s.id = :id"), {"id": session_id})).mappings().first()
         await db.commit()
     return dict(row) if row else None
@@ -957,13 +985,18 @@ async def next_queued_session(*, include_triggered: bool = True) -> dict[str, An
     return dict(row) if row else None
 
 
-async def claim_session(session_id: int) -> dict[str, Any] | None:
+async def claim_session(session_id: int, *, trigger_quota: int | None = None) -> dict[str, Any] | None:
     """Take this exact queued session, or nothing.
 
     Admission measures the lane of the session it intends to start, and the
     peek and the claim are separate statements: in between, that row can be
     cancelled, or a more urgent one on another model can be queued. Claiming
     "the next one" would then start a session whose lane nobody measured.
+
+    ``trigger_quota`` is how many self-queued sessions may be running at
+    once, counted *inside this statement*. Counting it beforehand and
+    claiming afterwards leaves a window in which two schedulers both see
+    room — the automation would then take the places kept for people.
     """
     async with sessionmaker()() as db:
         claimed = (
@@ -978,11 +1011,21 @@ async def claim_session(session_id: int) -> dict[str, Any] | None:
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
                            )
+                       AND (
+                             s.trigger_ref IS NULL
+                             OR CAST(:trigger_quota AS INTEGER) IS NULL
+                             OR (
+                                  SELECT COUNT(*) FROM agent_sessions mine
+                                   WHERE mine.trigger_ref IS NOT NULL
+                                     AND mine.status = ANY(:occupying)
+                                ) < CAST(:trigger_quota AS INTEGER)
+                           )
                      FOR UPDATE OF s SKIP LOCKED
                     """
                 ),
                 {
                     "session_id": session_id,
+                    "trigger_quota": trigger_quota,
                     "occupying": [
                         SessionStatus.STARTING.value,
                         SessionStatus.RUNNING.value,

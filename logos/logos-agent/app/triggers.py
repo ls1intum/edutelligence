@@ -127,8 +127,8 @@ def _next_auto_name(existing: set[str]) -> str:
 def max_active_sessions(ceiling: int | None = None) -> int:
     """How many self-queued sessions may be active at once.
 
-    Derived rather than configured: the ceiling in force, less a couple of
-    places kept for people. An operator who queues work by hand should
+    Derived rather than configured: the ceiling in force, less a fifth of
+    it and at least one place, kept for people. An operator who queues work by hand should
     always find room next to the automation — triggered sessions have
     higher priorities and would otherwise win every slot — but keeping half
     the fleet idle for a session nobody has asked for is a poor trade on a
@@ -138,7 +138,9 @@ def max_active_sessions(ceiling: int | None = None) -> int:
     lowering the limit during an incident lowers this with it.
     """
     limit = settings.max_parallel_sessions if ceiling is None else ceiling
-    return max(1, limit - max(1, limit // 5))
+    # Never below zero: a ceiling of one means the one place is a person's,
+    # and a ceiling of zero means nothing runs at all — including this.
+    return max(0, limit - max(1, limit // 5))
 
 
 def mentions_agent(body: str) -> bool:

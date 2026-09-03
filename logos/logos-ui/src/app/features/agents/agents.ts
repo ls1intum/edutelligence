@@ -375,8 +375,21 @@ export class Agents implements OnInit {
   retrying = signal<number | null>(null);
   moving = signal<number | null>(null);
 
-  /** The queue, in the order the runner will work through it. */
-  readonly queuedSessions = computed(() => this.sessions().filter((s) => s.status === 'queued'));
+  /**
+   * The queue, in the order the runner will work through it.
+   *
+   * Not the order the list arrives in: sessions come newest-first, and the
+   * scheduler takes the most urgent, oldest among equals. Showing one and
+   * moving by the other would grey out the arrows on the wrong rows.
+   */
+  readonly queuedSessions = computed(() =>
+    this.sessions()
+      .filter((s) => s.status === 'queued')
+      .sort(
+        (a, b) =>
+          b.priority - a.priority || a.created_at.localeCompare(b.created_at) || a.id - b.id,
+      ),
+  );
 
   /**
    * Move a queued session in the queue.

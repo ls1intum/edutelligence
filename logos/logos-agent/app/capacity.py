@@ -199,7 +199,8 @@ def parse_scheduler_state(
     # Counted per model as well as in total: a lane holding a saturated
     # model and an idle one is not half busy — a session bound for the
     # saturated one has nowhere to go, and the average would hide that.
-    per_model: dict[str, list[int]] = {}
+    # Per model, not per deployment: busy, waiting, capacity, cache.
+    per_model: dict[str, list[float]] = {}
     providers = ((payload.get("logosnode") or {}).get("providers")) or {}
 
     busy = 0
@@ -222,28 +223,35 @@ def parse_scheduler_state(
                 continue
             name = str(model.get("model_name") or model_id)
             active, waiting, cache = _live(model, capacity)
-            # Ours come off this model's figures, from what is *running*
-            # first. The other way round empties the queue on the assumption
-            # that our sessions are the ones waiting — and a queue that
-            # reads as empty is the signal that a user is not waiting, which
-            # is the one thing worth being wrong about in the safe
-            # direction.
-            ours_here = mine.get(name.strip().lower(), 0)
-            ours_serving = min(ours_here, active)
-            ours_waiting = min(ours_here - ours_serving, waiting)
-            active -= ours_serving
-            waiting -= ours_waiting
-            queue_total += waiting
             fleet_total += capacity
             fleet_busy += active
             if wanted and (str(provider_id), str(model_id)) not in wanted:
+                # Still counted towards the queue: somebody waiting on a
+                # deployment we cannot reach is somebody waiting.
+                queue_total += waiting
                 continue
             total += capacity
-            busy += active
-            slots = per_model.setdefault(name, [0, 0, 0.0])
+            slots = per_model.setdefault(name, [0, 0, 0, 0.0])
             slots[0] += active
-            slots[1] += capacity
-            slots[2] = max(slots[2], cache)
+            slots[1] += waiting
+            slots[2] += capacity
+            slots[3] = max(slots[3], cache)
+
+    # Ours come off each model *once*, after its deployments are added up:
+    # the same model served by three providers is one lane, and subtracting
+    # the same sessions from each of them would erase three times what this
+    # runner is doing. From what is *running* before what is waiting, too —
+    # the other way round empties the queue on the assumption that our
+    # sessions are the ones waiting, and a queue that reads as empty is the
+    # signal that no user is waiting.
+    for name, slots in per_model.items():
+        ours_here = mine.get(name.strip().lower(), 0)
+        ours_serving = min(ours_here, slots[0])
+        ours_waiting = min(ours_here - ours_serving, slots[1])
+        slots[0] -= ours_serving
+        slots[1] -= ours_waiting
+        busy += slots[0]
+        queue_total += slots[1]
 
     fell_back = False
     if wanted and total == 0 and fleet_total > 0:
@@ -271,9 +279,9 @@ def parse_scheduler_state(
         # The busiest of them decides. Being kept out of an idle model
         # because another is full costs this runner some capacity; letting a
         # session into a full one costs a user their turn.
-        name, (model_busy, model_total, cache) = max(
+        name, (model_busy, _model_waiting, model_total, cache) = max(
             per_model.items(),
-            key=lambda item: (max((item[1][0] / item[1][1]) if item[1][1] else 0.0, item[1][2])),
+            key=lambda item: (max((item[1][0] / item[1][2]) if item[1][2] else 0.0, item[1][3])),
         )
         where = f" on {name}" if len(per_model) > 1 else ""
         detail = f"{model_busy}/{model_total} requests in flight{where}"
