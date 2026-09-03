@@ -53,6 +53,11 @@ def remaining_queue_wait_s(ingress_at: float | None) -> float | None:
     Without an ingress stamp (async jobs, tests) there is no client
     watchdog to beat, so ``None`` is returned and the scheduler keeps
     the plain window.
+
+    Call this immediately before the queue wait, not earlier: anything that
+    runs in between (notably the scheduler's synchronous candidate scoring,
+    whose SDI refreshes can each block on a 5s HTTP fetch) also spends
+    client window, and only a wait-time recompute deducts it.
     """
     if ingress_at is None:
         return None

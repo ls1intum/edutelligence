@@ -16,7 +16,7 @@ from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority
-from logos.timeouts import global_timeout_s, remaining_queue_wait_s
+from logos.timeouts import global_timeout_s
 
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
@@ -102,9 +102,11 @@ class PipelineRequest:
     # Calling API key. Seeds the prefix-affinity hash so two keys never share
     # a stream identity, and so one key's parallel agent loops stay separate.
     api_key_id: Optional[int] = None
-    # time.monotonic() stamp of request ingress (sync path only). The queue
-    # wait is capped at the client window minus the time already spent before
-    # enqueue, so the queue-timeout 429 still beats the client's watchdog.
+    # time.monotonic() stamp of request ingress (sync path only). Forwarded to
+    # the scheduler, which recomputes the queue-wait cap from it at wait time
+    # (``remaining_queue_wait_s``) — so auth, the worker reconnect wait,
+    # classification and the synchronous scheduling phase all count against
+    # the client window, and the queue-timeout 429 still beats its watchdog.
     ingress_at: Optional[float] = None
 
 
@@ -238,7 +240,11 @@ class RequestPipeline:
             required_provider_id=request.required_provider_id,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
             background_app=is_background_app(request.headers),
-            queue_wait_budget_s=remaining_queue_wait_s(request.ingress_at),
+            # Absolute ingress stamp, not a precomputed remainder: the
+            # scheduler recomputes what is left of the client window at wait
+            # time, so the synchronous scheduling phase in between (which can
+            # block on per-candidate SDI refreshes) counts against it too.
+            ingress_at=request.ingress_at,
         )
 
         # Record enqueue

@@ -11,7 +11,7 @@ import logging
 from typing import List, Optional, Tuple
 
 from logos.queue.priority_queue import Priority
-from logos.timeouts import DEFAULT_QUEUE_WAIT_TIMEOUT_S, global_timeout_s
+from logos.timeouts import DEFAULT_QUEUE_WAIT_TIMEOUT_S, global_timeout_s, remaining_queue_wait_s
 
 from .base_scheduler import BaseScheduler
 from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
@@ -121,11 +121,15 @@ class UtilizationAwareScheduler(BaseScheduler):
 
         try:
             timeout = request.timeout_s if request.timeout_s else global_timeout_s(DEFAULT_QUEUE_WAIT_TIMEOUT_S)
-            if request.queue_wait_budget_s is not None:
-                # Absolute client budget: pre-queue work (auth, worker
-                # reconnect wait, classification) already spent part of the
-                # window, so only the remainder may be spent waiting here.
-                timeout = min(timeout, request.queue_wait_budget_s)
+            # Recompute the client budget now, immediately before the wait,
+            # rather than trusting a value fixed at request construction: the
+            # synchronous selection above ran after construction and spent
+            # part of the window too, so only what is left at this instant may
+            # be spent waiting here (queue-timeout 429 stays ahead of the
+            # client's watchdog).
+            remaining = remaining_queue_wait_s(request.ingress_at)
+            if remaining is not None:
+                timeout = min(timeout, remaining)
             result = await asyncio.wait_for(future, timeout=timeout)
 
             if provider_type == "logosnode":

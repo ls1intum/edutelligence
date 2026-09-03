@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
-from logos.timeouts import DEFAULT_QUEUE_WAIT_TIMEOUT_S, global_timeout_s
+from logos.timeouts import DEFAULT_QUEUE_WAIT_TIMEOUT_S, global_timeout_s, remaining_queue_wait_s
 
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
@@ -803,11 +803,16 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             timeout = (
                 request.timeout_s if request.timeout_s else global_timeout_s(DEFAULT_QUEUE_WAIT_TIMEOUT_S)
             )  # bounded queue wait (or LOGOS_TIMEOUT_S)
-            if request.queue_wait_budget_s is not None:
-                # Absolute client budget: pre-queue work (auth, worker
-                # reconnect wait, classification) already spent part of the
-                # window, so only the remainder may be spent waiting here.
-                timeout = min(timeout, request.queue_wait_budget_s)
+            # Recompute the client budget now, immediately before the wait,
+            # rather than trusting a value fixed at request construction: the
+            # synchronous scoring phase above (per-candidate SDI refreshes can
+            # each block on a 5s HTTP fetch) ran after construction and spent
+            # part of the window too. Only what is left at this instant may be
+            # spent waiting here, so the queue-timeout 429 still beats the
+            # client's watchdog.
+            remaining = remaining_queue_wait_s(request.ingress_at)
+            if remaining is not None:
+                timeout = min(timeout, remaining)
             result = await asyncio.wait_for(future, timeout=timeout)
 
             # Attach ETTFT info to the dequeued result (decision-time values:
