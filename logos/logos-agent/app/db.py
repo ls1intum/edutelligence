@@ -836,6 +836,12 @@ async def list_sessions(
     return [dict(r) for r in rows]
 
 
+# How long a queue can still be put in an exact order using the priority
+# column alone. Beyond it two rows must share a number, and the tie falls to
+# age — which is what a move overrules, so the move would not hold.
+_ORDERABLE = 100
+
+
 def _renumbered(order: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Priorities that put this list in exactly this order.
 
@@ -847,6 +853,12 @@ def _renumbered(order: list[dict[str, Any]]) -> list[dict[str, Any]]:
     count = len(order)
     if count == 0:
         return []
+    if count > _ORDERABLE:
+        # More rows than the column has distinct values: two of them would
+        # share a number and the tie would fall to age, which is the very
+        # thing a move is trying to overrule. The caller refuses instead of
+        # pretending.
+        raise ValueError(f"a queue of {count} cannot be ordered by priority alone")
     step = max(1, 100 // (count + 1))
     for index, row in enumerate(order):
         row["priority"] = max(0, min(100, 100 - (index + 1) * step))
@@ -907,8 +919,13 @@ async def move_in_queue(session_id: int, move: str, *, by: str) -> dict[str, Any
             return await _one_session(session_id)
         moved = order.pop(at)
         order.insert(wanted, moved)
+        try:
+            order = _renumbered(order)
+        except ValueError:
+            await db.rollback()
+            raise
         reason = f"moved in the queue by {by}"
-        for position, row in enumerate(_renumbered(order)):
+        for position, row in enumerate(order):
             await db.execute(
                 text(
                     """
@@ -999,6 +1016,13 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
     room — the automation would then take the places kept for people.
     """
     async with sessionmaker()() as db:
+        if trigger_quota is not None:
+            # One admission at a time, across every replica: two schedulers
+            # locking different rows would otherwise both read the same
+            # count of active triggered sessions and both pass the check
+            # below, taking the places kept for people. Held to the end of
+            # this transaction, which is the claim.
+            await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('logos-agent-admission'))"))
         claimed = (
             await db.execute(
                 text(

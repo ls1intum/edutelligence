@@ -221,7 +221,11 @@ def parse_scheduler_state(
             capacity = int(model.get("max_capacity") or 0)
             if capacity <= 0:
                 continue
-            name = str(model.get("model_name") or model_id)
+            # Normalised: the platform is case-insensitive about model
+            # names, and "Qwen" and "qwen" reported by two providers must
+            # not become two pools — the busiest of which would then be one
+            # provider's view of a model, not the model.
+            name = str(model.get("model_name") or model_id).strip().lower()
             active, waiting, cache = _live(model, capacity)
             fleet_total += capacity
             fleet_busy += active
@@ -279,14 +283,20 @@ def parse_scheduler_state(
         # The busiest of them decides. Being kept out of an idle model
         # because another is full costs this runner some capacity; letting a
         # session into a full one costs a user their turn.
-        name, (model_busy, _model_waiting, model_total, cache) = max(
+        # Two "worsts", chosen independently, because the two figures are
+        # used by different decisions and one must not hide the other: a
+        # model at 0% load with a 95% cache would otherwise be picked as the
+        # busiest and then report its 0% load, so the runner would neither
+        # yield to a second model at 90% nor keep its paused work asleep.
+        name, (model_busy, _model_waiting, model_total, _cache) = max(
             per_model.items(),
-            key=lambda item: (max((item[1][0] / item[1][2]) if item[1][2] else 0.0, item[1][3])),
+            key=lambda item: ((item[1][0] / item[1][2]) if item[1][2] else 0.0),
         )
+        cache = max(slots[3] for slots in per_model.values())
         where = f" on {name}" if len(per_model) > 1 else ""
         detail = f"{model_busy}/{model_total} requests in flight{where}"
         if cache:
-            detail += f", {cache:.0%} of its KV cache in use"
+            detail += f", {cache:.0%} of a KV cache in use"
         return Reading(
             load=(model_busy / model_total) if model_total else 0.0,
             busy_slots=model_busy,

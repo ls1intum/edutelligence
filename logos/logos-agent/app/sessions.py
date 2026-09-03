@@ -744,7 +744,8 @@ class SessionManager:
         sid, container_id = session["id"], session.get("container_id")
         if not container_id:
             return False
-        if not await self._container_exists(container_id):
+        state, exit_code = await self._container_now(container_id)
+        if state == "gone":
             # Gone while it was paused — removed by a person, or swept with
             # the host. There is nothing to thaw and nothing to wait for:
             # left paused it would be retried every fifteen seconds forever,
@@ -752,6 +753,15 @@ class SessionManager:
             # does.
             logger.warning("session %s was paused and its container is gone; settling it", sid)
             await self._settle(sid, exit_code=None, error="the container disappeared while the session was paused")
+            return False
+        if state == "exited":
+            # It ran to its end while the row said paused — a settlement
+            # that lost the race to the pauser leaves exactly this. Docker
+            # cannot unpause an exited container, so retrying would mean
+            # retrying forever; its exit code is what the session is worth,
+            # and the ordinary settlement path reads its result file.
+            logger.info("session %s exited while it was paused; settling it on its own exit", sid)
+            await self._settle(sid, exit_code=exit_code, error=None)
             return False
         # Attach first: a session thawed without its network would fail on
         # its next model call, which is worse than staying paused one more
@@ -782,19 +792,18 @@ class SessionManager:
         return False
 
     @staticmethod
-    async def _container_exists(container_id: str) -> bool:
-        """Whether Docker still has this container.
+    async def _container_now(container_id: str) -> tuple[str, int | None]:
+        """What Docker says about this container, and its exit code if any.
 
-        Unknown counts as present: a daemon that cannot be asked is not
-        evidence that a session's container is gone, and settling a live
-        session on a failed question would throw its work away.
+        A daemon that cannot be asked answers "running": an unanswered
+        question is not evidence that a session's work should be thrown
+        away, and the next pass asks again.
         """
         try:
-            state, _ = await docker_engine.container_state(container_id)
+            return await docker_engine.container_state(container_id)
         except Exception as exc:
             logger.info("could not ask about container %s: %s", container_id, exc)
-            return True
-        return state != "gone"
+            return "running", None
 
     def _register_launch(self, session_id: int) -> _Launch:
         """Take (or find) the launch record for a session.
@@ -1476,8 +1485,13 @@ class SessionManager:
             return False
         try:
             return await db.attempts_for_trigger(ref) < _MAX_ATTEMPTS_PER_REQUEST
-        except Exception:
-            return False
+        except Exception as exc:
+            # A database that blinked is not an answer. Treated as "yes,
+            # there is another attempt", so the reply stays owed and a later
+            # sweep decides once the question can be asked again — the
+            # alternative loses the request on a transient failure.
+            logger.info("could not count the attempts on %s; keeping the answer owed: %s", ref, exc)
+            return True
 
     async def take_up_again(self, session: dict[str, Any], *, by: str = "the runner") -> int | None:
         """Queue this session's work once more, from where it came from.

@@ -220,7 +220,15 @@ class TestMovingInTheQueue:
             async def execute(self, statement, params=None):
                 sql = str(statement)
                 if "ORDER BY priority DESC" in sql:
-                    return _Rows(sorted(state, key=lambda row: (-row["priority"], row["id"])))
+                    # The production key: priority, then age, then id. A
+                    # fake that ordered by id would accept a move that the
+                    # database's own tie-break would undo.
+                    return _Rows(
+                        sorted(
+                            state,
+                            key=lambda row: (-row["priority"], row.get("created_at", ""), row["id"]),
+                        )
+                    )
                 if sql.strip().startswith("UPDATE"):
                     for row in state:
                         if row["id"] == params["id"]:
@@ -250,7 +258,9 @@ class TestMovingInTheQueue:
     @staticmethod
     def order(state):
         """The queue as the scheduler would read it."""
-        return [row["id"] for row in sorted(state, key=lambda row: (-row["priority"], row["id"]))]
+        return [
+            row["id"] for row in sorted(state, key=lambda row: (-row["priority"], row.get("created_at", ""), row["id"]))
+        ]
 
     async def test_moving_up_changes_the_order(self, monkeypatch):
         state, session = self.queue(
@@ -330,3 +340,36 @@ class TestMovingInTheQueue:
         moved = next(row for row in state if row["id"] == 2)
         assert "tobias" in str(moved.get("priority_reason"))
         assert not next(row for row in state if row["id"] == 1).get("priority_reason")
+
+
+class TestMovingWhenAgeAndIdDisagree:
+    """The queue is ordered by age among equals, not by row id.
+
+    A fake that sorted by id would accept a move the database's own
+    tie-break undoes — the rows here are deliberately numbered against
+    their order in time.
+    """
+
+    async def test_a_move_holds_when_the_older_row_has_the_higher_id(self, monkeypatch):
+        state, session = TestMovingInTheQueue.queue(
+            {"id": 9, "priority": 60, "created_at": "2026-09-03T10:00:00"},
+            {"id": 1, "priority": 60, "created_at": "2026-09-03T11:00:00"},
+        )
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        # 9 is older, so it is first; moving 1 to the front has to hold
+        # against that.
+        assert TestMovingInTheQueue.order(state) == [9, 1]
+        await db.move_in_queue(1, "first", by="tobias")
+
+        assert TestMovingInTheQueue.order(state) == [1, 9]
+
+    async def test_a_queue_too_long_to_order_is_refused(self, monkeypatch):
+        rows = [{"id": index, "priority": 50, "created_at": f"2026-09-03T{index:02d}:00:00"} for index in range(120)]
+        state, session = TestMovingInTheQueue.queue(*rows)
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        # Two rows would have to share a number, and the tie falls to age —
+        # which is the thing the move is overruling.
+        with pytest.raises(ValueError, match="cannot be ordered"):
+            await db.move_in_queue(119, "first", by="tobias")

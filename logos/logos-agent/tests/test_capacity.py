@@ -298,8 +298,9 @@ class TestTheLaneWeAreServedBy:
         reading = capacity.parse_scheduler_state(payload, lane=frozenset({("15", "97"), ("15", "37")}))
 
         assert reading.load == 1.0
-        # And it says which model it is talking about.
-        assert "Qwen/Qwen3.8-27B" in reading.detail
+        # And it says which model it is talking about — under the name the
+        # comparison uses, which is case-normalised.
+        assert "qwen/qwen3.8-27b" in reading.detail
 
 
 class TestWhatTheEngineSaysItself:
@@ -532,3 +533,71 @@ class TestWhichDecisionGetsTheDiscount:
         adjusted = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={"model-a": 9})
 
         assert adjusted.busy_slots == 0 and adjusted.queue_total == 0
+
+
+class TestLoadAndCacheAreChosenApart:
+    """One model's full cache must not hide another model's full lane.
+
+    Picking "the busiest" by whichever of the two is worse, and then
+    reporting that model's request load, is how a model at 0% load with a
+    95% cache came to represent a lane whose other model was at 90%.
+    """
+
+    LANE = frozenset({("15", "97"), ("15", "37")})
+
+    @staticmethod
+    def payload(a_running, a_cache, b_running, b_cache):
+        def model(name, running, cache):
+            return {
+                "model_name": name,
+                "active": 0,
+                "queue_depth": 0,
+                "max_capacity": 10,
+                "loaded": True,
+                "scheduler_signals": {
+                    "requests_running_current": running,
+                    "queue_waiting_current": 0.0,
+                    "gpu_cache_usage_percent_max": cache,
+                },
+            }
+
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {
+                            "97": model("model-a", a_running, a_cache),
+                            "37": model("model-b", b_running, b_cache),
+                        }
+                    }
+                }
+            },
+        }
+
+    def test_the_busiest_lane_decides_the_load(self):
+        reading = capacity.parse_scheduler_state(
+            self.payload(a_running=0.0, a_cache=95.0, b_running=9.0, b_cache=0.0), lane=self.LANE
+        )
+
+        # B is the one users are waiting behind, whatever A's cache says.
+        assert reading.load == 0.9
+        assert "model-b" in reading.detail
+
+    def test_the_fullest_cache_still_stops_new_work(self):
+        reading = capacity.parse_scheduler_state(
+            self.payload(a_running=0.0, a_cache=95.0, b_running=9.0, b_cache=0.0), lane=self.LANE
+        )
+
+        assert reading.cache_pressure == 0.95
+        assert not capacity.start_decision(reading, running=0, paused=0, max_parallel=4)[0]
+
+    def test_a_case_difference_is_not_a_second_model(self):
+        payload = self.payload(a_running=5.0, a_cache=0.0, b_running=5.0, b_cache=0.0)
+        payload["logosnode"]["providers"]["15"]["models"]["37"]["model_name"] = "Model-A"
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        # One model on two providers: ten in flight of twenty, not five of
+        # ten twice over.
+        assert reading.busy_slots == 10 and reading.total_slots == 20

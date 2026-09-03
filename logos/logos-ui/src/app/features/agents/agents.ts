@@ -178,7 +178,12 @@ export class Agents implements OnInit {
   private async tick(): Promise<void> {
     // Only poll while something can change; a page left open on a finished
     // session should not keep the runner busy answering.
-    if (this.activeSessions().length === 0 && this.selectedId() === null) {
+    // Everything that has not finished, queued rows included: they are not
+    // rendered with the active ones any more, and gating the poll on that
+    // list would leave a page showing only a queue frozen — no start, no
+    // cancellation and no reordering would ever reach it.
+    const live = this.sessions().filter((s) => isActive(s.status)).length;
+    if (live === 0 && this.selectedId() === null) {
       await this.loadCapacity();
       return;
     }
