@@ -373,26 +373,6 @@ class ModelRamCache:
             ok = await self._copy_model(model_name)
             if ok:
                 self._cached_models.add(model_name)
-                # The pre-copy check above is a snapshot: the re-plan runs on
-                # a tick and after every lane sleep, so the floor may have
-                # risen while this copy ran. Re-check the live floor with the
-                # entry now resident (size 0, as in the already-cached branch)
-                # — serving the lane from an over-floor entry would protect it
-                # (the lane reads it) and leave the lane's first sleep short of
-                # planned host RAM, so serve from disk instead. The entry
-                # stays in the cache and is evictable: the lane did not launch
-                # from it.
-                starves, host_available = self._would_starve_host(0)
-                if starves:
-                    logger.warning(
-                        "Model %s: cached, but host RAM (%d MB) is below the "
-                        "%d MB sleep reserve — loading from disk so the lane's "
-                        "first sleep has planned host RAM",
-                        model_name,
-                        host_available // (1024 * 1024),
-                        self._host_ram_floor_bytes // (1024 * 1024),
-                    )
-                    return str(self._source_hub.parent)
                 logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
             logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
@@ -473,19 +453,6 @@ class ModelRamCache:
         ok = self._copy_model_sync(model_name)
         if ok:
             self._cached_models.add(model_name)
-            # Same post-copy re-check as the async path: the reserve may have
-            # risen while the copy ran (see ensure_cached).
-            starves, host_available = self._would_starve_host(0)
-            if starves:
-                logger.warning(
-                    "Model %s: cached, but host RAM (%d MB) is below the "
-                    "%d MB sleep reserve — loading from disk so the lane's "
-                    "first sleep has planned host RAM",
-                    model_name,
-                    host_available // (1024 * 1024),
-                    self._host_ram_floor_bytes // (1024 * 1024),
-                )
-                return str(self._source_hub.parent)
             logger.info("Model %s: cached to tmpfs RAM cache (sync)", model_name)
             return str(self._cache_hub.parent)
         logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
