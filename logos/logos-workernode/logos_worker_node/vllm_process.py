@@ -418,6 +418,11 @@ class VllmProcessHandle:
         # Duration of the most recent successful wake-from-sleep (/wake_up
         # call). None until at least one successful wake has been observed.
         self._last_wake_from_sleep_s: float | None = None
+        # Cumulative vLLM Prometheus counters from the previous poll; used to
+        # compute per-interval deltas for the prefill EWMA in the orchestrator.
+        self._prev_ttft_sum: float = 0.0
+        self._prev_ttft_count: float = 0.0
+        self._prev_prompt_tokens_total: float = 0.0
         # Set by _maybe_prepare_sharded_checkpoint when a pre-sharded checkpoint
         # is used for a TP>1 lane; _build_cmd then serves this directory with
         # --load-format sharded_state instead of the full checkpoint.
@@ -1311,6 +1316,8 @@ class VllmProcessHandle:
             "generation_tokens_total": None,
             "ttft_histogram": {},
             "e2e_latency_histogram": {},
+            "last_prefill_s": None,
+            "last_prefill_tokens": None,
         }
         if self._http is None:
             return metrics
@@ -1322,6 +1329,8 @@ class VllmProcessHandle:
             _prefix_hits: float = 0.0
             _spec_draft_tokens_total: float = 0.0
             _spec_accepted_tokens_total: float = 0.0
+            _ttft_sum: float = self._prev_ttft_sum
+            _ttft_count: float = self._prev_ttft_count
             for raw_line in resp.text.splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -1383,6 +1392,10 @@ class VllmProcessHandle:
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]
                     metrics["ttft_histogram"][bucket] = value
+                elif metric_name.endswith("time_to_first_token_seconds_sum"):
+                    _ttft_sum = value
+                elif metric_name.endswith("time_to_first_token_seconds_count"):
+                    _ttft_count = value
                 elif "e2e_request_latency_seconds_bucket" in metric_name:
                     bucket = "unknown"
                     if 'le="' in name:
@@ -1402,6 +1415,20 @@ class VllmProcessHandle:
                 # token-weighted aggregation in the orchestrator).
                 metrics["mtp_draft_tokens_total"] = _spec_draft_tokens_total
                 metrics["mtp_accepted_tokens_total"] = _spec_accepted_tokens_total
+            # Compute per-poll deltas for the prefill EWMA. Positive delta_count
+            # means new requests completed since the last poll; negative means the
+            # vLLM process restarted and counters reset, so we skip that poll.
+            delta_count = _ttft_count - self._prev_ttft_count
+            if delta_count > 0:
+                delta_sum = _ttft_sum - self._prev_ttft_sum
+                delta_tokens = (metrics["prompt_tokens_total"] or 0.0) - self._prev_prompt_tokens_total
+                if delta_sum > 0:
+                    metrics["last_prefill_s"] = delta_sum / delta_count
+                if delta_tokens > 0:
+                    metrics["last_prefill_tokens"] = delta_tokens / delta_count
+            self._prev_ttft_sum = _ttft_sum
+            self._prev_ttft_count = _ttft_count
+            self._prev_prompt_tokens_total = metrics["prompt_tokens_total"] or 0.0
         except httpx.HTTPError:
             return metrics
         return metrics

@@ -101,3 +101,61 @@ class TestNoLatencyStore:
     def test_registry_without_store_has_none(self):
         reg = LogosNodeRuntimeRegistry()
         assert reg._latency_store is None
+
+
+# ---------------------------------------------------------------------------
+# Prefill ingestion path (last_prefill_s / last_prefill_tokens from worker)
+# ---------------------------------------------------------------------------
+
+
+class TestPrefillIngestion:
+    def _lane_with_prefill(self, model: str = "test-model", prefill_s=1.5, prefill_tokens=300, **kwargs) -> dict:
+        return {"model": model, "backend_metrics": {"last_prefill_s": prefill_s, "last_prefill_tokens": prefill_tokens, **kwargs}}
+
+    def test_prefill_observation_reaches_record_prefill(self):
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(7, _runtime([self._lane_with_prefill()]))
+        store.record_prefill.assert_called_once_with("test-model", 7, 1.5, 300)
+
+    def test_prefill_provider_id_forwarded(self):
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(42, _runtime([self._lane_with_prefill(prefill_s=2.0, prefill_tokens=500)]))
+        store.record_prefill.assert_called_once_with("test-model", 42, 2.0, 500)
+
+    def test_prefill_tokens_zero_rejected(self):
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(1, _runtime([self._lane_with_prefill(prefill_tokens=0)]))
+        store.record_prefill.assert_not_called()
+
+    def test_prefill_tokens_fractional_rejected(self):
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(1, _runtime([self._lane_with_prefill(prefill_tokens=1.5)]))
+        store.record_prefill.assert_not_called()
+
+    def test_prefill_s_infinite_rejected(self):
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(1, _runtime([self._lane_with_prefill(prefill_s=float("inf"))]))
+        store.record_prefill.assert_not_called()
+
+    def test_prefill_tokens_infinite_rejected(self):
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(1, _runtime([self._lane_with_prefill(prefill_tokens=float("inf"))]))
+        store.record_prefill.assert_not_called()
+
+    def test_prefill_missing_fields_not_called(self):
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(1, _runtime([_lane()]))
+        store.record_prefill.assert_not_called()
+
+    def test_prefill_none_fields_not_called(self):
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(1, _runtime([self._lane_with_prefill(prefill_s=None, prefill_tokens=300)]))
+        store.record_prefill.assert_not_called()

@@ -1183,6 +1183,51 @@ vllm:gpu_prefix_cache_hits{model_name="m"} 10
     assert metrics["prefix_cache_hit_rate"] == pytest.approx(0.1)
 
 
+@pytest.mark.asyncio
+async def test_get_backend_metrics_emits_prefill_delta_fields() -> None:
+    """last_prefill_s and last_prefill_tokens are derived from per-poll deltas
+    of the cumulative _sum/_count Prometheus counters."""
+
+    def _make_response(ttft_sum: float, ttft_count: float, prompt_tokens: float) -> object:
+        class DummyResponse:
+            status_code = 200
+            text = (
+                f'vllm:time_to_first_token_seconds_sum{{model_name="m"}} {ttft_sum}\n'
+                f'vllm:time_to_first_token_seconds_count{{model_name="m"}} {ttft_count}\n'
+                f'vllm:prompt_tokens_total{{model_name="m"}} {prompt_tokens}\n'
+                f'vllm:num_requests_running{{model_name="m"}} 1\n'
+            )
+
+        return DummyResponse()
+
+    responses: list[object] = []
+
+    class DummyClient:
+        async def get(self, _url: str, timeout: float = 5.0):  # noqa: ARG002
+            return responses.pop(0)
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._http = DummyClient()  # type: ignore[assignment]
+
+    # First poll: cumulative counters since process start (2 requests, 10s total, 1000 tokens).
+    responses.append(_make_response(ttft_sum=10.0, ttft_count=2.0, prompt_tokens=1000.0))
+    m1 = await handle.get_backend_metrics()
+    assert m1["last_prefill_s"] == pytest.approx(5.0)   # 10/2
+    assert m1["last_prefill_tokens"] == pytest.approx(500.0)  # 1000/2
+
+    # Second poll: one new request (sum +5s, count +1, tokens +400).
+    responses.append(_make_response(ttft_sum=15.0, ttft_count=3.0, prompt_tokens=1400.0))
+    m2 = await handle.get_backend_metrics()
+    assert m2["last_prefill_s"] == pytest.approx(5.0)   # 5/1
+    assert m2["last_prefill_tokens"] == pytest.approx(400.0)  # 400/1
+
+    # Third poll: no new requests — delta_count == 0, fields stay None.
+    responses.append(_make_response(ttft_sum=15.0, ttft_count=3.0, prompt_tokens=1400.0))
+    m3 = await handle.get_backend_metrics()
+    assert m3["last_prefill_s"] is None
+    assert m3["last_prefill_tokens"] is None
+
+
 def test_build_env_injects_nccl_safety_for_tp_greater_than_1(monkeypatch) -> None:
     handle = VllmProcessHandle(
         "lane-test",

@@ -18,12 +18,11 @@ import random
 import time
 from typing import Dict, List, Optional, Tuple
 
+from logos.context_budget import estimate_prompt_tokens
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
 from logos.timeouts import global_timeout_s
-
-from logos.context_budget import estimate_prompt_tokens
 
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
