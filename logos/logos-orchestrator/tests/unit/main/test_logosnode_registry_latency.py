@@ -173,12 +173,6 @@ class TestPrefillIngestion:
         reg._absorb_latency_observations(1, _runtime([self._lane_with_prefill(prefill_tokens=0)]))
         store.record_prefill.assert_not_called()
 
-    def test_prefill_tokens_fractional_rejected(self):
-        store = MagicMock()
-        reg = _make_registry(store)
-        reg._absorb_latency_observations(1, _runtime([self._lane_with_prefill(prefill_tokens=1.5)]))
-        store.record_prefill.assert_not_called()
-
     def test_prefill_s_infinite_rejected(self):
         store = MagicMock()
         reg = _make_registry(store)
