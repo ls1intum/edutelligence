@@ -63,6 +63,25 @@ session is never resumed into a permission it no longer has. The **queue** is
 deliberately not filtered — models share GPUs, so a person waiting on any of
 them is a person this runner gets out of the way of.
 
+**Minus its own share, where that is the right question.** The orchestrator
+reports how busy a model is; it does not report *who* is keeping it busy,
+and nothing in its payload could say. So the runner estimates: a running
+session has at most one request outstanding, per model, and that many come
+off the figures.
+
+Whether to *hand capacity back* is a question about other people, so it is
+decided on that adjusted figure. Without it a runner reads its own sessions
+as user traffic — it pauses itself for them, the load it reacted to leaves
+with them, it resumes, and it does it again — and its own sessions queueing
+read as "users are queueing", the signal that means stop everything. A real
+user waiting still shows, and still stops it.
+
+Whether to *take more on* is a question about the model, and the estimate is
+an upper bound: a running session may be between turns, running tests,
+making no request at all. Subtracting too much there would add work to a
+lane that is genuinely busy, so admission uses the figure as measured. What
+bounds the runner's own concurrency is the parallel ceiling, not the load.
+
 | Condition | What happens |
 |---|---|
 | load < `START_BELOW_LOAD` (default 60 %) and no queue | queued sessions may start |
@@ -169,6 +188,14 @@ survive a restart, and both are visible to whoever finds the runner stopped.
 | **Sessions at once** | A ceiling for now, overriding the configured one. Zero drains without pausing. |
 
 ## What gets worked on first
+
+An operator can overrule it. The queue on the page carries three controls on
+every session waiting in it — to the front, up one, down one — because the
+order is what the runner works through while the platform is busy, and
+which review is holding up a release is something the person watching knows
+and the rules do not. A move past a session of equal priority goes one above
+it: ties are broken by age, and nothing can make a session older.
+
 
 A session is admitted per capacity reading, so the order of the queue is what
 the platform actually works on while it is busy. That order is urgency, not
@@ -349,8 +376,13 @@ answered twice. Only the *newest* changes-requested review of a pull request
 counts as work; the older ones were answered by it. A session that failed is
 re-queued by a person, who can see why it failed.
 
-**Bounded.** At most half the parallel ceiling may be self-queued sessions,
-so an operator queueing work by hand always finds room. Bots are ignored:
+**Bounded.** Self-queued sessions may *run* up to the parallel ceiling less a
+fifth of it, at least one place, kept for people — triggered sessions carry
+higher priorities and would otherwise win every slot. Keeping half the fleet
+idle for a session nobody has asked for is the wrong trade on a platform
+whose point is spending what would go to waste. What does not fit runs
+later: it is queued, in priority order, and visible as work waiting rather
+than left in the repository where nobody sees it. Bots are ignored:
 their findings reach the agent through the next review, not as a session per
 note. Workspaces are created on demand up to the ceiling, since a session the
 runner queued has nobody to prepare a working copy for it.

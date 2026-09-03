@@ -30,9 +30,9 @@ from typing import Any
 
 import httpx
 
-from . import attachments, capacity, controls, db, docker_engine, github, model_policy
+from . import attachments, capacity, controls, db, docker_engine, github, model_policy, triggers
 from .config import REPLY_FILE, settings
-from .schemas import EventKind, SessionStatus
+from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,11 @@ _MAX_REPLY_CHARS = 60000
 # How often an undelivered answer is retried before it is left alone.
 _MAX_REPLY_ATTEMPTS = 5
 
+# How many sessions one request may have before the runner stops taking it
+# up again. A launch that cannot work, or a task nothing can be made of:
+# three attempts survives an accident and is few enough to notice.
+_MAX_ATTEMPTS_PER_REQUEST = 3
+
 # How long a workspace the runner created must have existed before it may be
 # swept away. It covers the gap between a session being queued into a fresh
 # workspace and being claimed, in which neither is active yet.
@@ -89,35 +94,23 @@ def container_name(session_id: int) -> str:
     return f"{_CONTAINER_PREFIX}{session_id}"
 
 
-def _report_without_the_agent(session: dict[str, Any]) -> str:
-    """What to say on a thread whose session said nothing.
+def _ours_by_model(running: list[dict[str, Any]], policy: model_policy.ModelPolicy) -> dict[str, int]:
+    """How many sessions this runner is running, per model they run on.
 
-    Not an apology and not a summary of the runner's internals: what was
-    attempted, what came of it, and how to see the rest. Written here
-    because the alternative — saying nothing — reads exactly like being
-    ignored, whatever the session's status says.
+    Per model rather than in total: subtracting five sessions on one model
+    from another model's figures would turn somebody else's busy lane into
+    an idle-looking one, which is the opposite of the mistake this exists to
+    prevent.
     """
-    status = str(session.get("status") or "finished")
-    error = str(session.get("error") or "").strip()
-    pr_url = str(session.get("pr_url") or "").strip()
-    lines = []
-    if pr_url:
-        lines.append(f"I have opened {pr_url} for this.")
-    elif status == SessionStatus.SUCCEEDED.value:
-        lines.append(
-            "I worked through this and did not change anything — and I did not "
-            "leave a note saying why, which I should have. Nothing here is a "
-            "verdict on the request: read it as 'not done', not as 'nothing to do'."
-        )
-    else:
-        lines.append(f"I did not get through this one: the session {status}.")
-        if error:
-            lines.append(f"\n> {error[:500]}")
-    lines.append(
-        "\nThe transcript is in the Logos agent page under session "
-        f"{session.get('id', '?')}, and this can be run again from there."
-    )
-    return "\n".join(lines)
+    counted: dict[str, int] = {}
+    for session in running:
+        # Under the name the platform's own figures use: a session created
+        # with an alias would otherwise be counted under a key that matches
+        # no lane, and the discount would quietly do nothing.
+        name = policy.canonical(policy.resolve(session.get("model")))
+        if name:
+            counted[name] = counted.get(name, 0) + 1
+    return counted
 
 
 def _fallback_subject(session: dict[str, Any]) -> str:
@@ -543,14 +536,38 @@ class SessionManager:
         # Measured on the lane these sessions are served by, not on the
         # whole fleet: an embedding model being idle says nothing about
         # whether another agent session is safe to start.
-        reading = await capacity.read_load(lane=policy.lane())
-        self._last_reading = reading
         # What an operator has asked for right now — the kill switch and the
         # ceiling they set — read before anything is decided.
         control = await controls.current()
 
         running = await db.sessions_in_status(SessionStatus.RUNNING)
         paused = await db.sessions_in_status(SessionStatus.PAUSED)
+
+        # Two readings of the same moment, because the two decisions are
+        # not the same question.
+        #
+        # Whether to *hand capacity back* is a question about other people:
+        # counting our own sessions there makes the runner pause itself, and
+        # the load it reacted to leaves with them, and it resumes, and does
+        # it again. So that decision is made on the platform's load minus
+        # our own share of it, per model.
+        #
+        # Whether to *take more* is a question about the model: it does not
+        # matter who filled it, and our own share is an estimate — a running
+        # session may be between turns, running tests, making no request at
+        # all. Over-subtracting there would let the runner add work to a
+        # lane that is genuinely busy, so admission uses the figure as
+        # measured. Our own concurrency is bounded by the parallel ceiling,
+        # not by this.
+        # Two readings: what the platform is doing, and what it is doing
+        # apart from this runner. The discount is applied *while* the
+        # per-model figures still exist — subtracting sessions on one model
+        # from a figure that describes another is how nine user requests
+        # read as four — which is why it is a second reading rather than an
+        # adjustment of the first.
+        measured = await capacity.read_load(lane=policy.lane())
+        reading = await capacity.read_load(lane=policy.lane(), ours=_ours_by_model(running, policy))
+        self._last_reading = measured
 
         if control.paused:
             # The hard half of the kill switch: hand the platform back
@@ -582,6 +599,7 @@ class SessionManager:
                 # before the loop would resume all four and put the runner
                 # over the ceiling an operator just set.
                 live = len(running)
+                woken = 0
                 for session in paused:
                     if live >= control.max_parallel:
                         logger.info(
@@ -590,13 +608,27 @@ class SessionManager:
                             control.max_parallel,
                         )
                         break
-                    await self._resume(session, why)
+                    if not await self._resume(session, why):
+                        # It stayed paused, or it was settled because its
+                        # container had gone. Either way it took no capacity
+                        # and the pass has not spent its turn on it.
+                        continue
+                    woken += 1
                     live += 1
-                    reading = await capacity.read_load(lane=model_policy.current().lane())
-                    self._last_reading = reading
+                    # Re-read after each one, and through the same discount:
+                    # the session just resumed is this runner's, and a
+                    # reading that counts it would stop the batch on its own
+                    # load — leaving the rest paused for nothing.
+                    resumed = await db.sessions_in_status(SessionStatus.RUNNING)
+                    self._last_reading = await capacity.read_load(lane=policy.lane())
+                    reading = await capacity.read_load(lane=policy.lane(), ours=_ours_by_model(resumed, policy))
                     if not capacity.resume_decision(reading)[0]:
                         break
-            return  # resume before admitting anything new
+                if woken:
+                    return  # resume before admitting anything new
+            elif paused and not may_resume:
+                # Held back for a reason that applies to admission too.
+                return
 
         # 3. Admit queued work — at most one session per fresh capacity
         #    reading, taken *inside* the admission lock. A session creation
@@ -623,14 +655,22 @@ class SessionManager:
             # Admitting it against another model's load is how a queued
             # session enters a full lane on an idle one's figure — the
             # launch checks permission afterwards, never capacity.
-            candidate = await db.next_queued_session()
+            # The automation may fill the platform but not the last places
+            # in it: with its quota used up, only work a person queued is
+            # claimable. The quota is about what is *running*, so the
+            # backlog behind it stays queued and visible.
+            quota = triggers.max_active_sessions(control.max_parallel)
+            triggered = await db.count_active_trigger_sessions()
+            include_triggered = triggered < quota
+            candidate = await db.next_queued_session(include_triggered=include_triggered)
             if candidate is None:
                 return
             wanted = admission_policy.resolve(candidate.get("model"))
-            reading = await capacity.read_load(lane=admission_policy.lane(wanted))
-            self._last_reading = reading
             running = await db.sessions_in_status(SessionStatus.RUNNING)
             paused = await db.sessions_in_status(SessionStatus.PAUSED)
+            # As measured: adding to a lane is a question about the lane.
+            reading = await capacity.read_load(lane=admission_policy.lane(wanted))
+            self._last_reading = reading
             blocked = control.admission_block()
             if blocked:
                 # Draining, paused, or a ceiling of zero: nothing new starts.
@@ -643,7 +683,16 @@ class SessionManager:
             )
             if not may_start:
                 return
-            claimed = await db.claim_queued_sessions(1)
+            # The row that was measured, not "the next one": between the
+            # peek and here the candidate can be cancelled, or something
+            # more urgent on another model can arrive, and either would be
+            # started against a reading of somebody else's lane.
+            # The quota is checked again inside the claim, against a count
+            # taken in the same statement: this one was read before the
+            # capacity call above, and another scheduler could have used the
+            # room in between.
+            taken = await db.claim_session(int(candidate["id"]), trigger_quota=quota)
+            claimed = [taken] if taken else []
             # The claim is what makes these rows this pass's to launch, so
             # the launch record is taken here rather than inside _launch:
             # the event write below is an await, and a cancel landing in it
@@ -690,10 +739,30 @@ class SessionManager:
             # released when the upstream request finishes on its own.
             logger.warning("could not detach paused session %s from the session network: %s", session_id, exc)
 
-    async def _resume(self, session: dict[str, Any], reason: str) -> None:
+    async def _resume(self, session: dict[str, Any], reason: str) -> bool:
+        """Thaw a paused session. Returns whether it is running again."""
         sid, container_id = session["id"], session.get("container_id")
         if not container_id:
-            return
+            return False
+        state, exit_code = await self._container_now(container_id)
+        if state == "gone":
+            # Gone while it was paused — removed by a person, or swept with
+            # the host. There is nothing to thaw and nothing to wait for:
+            # left paused it would be retried every fifteen seconds forever,
+            # and it holds a workspace and a place in the queue while it
+            # does.
+            logger.warning("session %s was paused and its container is gone; settling it", sid)
+            await self._settle(sid, exit_code=None, error="the container disappeared while the session was paused")
+            return False
+        if state == "exited":
+            # It ran to its end while the row said paused — a settlement
+            # that lost the race to the pauser leaves exactly this. Docker
+            # cannot unpause an exited container, so retrying would mean
+            # retrying forever; its exit code is what the session is worth,
+            # and the ordinary settlement path reads its result file.
+            logger.info("session %s exited while it was paused; settling it on its own exit", sid)
+            await self._settle(sid, exit_code=exit_code, error=None)
+            return False
         # Attach first: a session thawed without its network would fail on
         # its next model call, which is worse than staying paused one more
         # tick.
@@ -701,16 +770,40 @@ class SessionManager:
             attached = await docker_engine.connect_network(settings.session_network, container_id)
         except Exception as exc:
             logger.error("could not reattach session %s to the session network: %s", sid, exc)
-            return
+            return False
         if not attached:
             logger.error("session %s could not be reattached to the session network; leaving it paused", sid)
-            return
-        if not await docker_engine.unpause_container(container_id):
+            return False
+        try:
+            thawed = await docker_engine.unpause_container(container_id)
+        except Exception as exc:
+            # A Docker answer nobody expected must not take the scheduler
+            # pass down with it: everything behind this session — resuming,
+            # admitting, sweeping — would stop with it.
+            logger.error("could not resume session %s: %s", sid, exc)
+            return False
+        if not thawed:
             logger.info("session %s could not be resumed; its container is not running", sid)
-            return
+            return False
         if await db.transition_session(sid, SessionStatus.RUNNING):
             await db.add_event(sid, EventKind.CAPACITY, {"decision": "resume", "reason": reason})
             logger.info("resumed session %s: %s", sid, reason)
+            return True
+        return False
+
+    @staticmethod
+    async def _container_now(container_id: str) -> tuple[str, int | None]:
+        """What Docker says about this container, and its exit code if any.
+
+        A daemon that cannot be asked answers "running": an unanswered
+        question is not evidence that a session's work should be thrown
+        away, and the next pass asks again.
+        """
+        try:
+            return await docker_engine.container_state(container_id)
+        except Exception as exc:
+            logger.info("could not ask about container %s: %s", container_id, exc)
+            return "running", None
 
     def _register_launch(self, session_id: int) -> _Launch:
         """Take (or find) the launch record for a session.
@@ -1379,6 +1472,74 @@ class SessionManager:
 
     # --- settlement -------------------------------------------------------
 
+    @staticmethod
+    async def _may_try_again(session: dict[str, Any]) -> bool:
+        """Whether this request has attempts left at all.
+
+        Distinguishes "the replacement failed to be created" from "this
+        request has had its three goes": the first is worth waiting for, the
+        second would keep a settled session owing an answer forever.
+        """
+        ref = str(session.get("trigger_ref") or "")
+        if not ref:
+            return False
+        try:
+            return await db.attempts_for_trigger(ref) < _MAX_ATTEMPTS_PER_REQUEST
+        except Exception as exc:
+            # A database that blinked is not an answer. Treated as "yes,
+            # there is another attempt", so the reply stays owed and a later
+            # sweep decides once the question can be asked again — the
+            # alternative loses the request on a transient failure.
+            logger.info("could not count the attempts on %s; keeping the answer owed: %s", ref, exc)
+            return True
+
+    async def take_up_again(self, session: dict[str, Any], *, by: str = "the runner") -> int | None:
+        """Queue this session's work once more, from where it came from.
+
+        The same task, workspace, branch, thread and urgency; a new row, so
+        the attempt that failed keeps its transcript and its reason. Bounded
+        by how many attempts that one request has already had: a request
+        nothing can be made of stops being taken up rather than looping.
+
+        Returns the new session's id, or None when it was not taken up.
+        """
+        ref = str(session.get("trigger_ref") or "")
+        if ref:
+            try:
+                attempts = await db.attempts_for_trigger(ref)
+            except Exception as exc:
+                logger.info("could not count the attempts on %s: %s", ref, exc)
+                return None
+            if attempts >= _MAX_ATTEMPTS_PER_REQUEST:
+                logger.info("not taking %s up again: %s attempts is enough", ref, attempts)
+                return None
+        try:
+            new_id = await db.create_session(
+                workspace_id=int(session["workspace_id"]),
+                task=str(session["task"]),
+                model=session.get("model"),
+                created_by=by,
+                open_pull_request=bool(session.get("open_pull_request")),
+                # Deploying is a decision per attempt, not a property of the
+                # work.
+                deploy_to_dev=False,
+                screenshot_paths=[],
+                trigger_kind=session.get("trigger_kind"),
+                trigger_ref=session.get("trigger_ref"),
+                branch=session.get("branch_name"),
+                reply_target=session.get("reply_target"),
+                reaction_target=session.get("reaction_target"),
+                priority=int(session.get("priority") or 50),
+                priority_reason=session.get("priority_reason"),
+            )
+        except Exception as exc:
+            logger.warning("could not take session %s up again: %s", session.get("id"), exc)
+            return None
+        await db.add_event(new_id, EventKind.STATUS, {"status": "queued", "retry_of": session.get("id")})
+        logger.info("session %s queued as another attempt at %s", new_id, ref or session.get("id"))
+        asyncio.create_task(self.scheduler_pass())
+        return new_id
+
     async def _react(self, session: dict[str, Any] | None, content: str) -> None:
         """Show on the thread how far this session's work has got.
 
@@ -1403,11 +1564,22 @@ class SessionManager:
             # and updates the result file before settlement reads it.
             status = ((await db.get_session(session_id)) or {}).get("status")
             if status not in (SessionStatus.RUNNING.value, SessionStatus.FINALIZING.value):
-                # A competing actor (a cancel, a second settlement) reached
-                # the row first: it is no longer ours to finish. Give the
-                # container back and record nothing.
-                logger.warning("settlement of session %s found the row in %r; only cleaning up", session_id, status)
-                await self._cleanup_container(session_id)
+                # A competing actor reached the row first: it is no longer
+                # ours to finish, and nothing is recorded. Whether the
+                # container may be removed depends on *which* actor.
+                logger.warning("settlement of session %s found the row in %r; not recording it", session_id, status)
+                if status in {state.value for state in TERMINAL_STATUSES}:
+                    # Cancelled or already settled: the row is finished and
+                    # the container is a leftover.
+                    await self._cleanup_container(session_id)
+                else:
+                    # Paused, or starting again: the session is alive and
+                    # somebody else owns it. Removing its container here is
+                    # how a paused session ends up with nothing to thaw —
+                    # unresumable, holding a workspace, and blocking the
+                    # queue behind it. Left alone, whoever owns the row
+                    # decides what happens to it.
+                    logger.info("leaving the container of session %s alone: its row is %r", session_id, status)
                 return
             if status == SessionStatus.RUNNING.value:
                 # Claim the non-pausable finalizing state *before* the
@@ -1634,12 +1806,24 @@ class SessionManager:
             logger.warning("could not read the answer of session %s (will retry): %s", session_id, exc)
             return
         if not body:
-            # Somebody assigned something and is waiting to hear anything at
-            # all. A session that finishes without writing a word is the one
-            # outcome that must not be silent — it is the shape a silent
-            # failure takes, and it is indistinguishable from being ignored.
-            body = _report_without_the_agent(session or {})
-            logger.info("session %s left no answer; reporting what the runner knows", session_id)
+            # A session that wrote nothing has nothing to say, and a thread
+            # is the wrong place to say so: "the session failed, run it
+            # again from the page" is the runner talking about itself in
+            # front of people who asked about their pull request. What that
+            # means is that the request was not dealt with — so it is dealt
+            # with again, quietly, and the thread hears from the attempt
+            # that has something to report.
+            logger.info("session %s left no answer; taking the work up again instead of saying so", session_id)
+            replacement = await self.take_up_again(session or {})
+            if replacement is None and await self._may_try_again(session or {}):
+                # The replacement could not be created — a database that
+                # blinked, not a decision. Left owing an answer, so the next
+                # sweep tries again: abandoning it first is how a request
+                # disappears between two failures.
+                logger.info("session %s could not be taken up again yet; leaving it owing an answer", session_id)
+                return
+            await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
+            return
         if len(body) > _MAX_REPLY_CHARS:
             # GitHub refuses a comment above its length limit outright, and
             # an answer nobody receives is worse than a shortened one on a

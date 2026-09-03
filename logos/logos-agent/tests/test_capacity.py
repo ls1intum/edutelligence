@@ -298,4 +298,306 @@ class TestTheLaneWeAreServedBy:
         reading = capacity.parse_scheduler_state(payload, lane=frozenset({("15", "97"), ("15", "37")}))
 
         assert reading.load == 1.0
-        assert "busiest" in reading.detail
+        # And it says which model it is talking about — under the name the
+        # comparison uses, which is case-normalised.
+        assert "qwen/qwen3.8-27b" in reading.detail
+
+
+class TestWhatTheEngineSaysItself:
+    """vLLM's own numbers, not the ledger's guess at them.
+
+    In production a lane the orchestrator counted as serving two requests
+    reported none running and an empty cache. The ledger is the one that
+    cannot see inside the engine.
+    """
+
+    @staticmethod
+    def one(**signals):
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {
+                            "97": {
+                                "model_name": "Qwen/Qwen3.8-27B",
+                                "active": signals.pop("active", 0),
+                                "queue_depth": signals.pop("queue_depth", 0),
+                                "max_capacity": 20,
+                                "loaded": True,
+                                "scheduler_signals": signals,
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+    LANE = frozenset({("15", "97")})
+
+    def test_the_engine_outranks_the_ledger(self):
+        # The ledger says two are in flight; the engine says none are.
+        payload = self.one(active=2, requests_running_current=0.0, gpu_cache_usage_percent_avg=0.0)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        assert reading.busy_slots == 0 and reading.load == 0.0
+
+    def test_a_full_cache_stops_new_work(self):
+        # Three of twenty "slots", and no room for a fourth: concurrency is
+        # bounded by the cache, not by a number in a configuration file. It
+        # is reported apart from the load, because the cache does not say
+        # whose tokens are in it — a reason not to add, never a reason to
+        # pause what is already running.
+        payload = self.one(active=3, requests_running_current=3.0, gpu_cache_usage_percent_max=94.0)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        assert reading.cache_pressure == 0.94
+        assert "KV cache" in reading.detail
+        assert not capacity.start_decision(reading, running=0, paused=0, max_parallel=4)[0]
+        # And it does not pause anything: that would be the runner starving
+        # itself for its own context.
+        assert not capacity.pause_decision(reading)[0]
+
+    def test_the_engine_s_queue_is_the_queue(self):
+        payload = self.one(queue_depth=0, requests_running_current=20.0, queue_waiting_current=4.0)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        assert reading.queue_total == 4 and reading.saturated
+
+    def test_a_lane_that_reports_nothing_falls_back_to_the_ledger(self):
+        # Not every provider reports engine signals; the ledger is still an
+        # answer, just a worse one.
+        payload = self.one(active=5, queue_depth=1)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        assert reading.busy_slots == 5 and reading.queue_total == 1
+
+
+class TestNotReactingToItself:
+    """The orchestrator says how busy a model is, never who is keeping it so.
+
+    A runner with sessions in flight reads its own requests as platform
+    load: it pauses itself for them, the load it reacted to leaves with
+    them, it resumes, and it does it again. Its own sessions queueing read
+    as "users are queueing", which is the signal that means stop.
+    """
+
+    LANE = frozenset({("15", "97")})
+
+    @staticmethod
+    def busy(running: float, waiting: float = 0.0, name: str = "Qwen/Qwen3.8-27B", model_id: str = "97"):
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {
+                            model_id: {
+                                "model_name": name,
+                                "active": 0,
+                                "queue_depth": 0,
+                                "max_capacity": 10,
+                                "loaded": True,
+                                "scheduler_signals": {
+                                    "requests_running_current": running,
+                                    "queue_waiting_current": waiting,
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+    def test_our_own_requests_are_not_platform_load(self):
+        reading = capacity.parse_scheduler_state(self.busy(3.0), lane=self.LANE, ours={"Qwen/Qwen3.8-27B": 3})
+
+        assert reading.busy_slots == 0 and reading.load == 0.0
+
+    def test_what_somebody_else_is_doing_remains(self):
+        reading = capacity.parse_scheduler_state(self.busy(5.0), lane=self.LANE, ours={"Qwen/Qwen3.8-27B": 2})
+
+        assert reading.busy_slots == 3 and reading.load == 0.3
+
+    def test_our_own_queueing_is_not_a_user_waiting(self):
+        reading = capacity.parse_scheduler_state(
+            self.busy(2.0, waiting=1.0), lane=self.LANE, ours={"Qwen/Qwen3.8-27B": 3}
+        )
+
+        assert reading.queue_total == 0 and not reading.saturated
+
+    def test_a_real_user_waiting_still_stops_it(self):
+        reading = capacity.parse_scheduler_state(
+            self.busy(2.0, waiting=3.0), lane=self.LANE, ours={"Qwen/Qwen3.8-27B": 3}
+        )
+
+        # One of those three waiting is ours; the other two are not.
+        assert reading.queue_total == 2 and reading.saturated
+
+    def test_sessions_on_another_model_are_not_subtracted_here(self):
+        # The finding: eighteen user requests on one model and five agent
+        # sessions on another would have read as an idle-looking lane.
+        reading = capacity.parse_scheduler_state(self.busy(9.0), lane=self.LANE, ours={"some/other-model": 5})
+
+        assert reading.busy_slots == 9 and reading.load == 0.9
+
+    def test_nothing_of_ours_running_changes_nothing(self):
+        reading = capacity.parse_scheduler_state(self.busy(4.0), lane=self.LANE)
+
+        assert reading.busy_slots == 4
+
+
+class TestWhichDecisionGetsTheDiscount:
+    """Handing capacity back and taking more are different questions.
+
+    Whether to pause is about other people: counting our own sessions there
+    makes the runner stop for itself. Whether to admit is about the model:
+    it does not matter who filled it, and our share is an estimate — a
+    running session may be between turns, making no request at all.
+
+    Both figures come from the same parsing, because the discount only means
+    anything while the per-model numbers still exist.
+    """
+
+    LANE = frozenset({("15", "97"), ("15", "37")})
+
+    @staticmethod
+    def two_models(a_running: float, b_running: float, a_waiting: float = 0.0):
+        def model(name, running, waiting):
+            return {
+                "model_name": name,
+                "active": 0,
+                "queue_depth": 0,
+                "max_capacity": 10,
+                "loaded": True,
+                "scheduler_signals": {
+                    "requests_running_current": running,
+                    "queue_waiting_current": waiting,
+                },
+            }
+
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {
+                            "97": model("model-a", a_running, a_waiting),
+                            "37": model("model-b", b_running, 0.0),
+                        }
+                    }
+                }
+            },
+        }
+
+    def test_our_sessions_on_one_model_do_not_empty_another(self):
+        # The finding: nine user requests on A and five runner sessions on
+        # B read as 40% and stopped the runner from ever yielding.
+        payload = self.two_models(a_running=9.0, b_running=5.0)
+
+        adjusted = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={"model-b": 5})
+
+        assert adjusted.load == 0.9
+        assert "model-a" in adjusted.detail
+
+    def test_our_own_load_still_comes_off_its_own_model(self):
+        payload = self.two_models(a_running=2.0, b_running=5.0)
+
+        adjusted = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={"model-b": 5})
+
+        assert adjusted.load == 0.2
+
+    def test_the_measured_figure_keeps_everything(self):
+        payload = self.two_models(a_running=2.0, b_running=5.0)
+
+        measured = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        # What admission decides on: it does not matter who filled the lane.
+        assert measured.load == 0.5
+
+    def test_a_user_waiting_behind_us_still_counts(self):
+        payload = self.two_models(a_running=2.0, b_running=0.0, a_waiting=3.0)
+
+        adjusted = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={"model-a": 3})
+
+        # Two of ours were serving, one of the three waiting is ours.
+        assert adjusted.queue_total == 2 and adjusted.saturated
+
+    def test_it_never_subtracts_more_than_is_there(self):
+        payload = self.two_models(a_running=1.0, b_running=0.0)
+
+        adjusted = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={"model-a": 9})
+
+        assert adjusted.busy_slots == 0 and adjusted.queue_total == 0
+
+
+class TestLoadAndCacheAreChosenApart:
+    """One model's full cache must not hide another model's full lane.
+
+    Picking "the busiest" by whichever of the two is worse, and then
+    reporting that model's request load, is how a model at 0% load with a
+    95% cache came to represent a lane whose other model was at 90%.
+    """
+
+    LANE = frozenset({("15", "97"), ("15", "37")})
+
+    @staticmethod
+    def payload(a_running, a_cache, b_running, b_cache):
+        def model(name, running, cache):
+            return {
+                "model_name": name,
+                "active": 0,
+                "queue_depth": 0,
+                "max_capacity": 10,
+                "loaded": True,
+                "scheduler_signals": {
+                    "requests_running_current": running,
+                    "queue_waiting_current": 0.0,
+                    "gpu_cache_usage_percent_max": cache,
+                },
+            }
+
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {
+                            "97": model("model-a", a_running, a_cache),
+                            "37": model("model-b", b_running, b_cache),
+                        }
+                    }
+                }
+            },
+        }
+
+    def test_the_busiest_lane_decides_the_load(self):
+        reading = capacity.parse_scheduler_state(
+            self.payload(a_running=0.0, a_cache=95.0, b_running=9.0, b_cache=0.0), lane=self.LANE
+        )
+
+        # B is the one users are waiting behind, whatever A's cache says.
+        assert reading.load == 0.9
+        assert "model-b" in reading.detail
+
+    def test_the_fullest_cache_still_stops_new_work(self):
+        reading = capacity.parse_scheduler_state(
+            self.payload(a_running=0.0, a_cache=95.0, b_running=9.0, b_cache=0.0), lane=self.LANE
+        )
+
+        assert reading.cache_pressure == 0.95
+        assert not capacity.start_decision(reading, running=0, paused=0, max_parallel=4)[0]
+
+    def test_a_case_difference_is_not_a_second_model(self):
+        payload = self.payload(a_running=5.0, a_cache=0.0, b_running=5.0, b_cache=0.0)
+        payload["logosnode"]["providers"]["15"]["models"]["37"]["model_name"] = "Model-A"
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE)
+
+        # One model on two providers: ten in flight of twenty, not five of
+        # ten twice over.
+        assert reading.busy_slots == 10 and reading.total_slots == 20

@@ -137,7 +137,10 @@ export class Agents implements OnInit {
   );
 
   // ── grouped view ─────────────────────────────────────────────────────────
-  activeSessions = computed(() => this.sessions().filter((s) => isActive(s.status)));
+  /** What is under way: everything active that is not still waiting. */
+  activeSessions = computed(() =>
+    this.sessions().filter((s) => isActive(s.status) && s.status !== 'queued'),
+  );
   finishedSessions = computed(() => this.sessions().filter((s) => !isActive(s.status)));
 
   loadPercent = computed(() => Math.round((this.capacity()?.load ?? 0) * 100));
@@ -175,7 +178,12 @@ export class Agents implements OnInit {
   private async tick(): Promise<void> {
     // Only poll while something can change; a page left open on a finished
     // session should not keep the runner busy answering.
-    if (this.activeSessions().length === 0 && this.selectedId() === null) {
+    // Everything that has not finished, queued rows included: they are not
+    // rendered with the active ones any more, and gating the poll on that
+    // list would leave a page showing only a queue frozen — no start, no
+    // cancellation and no reordering would ever reach it.
+    const live = this.sessions().filter((s) => isActive(s.status)).length;
+    if (live === 0 && this.selectedId() === null) {
       await this.loadCapacity();
       return;
     }
@@ -373,6 +381,44 @@ export class Agents implements OnInit {
 
   private stream: AbortController | null = null;
   retrying = signal<number | null>(null);
+  moving = signal<number | null>(null);
+
+  /**
+   * The queue, in the order the runner will work through it.
+   *
+   * Not the order the list arrives in: sessions come newest-first, and the
+   * scheduler takes the most urgent, oldest among equals. Showing one and
+   * moving by the other would grey out the arrows on the wrong rows.
+   */
+  readonly queuedSessions = computed(() =>
+    this.sessions()
+      .filter((s) => s.status === 'queued')
+      .sort(
+        (a, b) =>
+          b.priority - a.priority || a.created_at.localeCompare(b.created_at) || a.id - b.id,
+      ),
+  );
+
+  /**
+   * Move a queued session in the queue.
+   *
+   * Priority is derived from what a request is, which is right most of the
+   * time. The rest — which review is holding up a release, which issue can
+   * wait until tomorrow — is something the person watching knows and the
+   * rules do not.
+   */
+  async move(session: AgentSession, where: 'up' | 'down' | 'first'): Promise<void> {
+    if (this.moving() !== null) return;
+    this.moving.set(session.id);
+    try {
+      await this.agentService.moveInQueue(session.id, where);
+      await this.refresh({ quiet: true });
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not move that session in the queue.'));
+    } finally {
+      this.moving.set(null);
+    }
+  }
 
   /**
    * Queue a finished session's work again.

@@ -39,8 +39,11 @@ does not produce a second pull request next week, and an answered question
 is not answered twice. Only the *newest* changes-requested review of a pull
 request is work; the older ones were answered by it.
 
-**Bounded.** At most half the parallel ceiling may be self-queued sessions,
-so an operator queueing work by hand always finds room.
+**Bounded, and written down.** Self-queued sessions may *run* up to the
+parallel ceiling less a fifth of it, at least one place, kept for people —
+triggered sessions carry higher priorities and would otherwise win every
+slot. What does not fit is queued rather than forgotten: it becomes a row,
+in priority order, visible on the page as work waiting its turn.
 """
 
 from __future__ import annotations
@@ -124,16 +127,20 @@ def _next_auto_name(existing: set[str]) -> str:
 def max_active_sessions(ceiling: int | None = None) -> int:
     """How many self-queued sessions may be active at once.
 
-    Derived rather than configured: half the ceiling in force, at least
-    one. The runner is a guest on this platform even when it is idle, and
-    an operator who queues work by hand should always find room next to the
-    automation — which is why it follows the *current* ceiling and not the
-    configured one. Lowering the limit to two and still letting five
-    triggered sessions through would take that room away, and their higher
-    priorities would win it.
+    Derived rather than configured: the ceiling in force, less a fifth of
+    it and at least one place, kept for people. An operator who queues work by hand should
+    always find room next to the automation — triggered sessions have
+    higher priorities and would otherwise win every slot — but keeping half
+    the fleet idle for a session nobody has asked for is a poor trade on a
+    platform whose whole point is spending capacity that would go to waste.
+
+    It follows the *current* ceiling rather than the configured one, so
+    lowering the limit during an incident lowers this with it.
     """
     limit = settings.max_parallel_sessions if ceiling is None else ceiling
-    return max(1, limit // 2)
+    # Never below zero: a ceiling of one means the one place is a person's,
+    # and a ceiling of zero means nothing runs at all — including this.
+    return max(0, limit - max(1, limit // 5))
 
 
 def mentions_agent(body: str) -> bool:
@@ -405,10 +412,15 @@ class TriggerPoller:
             logger.debug("trigger poll skipped: %s", blocked)
             self._last_pass = now
             return []
+        # How much of the platform the automation may hold at once. Queued
+        # sessions are not counted against it: they are work waiting its
+        # turn, which is what the queue on the page is for, and refusing to
+        # write them down is what kept that queue permanently empty while
+        # the backlog sat invisible in the repository.
         quota = max_active_sessions(control.max_parallel)
         room = quota - await db.count_active_trigger_sessions()
         if room <= 0:
-            logger.debug("trigger poll skipped: already at %s self-queued sessions", quota)
+            logger.debug("trigger poll skipped: already running %s self-queued sessions", quota)
             self._last_pass = now
             return []
 

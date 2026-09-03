@@ -471,7 +471,7 @@ class TestPermissionsRevokedMidFlight:
         async def refresh():
             return revoked
 
-        async def read_load(timeout_s: float = 5.0, lane=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
             # The lane an invalid policy hands over is empty, and an empty
             # lane is refused rather than measured.
             assert lane == frozenset()
@@ -855,11 +855,12 @@ class TestBackpressure:
 
 
 class TestAnAnswerThatWasNeverWritten:
-    """Somebody assigned something and is waiting to hear anything at all.
+    """A session that wrote nothing has nothing to say.
 
-    A session that finishes without writing a word is the one outcome that
-    must not be silent: it is the shape a silent failure takes, and from the
-    thread it is indistinguishable from being ignored.
+    Somebody is waiting to hear about their pull request, not about the
+    runner. So a session that finishes without a word is not announced —
+    the request is taken up again, and the thread hears from the attempt
+    that has something to report.
     """
 
     @staticmethod
@@ -880,73 +881,45 @@ class TestAnAnswerThatWasNeverWritten:
         async def record_reply_attempt(session_id, *, delivered):
             attempts.append((session_id, delivered))
 
+        async def abandon_reply(_session_id, *, attempts):
+            return None
+
         async def add_event(*_args, **_kwargs):
             return None
 
         monkeypatch.setattr(sessions.db, "get_session", get_session)
         monkeypatch.setattr(sessions.db, "record_reply_attempt", record_reply_attempt)
+        monkeypatch.setattr(sessions.db, "abandon_reply", abandon_reply)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
         monkeypatch.setattr(sessions.github, "post_issue_comment", post_issue_comment)
         return posted, attempts
 
-    async def test_a_silent_success_still_says_something(self, monkeypatch, tmp_path):
-        from app import sessions
-
-        posted, attempts = self.install(
-            monkeypatch,
-            tmp_path,
-            {"id": 30, "status": "succeeded", "reply_target": "issue:886", "reply_posted_at": None, "pr_url": None},
-        )
-
-        await sessions.manager._post_reply(30)
-
-        assert attempts == [(30, True)]
-        number, body = posted[0]
-        assert number == 886
-        # It must not read as a verdict on the request.
-        assert "did not change anything" in body
-        assert "session 30" in body
-
-    async def test_a_session_that_opened_a_pull_request_says_where(self, monkeypatch, tmp_path):
+    async def test_a_silent_session_is_taken_up_again_rather_than_announced(self, monkeypatch, tmp_path):
         from app import sessions
 
         posted, _ = self.install(
             monkeypatch,
             tmp_path,
-            {
-                "id": 30,
-                "status": "succeeded",
-                "reply_target": "issue:886",
-                "reply_posted_at": None,
-                "pr_url": "https://github.com/x/y/pull/900",
-            },
+            {"id": 30, "status": "failed", "reply_target": "issue:886", "reply_posted_at": None, "pr_url": None},
         )
+        taken_up: list = []
+
+        async def take_up_again(_self, session, *, by="the runner"):
+            taken_up.append(session["id"])
+            return 99
+
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
 
         await sessions.manager._post_reply(30)
 
-        assert "pull/900" in posted[0][1]
+        # "The session failed, run it again from the page" is the runner
+        # talking about itself in front of people who asked about their
+        # pull request. What it means is that the request was not dealt
+        # with — so it is dealt with again.
+        assert posted == []
+        assert taken_up == [30]
 
-    async def test_a_failure_says_what_went_wrong(self, monkeypatch, tmp_path):
-        from app import sessions
-
-        posted, _ = self.install(
-            monkeypatch,
-            tmp_path,
-            {
-                "id": 30,
-                "status": "failed",
-                "error": "agent exited with code 1",
-                "reply_target": "issue:886",
-                "reply_posted_at": None,
-                "pr_url": None,
-            },
-        )
-
-        await sessions.manager._post_reply(30)
-
-        assert "exited with code 1" in posted[0][1]
-
-    async def test_what_the_agent_wrote_wins(self, monkeypatch, tmp_path):
+    async def test_what_the_agent_wrote_is_posted(self, monkeypatch, tmp_path):
         from app import sessions
 
         posted, _ = self.install(
@@ -1394,7 +1367,7 @@ class TestAgentPhaseIsolation:
         paused: list = []
         events: list = []
 
-        async def fake_reading(_timeout_s=5.0, lane=None):
+        async def fake_reading(_timeout_s=5.0, lane=None, ours=None):
             return capacity.Reading(load=0.99, busy_slots=10, total_slots=10, queue_total=0, ok=True)
 
         async def fake_in_status(status):
@@ -2095,7 +2068,7 @@ class TestClaimToLaunchWindow:
 
         reading = capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)
 
-        async def fake_claim(_limit):
+        async def fake_claim(_limit, *, include_triggered: bool = True):
             states[5] = "starting"
             return [session_row]
 
@@ -2120,6 +2093,7 @@ class TestClaimToLaunchWindow:
         monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
         monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([]))
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", slow_event)
         monkeypatch.setattr(sessions.db, "get_session", self._async_value({**session_row, "status": "starting"}))
@@ -2204,7 +2178,7 @@ class TestOverlappingAdmission:
             # Always a fresh read, like the database: whatever is true now.
             return [{"id": sid, "workspace_id": sid} for sid, state in states.items() if state == status.value]
 
-        async def fake_claim(limit):
+        async def fake_claim(limit, *, include_triggered: bool = True):
             claimed = []
             while limit > 0 and queue:
                 session = queue.pop(0)
@@ -2226,6 +2200,7 @@ class TestOverlappingAdmission:
         monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
         monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
@@ -2257,7 +2232,7 @@ class TestOverlappingAdmission:
         async def fake_in_status(status):
             return [{"id": sid, "workspace_id": sid} for sid, state in states.items() if state == status.value]
 
-        async def fake_claim(limit):
+        async def fake_claim(limit, *, include_triggered: bool = True):
             claimed = []
             while limit > 0 and queue:
                 session = queue.pop(0)
@@ -2279,6 +2254,7 @@ class TestOverlappingAdmission:
         monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
         monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
@@ -2314,8 +2290,13 @@ class TestOverlappingAdmission:
         decided_loads: list = []
         real_start_decision = capacity.start_decision
 
-        async def fake_read_load(lane=None):
-            return readings.pop(0) if len(readings) > 1 else readings[0]
+        async def fake_read_load(lane=None, ours=None):
+            # A pass takes two readings of one moment — the platform's, and
+            # the platform's minus this runner's share — so only the first
+            # of the pair advances the prepared sequence.
+            if ours is None and len(readings) > 1:
+                return readings.pop(0)
+            return readings[0]
 
         def spy_start_decision(reading, **kwargs):
             decided_loads.append(reading.load)
@@ -2328,7 +2309,7 @@ class TestOverlappingAdmission:
         async def fake_in_status(status):
             return [{"id": sid, "workspace_id": sid} for sid, state in states.items() if state == status.value]
 
-        async def fake_claim(limit):
+        async def fake_claim(limit, *, include_triggered: bool = True):
             claimed = []
             while limit > 0 and queue:
                 session = queue.pop(0)
@@ -2351,6 +2332,7 @@ class TestOverlappingAdmission:
         monkeypatch.setattr(sessions.capacity, "start_decision", spy_start_decision)
         monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "add_event", fake_event)
         monkeypatch.setattr(sessions.SessionManager, "_launch", fake_launch)
@@ -2366,9 +2348,10 @@ class TestOverlappingAdmission:
         # bought exactly one session, not one per overlapping pass.
         assert launched == [1]
         assert [sid for sid, state in states.items() if state == "queued"] == [2, 3, 4]
-        # And the second decision was made on a post-launch observation,
-        # not on the shared pre-launch one.
-        assert decided_loads == [0.0, 0.7]
+        # And the second decision was made on a post-launch observation, not
+        # on the shared pre-launch one.
+        assert decided_loads[0] == 0.0
+        assert decided_loads[1] > 0.0
 
 
 class TestScreenshotOrchestration:
@@ -3646,7 +3629,7 @@ class TestOperatorControls:
             paused.append(cid)
             return True
 
-        async def fake_claim(_limit):
+        async def fake_claim(_limit, *, include_triggered: bool = True):
             claimed.append(1)
             return []
 
@@ -3659,6 +3642,7 @@ class TestOperatorControls:
         )
         monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
         monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
@@ -3681,7 +3665,7 @@ class TestOperatorControls:
         async def drained():
             return {"mode": "draining", "mode_reason": "before a deploy", "max_parallel": None, "updated_by": "t"}
 
-        async def fake_claim(_limit):
+        async def fake_claim(_limit, *, include_triggered: bool = True):
             claimed.append(1)
             return []
 
@@ -3700,6 +3684,7 @@ class TestOperatorControls:
 
         monkeypatch.setattr(sessions.db, "sessions_in_status", self._async_value([{"id": 7, "container_id": "cid-7"}]))
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
         monkeypatch.setattr(sessions.db, "next_queued_session", _peek)
         monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
         monkeypatch.setattr(sessions.docker_engine, "disconnect_network", self._async_value(True))
@@ -3936,15 +3921,18 @@ class TestAdmissionMeasuresTheRightLane:
         async def refresh():
             return policy
 
-        async def read_load(timeout_s: float = 5.0, lane=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
             lanes.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
-        async def peek():
+        async def peek(*, include_triggered: bool = True):
             return {"id": 7, "model": "model-b", "workspace_id": 1}
 
-        async def claim(_limit):
+        async def claim(_limit, *, include_triggered: bool = True):
             return []
+
+        async def claim_session(_session_id, *, trigger_quota=None):
+            return None
 
         async def none(_status):
             return []
@@ -3954,6 +3942,7 @@ class TestAdmissionMeasuresTheRightLane:
         monkeypatch.setattr(capacity, "read_load", read_load)
         monkeypatch.setattr(sessions.db, "next_queued_session", peek)
         monkeypatch.setattr(sessions.db, "claim_queued_sessions", claim)
+        monkeypatch.setattr(sessions.db, "claim_session", claim_session)
         monkeypatch.setattr(sessions.db, "sessions_in_status", none)
 
         await sessions.manager.scheduler_pass()
@@ -3969,14 +3958,14 @@ class TestAdmissionMeasuresTheRightLane:
 
         readings: list = []
 
-        async def read_load(timeout_s: float = 5.0, lane=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
             readings.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
         async def none(_status):
             return []
 
-        async def refuse(_limit):
+        async def refuse(_limit, *, include_triggered: bool = True):
             raise AssertionError("nothing is queued; there is nothing to claim")
 
         monkeypatch.setattr(capacity, "read_load", read_load)
@@ -3985,7 +3974,9 @@ class TestAdmissionMeasuresTheRightLane:
 
         await sessions.manager.scheduler_pass()
 
-        assert len(readings) == 1
+        # Two of the same moment — with and without this runner's share —
+        # and nothing queued, so admission takes none of its own.
+        assert len(readings) == 2
 
 
 class TestPicturesTravelWithTheRequest:
@@ -4054,7 +4045,22 @@ class TestPicturesTravelWithTheRequest:
         assert await sessions.manager._collect_attachments(30, "![shot](https://example.com/a.png)") == []
 
 
-async def _peek():
+def _claim_one(fake_claim):
+    """The targeted claim, expressed through a test's own batch stub.
+
+    Admission takes the row it measured rather than "the next one"; these
+    tests care about *whether* something was claimed, so this keeps their
+    existing fakes honest without each of them growing a second one.
+    """
+
+    async def claim_session(_session_id: int, *, trigger_quota=None):
+        taken = await fake_claim(1)
+        return taken[0] if taken else None
+
+    return claim_session
+
+
+async def _peek(*, include_triggered: bool = True):
     """What admission looks at before it measures: any queued session.
 
     The tests that stub the claim are about admission, not about which row
@@ -4062,3 +4068,236 @@ async def _peek():
     model.
     """
     return {"id": 7, "model": None, "workspace_id": 1}
+
+
+class TestTakingWorkUpAgain:
+    """The same request, once more, without a person having to ask."""
+
+    ROW = {
+        "id": 30,
+        "workspace_id": 3,
+        "task": "answer the review on #858",
+        "trigger_kind": "review",
+        "trigger_ref": "pr-858-review-1",
+        "branch_name": "logos/issue-797",
+        "reply_target": "issue:858",
+        "reaction_target": "/repos/x/y/issues/858",
+        "priority": 80,
+        "open_pull_request": False,
+    }
+
+    @staticmethod
+    def install(monkeypatch, *, attempts: int):
+        from app import sessions
+
+        created: list = []
+
+        async def attempts_for_trigger(_ref):
+            return attempts
+
+        async def create_session(**kwargs):
+            created.append(kwargs)
+            return 99
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        async def scheduler_pass(_self=None):
+            return None
+
+        monkeypatch.setattr(sessions.db, "attempts_for_trigger", attempts_for_trigger)
+        monkeypatch.setattr(sessions.db, "create_session", create_session)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.SessionManager, "scheduler_pass", scheduler_pass)
+        return created
+
+    async def test_the_work_comes_back_where_it_came_from(self, monkeypatch):
+        from app import sessions
+
+        created = self.install(monkeypatch, attempts=1)
+
+        assert await sessions.manager.take_up_again(dict(self.ROW)) == 99
+        # The branch, the thread and the urgency belong to the request, not
+        # to the attempt that failed.
+        assert created[0]["branch"] == "logos/issue-797"
+        assert created[0]["reply_target"] == "issue:858"
+        assert created[0]["priority"] == 80
+        assert created[0]["deploy_to_dev"] is False
+
+    async def test_a_request_nothing_can_be_made_of_stops(self, monkeypatch):
+        from app import sessions
+
+        created = self.install(monkeypatch, attempts=sessions._MAX_ATTEMPTS_PER_REQUEST)
+
+        assert await sessions.manager.take_up_again(dict(self.ROW)) is None
+        assert created == []
+
+
+class TestAPausedSessionThatCannotComeBack:
+    """One stuck session must not stop the whole queue.
+
+    Production: a paused session's container was removed underneath it, so
+    every pass tried to reattach it, failed, and returned — because
+    resuming comes before admitting. Two sessions sat queued behind it for
+    as long as it existed, and the log filled with the same line every
+    fifteen seconds.
+    """
+
+    @staticmethod
+    def install(monkeypatch, *, exists: bool):
+        from app import capacity, sessions
+
+        settled: list = []
+        resumed: list = []
+
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None):
+            return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
+
+        async def container_state(_container_id):
+            return ("running" if exists else "gone"), None
+
+        async def settle(_self, session_id, *, exit_code, error):
+            settled.append((session_id, error))
+
+        async def connect_network(_network, _container_id):
+            resumed.append("attached")
+            return True
+
+        async def unpause(_container_id):
+            return True
+
+        async def transition(_sid, _target, **_fields):
+            return True
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(capacity, "read_load", reading)
+        monkeypatch.setattr(sessions.docker_engine, "container_state", container_state)
+        monkeypatch.setattr(sessions.docker_engine, "connect_network", connect_network)
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", unpause)
+        monkeypatch.setattr(sessions.db, "transition_session", transition)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
+        return settled, resumed
+
+    async def test_a_vanished_container_settles_the_session(self, monkeypatch):
+        from app import sessions
+
+        settled, resumed = self.install(monkeypatch, exists=False)
+
+        assert await sessions.manager._resume({"id": 34, "container_id": "cid-34"}, "load 0%") is False
+        assert settled and settled[0][0] == 34
+        assert "disappeared" in settled[0][1]
+        # It was never attached to anything: there was nothing there.
+        assert resumed == []
+
+    async def test_a_session_that_is_still_there_resumes(self, monkeypatch):
+        from app import sessions
+
+        settled, resumed = self.install(monkeypatch, exists=True)
+
+        assert await sessions.manager._resume({"id": 34, "container_id": "cid-34"}, "load 0%") is True
+        assert settled == [] and resumed == ["attached"]
+
+    async def test_the_queue_moves_on_when_nothing_could_be_resumed(self, monkeypatch):
+        from app import capacity, sessions
+
+        admitted: list = []
+
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None):
+            return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
+
+        async def in_status(status):
+            if status is sessions.SessionStatus.PAUSED:
+                return [{"id": 34, "container_id": "cid-34"}]
+            return []
+
+        async def no_resume(_self, _session, _reason):
+            return False
+
+        async def peek(*, include_triggered: bool = True):
+            return {"id": 37, "model": None, "workspace_id": 1}
+
+        async def claim_session(session_id, *, trigger_quota=None):
+            admitted.append(session_id)
+            return None
+
+        monkeypatch.setattr(capacity, "read_load", reading)
+        monkeypatch.setattr(sessions.db, "sessions_in_status", in_status)
+        monkeypatch.setattr(sessions.db, "next_queued_session", peek)
+        monkeypatch.setattr(sessions.db, "claim_session", claim_session)
+        monkeypatch.setattr(sessions.SessionManager, "_resume", no_resume)
+
+        await sessions.manager.scheduler_pass()
+
+        # Nothing was resumed, so the pass has not spent its turn: the work
+        # behind the stuck session gets its chance.
+        assert admitted == [37]
+
+
+class TestWhoseContainerIsIt:
+    """Settlement may only clear up after a row that is finished.
+
+    Production: a settlement raced the pauser, found the row in 'paused',
+    declined to record anything — and removed the container anyway. The
+    session was then unresumable, held its workspace, and blocked the queue
+    behind it. Removing somebody else's container is the one thing a
+    settlement that has decided not to own the row must not do.
+    """
+
+    @staticmethod
+    def install(monkeypatch, tmp_path, status: str):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        removed: list = []
+
+        async def get_session(_session_id):
+            return {"id": 34, "status": status, "container_id": "cid-34"}
+
+        async def cleanup(_self, session_id):
+            removed.append(session_id)
+
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
+        monkeypatch.setattr(sessions.SessionManager, "_cleanup_container", cleanup)
+        return removed
+
+    async def test_a_paused_row_keeps_its_container(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        removed = self.install(monkeypatch, tmp_path, "paused")
+
+        await sessions.manager._settle(34, exit_code=0, error=None)
+
+        assert removed == []
+
+    async def test_a_cancelled_row_gives_its_container_back(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        removed = self.install(monkeypatch, tmp_path, "cancelled")
+
+        await sessions.manager._settle(34, exit_code=0, error=None)
+
+        # Finished for good: the container is a leftover.
+        assert removed == [34]
+
+    async def test_a_resume_that_throws_does_not_take_the_pass_with_it(self, monkeypatch):
+        from app import sessions
+
+        async def exists(_container_id):
+            return "running", None
+
+        async def attach(_network, _container_id):
+            return True
+
+        async def explodes(_container_id):
+            raise sessions.docker_engine.DockerError(500, "something nobody expected")
+
+        monkeypatch.setattr(sessions.docker_engine, "container_state", exists)
+        monkeypatch.setattr(sessions.docker_engine, "connect_network", attach)
+        monkeypatch.setattr(sessions.docker_engine, "unpause_container", explodes)
+
+        # Everything behind this session — resuming the rest, admitting,
+        # sweeping — would otherwise stop with it.
+        assert await sessions.manager._resume({"id": 34, "container_id": "cid-34"}, "load 0%") is False

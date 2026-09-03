@@ -333,7 +333,11 @@ async def _get_all_bounded(path: str, params: dict[str, Any] | None = None) -> t
         page = len(collected) // _PAGE_SIZE + 1
         payload = await _get(path, {**(params or {}), "per_page": _PAGE_SIZE, "page": page})
         if not isinstance(payload, list):
-            return collected, False
+            # A 200 that is not a list is not an empty listing: something
+            # answered, and it was not this endpoint. Reported as incomplete
+            # rather than as "nothing more to read".
+            logger.info("listing %s answered with %s, not a list", path, type(payload).__name__)
+            return collected, True
         collected.extend(payload)
         if len(payload) < _PAGE_SIZE:
             return collected, False

@@ -163,6 +163,17 @@ class SessionSummary(BaseModel):
     priority_reason: str | None = None
 
 
+class QueueMove(BaseModel):
+    """Where an operator wants a queued session to sit.
+
+    A move rather than a number: the order is what the runner works on
+    while the platform is busy, and picking a number means guessing what
+    the neighbours are.
+    """
+
+    move: str = Field(pattern="^(up|down|first)$")
+
+
 class SessionEvent(BaseModel):
     id: int
     session_id: int

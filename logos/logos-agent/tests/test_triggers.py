@@ -509,13 +509,15 @@ class TestBounds:
 
         queued = await triggers.TriggerPoller().poll_once()
 
-        # Half the ceiling *in force*, so an operator always has room — and
-        # it follows what they set at runtime, not what the environment
-        # configured.
-        assert triggers.max_active_sessions(4) == 2
-        assert len(queued) == 2
+        # The ceiling *in force*, less the places kept for people — and it
+        # follows what an operator set at runtime, not what the environment
+        # configured. With four, one stays free.
+        assert triggers.max_active_sessions(4) == 3
+        assert len(queued) == 3
 
-    async def test_nothing_is_queued_while_the_ceiling_is_full(self, monkeypatch):
+    async def test_nothing_is_queued_while_the_automation_is_full(self, monkeypatch):
+        # The quota counts what is *running*: with it used up, the pass adds
+        # nothing and the repository keeps the rest until a session ends.
         FakeRepo(assigned_issues=[issue(1)]).install(monkeypatch)
         fake_db = FakeDb(active_triggers=99)
         fake_db.install(monkeypatch)
@@ -542,15 +544,15 @@ class TestBounds:
         )
         fake_db.install(monkeypatch)
         allow_models(monkeypatch)
-        ceiling(monkeypatch, 4)
+        ceiling(monkeypatch, 2)
         poller = triggers.TriggerPoller()
 
         first = await poller.poll_once()
-        fake_db.active_triggers = 0  # the first two finished
+        fake_db.active_triggers = 0  # the first one finished
         second = await poller.poll_once()
 
-        assert len(first) == 2 and len(second) == 1
-        assert {c["trigger_ref"] for c in fake_db.created} == {"issue-1", "issue-2", "issue-3"}
+        assert len(first) == 1 and len(second) == 1
+        assert {c["trigger_ref"] for c in fake_db.created} == {"issue-1", "issue-2"}
 
 
 class TestWorkspaceNaming:
@@ -622,11 +624,13 @@ class TestTheCommentMark:
         assert fake_db.comment_mark is None
 
     async def test_work_left_for_the_next_pass_holds_the_mark(self, monkeypatch):
+        # One workspace, two pieces of work: the second is left where it
+        # was, so the mark must not move past the comments this pass saw.
         FakeRepo(assigned_issues=[issue(812), issue(813)]).install(monkeypatch)
         fake_db = FakeDb()
         fake_db.install(monkeypatch)
         allow_models(monkeypatch)
-        ceiling(monkeypatch, 1)
+        ceiling(monkeypatch, 2)
 
         queued = await triggers.TriggerPoller().poll_once()
 

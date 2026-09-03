@@ -676,19 +676,18 @@ _spent = {"in": 0, "out": 0}
 def _report_usage(message: dict) -> None:
     """Print what has been spent so far, when it changes.
 
-    Both sides accumulate, because that is what the agent is charged for and
-    what the result file reports at the end: a turn's input is billed as
-    input even though most of it is the conversation being re-read. Taking
-    the largest turn instead would read lower here than in the final total,
-    and a number that jumps when the session ends is worse than no number.
+    Cache reads are deliberately not counted. Every turn re-reads the whole
+    conversation out of the cache, so summing that key means counting the
+    same tokens once per turn: a session reported seventeen million input
+    tokens against no output at all, which is a true sum of a meaningless
+    quantity. What is counted is what the model had to take in anew —
+    fresh input and cache writes — and what it wrote.
     """
     usage = message.get("usage")
     if not isinstance(usage, dict):
         return
     read = sum(
-        value
-        for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
-        if isinstance(value := usage.get(key), int)
+        value for key in ("input_tokens", "cache_creation_input_tokens") if isinstance(value := usage.get(key), int)
     )
     written = usage.get("output_tokens")
     before = dict(_spent)
@@ -802,7 +801,11 @@ def usage_totals(usage: dict[str, object]) -> tuple[int, int, float]:
                 return value
         return 0
 
-    tokens_in = as_int("input_tokens") + as_int("cache_creation_input_tokens") + as_int("cache_read_input_tokens")
+    # Same definition as the running figures the session reports on its
+    # transcript, so the number does not change meaning when the session
+    # ends: fresh input and cache writes, not the conversation re-read out
+    # of the cache on every turn.
+    tokens_in = as_int("input_tokens") + as_int("cache_creation_input_tokens")
     tokens_out = as_int("output_tokens")
     # The CLI reports USD; Logos accounts in EUR. Without a live rate the
     # honest thing is to carry the number through unconverted and let the

@@ -339,11 +339,17 @@ async def unpause_container(container_id: str) -> bool:
     304 means it was not frozen in the first place, which is the desired
     end state; 404 and 409 mean there is no running container to thaw, and
     the caller must not record the session as running again.
+
+    Docker also answers 500 "Container … is not paused" for a container
+    that is running — the same situation as 304, reported differently, and
+    in production it escaped as an exception that killed the whole
+    scheduler pass. A container that is already running is what the caller
+    asked for.
     """
     try:
         await _request("POST", f"/containers/{container_id}/unpause")
     except DockerError as exc:
-        if exc.status == 304:
+        if exc.status == 304 or (exc.status == 500 and "is not paused" in str(exc)):
             return True
         if exc.status in (404, 409):
             return False
