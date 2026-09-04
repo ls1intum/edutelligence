@@ -22,6 +22,7 @@ import {
   applyTimeSeriesLabels,
   chooseDynamicBucketMs,
   chooseDynamicTargetBuckets,
+  extractProviderHostRamMb,
   extractProviderVramMb,
   formatRangeLabel,
   formatTokenCount as formatTokenCountValue,
@@ -411,6 +412,32 @@ export class Statistics implements OnInit, OnDestroy {
       usedMb += vram.usedMb;
     }
     return {
+      usedGb: toGb(usedMb * BYTES_PER_MIB),
+      freeGb: toGb(freeMb * BYTES_PER_MIB),
+      totalGb: toGb(totalMb * BYTES_PER_MIB),
+    };
+  });
+
+  /**
+   * Host RAM across the online providers, parallel to allProviderVramSummary.
+   * A provider that does not report host RAM (an older worker, or a non-Linux
+   * host) is skipped rather than counted as 0 — adding it in would make the
+   * total visibly shrink every time such a node came online.
+   */
+  readonly allProviderRamSummary = computed(() => {
+    let totalMb = 0;
+    let usedMb = 0;
+    let freeMb = 0;
+    for (const [name, sample] of Object.entries(this.latestSampleByProvider())) {
+      if (!this._isProviderOnline(name)) continue;
+      const ram = extractProviderHostRamMb(sample);
+      if (!ram.reported) continue;
+      totalMb += ram.totalMb;
+      usedMb += ram.usedMb;
+      freeMb += ram.freeMb;
+    }
+    return {
+      reported: totalMb > 0,
       usedGb: toGb(usedMb * BYTES_PER_MIB),
       freeGb: toGb(freeMb * BYTES_PER_MIB),
       totalGb: toGb(totalMb * BYTES_PER_MIB),

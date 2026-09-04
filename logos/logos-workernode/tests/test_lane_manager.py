@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -305,6 +306,163 @@ async def test_sleep_and_wake_lane_delegate_to_vllm_handle(monkeypatch) -> None:
     assert out_wake is sentinel
     assert fake.sleep_called_with == (2, "wait")
     assert fake.wake_called is True
+
+
+@pytest.mark.asyncio
+async def test_sleep_lane_invokes_the_on_lane_slept_hook(monkeypatch) -> None:
+    """The moment a lane's weights land in host RAM, the wired hook (the RAM
+    cache re-plan) must run before sleep_lane returns — so several lanes
+    sleeping in quick succession do not face a cache that keeps its old size
+    for up to a 60 s tick. A failing hook must never fail the sleep itself."""
+    calls = []
+
+    async def _hook() -> None:
+        calls.append(1)
+
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15071,
+        lane_port_end=15080,
+        on_lane_slept=_hook,
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_id = "deepseek-ai_DeepSeek-R1-0528-Qwen3-8B"
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15071
+            self.lane_config = lane
+            self.sleep_called = 0
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            self.sleep_called += 1
+            return {"ok": True}
+
+    fake = FakeVllmHandle()
+    manager._handles[lane_id] = fake  # noqa: SLF001
+    sentinel = object()
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+
+    out = await manager.sleep_lane(lane_id, level=1, mode="wait")
+
+    assert out is sentinel
+    assert fake.sleep_called == 1
+    assert calls == [1]
+
+    async def _boom() -> None:
+        raise RuntimeError("simulated re-plan failure")
+
+    manager._on_lane_slept = _boom  # noqa: SLF001
+    out2 = await manager.sleep_lane(lane_id, level=1, mode="wait")
+
+    assert out2 is sentinel  # the sleep still succeeds
+    assert fake.sleep_called == 2
+
+
+@pytest.mark.asyncio
+async def test_add_lane_invokes_the_on_lane_added_hook(monkeypatch) -> None:
+    """The moment a lane is added — a startup static lane, a restored dynamic
+    lane, or a new dynamic lane — the wired hook (the RAM-cache re-plan) must
+    run so the sleep reserve is in place BEFORE the lane's first sleep: the
+    post-sleep hook only fires after the sleep has already happened, and the
+    periodic loop waits its initial 60 s. A failing hook must never fail the
+    lane add itself."""
+    calls = []
+
+    async def _hook() -> None:
+        calls.append(1)
+
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15071,
+        lane_port_end=15080,
+        nvidia_smi_available=lambda: True,
+        on_lane_added=_hook,
+    )
+    sentinel = object()
+    monkeypatch.setattr(manager, "_add_lane_unlocked", AsyncMock())
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+
+    out = await manager.add_lane(
+        LaneConfig(
+            model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+            vllm=True,
+            vllm_config=VllmConfig(enable_sleep_mode=True),
+        )
+    )
+
+    assert out is sentinel
+    assert calls == [1]
+
+    async def _boom() -> None:
+        raise RuntimeError("simulated re-plan failure")
+
+    manager._on_lane_added = _boom  # noqa: SLF001
+    out2 = await manager.add_lane(
+        LaneConfig(
+            model="org/other-model",
+            vllm=True,
+            lane_id="org_other-model",
+            vllm_config=VllmConfig(enable_sleep_mode=True),
+        )
+    )
+
+    assert out2 is sentinel  # the add still succeeds
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_replans_after_each_registration_before_staggered_sleep(monkeypatch) -> None:
+    """A batch add of sleep-capable lanes must re-plan after each registration
+    and BEFORE that lane's staggered sleep — otherwise the lane's sleeping
+    footprint is not reserved until the post-sleep hook (which fires only AFTER
+    the weights are already in host RAM) or the periodic loop's 60 s tick.
+    apply_lanes fires the re-plan per registration, so the cache has shrunk to
+    make room before the staggered sleep of each lane lands."""
+    events: list[str] = []
+
+    async def _hook() -> None:
+        events.append("replan")
+
+    manager = LaneManager(OllamaConfig(), nvidia_smi_available=lambda: True, on_lane_added=_hook)
+    lanes = [
+        LaneConfig(model="org/a", vllm=True, lane_id="org_a", vllm_config=VllmConfig(enable_sleep_mode=True)),
+        LaneConfig(model="org/b", vllm=True, lane_id="org_b", vllm_config=VllmConfig(enable_sleep_mode=True)),
+    ]
+
+    async def _fake_add(lid: str, lc: LaneConfig) -> None:
+        events.append(f"add:{lid}")
+        manager._handles[lid] = SimpleNamespace(  # noqa: SLF001
+            lane_id=lid,
+            lane_config=lc,
+            status=lambda: SimpleNamespace(state=ProcessState.RUNNING, pid=None),
+        )
+
+    async def _fake_sleep(handle: Any, level: int, mode: str) -> None:
+        events.append(f"sleep:{handle.lane_id}")
+
+    monkeypatch.setattr(manager, "_add_lane_unlocked", _fake_add)
+    monkeypatch.setattr(manager, "_sleep_handle_and_replan", _fake_sleep)
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    await manager.apply_lanes(lanes)
+
+    # Both lanes are added; exactly one (the non-last) is stagger-slept. Each
+    # registration fires the re-plan, plus the batch backstop fires once more.
+    assert sum(e.startswith("add:") for e in events) == 2
+    assert sum(e.startswith("sleep:") for e in events) == 1
+    assert events.count("replan") == 3
+    # The whole point of the fix: for the stagger-slept lane, the re-plan fires
+    # AFTER its registration and BEFORE its sleep, so the reserve is in place
+    # before the weights move to host RAM.
+    slept = next(e for e in events if e.startswith("sleep:"))
+    lid = slept.split(":", 1)[1]
+    i_add, i_sleep = events.index(f"add:{lid}"), events.index(slept)
+    assert any(e == "replan" for e in events[i_add:i_sleep])
 
 
 @pytest.mark.asyncio
@@ -2850,3 +3008,382 @@ async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
     await manager._add_lane_unlocked("org_left-model", lane)  # noqa: SLF001
     assert "org_left-model" in manager._handles  # noqa: SLF001
     manager.end_calibration_session()
+
+
+# ── reactive re-plan hook on every staggered sleep ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_stagger_sleeps_run_the_hook_between_sleeps(monkeypatch) -> None:
+    """apply_lanes sleeps several lanes in one staggered pass (existing lanes
+    before a spawn, fresh lanes between spawns). Each successful sleep must
+    run the on_lane_slept hook before the next lane is slept, so the RAM-cache
+    re-plan keeps up with weights landing in host RAM instead of waiting for
+    the next 60 s tick after the whole pass."""
+    hook_calls = []
+    events: list[str] = []
+
+    async def _hook() -> None:
+        hook_calls.append(1)
+        events.append("hook")
+
+    existing = LaneConfig(
+        lane_id="org_existing",
+        model="org/existing",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_a = LaneConfig(
+        lane_id="org_new-a",
+        model="org/new-a",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_b = LaneConfig(
+        lane_id="org_new-b",
+        model="org/new-b",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15400,
+        lane_port_end=15410,
+        on_lane_slept=_hook,
+    )
+
+    class ExistingHandle:
+        def __init__(self) -> None:
+            self.lane_id = "org_existing"
+            self.port = 15400
+            self.lane_config = existing
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            events.append("sleep:existing")
+            return {"ok": True}
+
+    class NewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            events.append(f"spawn:{self.lane_id}")
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            events.append(f"sleep:{self.lane_id}")
+            return {"ok": True}
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles["org_existing"] = ExistingHandle()  # noqa: SLF001
+    manager._port_alloc._used["org_existing"] = 15400  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+        return NewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    await manager.apply_lanes([existing, lane_a, lane_b])
+
+    assert hook_calls == [1, 1]
+    spawns = [e for e in events if e.startswith("spawn:")]
+    assert len(spawns) == 2
+    first_spawn, second_spawn = spawns[0], spawns[1]
+    i1 = events.index(first_spawn)
+    i2 = events.index(second_spawn)
+    # Staggered existing-lane sleep first, hook immediately after — then the
+    # spawns, each (except the last, which stays awake) followed by its own
+    # sleep and hook before the next spawn.
+    assert events[: i1 + 1] == ["sleep:existing", "hook", first_spawn]
+    assert events[i1 + 1 : i2] == [f"sleep:{first_spawn.removeprefix('spawn:')}", "hook"]
+    assert events[i2:] == [second_spawn]
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_stagger_sleep_failure_does_not_run_hook(monkeypatch) -> None:
+    """A staggered sleep that raises must not run the hook — the lane's
+    weights never landed in host RAM, so there is nothing to reclaim. The
+    apply itself continues without the stagger for that lane."""
+    hook_calls = []
+
+    async def _hook() -> None:
+        hook_calls.append(1)
+
+    existing = LaneConfig(
+        lane_id="org_existing",
+        model="org/existing",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_a = LaneConfig(
+        lane_id="org_new-a",
+        model="org/new-a",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15420,
+        lane_port_end=15430,
+        on_lane_slept=_hook,
+    )
+
+    class ExistingHandle:
+        def __init__(self) -> None:
+            self.lane_id = "org_existing"
+            self.port = 15420
+            self.lane_config = existing
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            raise RuntimeError("simulated sleep failure")
+
+    class NewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            return {"ok": True}
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles["org_existing"] = ExistingHandle()  # noqa: SLF001
+    manager._port_alloc._used["org_existing"] = 15420  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+        return NewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    result = await manager.apply_lanes([existing, lane_a])
+
+    assert result.success is True
+    assert hook_calls == []
+    assert manager.get_handle("org_new-a") is not None
+
+
+# ── startup/restart model reservation for the lock-free re-plan ─────────────
+
+
+@pytest.mark.asyncio
+async def test_add_lane_reserves_model_for_the_startup_window(monkeypatch) -> None:
+    """The model must be reserved before its HF_HOME is selected and only
+    released once the handle is registered — during the spawn the re-plan
+    (which does not take the lane-manager lock) must see it as protected even
+    though the lane is not in _handles yet."""
+    seen: dict[str, frozenset[str]] = {}
+
+    class ReservingHandle(_StubHandle):
+        def __init__(self, lane_config: LaneConfig) -> None:
+            super().__init__(lane_config)
+            self.lane_id = "org_new"
+            self.port = 15440
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            # The spawn is reading the (possibly tmpfs) model directory —
+            # the reservation must be live while the lane is unregistered.
+            seen["during_spawn"] = manager.starting_models()  # noqa: F821
+            assert "org/new" not in manager.lane_ids  # noqa: F821
+            return ProcessStatus(state=ProcessState.RUNNING)
+
+    manager = LaneManager(OllamaConfig(), lane_port_start=15440, lane_port_end=15450)
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle",
+        lambda *a, **k: ReservingHandle(a[4]),
+    )
+    lane = LaneConfig(lane_id="org_new", model="org/new", vllm=True)
+
+    await manager._add_lane_unlocked("org_new", lane)  # noqa: SLF001
+
+    assert seen["during_spawn"] == frozenset({"org/new"})
+    # Registration settled the model's fate — the reservation is gone.
+    assert manager.starting_models() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_add_lane_releases_startup_reservation_when_spawn_fails(monkeypatch) -> None:
+    seen: dict[str, frozenset[str]] = {}
+
+    class FailingReservingHandle(_StubHandle):
+        def __init__(self, lane_config: LaneConfig) -> None:
+            super().__init__(lane_config)
+            self.lane_id = "org_new"
+            self.port = 15460
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            seen["during_spawn"] = manager.starting_models()  # noqa: F821
+            raise RuntimeError("spawn boom")
+
+    manager = LaneManager(OllamaConfig(), lane_port_start=15460, lane_port_end=15470)
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle",
+        lambda *a, **k: FailingReservingHandle(a[4]),
+    )
+    lane = LaneConfig(lane_id="org_new", model="org/new", vllm=True)
+
+    with pytest.raises(RuntimeError, match="spawn boom"):
+        await manager._add_lane_unlocked("org_new", lane)  # noqa: SLF001
+
+    assert seen["during_spawn"] == frozenset({"org/new"})
+    # Failed startup cleaned up — no dangling reservation.
+    assert manager.starting_models() == frozenset()
+    assert "org_new" not in manager._handles  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_restart_lane_reserves_model_during_stop_spawn_window(monkeypatch) -> None:
+    """The old handle's process is dead (no RUNNING state left to protect the
+    model) while the new spawn runs — the reservation must cover that whole
+    window and clear once the new handle is registered."""
+    lane_id = "org_swap"
+    model = "org/swap"
+    lane_config = LaneConfig(lane_id=lane_id, model=model, vllm=True, vllm_config=VllmConfig())
+    manager = LaneManager(OllamaConfig(), lane_port_start=15480, lane_port_end=15490)
+
+    class DeadHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15480
+            self.lane_config = lane_config
+            self.destroyed = False
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=1)
+
+        async def destroy(self) -> None:
+            self.destroyed = True
+
+        async def close(self) -> None:
+            pass
+
+    seen: dict[str, frozenset[str]] = {}
+
+    class NewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            # Old process already destroyed, new handle not registered yet.
+            seen["during_spawn"] = manager.starting_models()  # noqa: F821
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    old = DeadHandle()
+    manager._handles[lane_id] = old  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15480  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+        return NewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+
+    await manager._restart_lane_unlocked(lane_id, LaneConfig(lane_id=lane_id, model=model, vllm=True))  # noqa: SLF001
+
+    assert old.destroyed is True
+    assert seen["during_spawn"] == frozenset({model})
+    assert manager.get_handle(lane_id) is not None
+    assert manager.starting_models() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_restart_lane_releases_startup_reservation_on_spawn_failure(monkeypatch) -> None:
+    lane_id = "org_swap"
+    model = "org/swap"
+    lane_config = LaneConfig(lane_id=lane_id, model=model, vllm=True, vllm_config=VllmConfig())
+    manager = LaneManager(OllamaConfig(), lane_port_start=15500, lane_port_end=15510)
+
+    class DeadHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15500
+            self.lane_config = lane_config
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=1)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    class FailingNewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            assert model in manager.starting_models()  # noqa: F821
+            raise RuntimeError("GPU out of memory")
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles[lane_id] = DeadHandle()  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15500  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> FailingNewHandle:
+        return FailingNewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+
+    with pytest.raises(RuntimeError, match="GPU out of memory"):
+        await manager._restart_lane_unlocked(
+            lane_id, LaneConfig(lane_id=lane_id, model=model, vllm=True)
+        )  # noqa: SLF001
+
+    assert lane_id not in manager._handles  # noqa: SLF001
+    assert manager.starting_models() == frozenset()

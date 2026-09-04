@@ -197,6 +197,14 @@
                   VRAM
                 </div>
               }
+              @if (allProviderRamSummary().reported) {
+                <div>
+                  <strong>{{ allProviderRamSummary().usedGb.toFixed(1) }}</strong>
+                  /
+                  <strong>{{ allProviderRamSummary().totalGb.toFixed(0) }} GB</strong>
+                  RAM
+                </div>
+              }
             </div>
           }
         </app-stats-kpi-card>

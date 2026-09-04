@@ -228,6 +228,13 @@ class ModelRamCache:
         self._caching_now: str | None = None
         self._caching_task: asyncio.Task | None = None
 
+        # Reference-counted cache-use reservations, model -> outstanding use.
+        # Calibration reads a model's tmpfs entry (ensure_cached_sync + vLLM
+        # probes) with neither a lane handle nor a startup reservation, so the
+        # re-plan's live-lane protection set cannot see it; a reserved entry is
+        # unioned into that set instead (see cache_use_reservations).
+        self._cache_use_refs: dict[str, int] = {}
+
         self._cache_hub.mkdir(parents=True, exist_ok=True)
         self._scan_existing()
 
@@ -270,6 +277,40 @@ class ModelRamCache:
         """List models currently in the cache."""
         return sorted(self._cached_models)
 
+    def reserve_cache_use(self, model_name: str) -> None:
+        """Mark that a process is about to read *model_name*'s tmpfs entry.
+
+        The re-plan protects the entries of lanes that read the cache, but
+        calibration reads its entry with no lane handle and no startup
+        reservation, so without this its tree could be evicted mid-session.
+        Call before the first read, pair every call with exactly one
+        ``release_cache_use``. Reference-counted so overlapping uses (e.g. a
+        calibration session that re-runs) cannot un-reserve each other, and a
+        double release is a harmless no-op rather than corrupting the count.
+        """
+        self._cache_use_refs[model_name] = self._cache_use_refs.get(model_name, 0) + 1
+
+    def release_cache_use(self, model_name: str) -> None:
+        """Drop one reservation taken by ``reserve_cache_use``.
+
+        A release with no matching reservation is ignored (the count is clamped
+        at zero) so an over-release cannot drive the count negative.
+        """
+        refs = self._cache_use_refs.get(model_name, 0)
+        if refs <= 1:
+            self._cache_use_refs.pop(model_name, None)
+        else:
+            self._cache_use_refs[model_name] = refs - 1
+
+    def cache_use_reservations(self) -> set[str]:
+        """Models with an outstanding ``reserve_cache_use``.
+
+        The RAM-cache re-plan unions this set into its protection set, so a
+        model being calibrated — whose entry it reads with no lane to hide
+        behind — is not reclaimed while the reservation is live.
+        """
+        return set(self._cache_use_refs)
+
     def model_size_bytes(self, model_name: str) -> int:
         """Bytes this model will occupy in the cache.
 
@@ -297,6 +338,30 @@ class ModelRamCache:
             if model_name in self._cached_models:
                 cached = self._cache_hub / _hf_model_dir_name(model_name)
                 if cached.exists():
+                    # The copy path below re-checks the floor before admitting
+                    # NEW bytes, but this entry is already resident in tmpfs —
+                    # it was cached under an earlier, smaller floor (or its
+                    # in-flight copy finished under one) and the re-plan may
+                    # since have raised the sleep reserve past it. The right
+                    # question is whether the host is ALREADY below the floor
+                    # with the entry in place (size 0: nothing to add), not
+                    # whether adding it would be. Serving the lane from an
+                    # over-floor entry would protect it (the lane reads it) and
+                    # leave the lane's first sleep short of planned host RAM,
+                    # so when the host is under the floor serve from disk
+                    # instead — which also leaves the entry evictable by the
+                    # re-plan.
+                    starves, host_available = self._would_starve_host(0)
+                    if starves:
+                        logger.warning(
+                            "Model %s: already cached but host RAM (%d MB) is below the "
+                            "%d MB sleep reserve — loading from disk so the lane's "
+                            "first sleep has planned host RAM",
+                            model_name,
+                            host_available // (1024 * 1024),
+                            self._host_ram_floor_bytes // (1024 * 1024),
+                        )
+                        return str(self._source_hub.parent)
                     logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                     return str(self._cache_hub.parent)
                 self._cached_models.discard(model_name)
@@ -349,6 +414,26 @@ class ModelRamCache:
             ok = await self._copy_model(model_name)
             if ok:
                 self._cached_models.add(model_name)
+                # The pre-copy check above is a snapshot: the re-plan runs on
+                # a tick and after every lane sleep, so the floor may have
+                # risen while this copy ran. Re-check the live floor with the
+                # entry now resident (size 0, as in the already-cached branch)
+                # — serving the lane from an over-floor entry would protect it
+                # (the lane reads it) and leave the lane's first sleep short of
+                # planned host RAM, so serve from disk instead. The entry
+                # stays in the cache and is evictable: the lane did not launch
+                # from it.
+                starves, host_available = self._would_starve_host(0)
+                if starves:
+                    logger.warning(
+                        "Model %s: cached, but host RAM (%d MB) is below the "
+                        "%d MB sleep reserve — loading from disk so the lane's "
+                        "first sleep has planned host RAM",
+                        model_name,
+                        host_available // (1024 * 1024),
+                        self._host_ram_floor_bytes // (1024 * 1024),
+                    )
+                    return str(self._source_hub.parent)
                 logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
             logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
@@ -363,6 +448,21 @@ class ModelRamCache:
         if model_name in self._cached_models:
             cached = self._cache_hub / _hf_model_dir_name(model_name)
             if cached.exists():
+                # Same floor re-check as the async path: an entry resident
+                # under an earlier, smaller floor must not be served once the
+                # re-plan has raised the sleep reserve past it (see
+                # ensure_cached).
+                starves, host_available = self._would_starve_host(0)
+                if starves:
+                    logger.warning(
+                        "Model %s: already cached but host RAM (%d MB) is below the "
+                        "%d MB sleep reserve — loading from disk so the lane's "
+                        "first sleep has planned host RAM",
+                        model_name,
+                        host_available // (1024 * 1024),
+                        self._host_ram_floor_bytes // (1024 * 1024),
+                    )
+                    return str(self._source_hub.parent)
                 logger.info("Model %s: already in tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
             self._cached_models.discard(model_name)
@@ -414,6 +514,19 @@ class ModelRamCache:
         ok = self._copy_model_sync(model_name)
         if ok:
             self._cached_models.add(model_name)
+            # Same post-copy re-check as the async path: the reserve may have
+            # risen while the copy ran (see ensure_cached).
+            starves, host_available = self._would_starve_host(0)
+            if starves:
+                logger.warning(
+                    "Model %s: cached, but host RAM (%d MB) is below the "
+                    "%d MB sleep reserve — loading from disk so the lane's "
+                    "first sleep has planned host RAM",
+                    model_name,
+                    host_available // (1024 * 1024),
+                    self._host_ram_floor_bytes // (1024 * 1024),
+                )
+                return str(self._source_hub.parent)
             logger.info("Model %s: cached to tmpfs RAM cache (sync)", model_name)
             return str(self._cache_hub.parent)
         logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
@@ -555,6 +668,9 @@ class ModelRamCache:
         ``apply_lanes`` immediately instead of blocking the lifespan
         startup hook on a multi-minute rsync sweep.
 
+        Called at startup, and again by the RAM-cache re-plan whenever host
+        RAM frees up (admitted models are extended onto the same queue).
+
         Subsequent calls extend the queue rather than replacing it — safe
         to invoke from anywhere once the worker is running.
         """
@@ -590,7 +706,11 @@ class ModelRamCache:
                 self._cache_queue.appendleft(model_name)
                 logger.info("RAM cache: bumped %s to front of queue", model_name)
             return event
-        # Fresh enqueue.
+        # Fresh enqueue. The completion event may still be set from a
+        # *released* attempt (the re-plan dropped a queue entry and woke
+        # its waiters) — clear it so this attempt's waiters wait for the
+        # real completion, not the stale release.
+        event.clear()
         if priority:
             self._cache_queue.appendleft(model_name)
         else:
@@ -701,7 +821,7 @@ class ModelRamCache:
                 total += _tree_size_bytes(target)
         return total
 
-    def reclaim(self, keep: set[str]) -> list[str]:
+    async def reclaim(self, keep: set[str]) -> list[str]:
         """Drop cached models outside *keep*, returning what was removed.
 
         The cache and vLLM's sleep_l1 both hold model weights in host RAM,
@@ -715,14 +835,64 @@ class ModelRamCache:
         waking from sleep_l2 re-reads its weights from whatever HF_HOME it
         was started with, and pulling that directory out from under it turns
         a wake into a failed lane.
+
+        Coordination with the background copy worker (reclaim now runs on a
+        60 s tick next to in-flight copies, not once at startup before any):
+
+        * the model being copied right now (``_caching_now``) is skipped —
+          the worker owns its tree, and a concurrent ``rmtree`` would tear a
+          half-written copy. The next pass sees the finished copy in
+          ``_cached_models`` and drops it then.
+        * each evicted model's per-model lock — the same one
+          ``ensure_cached`` holds during a copy — is held while its tree is
+          removed, so no copy of the same model can interleave with the
+          ``rmtree``.
+        * queue entries the plan no longer wants are dropped, and their
+          completion events released (a waiter then sees ``is_cached`` False
+          and falls back to disk immediately). Without this the worker would
+          finish copying a model the plan just rejected, and the next pass
+          would evict it again — evict/recopy thrash of tens of GB.
         """
         removed: list[str] = []
         for model_name in sorted(self._cached_models):
             if model_name in keep:
                 continue
-            self.evict(model_name)
+            if model_name == self._caching_now:
+                continue
+            lock = await self._get_model_lock(model_name)
+            async with lock:
+                self._release_queue_entry(model_name)
+                self.evict(model_name)
             removed.append(model_name)
+        for model_name in [m for m in self._cache_queue if m not in keep]:
+            self._release_queue_entry(model_name)
         return removed
+
+    def _release_queue_entry(self, model_name: str) -> None:
+        """Drop *model_name* from the copy queue and release its waiters.
+
+        A released event means "the caching attempt finished"; ``is_cached``
+        is still False, so a waiter proceeds from disk instead of waiting
+        out its timeout.
+        """
+        if model_name in self._cache_queue:
+            self._cache_queue.remove(model_name)
+        event = self._completion_events.get(model_name)
+        if event is not None and not event.is_set():
+            event.set()
+
+    def pending_or_caching(self) -> set[str]:
+        """Models the background worker already owns: queued or in flight.
+
+        A model in here is on its way into the cache — re-queueing it is a
+        no-op and re-logging it is noise. The re-plan uses this to keep its
+        "re-caching N model(s)" line truthful while a copy is in flight
+        (``is_cached`` is False until the copy lands).
+        """
+        pending = set(self._cache_queue)
+        if self._caching_now is not None:
+            pending.add(self._caching_now)
+        return pending
 
     def get_effective_hf_home(self, model_name: str) -> str:
         """Return tmpfs-based HF_HOME if cached, else source HF_HOME."""
@@ -1041,11 +1211,23 @@ class _DisabledModelRamCache:
     def held_bytes(self) -> int:
         return 0
 
-    def reclaim(self, keep: set[str]) -> list[str]:  # noqa: ARG002
+    async def reclaim(self, keep: set[str]) -> list[str]:  # noqa: ARG002
         return []
+
+    def pending_or_caching(self) -> set[str]:
+        return set()
 
     def set_host_ram_floor_mb(self, floor_mb: float) -> None:  # noqa: ARG002
         pass
+
+    def reserve_cache_use(self, model_name: str) -> None:  # noqa: ARG002
+        pass
+
+    def release_cache_use(self, model_name: str) -> None:  # noqa: ARG002
+        pass
+
+    def cache_use_reservations(self) -> set[str]:
+        return set()
 
     def get_effective_hf_home(self, model_name: str) -> str:  # noqa: ARG002
         return ""

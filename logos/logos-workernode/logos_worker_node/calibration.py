@@ -1389,6 +1389,54 @@ def calibrate_model(
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
 ) -> CalibrationResult:
+    """Calibrate one model on this worker — the public entry point.
+
+    Runs the full probe sequence (``_calibrate_model_probe``) and owns the
+    RAM-cache entry's reservation lifecycle around it: the probe reserves the
+    entry the moment it actually reads it from tmpfs — only that moment, a
+    source fallback reads no tmpfs bytes — and holds it for the probe
+    lifetime so the re-plan cannot reclaim the tree mid-session; this
+    function releases it when the run ends, on every exit.
+    """
+    # One-element list (not a plain bool) so the reservation taken deep
+    # inside the probe's closures is observable here without a shared
+    # mutable object threaded through every level.
+    cache_use_reserved: list[bool] = [False]
+    try:
+        return _calibrate_model_probe(
+            plan,
+            vllm_binary=vllm_binary,
+            port=port,
+            log_dir=log_dir,
+            sleep_level=sleep_level,
+            ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
+            hf_home=hf_home,
+            model_cache=model_cache,
+            cancel_event=cancel_event,
+            cache_use_reserved=cache_use_reserved,
+        )
+    finally:
+        # Release on EVERY exit — a failed, cancelled, or early-returned run
+        # must not keep the entry pinned for the next model.
+        if cache_use_reserved[0] and model_cache is not None:
+            model_cache.release_cache_use(plan["model"])
+
+
+def _calibrate_model_probe(
+    plan: dict[str, Any],
+    *,
+    vllm_binary: str,
+    port: int,
+    log_dir: Path,
+    sleep_level: int,
+    ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
+    model_cache: Any | None = None,
+    cancel_event: threading.Event | None = None,
+    cache_use_reserved: list[bool],
+) -> CalibrationResult:
     """Calibrate one model on this worker and return a :class:`CalibrationResult`.
 
     Runs the full probe sequence for *plan*: baseline VRAM, the KV-cache
@@ -1412,6 +1460,10 @@ def calibrate_model(
         model_cache: Optional model cache; the first real spawn copies the
             model into it.
         cancel_event: When set, aborts the run at the next checkpoint.
+        cache_use_reserved: One-element flag the ``calibrate_model`` wrapper
+            reads in its ``finally`` to release the reservation: ``_try_start``
+            sets ``cache_use_reserved[0]`` (and takes the reservation) when
+            this run's probe actually reads the model from the tmpfs entry.
 
     Returns:
         A ``CalibrationResult`` with ``success=True`` and the measured
@@ -1720,6 +1772,17 @@ def calibrate_model(
                 is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
                 if is_tmpfs:
                     hf_home = _hf
+                    # Only NOW does this run read the entry from tmpfs (every
+                    # later probe reuses this hf_home without re-checking the
+                    # floor), so only now must it stay pinned against the
+                    # re-plan: the calibrate_model wrapper's finally releases
+                    # it. A source fallback selects no tmpfs bytes and must
+                    # not pin the copy — reserving before the selection
+                    # protected an unused entry for the whole calibration
+                    # after a raised floor rejected it.
+                    if not cache_use_reserved[0]:
+                        model_cache.reserve_cache_use(model)
+                        cache_use_reserved[0] = True
                     logger.info("  [RAM cache] %s → loading from tmpfs", model)
                 else:
                     logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
@@ -3152,6 +3215,12 @@ def calibrate_with_tp_escalation(
     # blacklisted.  Pass the cache object through; it will call
     # ensure_cached_sync only when needed.
     _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
+    # The probes reserve this model's tmpfs entry themselves — and only
+    # once a probe actually reads it from tmpfs (calibrate_model's finally
+    # releases it when the run ends). A session-level reservation here
+    # would pin an entry a source-fallback probe never reads while host
+    # RAM is below the floor, blocking the re-plan's reclaim for the
+    # whole run.
     cal_kwargs: dict[str, Any] = dict(
         vllm_binary=vllm_binary,
         port=port,

@@ -7,6 +7,7 @@ import {
   VramProviderMeta,
   VramV2Sample,
 } from '../../statistics.models';
+import { extractProviderHostRamMb } from '../../statistics.utils';
 import { EmptyState } from '../empty-state/empty-state';
 
 type CalibrateState =
@@ -152,6 +153,43 @@ export class WorkerGpuPanel {
     const total = this.syntheticTotalMb();
     if (total <= 0) return 0;
     return Math.min(100, (this.syntheticUsedMb() / total) * 100);
+  }
+
+  // ── Host RAM ────────────────────────────────────────────────────────────────
+  // The same resource axis the capacity planner schedules against as VRAM:
+  // sleeping lanes park their weights here and the tmpfs model cache draws
+  // from it. Shown as its own card because it is a machine-level pool, not a
+  // per-GPU one.
+
+  private hostRamSummary() {
+    return extractProviderHostRamMb(this.latestSample);
+  }
+
+  hostRamTotalMb(): number {
+    return this.hostRamSummary().totalMb;
+  }
+
+  hostRamUsedMb(): number {
+    return this.hostRamSummary().usedMb;
+  }
+
+  hostRamFreeMb(): number {
+    return this.hostRamSummary().freeMb;
+  }
+
+  hostRamPct(): number {
+    const summary = this.hostRamSummary();
+    if (summary.totalMb <= 0) return 0;
+    return Math.min(100, (summary.usedMb / summary.totalMb) * 100);
+  }
+
+  /**
+   * Whether this provider reports host RAM at all. Absent means "not
+   * reported" (an older worker, or a non-Linux host), which is a different
+   * thing from a host that measured 0 MB — the card simply stays out.
+   */
+  hasHostRam(): boolean {
+    return this.hostRamSummary().reported;
   }
 
   deviceName(device: DeviceInfo): string {

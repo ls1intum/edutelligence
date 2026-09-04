@@ -1,4 +1,5 @@
 import {
+  extractProviderHostRamMb,
   formatTokenCount,
   normalizeFeedStatus,
   resolveFeedTotal,
@@ -62,7 +63,6 @@ describe('resolveFeedTotal', () => {
   });
 });
 
-
 /**
  * The scale token counts are displayed on.
  *
@@ -118,5 +118,84 @@ describe('formatTokenCount', () => {
   it('stays on T once the scale is exhausted', () => {
     expect(formatTokenCount(2_000_000_000_000)).toBe('2 T');
     expect(formatTokenCount(15_000_000_000_000)).toBe('15 T');
+  });
+});
+
+
+/**
+ * Host RAM of a provider's latest sample.
+ *
+ * The distinction that matters here is "reported" vs "not reported": the
+ * numbers travel on the runtime's host_memory summary, which older workers
+ * never sent and non-Linux hosts report all-zero. Both have to read as "no
+ * data" on the page, never as a machine with 0 MB of RAM.
+ */
+describe('extractProviderHostRamMb', () => {
+  it('reads the three figures from the provider signals', () => {
+    const sample = {
+      timestamp: '2026-03-16T18:00:00Z',
+      scheduler_signals: {
+        provider: {
+          host_ram_total_mb: 516_096,
+          host_ram_used_mb: 204_048,
+          host_ram_available_mb: 312_048,
+        },
+      },
+    };
+    expect(extractProviderHostRamMb(sample)).toEqual({
+      totalMb: 516_096,
+      usedMb: 204_048,
+      freeMb: 312_048,
+      reported: true,
+    });
+  });
+
+  it('treats a sample without host RAM as not reported, not as zero', () => {
+    // An older worker: the field is simply absent.
+    expect(extractProviderHostRamMb({ timestamp: 't', scheduler_signals: { provider: {} } })).toEqual({
+      totalMb: 0,
+      usedMb: 0,
+      freeMb: 0,
+      reported: false,
+    });
+    expect(extractProviderHostRamMb(null)).toEqual({
+      totalMb: 0,
+      usedMb: 0,
+      freeMb: 0,
+      reported: false,
+    });
+    expect(extractProviderHostRamMb(undefined)).toEqual({
+      totalMb: 0,
+      usedMb: 0,
+      freeMb: 0,
+      reported: false,
+    });
+  });
+
+  it('treats the all-zero non-Linux summary as not reported', () => {
+    const sample = {
+      timestamp: 't',
+      scheduler_signals: {
+        provider: { host_ram_total_mb: 0, host_ram_used_mb: 0, host_ram_available_mb: 0 },
+      },
+    };
+    expect(extractProviderHostRamMb(sample).reported).toBe(false);
+  });
+
+  it('keeps a legitimately used host that is down to 0 MB available', () => {
+    // 0 free is a real reading on an exhausted host — the page wants to show
+    // that, so "reported" keys off the total, not the free figure.
+    const sample = {
+      timestamp: 't',
+      scheduler_signals: {
+        provider: { host_ram_total_mb: 65_536, host_ram_used_mb: 65_536, host_ram_available_mb: 0 },
+      },
+    };
+    expect(extractProviderHostRamMb(sample)).toEqual({
+      totalMb: 65_536,
+      usedMb: 65_536,
+      freeMb: 0,
+      reported: true,
+    });
   });
 });

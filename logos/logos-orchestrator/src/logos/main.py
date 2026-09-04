@@ -502,6 +502,13 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
     capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
     transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
+    # Host RAM is a first-class scheduling axis parallel to VRAM (see
+    # capacity/host_ram_ledger.py): sleeping lanes keep their weights in it and
+    # the worker's tmpfs model cache draws from it too, so the statistics page
+    # shows it the same way it shows the GPU memory above. The worker reports
+    # it in the runtime's host_memory summary on every heartbeat; on
+    # non-Linux hosts that summary is all zeros and source="unavailable".
+    host_memory = runtime.get("host_memory") if isinstance(runtime.get("host_memory"), dict) else {}
     # Needed to resolve a lane's served window: a vLLM lane that was started
     # without an explicit --max-model-len takes it from the calibrated profile,
     # so the number is not on the lane itself.
@@ -516,6 +523,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
         "free_memory_mb": _safe_float(devices.get("free_memory_mb")),
+        "host_ram_total_mb": _safe_float(host_memory.get("total_mb")),
+        "host_ram_used_mb": _safe_float(host_memory.get("used_mb")),
+        "host_ram_available_mb": _safe_float(host_memory.get("available_mb")),
         "lane_count": _safe_int(capacity.get("lane_count")) or len(lanes),
         "active_requests": _safe_int(capacity.get("active_requests")) or 0,
         "loaded_lane_count": _safe_int(capacity.get("loaded_lane_count")) or 0,
