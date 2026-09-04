@@ -1,13 +1,10 @@
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter, MetadataQuery
 
 from iris.common.logging_config import get_logger
-from iris.domain.search.global_search_dto import (
-    AccessContext,
+from iris.domain.search.lecture_search_dto import (
     CourseInfo,
     LectureInfo,
     LectureSearchResultDTO,
@@ -45,53 +42,6 @@ logger = get_logger(__name__)
 _EMPTY_SEGMENT_PREFIX = "There is no content"
 
 
-@dataclass(frozen=True)
-class _VisibilityPolicy:
-    """Per-search visibility decision derived from the Artemis access context.
-
-    Mirrors Artemis lecture-unit visibility: admins (``unrestricted``) and staff of a
-    course see units regardless of release date; everyone else is gated on the unit's
-    release date evaluated at ``now`` (the Artemis request time, not the Pyris clock).
-    Slide-level ``hidden_until`` is enforced for all roles and is never bypassed here.
-    """
-
-    now: datetime | None
-    unrestricted: bool
-    staff_course_ids: frozenset[int]
-
-    @classmethod
-    def from_context(cls, ctx: AccessContext | None) -> "_VisibilityPolicy":
-        if ctx is None:
-            return cls(now=None, unrestricted=False, staff_course_ids=frozenset())
-        return cls(
-            now=ctx.effective_now_dt(),
-            unrestricted=ctx.unrestricted,
-            staff_course_ids=frozenset(ctx.staff_course_ids),
-        )
-
-    def release_bypassed(self, course_id: Any) -> bool:
-        """Whether the unit-level release-date gate is waived for this course."""
-        return self.unrestricted or (
-            course_id is not None and course_id in self.staff_course_ids
-        )
-
-
-def resolve_effective_course_ids(
-    course_ids: list[int] | None, ctx: AccessContext | None
-) -> list[int] | None:
-    """Intersect the user's course filter with the courses the access context permits.
-
-    Returns None (no course ceiling) when there is no access context or the context is
-    unrestricted (admin). An empty list means the user has no accessible courses.
-    """
-    if ctx is None or ctx.unrestricted:
-        return course_ids
-    if course_ids is None:
-        return ctx.course_ids
-    allowed = set(ctx.course_ids)
-    return [course_id for course_id in course_ids if course_id in allowed]
-
-
 class LectureGlobalSearchRetrieval:
     """Retrieves lecture content from Weaviate using hybrid search across two collections:
     LectureUnitSegments (slide-based) and LectureTranscriptions (video-only segments with
@@ -114,7 +64,6 @@ class LectureGlobalSearchRetrieval:
         limit: int,
         alpha: float = 0.5,
         course_ids: list[int] | None = None,
-        access_context: AccessContext | None = None,
     ) -> list[LectureSearchResultDTO]:
         """
         Search for lecture content based on a query.
@@ -124,24 +73,15 @@ class LectureGlobalSearchRetrieval:
         :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
         :param course_ids: Optional list of course IDs to restrict the search scope.
                            When None, searches all ingested courses (global search).
-        :param access_context: Optional permissions filter resolved by Artemis. Intersected
-                               with course_ids; an empty accessible scope skips the search.
         :return: Segments sorted by relevance.
         """
-        effective_course_ids = resolve_effective_course_ids(course_ids, access_context)
-        if effective_course_ids is not None and not effective_course_ids:
-            logger.debug(
-                "Access context yields no accessible courses; skipping search."
-            )
-            return []
         query_embedding = self.llm_embedding.embed(query)
         return self._run_hybrid_search(
             query=query,
             vector=query_embedding,
             alpha=alpha,
             limit=limit,
-            course_ids=effective_course_ids,
-            policy=_VisibilityPolicy.from_context(access_context),
+            course_ids=course_ids,
         )
 
     def search_with_vector_override(
@@ -151,7 +91,6 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
-        access_context: AccessContext | None = None,
     ) -> list[LectureSearchResultDTO]:
         """
         Search using a custom text to generate the search vector, while keeping the
@@ -163,24 +102,11 @@ class LectureGlobalSearchRetrieval:
         :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
         :param limit: The maximum number of results to return.
         :param course_ids: Optional list of course IDs to restrict the search scope.
-        :param access_context: Optional permissions filter resolved by Artemis. Intersected
-                               with course_ids; an empty accessible scope skips the search.
         :return: Segments sorted by relevance.
         """
-        effective_course_ids = resolve_effective_course_ids(course_ids, access_context)
-        if effective_course_ids is not None and not effective_course_ids:
-            logger.debug(
-                "Access context yields no accessible courses; skipping search."
-            )
-            return []
         vector = self.llm_embedding.embed(vector_text)
         return self._run_hybrid_search(
-            query=query,
-            vector=vector,
-            alpha=alpha,
-            limit=limit,
-            course_ids=effective_course_ids,
-            policy=_VisibilityPolicy.from_context(access_context),
+            query=query, vector=vector, alpha=alpha, limit=limit, course_ids=course_ids
         )
 
     def _run_hybrid_search(
@@ -190,11 +116,8 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
-        policy: "_VisibilityPolicy | None" = None,
     ) -> list[LectureSearchResultDTO]:
         """Run hybrid searches, expanding candidates until visible results are filled."""
-        if policy is None:
-            policy = _VisibilityPolicy.from_context(None)
         candidate_limit = max(limit, 1)
         while True:
             with TracedThreadPoolExecutor(max_workers=2) as executor:
@@ -221,7 +144,7 @@ class LectureGlobalSearchRetrieval:
                 len(seg_objects),
                 len(trans_objects),
             )
-            scored = self._map_search_objects(seg_objects, trans_objects, policy)
+            scored = self._map_search_objects(seg_objects, trans_objects)
             segment_scored = [
                 item
                 for item in scored
@@ -247,10 +170,7 @@ class LectureGlobalSearchRetrieval:
             candidate_limit = min(candidate_limit * 2, 10_000)
 
     def _map_search_objects(
-        self,
-        seg_objects: list[Any],
-        trans_objects: list[Any],
-        policy: "_VisibilityPolicy",
+        self, seg_objects: list[Any], trans_objects: list[Any]
     ) -> list[tuple[float, LectureSearchResultDTO]]:
         """Map one candidate window and discard unreleased or hidden objects."""
 
@@ -299,7 +219,7 @@ class LectureGlobalSearchRetrieval:
 
         for obj in seg_objects:
             dto = self._segment_to_dto(
-                obj.properties, lecture_unit_by_id, transcription_start_times, policy
+                obj.properties, lecture_unit_by_id, transcription_start_times
             )
             if dto is not None:
                 score = (
@@ -311,7 +231,7 @@ class LectureGlobalSearchRetrieval:
 
         for obj in trans_objects:
             dto = self._transcription_to_dto(
-                obj.properties, lecture_unit_by_id, slide_by_display_page, policy
+                obj.properties, lecture_unit_by_id, slide_by_display_page
             )
             if dto is not None:
                 score = (
@@ -481,11 +401,8 @@ class LectureGlobalSearchRetrieval:
         props: dict[str, Any],
         lecture_unit_by_id: dict[tuple[str | None, int], Any],
         transcription_start_times: dict[tuple[str, int, int], float],
-        policy: "_VisibilityPolicy | None" = None,
     ) -> LectureSearchResultDTO | None:
-        if policy is None:
-            policy = _VisibilityPolicy.from_context(None)
-        if not is_segment_visible(props, policy.now):
+        if not is_segment_visible(props):
             return None
 
         snippet = props.get(LectureUnitSegmentSchema.SEGMENT_SUMMARY.value)
@@ -494,16 +411,13 @@ class LectureGlobalSearchRetrieval:
 
         unit_id = props.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
         base_url = props.get(LectureUnitSegmentSchema.BASE_URL.value)
-        course_id = props.get(LectureUnitSegmentSchema.COURSE_ID.value)
         lecture_unit = (
             lecture_unit_by_id.get((base_url, unit_id)) if unit_id is not None else None
         )
-        if lecture_unit is None or (
-            not policy.release_bypassed(course_id)
-            and not is_unit_released(lecture_unit, policy.now)
-        ):
+        if lecture_unit is None or not is_unit_released(lecture_unit):
             return None
 
+        course_id = props.get(LectureUnitSegmentSchema.COURSE_ID.value)
         lecture_id = props.get(LectureUnitSegmentSchema.LECTURE_ID.value)
         page_number = props.get(LectureUnitSegmentSchema.PAGE_NUMBER.value)
         if (
@@ -558,10 +472,7 @@ class LectureGlobalSearchRetrieval:
         slide_by_display_page: (
             dict[tuple[str | None, int, int], list[Any]] | None
         ) = None,
-        policy: "_VisibilityPolicy | None" = None,
     ) -> LectureSearchResultDTO | None:
-        if policy is None:
-            policy = _VisibilityPolicy.from_context(None)
         snippet = props.get(
             LectureTranscriptionSchema.SEGMENT_SUMMARY.value
         ) or props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value)
@@ -574,7 +485,6 @@ class LectureGlobalSearchRetrieval:
             lecture_unit_by_id.get((base_url, unit_id)) if unit_id is not None else None
         )
         page_number = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
-        course_id = props.get(LectureTranscriptionSchema.COURSE_ID.value)
         associated_slide = None
         if slide_by_display_page is not None and page_number is not None:
             try:
@@ -584,14 +494,11 @@ class LectureGlobalSearchRetrieval:
             except (TypeError, ValueError):
                 return None
         if lecture_unit is None or not is_transcription_visible(
-            props,
-            lecture_unit,
-            associated_slide,
-            now=policy.now,
-            bypass_release=policy.release_bypassed(course_id),
+            props, lecture_unit, associated_slide
         ):
             return None
 
+        course_id = props.get(LectureTranscriptionSchema.COURSE_ID.value)
         lecture_id = props.get(LectureTranscriptionSchema.LECTURE_ID.value)
         start_time = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
         if course_id is None or lecture_id is None or start_time is None:
