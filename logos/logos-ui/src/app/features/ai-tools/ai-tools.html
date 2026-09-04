@@ -245,7 +245,7 @@
 
       <div class="step-nav">
         <button type="button" class="btn-secondary" (click)="back()">Back</button>
-        <button type="button" class="btn-primary" [disabled]="!modelChosen()" (click)="next()">
+        <button type="button" class="btn-primary" [disabled]="!modelUsable()" (click)="next()">
           Continue <i class="pi pi-arrow-right" aria-hidden="true"></i>
         </button>
       </div>
@@ -697,13 +697,50 @@
           @if (!hasCurrentWindow() && hasOverallWindow()) {
             <strong>No worker is serving this model at the moment</strong>, which is why the
             first two figures have no value yet — they only exist while a lane is up. Starting
-            a session tells Logos to bring one up, and it is sized against the maximum on the
+            a session tells Logos to bring one up; how wide it comes up is decided then, from
+            the capacity that happens to be free, so it can land well below the maximum on the
             right.
           } @else if (!hasOverallWindow()) {
             Logos reports no size for this model at all, so the figure above is a
             conservative estimate.
           }
         </p>
+
+        <!-- The window against Claude Code's own fixed deductions. Below the
+             floor the session's first request is a 400, so the model is out of
+             reach rather than merely warned about; just above it, it runs but
+             compacts from the first message on. -->
+        @if (activeTool() === 'claudecode' && claudeCodeFit() === 'unusable') {
+          <div class="privacy-callout" role="note">
+            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+            <p>
+              <strong>This window is too small for Claude Code, so it cannot be picked.</strong>
+              Logos serves this model at {{ selectedContextFloor() | number }} tokens and Claude
+              Code needs at least {{ claudeCodeContextFloor | number }}: it reserves
+              {{ claudeCodeOutputReserve | number }} tokens for a reply on every request
+              whatever it is told, and its own system prompt and tool definitions take about
+              {{ claudeCodeBasePrompt | number }} more before you have typed anything. Both are
+              charged against the one window, so the session's very first message would come
+              back as <code class="inline-code">maximum context length is
+              {{ selectedContextFloor() | number }} tokens</code> — and no amount of
+              compacting gets under that. Pick a model with a wider window, or use OpenCode,
+              which is told what to reserve and only loses reply length here.
+            </p>
+          </div>
+        } @else if (activeTool() === 'claudecode' && claudeCodeFit() === 'tight') {
+          <div class="privacy-callout" role="note">
+            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+            <p>
+              <strong>This window is workable but tight for Claude Code.</strong>
+              After the {{ claudeCodeOutputReserve | number }} tokens it reserves for a reply
+              and the ~{{ claudeCodeBasePrompt | number }} its own system prompt and tools
+              take, a {{ selectedContextFloor() | number }}-token window leaves little room
+              before auto-compaction starts, so long tasks will be summarised repeatedly. From
+              {{ claudeCodeContextComfortable | number }} tokens up that stops being the normal
+              case.
+            </p>
+          </div>
+        }
 
         @if (activeTool() === 'claudecode' && windowUnenforced()) {
           <div class="privacy-callout" role="note">

@@ -15,6 +15,17 @@ import { SelectComponent, AppSelectOption } from '../../shared/components/select
 export type AiTool = 'claudecode' | 'opencode';
 export type OsTab = 'mac' | 'linux' | 'windows';
 
+/**
+ * Whether a model's context window can carry a Claude Code session.
+ *
+ * `unusable`  the first request of the session comes back as a 400.
+ * `tight`     it runs, but auto-compaction fires from the first message on.
+ * `ok`        room to work before anything is compacted.
+ * `unknown`   Logos reports no window being served, so there is nothing to
+ *             judge — never a reason to block.
+ */
+export type ClaudeCodeFit = 'ok' | 'tight' | 'unusable' | 'unknown';
+
 /** One piece of the finishing confetti. Values are randomised per piece. */
 interface ConfettiPiece {
   id: number;
@@ -96,7 +107,7 @@ export class AiTools implements OnInit, OnDestroy {
   readonly toolChosen = computed(() => this.activeTool() !== null);
   readonly teamChosen = computed(() => this.selectedKey() !== null);
   readonly modelChosen = computed(() => this.selected() !== null);
-  readonly ready = computed(() => this.teamChosen() && this.modelChosen());
+  readonly ready = computed(() => this.teamChosen() && this.modelUsable());
 
   /**
    * A step that holds no decision is not a step. With one team there is nothing
@@ -106,11 +117,13 @@ export class AiTools implements OnInit, OnDestroy {
    * Only while the list is loaded and holds exactly one entry. An empty list is
    * *not* skipped — that step is where "no keys for your account" is said, and
    * silently jumping over it would leave the user in a later step wondering why
-   * nothing is generated.
+   * nothing is generated. Neither is a single model the chosen tool cannot use:
+   * step 3 is where that is explained, and skipping it would drop the user into
+   * the install step with no idea why nothing continues.
    */
   isSkipped(step: number): boolean {
     if (step === 2) return !this.keysLoading() && this.keys().length === 1;
-    if (step === 3) return !this.modelsLoading() && this.models().length === 1;
+    if (step === 3) return !this.modelsLoading() && this.models().length === 1 && this.modelUsable();
     return false;
   }
 
@@ -133,7 +146,7 @@ export class AiTools implements OnInit, OnDestroy {
     if (step === 2) return true;
     if (!this.teamChosen()) return false;
     if (step === 3) return true;
-    return this.modelChosen();
+    return this.modelUsable();
   }
 
   stepState(step: number): 'done' | 'current' | 'locked' | 'upcoming' {
@@ -243,8 +256,14 @@ export class AiTools implements OnInit, OnDestroy {
   chooseTool(tool: AiTool): void {
     this.activeTool.set(tool);
     // A tool switch changes what the later steps say but nothing about the team
-    // or the model, so those choices are kept. Land on the next step that
-    // actually asks something — with one team and one model that is the install.
+    // or the model, so those choices are kept — with one exception: a model the
+    // newly chosen tool cannot host is not a choice worth keeping, and moving
+    // off it is what lets the wizard continue. It stays put when nothing fits,
+    // so step 3 can say why.
+    const models = this.models();
+    if (models.length > 0 && !this.modelUsable()) this.selected.set(this.preferredModel(models));
+    // Land on the next step that actually asks something — with one team and
+    // one model that is the install.
     const target = this.firstOpenFrom(2);
     if (target !== null) this.setStep(target);
   }
@@ -265,9 +284,29 @@ export class AiTools implements OnInit, OnDestroy {
     this.keys().map((k) => ({ value: String(k.id), label: k.team.name })),
   );
 
-  readonly modelOptions = computed<AppSelectOption[]>(() =>
-    this.models().map((m) => ({ value: m.model_name, label: m.model_name })),
-  );
+  /**
+   * The models, with the ones Claude Code cannot host taken out of reach.
+   *
+   * A disabled option rather than a hidden one: the model *is* accessible to
+   * this key, it just cannot carry a Claude Code session, and a list that
+   * silently omits it reads as a permission problem. The window is named in
+   * the label because a greyed-out row with no reason reads as a bug in the
+   * page. OpenCode is left alone — it is told what to reserve, so a narrow
+   * window costs it reply length, not the whole session.
+   */
+  readonly modelOptions = computed<AppSelectOption[]>(() => {
+    const forClaudeCode = this.activeTool() === 'claudecode';
+    return this.models().map((m) => {
+      const blocked = forClaudeCode && claudeCodeFitFor(m) === 'unusable';
+      return {
+        value: m.model_name,
+        label: blocked
+          ? `${m.model_name} — ${servedContextFloorFor(m).toLocaleString('en-US')} tokens, too small for Claude Code`
+          : m.model_name,
+        disabled: blocked,
+      };
+    });
+  });
 
   // ── Context windows ───────────────────────────────────────────────────────
   // Three numbers per model, and which one to use depends on who is asking.
@@ -321,6 +360,39 @@ export class AiTools implements OnInit, OnDestroy {
   windowUnenforced = computed(() => {
     const name = (this.selected()?.model_name ?? '').toLowerCase();
     return name.startsWith('claude-') || name.includes('[1m]');
+  });
+
+  // ── Does Claude Code fit in there at all? ─────────────────────────────────
+  // The numbers below are read by the template, which cannot see module
+  // constants.
+  readonly claudeCodeBasePrompt = CC_BASE_PROMPT_TOKENS;
+  readonly claudeCodeOutputReserve = CC_OUTPUT_RESERVE_TOKENS;
+  readonly claudeCodeContextFloor = CLAUDE_CODE_CONTEXT_FLOOR;
+  readonly claudeCodeContextComfortable = CLAUDE_CODE_CONTEXT_COMFORTABLE;
+
+  /** The window the selected model is actually served with, 0 when unknown. */
+  readonly selectedContextFloor = computed(() => {
+    const model = this.selected();
+    return model ? servedContextFloorFor(model) : 0;
+  });
+
+  /** How the selected model's window measures up to what Claude Code needs. */
+  readonly claudeCodeFit = computed<ClaudeCodeFit>(() => {
+    const model = this.selected();
+    return model ? claudeCodeFitFor(model) : 'unknown';
+  });
+
+  /**
+   * Whether the setup may proceed past the model.
+   *
+   * A model chosen is not the same as a model that works: a window below
+   * `CLAUDE_CODE_CONTEXT_FLOOR` fails on the session's first request, so the
+   * wizard stops here and says why instead of generating an install command
+   * whose first use is an error.
+   */
+  readonly modelUsable = computed(() => {
+    if (!this.modelChosen()) return false;
+    return !(this.activeTool() === 'claudecode' && this.claudeCodeFit() === 'unusable');
   });
 
   // ── OpenCode ──────────────────────────────────────────────────────────────
@@ -617,7 +689,7 @@ export class AiTools implements OnInit, OnDestroy {
       }
       const unique = [...byName.values()];
       this.models.set(unique);
-      if (unique.length > 0) this.selected.set(unique[0]);
+      if (unique.length > 0) this.selected.set(this.preferredModel(unique));
     } catch {
       if (requestId === this.modelsRequestId) this.modelsError.set(true);
     } finally {
@@ -627,6 +699,18 @@ export class AiTools implements OnInit, OnDestroy {
 
   selectModel(name: string) {
     this.selected.set(this.models().find((m) => m.model_name === name) ?? null);
+  }
+
+  /**
+   * Which model to start on. The first one, unless the chosen tool cannot host
+   * it: pre-selecting a model that blocks the next step makes the page look
+   * broken for a team whose first model happens to be a narrow one. Falls back
+   * to the first model when none fits, because the explanation in step 3 needs
+   * a selection to be about.
+   */
+  private preferredModel(models: ModelAccess[]): ModelAccess {
+    if (this.activeTool() !== 'claudecode') return models[0];
+    return models.find((m) => claudeCodeFitFor(m) !== 'unusable') ?? models[0];
   }
 
   copyCmd(text: string) {
@@ -639,6 +723,87 @@ export class AiTools implements OnInit, OnDestroy {
 
 function positive(value: number | null | undefined): number {
   return typeof value === 'number' && value > 0 ? value : 0;
+}
+
+// ── The window Claude Code needs ────────────────────────────────────────────
+// Claude Code's session arithmetic is fixed, so the smallest window that can
+// host it is arithmetic too, not taste. Four deductions, none of them optional:
+//
+//   * it puts min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000) in `max_tokens` on
+//     every request, and vLLM charges input and output against one budget, so
+//     that reservation comes off the window whether or not the reply uses it;
+//   * its own system prompt and tool definitions are ~13000 tokens before the
+//     user has typed anything, and there is nothing to compact away about them;
+//   * it refuses to send 3000 tokens short of the limit it was told, and
+//     compacts by itself 13000 tokens short of it;
+//   * the claude-logos wrapper takes tokenizer-drift headroom off the top
+//     (2% of the window, floored at 1024).
+//
+// A 32768-token window therefore leaves 12768 tokens for input — one token
+// less than Claude Code's own opening prompt, which is how a fresh install
+// answered its very first message with
+//
+//   "This model's maximum context length is 32768 tokens. However, you
+//    requested 20000 output tokens and your prompt contains at least 12769
+//    input tokens"
+//
+// Nothing inside the session recovers that, so a window below the floor is not
+// offered for Claude Code at all.
+
+/** Claude Code's own prompt before the first user message: system + tool schemas. */
+const CC_BASE_PROMPT_TOKENS = 13_000;
+
+/** What it reserves for a reply, capped there regardless of what it is told. */
+const CC_OUTPUT_RESERVE_TOKENS = 20_000;
+
+/** How far short of the limit it refuses to send and asks for a /compact. */
+const CC_HARD_STOP_TOKENS = 3_000;
+
+/** How far short of the limit it compacts the conversation by itself. */
+const CC_AUTOCOMPACT_TOKENS = 13_000;
+
+/** The wrapper's tokenizer-drift headroom at its floor (claude-logos.sh). */
+const WRAPPER_HEADROOM_FLOOR_TOKENS = 1_024;
+
+/** Below this a session cannot send its first message at all: 37,024 tokens. */
+export const CLAUDE_CODE_CONTEXT_FLOOR =
+  CC_BASE_PROMPT_TOKENS +
+  CC_OUTPUT_RESERVE_TOKENS +
+  CC_HARD_STOP_TOKENS +
+  WRAPPER_HEADROOM_FLOOR_TOKENS;
+
+/** Below this it starts, but compacts from the first message on: 47,024 tokens. */
+export const CLAUDE_CODE_CONTEXT_COMFORTABLE =
+  CC_BASE_PROMPT_TOKENS +
+  CC_OUTPUT_RESERVE_TOKENS +
+  CC_AUTOCOMPACT_TOKENS +
+  WRAPPER_HEADROOM_FLOOR_TOKENS;
+
+/**
+ * The window a model is actually being served with, 0 when none is known.
+ *
+ * The narrowest of the reported figures, because that is the one a request
+ * meets: `current_min` holds whichever deployment answers. It falls through to
+ * the wider figures only when the narrower one is absent, and to 0 when Logos
+ * reports nothing at all — which is missing information, not a narrow window,
+ * and must not be judged as one. Deliberately *not* `configuredContextFor`,
+ * whose job is the opposite: the widest number to write into a config file.
+ */
+export function servedContextFloorFor(model: ModelAccess): number {
+  return (
+    positive(model.context_window_current_min) ||
+    positive(model.context_window_current_max) ||
+    positive(model.context_window_overall)
+  );
+}
+
+/** Whether a model's served window can carry a Claude Code session. */
+export function claudeCodeFitFor(model: ModelAccess): ClaudeCodeFit {
+  const served = servedContextFloorFor(model);
+  if (served <= 0) return 'unknown';
+  if (served < CLAUDE_CODE_CONTEXT_FLOOR) return 'unusable';
+  if (served < CLAUDE_CODE_CONTEXT_COMFORTABLE) return 'tight';
+  return 'ok';
 }
 
 /** Best guess at the visitor's OS, so the install tab starts on the right one. */
