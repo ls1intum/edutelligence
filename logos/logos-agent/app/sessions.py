@@ -55,7 +55,10 @@ STAND_DOWN_S = 20.0
 # What the agent phase prints when it wants its spending known — the only
 # channel it has, holding no credential and reaching nothing but the model
 # gateway.
-_USAGE_LINE = re.compile(r"^\[usage\]\s+in=(?P<tin>\d+)\s+out=(?P<tout>\d+)")
+# `out=` is absent until the agent's invocation reports its total: the
+# usage on an assistant event is the count as the turn began, and the output
+# figure only exists at the end of a run.
+_USAGE_LINE = re.compile(r"^\[usage\]\s+in=(?P<tin>\d+)(?:\s+out=(?P<tout>\d+))?")
 
 # Container names must be unique and stable so a restarted service can find
 # the container belonging to a session again.
@@ -1525,11 +1528,16 @@ class SessionManager:
             match = _USAGE_LINE.match(line)
             if match is None:
                 continue
+            written = match.group("tout")
             try:
                 await db.update_session_usage(
                     session_id,
                     tokens_in=int(match.group("tin")),
-                    tokens_out=int(match.group("tout")),
+                    # Absent until the invocation reports its total. Zero is
+                    # the right value to pass — the column only ever moves
+                    # upwards, so an unknown figure leaves the last known
+                    # one standing.
+                    tokens_out=int(written) if written else 0,
                 )
             except Exception as exc:
                 logger.debug("could not record the usage of session %s: %s", session_id, exc)

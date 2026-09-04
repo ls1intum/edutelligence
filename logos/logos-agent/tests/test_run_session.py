@@ -993,3 +993,52 @@ class TestTheHookStore:
         # Better a linter the agent is told is unavailable than a session
         # that never starts.
         assert home.is_dir()
+
+
+class TestWhatASessionReportsSpending:
+    """The running total on the transcript, and what it may claim to know.
+
+    The usage on an assistant event is the count as that turn *began*, so
+    the output figure is zero for the whole run and only the result event
+    knows the total. Printing that zero told everybody watching that a
+    session which had written a hundred thousand tokens had written none.
+    """
+
+    def setup_method(self):
+        run_session._spent.update(**{"in": 0, "out": 0})
+
+    def test_a_turn_in_flight_reports_only_what_it_knows(self, capsys):
+        run_session._report_usage({"usage": {"input_tokens": 1200, "cache_creation_input_tokens": 300}})
+
+        line = capsys.readouterr().out.strip()
+        assert line == "[usage] in=1500"
+
+    def test_the_conversation_read_out_of_the_cache_is_not_counted(self, capsys):
+        # Every turn re-reads the whole conversation; summing that key
+        # counts the same tokens once per turn, which is how a session
+        # reported seventeen million against no output at all.
+        run_session._report_usage({"usage": {"input_tokens": 100, "cache_read_input_tokens": 900_000}})
+
+        assert capsys.readouterr().out.strip() == "[usage] in=100"
+
+    def test_the_result_event_supplies_the_output_total(self, capsys):
+        run_session._report_usage({"usage": {"input_tokens": 1500}})
+        capsys.readouterr()
+
+        run_session._account_for(
+            {"type": "result", "usage": {"input_tokens": 1500, "output_tokens": 42_000}, "total_cost_usd": 1.5}
+        )
+
+        # The last line of a run matches the row the settlement writes,
+        # rather than being the one account permanently missing half of it.
+        assert capsys.readouterr().out.strip() == "[usage] in=1500 out=42000"
+
+    def test_a_later_report_never_lowers_the_running_total(self, capsys):
+        run_session._account_for({"usage": {"input_tokens": 9000, "output_tokens": 5000}})
+        capsys.readouterr()
+
+        # An interrupted invocation reports only its own share; the session
+        # is the sum of them, and the figure must not go backwards.
+        run_session._account_for({"usage": {"input_tokens": 10, "output_tokens": 10}})
+
+        assert capsys.readouterr().out.strip() == "[usage] in=9000 out=5000"

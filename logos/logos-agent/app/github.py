@@ -633,7 +633,7 @@ async def issue_conversation(number: int) -> tuple[list[dict[str, Any]], list[st
     return _as_conversation({"comments": answer}, number)
 
 
-async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[list[dict[str, Any]], list[str]]:
+async def pull_request_conversation(number: int) -> tuple[list[dict[str, Any]], list[str]]:
     """Everything said on a pull request, oldest last, and what is missing.
 
     The second half of the answer is the point: a source that failed reads
@@ -658,13 +658,12 @@ async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[li
     )
     entries, missing = _as_conversation({"reviews": reviews, "inline comments": inline, "comments": discussion}, number)
     entries.sort(key=lambda entry: entry["at"] or datetime.min.replace(tzinfo=timezone.utc))
-    # The newest are the ones still open; an old conversation is history.
-    # Said rather than silently dropped, though: an early review comment
-    # nobody answered is exactly the kind of thing that falls off the end,
-    # and the task built from this claims to be complete.
-    if len(entries) > limit:
-        missing = [*missing, f"{len(entries) - limit} older comment(s), beyond what fits in a task"]
-    return entries[-limit:], missing
+    # Everything that was read, oldest first. Cutting it to what fits in a
+    # task belongs to the caller and has to happen after it has decided
+    # whose entries count — a pull request with fifteen review comments on
+    # it would otherwise spend its whole allowance on entries the runner is
+    # about to drop, and the review would fall off the end.
+    return entries, missing
 
 
 def _as_conversation(sources: dict[str, object], number: int) -> tuple[list[dict[str, Any]], list[str]]:

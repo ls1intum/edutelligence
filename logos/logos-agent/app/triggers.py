@@ -523,7 +523,7 @@ class TriggerPoller:
         outsiders = 0
         for entry in entries:
             author = str(entry.get("author") or "")
-            if author and await self._writer(author):
+            if author and await self._worth_reading(author):
                 allowed.append(entry)
             else:
                 outsiders += 1
@@ -557,7 +557,7 @@ class TriggerPoller:
         outsiders = 0
         for entry in entries:
             author = str(entry.get("author") or "")
-            if author and await self._writer(author):
+            if author and await self._worth_reading(author):
                 allowed.append(entry)
             else:
                 outsiders += 1
@@ -568,6 +568,12 @@ class TriggerPoller:
                 number,
             )
             missing = [*missing, f"{outsiders} comment(s) from accounts the runner does not take direction from"]
+        if len(allowed) > MAX_CONVERSATION:
+            # After the filter, never before it: a pull request whose review
+            # is fifteen comments long would otherwise spend its allowance
+            # on entries that are about to be dropped.
+            missing = [*missing, f"{len(allowed) - MAX_CONVERSATION} older comment(s), beyond what fits in a task"]
+            allowed = allowed[-MAX_CONVERSATION:]
         return allowed, missing
 
     async def _acknowledge(self, candidate: dict[str, Any]) -> None:
@@ -744,6 +750,21 @@ class TriggerPoller:
             member = await github.in_a_trusted_team(login)
             self._writers[key] = await github.may_push(login) if member is None else member
         return self._writers[key]
+
+    async def _worth_reading(self, login: str) -> bool:
+        """Whether this account's words belong in a task.
+
+        Wider than :meth:`_writer`, and only here. Directing the agent is a
+        decision about people; *reading* a review is not, and this
+        repository's review runs on two apps that are in no team and may
+        push nothing. Dropping them left a session taking over its own pull
+        request to address a review it had not been shown.
+
+        They still direct nothing: no review of theirs starts a session and
+        no comment of theirs steers one — a person the runner listens to has
+        already decided that this work happens.
+        """
+        return login.lower() in settings.review_bots or await self._writer(login)
 
     async def _may_direct_changes(self, comments: list[dict[str, Any]]) -> bool:
         """Whether anyone in this conversation may direct a code change."""

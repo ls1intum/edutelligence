@@ -147,6 +147,26 @@ class Settings:
         for team in os.getenv("LOGOS_AGENT_TRUSTED_TEAMS", "logos-developers,logos-maintainers").split(",")
         if team.strip()
     )
+    # The review apps this repository runs on its own pull requests. They may
+    # not direct anything — no review of theirs starts a session, no comment
+    # of theirs steers one — but what they wrote travels with a task that
+    # somebody trusted has already directed.
+    #
+    # Without this the agent takes over its own pull request to address a
+    # review and is handed the pull request without the review: on prod,
+    # every handover dropped between six and seventeen comments, and on the
+    # busy ones those were the entire review. An agent given a diff and told
+    # "start from what is still open" reconstructs a review from the diff,
+    # which is guesswork dressed up as work.
+    #
+    # Named accounts rather than "any bot": this is a list of two apps that
+    # this repository chose, and it is emptied by setting the variable to
+    # nothing.
+    review_bots: tuple[str, ...] = tuple(
+        name.strip().lower()
+        for name in os.getenv("LOGOS_AGENT_REVIEW_BOTS", "coderabbitai[bot],Claudia-Anthropica").split(",")
+        if name.strip()
+    )
     # Wall-clock ceiling for one session, or 0 for none — which is the
     # default. A clock is the wrong thing to stop an agent with: a session
     # that has read the repository for two hours and is halfway through a

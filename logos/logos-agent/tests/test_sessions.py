@@ -660,6 +660,35 @@ class TestTranscript:
         # running total and only the latest one is current.
         assert recorded == [(7, 4200, 310)]
 
+    async def test_a_line_without_an_output_figure_still_records_the_input(self, monkeypatch):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "LOG_FLUSH_S", 0.05)
+        recorded: list = []
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        async def update_session_usage(session_id, *, tokens_in, tokens_out):
+            recorded.append((session_id, tokens_in, tokens_out))
+
+        async def lines(_cid, **_kwargs):
+            # What a run in flight looks like: the output count only exists
+            # once the invocation reports its total, and the column only
+            # ever moves upwards, so zero leaves the last known one standing.
+            yield "[usage] in=4200"
+            await asyncio.sleep(0.4)
+
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.db, "update_session_usage", update_session_usage)
+        monkeypatch.setattr(sessions.docker_engine, "stream_logs", lines)
+
+        collector = asyncio.create_task(sessions.manager._collect_logs(7, "cid-7"))
+        await asyncio.sleep(0.2)
+        collector.cancel()
+
+        assert recorded == [(7, 4200, 0)]
+
     async def test_ordinary_output_records_no_usage(self, monkeypatch):
         from app import sessions
 

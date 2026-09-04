@@ -340,6 +340,16 @@ omission is disclosed, the reporter's own included: anybody can open an
 issue on a public repository, and a maintainer can repeat what matters in
 their own words.
 
+One narrow exception, and only to *reading*: the review apps this
+repository runs on its own pull requests (`LOGOS_AGENT_REVIEW_BOTS`,
+`coderabbitai[bot]` and `Claudia-Anthropica` by default). What they wrote
+travels with a task somebody trusted has already directed, because a
+handover exists to answer a review and dropping the review left the agent
+reconstructing one from the diff — on production, every handover was losing
+between six and seventeen comments that way. They direct nothing: no review
+of theirs starts a session and no comment of theirs steers one. Setting the
+variable to nothing removes the exception.
+
 **It does not take over its own work.** This repository assigns every pull
 request to its author, so one the agent opens comes back a moment later as
 one assigned to it. Reviews and questions on it still reach the agent; a

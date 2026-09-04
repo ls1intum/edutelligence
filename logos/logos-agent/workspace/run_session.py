@@ -628,6 +628,7 @@ def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool]:
         _render_event(event)
         if event.get("type") == "result":
             usage = event
+            _account_for(event)
     return process.wait(), usage, interrupted
 
 
@@ -729,6 +730,14 @@ def _report_usage(message: dict) -> None:
     tokens against no output at all, which is a true sum of a meaningless
     quantity. What is counted is what the model had to take in anew —
     fresh input and cache writes — and what it wrote.
+
+    What it wrote is usually not there yet. The usage on an assistant event
+    is the count as the turn *began*, so the output figure is zero all the
+    way through a run and only the result event knows the total — which is
+    why a session that had written a hundred thousand tokens spent its whole
+    life reporting `out=0` on the page. So the number is printed when there
+    is one, and left out when there is not: an absent figure reads as
+    unknown, and a zero reads as nothing written.
     """
     usage = message.get("usage")
     if not isinstance(usage, dict):
@@ -741,7 +750,30 @@ def _report_usage(message: dict) -> None:
     _spent["in"] += read
     _spent["out"] += written if isinstance(written, int) else 0
     if _spent != before:
-        print(f"[usage] in={_spent['in']} out={_spent['out']}", flush=True)
+        _print_usage()
+
+
+def _print_usage() -> None:
+    """One transcript line for the running total."""
+    written = f" out={_spent['out']}" if _spent["out"] else ""
+    print(f"[usage] in={_spent['in']}{written}", flush=True)
+
+
+def _account_for(result: dict) -> None:
+    """Take the authoritative totals of a finished invocation.
+
+    The result event is the only place the output count appears, so it is
+    folded into the running figures rather than left to the settlement: a
+    paused session, a continued one, and the page in between all read the
+    transcript, and the transcript should not be the one account that is
+    permanently missing half the number.
+    """
+    tokens_in, tokens_out, _cost = usage_totals(result)
+    if tokens_out > _spent["out"]:
+        _spent["out"] = tokens_out
+    if tokens_in > _spent["in"]:
+        _spent["in"] = tokens_in
+    _print_usage()
 
 
 def _render_event(event: dict) -> None:

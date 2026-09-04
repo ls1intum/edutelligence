@@ -713,15 +713,16 @@ class TestTheConversationHandedToASession:
 
         assert len(entries) == 2 and missing == []
 
-    async def test_older_comments_that_do_not_fit_are_declared(self, monkeypatch):
-        # An unanswered early review comment is exactly what falls off the
-        # end when a discussion runs long.
+    async def test_everything_read_is_returned_for_the_caller_to_cut(self, monkeypatch):
+        # The cut belongs to the caller, after it has decided whose entries
+        # count: a review that is fifteen comments long would otherwise
+        # spend the whole allowance on entries about to be dropped, and the
+        # unanswered early comment is exactly what falls off that end.
         self.install(monkeypatch, discussion=[self.comment(index) for index in range(10)])
 
-        entries, missing = await github.pull_request_conversation(772, limit=4)
+        entries, missing = await github.pull_request_conversation(772)
 
-        assert len(entries) == 4
-        assert missing and "6 older comment(s)" in missing[0]
+        assert len(entries) == 10 and missing == []
 
     async def test_a_listing_that_hit_its_page_ceiling_is_named(self, monkeypatch):
         # Two thousand entries read out of more is incomplete context, and
