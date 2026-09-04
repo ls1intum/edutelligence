@@ -7,6 +7,8 @@ real `scheduler_state` response rather than against mocks of our own reading.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from app import capacity
 from app.config import settings
@@ -601,3 +603,64 @@ class TestLoadAndCacheAreChosenApart:
         # One model on two providers: ten in flight of twenty, not five of
         # ten twice over.
         assert reading.busy_slots == 10 and reading.total_slots == 20
+
+
+class TestAFailureThatSaysSomething:
+    """A warning nobody can act on is a warning that costs a reader time.
+
+    Production logged `capacity read failed: ` twice, with nothing after
+    the colon: a timeout and a refused connection both carry an empty
+    message, so the one thing the line was for was the one thing missing.
+    """
+
+    async def test_a_failure_with_no_message_is_still_named(self, monkeypatch, caplog):
+        import logging
+
+        class Refused(Exception):
+            pass
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, *args, **kwargs):
+                raise Refused()
+
+        monkeypatch.setattr(capacity.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(capacity, "settings", replace(capacity.settings, agent_api_key="tok"))
+
+        with caplog.at_level(logging.WARNING):
+            reading = await capacity.read_load()
+
+        assert reading.ok is False
+        assert "Refused" in caplog.text
+
+    async def test_a_message_is_kept_beside_the_name(self, monkeypatch, caplog):
+        import logging
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, *args, **kwargs):
+                raise ValueError("no route to host")
+
+        monkeypatch.setattr(capacity.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(capacity, "settings", replace(capacity.settings, agent_api_key="tok"))
+
+        with caplog.at_level(logging.WARNING):
+            await capacity.read_load()
+
+        assert "ValueError" in caplog.text and "no route to host" in caplog.text

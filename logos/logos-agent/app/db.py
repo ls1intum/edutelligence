@@ -1058,6 +1058,20 @@ async def next_queued_session(*, include_triggered: bool = True) -> dict[str, An
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
                            )
+                       -- Nor while another session holds the same branch.
+                       -- Two triggers on one pull request — a review and a
+                       -- question, minutes apart — are two requests about
+                       -- one piece of work, and two sessions in different
+                       -- workspaces would each commit to that branch from a
+                       -- checkout taken before the other one pushed. One
+                       -- waits; its checkout then contains the other's work.
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions same
+                              WHERE same.branch_name IS NOT NULL
+                                AND same.branch_name = s.branch_name
+                                AND same.id <> s.id
+                                AND same.status = ANY(:occupying)
+                           )
                      ORDER BY s.priority DESC, s.created_at
                      LIMIT 1
                     """
@@ -1111,6 +1125,20 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
                              SELECT 1 FROM agent_sessions busy
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
+                           )
+                       -- Nor while another session holds the same branch.
+                       -- Two triggers on one pull request — a review and a
+                       -- question, minutes apart — are two requests about
+                       -- one piece of work, and two sessions in different
+                       -- workspaces would each commit to that branch from a
+                       -- checkout taken before the other one pushed. One
+                       -- waits; its checkout then contains the other's work.
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions same
+                              WHERE same.branch_name IS NOT NULL
+                                AND same.branch_name = s.branch_name
+                                AND same.id <> s.id
+                                AND same.status = ANY(:occupying)
                            )
                        AND (
                              s.trigger_ref IS NULL
@@ -1181,6 +1209,20 @@ async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -
                              SELECT 1 FROM agent_sessions busy
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
+                           )
+                       -- Nor while another session holds the same branch.
+                       -- Two triggers on one pull request — a review and a
+                       -- question, minutes apart — are two requests about
+                       -- one piece of work, and two sessions in different
+                       -- workspaces would each commit to that branch from a
+                       -- checkout taken before the other one pushed. One
+                       -- waits; its checkout then contains the other's work.
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions same
+                              WHERE same.branch_name IS NOT NULL
+                                AND same.branch_name = s.branch_name
+                                AND same.id <> s.id
+                                AND same.status = ANY(:occupying)
                            )
                        -- One candidate per workspace, so a workspace cannot
                        -- take several slots in a pass and then collide with

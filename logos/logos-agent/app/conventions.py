@@ -97,7 +97,13 @@ your assumptions in the final summary.
 - Work only inside the current checkout.
 - Do not run git commit, git push, or gh: the harness commits and opens the
   pull request for you after you finish.
-- Run the project's tests for the code you touch, and fix what you break.
+- Run the project's tests for the code you touch, and fix what you break —
+  where they can run. The services' dependencies are not installed and there
+  is no network to install them with, so `pytest` is often simply absent.
+  Try once, and if it is not there, do not spend turns looking for a way
+  round it: read the code and the tests instead, and say in your final
+  message that you could not run them. A change you reason about and label
+  as unverified is honest; one you claim to have tested is not.
 - Linting is on you, and you can run it: from the top of the checkout,
   `pre-commit run --files <the files you changed>`. That is the same command
   CI runs and the same pinned hook versions — for every service, not only

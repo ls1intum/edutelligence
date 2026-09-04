@@ -114,10 +114,20 @@ async def read_load(
             )
         payload = response.json()
     except Exception as exc:  # network, JSON, anything
-        logger.warning("capacity read failed: %s", exc)
+        # Named, not just stringified: a timeout and a refused connection
+        # both carry an empty message, and "capacity read failed: " with
+        # nothing after it is a log line that costs a reader more than it
+        # tells them.
+        logger.warning("capacity read failed: %s", _describe(exc))
         return UNKNOWN
 
     return parse_scheduler_state(payload, lane=lane, ours=ours)
+
+
+def _describe(exc: BaseException) -> str:
+    """One line naming a failure, even when it carries no message."""
+    message = str(exc).strip()
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
 def _live(model: dict, capacity: int) -> tuple[int, int, float]:
