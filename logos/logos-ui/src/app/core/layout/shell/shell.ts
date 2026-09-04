@@ -37,10 +37,39 @@ export class Shell {
    */
   hasKeys = this.keysService.hasKeys;
 
+  /**
+   * Whether the agent runner is running on this deployment. The runner is
+   * opt-in per deployment (a compose profile), so where it is not selected
+   * there is no /api/agent router at all: the probe below falls through to
+   * the SPA and comes back with its HTML shell instead of the runner's JSON
+   * health answer. Only that JSON answer means the runner is really there,
+   * and it is what keeps the menu entry out of deployments without agents.
+   * Hidden by default: while the probe is in flight, and on any failure,
+   * the entry stays out rather than pointing at a service that is not up.
+   */
+  agentAvailable = signal(false);
+
   constructor() {
     this.router.events.subscribe(() => {
       this.closeSidebar();
     });
+    void this.probeAgent();
+  }
+
+  /**
+   * One probe per page load: the absence of the entry is the default, and a
+   * deployment that enables the runner later picks it up on the next reload.
+   * The endpoint needs no token, so a raw fetch keeps this out of the
+   * auth-intercepted HttpClient.
+   */
+  async probeAgent(): Promise<void> {
+    try {
+      const res = await fetch('/api/agent/health', { cache: 'no-store' });
+      const type = res.headers.get('content-type') ?? '';
+      this.agentAvailable.set(res.ok && type.includes('application/json'));
+    } catch {
+      this.agentAvailable.set(false);
+    }
   }
 
   toggleSidebar() {
@@ -96,6 +125,7 @@ export class Shell {
     const visible = MENU_ITEMS.filter(
       (item) =>
         item.roles.includes(role as UserRole) &&
+        (!item.requiresAgent || this.agentAvailable()) &&
         (!keyGatedPaths.includes(item.path) || showKeyGated),
     );
     return (['system', 'management', 'personal'] as const)
