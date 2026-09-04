@@ -4392,7 +4392,9 @@ class TestASessionThatRanOutOfTime:
     async def test_the_row_says_it_ran_out_of_time(self, monkeypatch):
         from app import sessions
 
-        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, session_timeout_s=0))
+        # A limit somebody configured — zero now means "no limit at all",
+        # which is the default and the case below.
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, session_timeout_s=1))
         settled: list = []
 
         async def state(_container_id):
@@ -4419,3 +4421,48 @@ class TestASessionThatRanOutOfTime:
         session_id, exit_code, error = settled[0]
         assert session_id == 7 and exit_code == -1
         assert "ran past its" in error and "budget" in error
+
+
+class TestNoClockUnlessSomebodyAsksForOne:
+    """A session is bounded by capacity, not by a clock.
+
+    A session that has read the repository for two hours and is halfway
+    through a change is not stuck, and stopping it throws away everything it
+    has done — uncommitted, in a checkout the next session resets. One did:
+    an hour and a half of work, thirty-eight million tokens, killed at the
+    deadline with nothing to show.
+    """
+
+    async def test_a_session_runs_until_it_is_done(self, monkeypatch):
+        from app import sessions
+
+        # The default: no limit configured.
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, session_timeout_s=0))
+        stopped: list = []
+        states = iter([("running", None), ("running", None), ("exited", 0)])
+
+        async def state(_container_id):
+            return next(states)
+
+        async def stop(container_id, **_kwargs):
+            stopped.append(container_id)
+
+        async def settle(_self, session_id, *, exit_code, error):
+            stopped.append(("settled", exit_code, error))
+
+        async def nothing(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "container_state", state)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
+        monkeypatch.setattr(sessions.db, "add_event", nothing)
+        monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
+        monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
+        real_sleep = asyncio.sleep
+        monkeypatch.setattr(sessions.asyncio, "sleep", lambda *_a, **_k: real_sleep(0))
+
+        await sessions.manager._supervise_session(7, "cid-7")
+
+        # It ended because the agent ended it, with its own exit code —
+        # nothing was stopped on a clock.
+        assert stopped == [("settled", 0, None)]

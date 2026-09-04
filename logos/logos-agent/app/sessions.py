@@ -1343,7 +1343,10 @@ class SessionManager:
         log_task = asyncio.create_task(self._collect_logs(session_id, container_id))
         try:
             loop = asyncio.get_running_loop()
-            deadline = loop.time() + settings.session_timeout_s
+            # No deadline unless one is configured: see `session_timeout_s`.
+            # A session is bounded by capacity, not by a clock.
+            budget = settings.session_timeout_s
+            deadline = loop.time() + budget if budget > 0 else None
             paused_since: float | None = None
             exit_code: int | None = None
             # Why this session ended, when it ended for a reason of ours.
@@ -1352,10 +1355,11 @@ class SessionManager:
             while True:
                 now = loop.time()
                 if paused_since is not None:
-                    deadline += now - paused_since
+                    if deadline is not None:
+                        deadline += now - paused_since
                     paused_since = None
-                remaining = deadline - now
-                if remaining <= 0:
+                remaining = (deadline - now) if deadline is not None else None
+                if remaining is not None and remaining <= 0:
                     await db.add_event(
                         session_id,
                         EventKind.ERROR,
@@ -1379,7 +1383,7 @@ class SessionManager:
                     break
                 # A paused container never exits; poll rather than block on
                 # /wait so the pause/resume cycle stays observable.
-                await asyncio.sleep(min(5.0, max(1.0, remaining)))
+                await asyncio.sleep(5.0 if remaining is None else min(5.0, max(1.0, remaining)))
         except asyncio.CancelledError:
             raise
         except Exception as exc:

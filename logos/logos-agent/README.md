@@ -250,7 +250,7 @@ has a default that is right for this deployment.
 | `LOGOS_AGENT_PAUSE_ABOVE_LOAD` | `0.85` | Pause at or above this load |
 | `LOGOS_AGENT_SESSION_MEMORY_MB` | `4096` | Per-session memory ceiling |
 | `LOGOS_AGENT_SESSION_CPUS` | `2` | Per-session CPU ceiling |
-| `LOGOS_AGENT_SESSION_TIMEOUT_S` | `10800` | Wall-clock ceiling per session (paused time does not count) |
+| `LOGOS_AGENT_SESSION_TIMEOUT_S` | `0` | Wall-clock ceiling per session; `0` is none, which is the default |
 | `LOGOS_AGENT_SESSION_MODEL_URL` | `http://logos-agent-gateway` | Where sessions send model traffic — a gateway that exposes only the orchestrator's `/v1` model surface, so a session never reaches the rest of the internal network |
 | `LOGOS_AGENT_SESSION_GITHUB_TOKEN` | falls back to the token above | Given to containers; best without `workflow` scope |
 | `LOGOS_AGENT_DEPLOY_ENABLED` | `false` | Whether dev deploys may be dispatched at all |
@@ -490,8 +490,17 @@ an `Authorization` header, and the token is what authorises the read.
   scheduler resumes them mid-task. `stop_grace_period` is 30 s for this, and
   whatever cannot be frozen in time simply runs through the deploy as it did
   before.
-- **A stuck session is capped**, not left to burn capacity — `SESSION_TIMEOUT_S`
-  stops it and records the reason.
+- **A session ends when it is done, not when a clock says so.** There is no
+  wall-clock limit unless a deployment sets one. A clock is the wrong
+  instrument: a session that has read the repository for two hours and is
+  halfway through a change is not stuck, and stopping it throws away
+  everything it has done — uncommitted, in a checkout the next session
+  resets. One went that way: ninety minutes and thirty-eight million tokens,
+  killed at the deadline with nothing to show. What this runner protects is
+  capacity, and capacity is protected by the things that measure it — the
+  pause, the parallel ceiling, the trigger quota — none of which care how
+  long a session has been at it. A session that really is stuck is visible
+  on the page and can be cancelled there.
 - **Yielding does not cost the work.** Freezing a session and cutting it off
   the model network — which is how capacity is handed back — ends the answer
   it was reading, and the agent meets a dead connection when it thaws. That

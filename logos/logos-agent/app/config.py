@@ -136,9 +136,16 @@ class Settings:
     # per-session artefact directory on the host as root, so it must hand it
     # over to this UID or the session cannot write its own output.
     session_uid: int = _int("LOGOS_AGENT_SESSION_UID", 10001)
-    # Wall-clock ceiling for one session. A stuck agent burns capacity that the
-    # whole point of this runner is to reclaim, so the cap is not optional.
-    session_timeout_s: int = _int("LOGOS_AGENT_SESSION_TIMEOUT_S", 3 * 3600)
+    # Wall-clock ceiling for one session, or 0 for none — which is the
+    # default. A clock is the wrong thing to stop an agent with: a session
+    # that has read the repository for two hours and is halfway through a
+    # change is not stuck, and killing it throws away everything it has done
+    # without committing any of it. What this runner actually protects is
+    # capacity, and that is protected by the things that measure capacity —
+    # the pause, the parallel ceiling, the trigger quota — none of which
+    # care how long a session has been at it. A session that really is stuck
+    # is a thing a person can see on the page and cancel.
+    session_timeout_s: int = _int("LOGOS_AGENT_SESSION_TIMEOUT_S", 0)
     # One helper container (checkout preparation, finalization) must not
     # outlive the session budget either: these are git and GitHub
     # round-trips, not agent work, and a stuck helper would pin its session
