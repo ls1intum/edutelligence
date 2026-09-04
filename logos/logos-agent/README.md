@@ -4,7 +4,7 @@ Runs coding agents in isolated containers, on serving capacity Logos is not
 otherwise using, and gives that capacity back the moment a user needs it.
 
 A session is one agent run: it gets a working copy, a task, and a Logos key.
-It works unattended, and what it produces arrives as a draft pull request that
+It works unattended, and what it produces arrives as a pull request that
 a human reviews like any other. Sessions can be told to deploy their result to
 the **dev** environment and screenshot the pages they changed.
 
@@ -160,7 +160,7 @@ session's behaviour drift between builds.
 ## What a session may and may not do
 
 **May:** read and change the working copy, run tests and linters, push a branch
-under `logos/agent/`, open a draft pull request, and — if enabled — have its result
+under `logos/agent/`, open a pull request, and — if enabled — have its result
 deployed to dev and screenshotted.
 
 **May not:** reach the Docker daemon, run as root, push to `main` or any
@@ -324,7 +324,7 @@ use it the way you use a person's:
 
 | What you do | What it does |
 |---|---|
-| assign it an issue | works on it and opens a draft pull request |
+| assign it an issue | works on it and opens a pull request |
 | assign it a pull request | takes it over, on that pull request's own branch |
 | request changes on one of its pull requests | addresses that review on its branch |
 | comment on a pull request it is responsible for | reads the thread and answers (within a day of writing) |
@@ -536,7 +536,7 @@ an `Authorization` header, and the token is what authorises the read.
   a new session. This is the only way back for work the runner took on
   itself: a trigger counts as handled the moment a session exists for it, so
   no later pass finds that issue, review or question again.
-- **Nothing merges itself.** Pull requests are opened as drafts, and a person
+- **Nothing merges itself.** A person
   approves and merges exactly as they do for human work.
 - **Screenshots follow the deploy.** A session that asks for dev screenshots
   gets them only after the runner has dispatched its dev deploy and watched

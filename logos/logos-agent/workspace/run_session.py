@@ -940,34 +940,19 @@ def _as_subject(text: str) -> str:
     return f"`Logos`: {cleaned}"
 
 
-def _asked_for(task: str) -> str:
-    """The request, without the standing conventions appended to every task.
-
-    The house rules are the same in every session; repeating them in every
-    pull request buries the one part that differs.
-    """
-    body = task.split("--- How work is done here ---", 1)[0].strip()
-    return (body or task.strip())[:4000]
-
-
 def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
     slug = os.environ.get("LOGOS_REPO_SLUG", "").strip()
     if not slug:
         log("no repository slug configured; skipping pull request")
         return None
 
+    # Title only. The description is the author's to write, and a pull
+    # request opened with a wall of generated text — a summary nobody wrote,
+    # the task pasted back, a checklist — buries the diff under boilerplate
+    # and gives the reviewer a page of things they already know. What the
+    # change does belongs in the commit subject; why it was made belongs to
+    # whoever picks it up.
     title = _commit_subject(task)
-    body = (
-        "## Summary\n\n"
-        "Opened by an unattended Logos agent session running on spare platform "
-        "capacity. **Nothing here has been reviewed by a human yet.**\n\n"
-        "## Task given to the agent\n\n"
-        f"```\n{_asked_for(task)}\n```\n\n"
-        "## Steps for Testing\n\n"
-        "1. Read the diff — this is the first point a person sees this work.\n"
-        "2. Check that the tests the agent ran actually cover the change.\n\n"
-        f"Session: `{os.environ.get('LOGOS_SESSION_ID', '?')}`\n"
-    )
     process = run(
         [
             "gh",
@@ -981,9 +966,10 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
             branch,
             "--title",
             title,
+            # Empty rather than absent: `gh` prompts for a body it was not
+            # given, and a session has no terminal to prompt at.
             "--body",
-            body,
-            "--draft",
+            "",
         ],
         cwd=CHECKOUT,
         check=False,

@@ -855,3 +855,55 @@ class TestTranscriptLines:
 
     def test_a_tool_with_nothing_to_show_is_still_named(self):
         assert run_session._tool_line({"name": "Whatever", "input": {}}) == "[tool] Whatever"
+
+
+class TestHowAPullRequestIsOpened:
+    """A title, and nothing else.
+
+    The description belongs to whoever writes it. A pull request opened with
+    a generated wall — a summary nobody wrote, the task pasted back, a
+    checklist — buries the diff under boilerplate and tells the reviewer
+    things they already know.
+    """
+
+    @staticmethod
+    def capture(monkeypatch, tmp_path):
+        calls: list = []
+
+        def fake_run(cmd, **_kwargs):
+            calls.append(cmd)
+
+            class _Done:
+                returncode = 0
+                stdout = "https://github.com/x/y/pull/1"
+
+            return _Done()
+
+        monkeypatch.setenv("LOGOS_REPO_SLUG", "x/y")
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        monkeypatch.setattr(run_session, "run", fake_run)
+        return calls
+
+    def test_it_is_not_a_draft(self, monkeypatch, tmp_path):
+        calls = self.capture(monkeypatch, tmp_path)
+
+        run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        assert "--draft" not in calls[0]
+
+    def test_the_body_is_empty(self, monkeypatch, tmp_path):
+        calls = self.capture(monkeypatch, tmp_path)
+
+        run_session.open_pull_request("logos/agent/x", "main", "a long task with all its house rules")
+
+        body = calls[0][calls[0].index("--body") + 1]
+        assert body == ""
+
+    def test_the_title_still_describes_the_change(self, monkeypatch, tmp_path):
+        calls = self.capture(monkeypatch, tmp_path)
+        (tmp_path / "commit.txt").write_text("Fit the KPI card sparkline to its slot")
+
+        run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        title = calls[0][calls[0].index("--title") + 1]
+        assert title == "`Logos`: Fit the KPI card sparkline to its slot"

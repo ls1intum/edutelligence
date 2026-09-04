@@ -5,7 +5,7 @@ usable like a person's. The gestures are the ordinary ones:
 
 | What you do on GitHub | What the agent does |
 |---|---|
-| assign it an issue | works on the issue and opens a draft pull request |
+| assign it an issue | works on the issue and opens a pull request |
 | assign it a pull request | takes that pull request over, on its own branch |
 | ask one of its pull requests for changes | addresses the review on that branch |
 | comment on a pull request it is responsible for | reads the comment and answers it |
@@ -174,8 +174,8 @@ async def issue_task(issue: dict[str, Any], conversation: str = "") -> str:
     if len(body) > 6000:
         body = body[:6000] + "\n\n[issue body truncated]"
     return await for_task(
-        f"You have been assigned issue #{number}. Work on it and open a draft pull "
-        f"request with your result.\n\n"
+        f"You have been assigned issue #{number}. Work on it; the harness opens "
+        f"a pull request with your result.\n\n"
         f"Issue #{number}: {title}\n\n"
         f"{body or '(no description in the issue body)'}\n\n"
         f"{conversation}"
