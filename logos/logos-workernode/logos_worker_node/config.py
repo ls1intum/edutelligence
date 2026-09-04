@@ -62,6 +62,55 @@ def _getenv_bool(name: str) -> bool:
 # ── Config loading ───────────────────────────────────────────────────────────
 
 
+def _resolve_env_file() -> Path | None:
+    """Locate the ``.env`` holding credentials for this deployment.
+
+    It sits next to config.yml — the directory named by
+    LOGOS_WORKER_NODE_CONFIG, else the directory of the first existing
+    config candidate, else the working directory (the launchd agent sets
+    WorkingDirectory to the install root, so both the macOS and the
+    container layouts resolve the same file).
+    """
+    config_path = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+    if config_path:
+        dirs = [Path(config_path).expanduser().parent]
+    else:
+        dirs = [Path("/app"), Path(".")]
+    for directory in dirs:
+        env_file = directory / ".env"
+        if env_file.is_file():
+            return env_file
+    return None
+
+
+def _load_env_file(env_file: Path | None) -> None:
+    """Load KEY=VALUE pairs from *env_file* into os.environ.
+
+    Real environment variables always win (setdefault): the launchd plist
+    or the shell can override anything the file provides. The file is
+    parsed by hand instead of pulling in a dotenv dependency — it is a
+    flat KEY=VALUE list, nothing more.
+    """
+    if env_file is None:
+        return
+    try:
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        logger.warning("Could not read %s: %s", env_file, exc)
+        return
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
+
+
 def _load_config_yml() -> AppConfig:
     """Load config.yml if present, otherwise return defaults."""
     config_path = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
@@ -174,6 +223,11 @@ def load_config() -> AppConfig:
     """Load config.yml (hardware/tuning), then apply .env overrides (credentials)."""
     global _config
 
+    # Credentials live in the .env next to config.yml — on the compose
+    # (CUDA) path docker-compose loads that file itself, but a natively
+    # running worker (the macOS/MLX path) has nothing else to read it.
+    # Real environment variables set by the launchd plist or shell win.
+    _load_env_file(_resolve_env_file())
     _config = _load_config_yml()
     _apply_env_overrides(_config)
     _wire_kv_budget(_config)

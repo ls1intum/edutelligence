@@ -86,9 +86,14 @@ LOGOS_URL=https://logos.example.tum.de
 LOGOS_API_KEY=<worker key>
 HF_TOKEN=<hf token>
 ENV
+chmod 600 .env              # credentials — keep it owner-only
 $EDITOR config.yml          # seeded from config.example.mlx.yml
 launchctl kickstart -k "gui/$(id -u)/de.tum.logos.workernode"
 ```
+
+The worker loads `.env` from the install root itself at startup (the
+launchd plist deliberately carries no secrets — it is world-readable).
+Environment variables set by the plist or your shell override the file.
 
 ### Overrides
 
