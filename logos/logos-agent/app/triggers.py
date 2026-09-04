@@ -5,7 +5,7 @@ usable like a person's. The gestures are the ordinary ones:
 
 | What you do on GitHub | What the agent does |
 |---|---|
-| assign it an issue | works on the issue and opens a draft pull request |
+| assign it an issue | works on the issue and opens a pull request |
 | assign it a pull request | takes that pull request over, on its own branch |
 | ask one of its pull requests for changes | addresses the review on that branch |
 | comment on a pull request it is responsible for | reads the comment and answers it |
@@ -79,6 +79,9 @@ MAX_COMMENT_LOOKBACK = timedelta(days=7)
 
 # At most this many comments are carried into one task, and this much of each.
 MAX_THREAD_COMMENTS = 20
+# How many comments of a conversation fit in one task.
+MAX_CONVERSATION = 40
+
 MAX_COMMENT_CHARS = 3000
 
 # The account sessions are attributed to when the runner queued them itself.
@@ -166,18 +169,20 @@ def is_bot(login: str) -> bool:
 # --- what the agent is asked to do ----------------------------------------
 
 
-def issue_task(issue: dict[str, Any]) -> str:
+async def issue_task(issue: dict[str, Any], conversation: str = "") -> str:
     """The task text for an issue assigned to the agent."""
     number = issue.get("number")
     title = str(issue.get("title") or "").strip()
     body = str(issue.get("body") or "").strip()
     if len(body) > 6000:
         body = body[:6000] + "\n\n[issue body truncated]"
-    return for_task(
-        f"You have been assigned issue #{number}. Work on it and open a draft pull "
-        f"request with your result.\n\n"
+    return await for_task(
+        f"You have been assigned issue #{number}. Work on it; the harness opens "
+        f"a pull request with your result.\n\n"
         f"Issue #{number}: {title}\n\n"
-        f"{body}\n\n"
+        f"{body or '(no description in the issue body)'}\n\n"
+        f"{conversation}"
+        f"That is the whole issue as it stands — you cannot fetch more of it. "
         f"Scope your change to what the issue asks for: the smallest change that "
         f"answers it, with tests for what you changed. If the issue is unclear or turns "
         f"out to be larger than it looks, do the part you are confident about and say "
@@ -221,12 +226,12 @@ def conversation_block(entries: list[dict[str, Any]], missing: list[str] | None 
     return gap + "The conversation so far, oldest first:\n\n" + "\n\n---\n\n".join(rendered) + "\n\n"
 
 
-def takeover_task(number: int, title: str, body: str, branch: str, conversation: str = "") -> str:
+async def takeover_task(number: int, title: str, body: str, branch: str, conversation: str = "") -> str:
     """The task text for a pull request handed to the agent."""
     text = (body or "").strip()
     if len(text) > 6000:
         text = text[:6000] + "\n\n[description truncated]"
-    return for_task(
+    return await for_task(
         f"Pull request #{number} ('{title}') has been assigned to you: somebody wants you "
         f"to carry it the rest of the way. You are working in a checkout of its own "
         f"branch `{branch}`, and your commit updates that pull request — do not open a "
@@ -266,14 +271,16 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
     return "Inline comments:\n\n" + "\n\n".join(rendered[:30]) + "\n\n"
 
 
-def review_task(number: int, title: str, review: dict[str, Any], comments: list[dict[str, Any]] | None = None) -> str:
+async def review_task(
+    number: int, title: str, review: dict[str, Any], comments: list[dict[str, Any]] | None = None
+) -> str:
     """The task text for a review that asked a pull request for changes."""
     reviewer = str((review.get("user") or {}).get("login") or "a reviewer")
     body = str(review.get("body") or "").strip()
     if len(body) > 6000:
         body = body[:6000] + "\n\n[review body truncated]"
     inline = _inline_block(comments or [])
-    return for_task(
+    return await for_task(
         f"A review on pull request #{number} ('{title}') asked for changes. You are working "
         f"in a checkout of that pull request's own branch, and your commit updates it — "
         f"there is no new pull request to open.\n\n"
@@ -290,7 +297,7 @@ def review_task(number: int, title: str, review: dict[str, Any], comments: list[
     )
 
 
-def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, branch: str | None) -> str:
+async def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, branch: str | None) -> str:
     """The task text for comments addressed to the agent.
 
     The answer is the deliverable. Whether code changes at all is the
@@ -320,7 +327,7 @@ def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, bran
             "answer needs a code change, say what you would change and why, and leave it to "
             "the people on the thread."
         )
-    return for_task(
+    return await for_task(
         f"You were asked something on #{number} ('{title}').\n\n"
         f"{conversation}\n\n"
         f"Write your answer to `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` — the runner posts it in "
@@ -491,6 +498,44 @@ class TriggerPoller:
         except Exception as exc:
             logger.warning("could not record how far the comment scan got: %s", exc)
 
+    async def _issue_conversation(self, number: int, issue: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+        """What has been said under an issue, and what was left out.
+
+        An issue's description is not always in its body: a title, an empty
+        body and the whole report in the first comment is an ordinary way to
+        file one, and a session handed the title alone can only say that it
+        was handed the title alone.
+
+        Kept: what people the runner trusts have said. Not the reporter by
+        virtue of having reported — anybody can open an issue on a public
+        repository, and the session that reads this will push a branch. If
+        the description only exists in an outsider's comment, the agent is
+        told that comments were withheld and a maintainer can repeat what
+        matters in their own words, which is a small cost against letting a
+        stranger write the task.
+        """
+        try:
+            entries, missing = await github.issue_conversation(number)
+        except Exception as exc:
+            logger.info("could not read the conversation of issue #%s: %s", number, exc)
+            return [], ["the issue's comments"]
+        allowed: list[dict[str, Any]] = []
+        outsiders = 0
+        for entry in entries:
+            author = str(entry.get("author") or "")
+            if author and await self._worth_reading(author):
+                allowed.append(entry)
+            else:
+                outsiders += 1
+        if outsiders:
+            missing = [*missing, f"{outsiders} comment(s) from accounts the runner does not take direction from"]
+        if len(allowed) > MAX_CONVERSATION:
+            # Said, not silently dropped: the task claims to carry the whole
+            # issue, and the oldest comment is often the report itself.
+            missing = [*missing, f"{len(allowed) - MAX_CONVERSATION} older comment(s), beyond what fits in a task"]
+            allowed = allowed[-MAX_CONVERSATION:]
+        return allowed, missing
+
     async def _conversation(self, number: int) -> tuple[list[dict[str, Any]], list[str]]:
         """The conversation a handover may act on, and what is missing from it.
 
@@ -512,7 +557,7 @@ class TriggerPoller:
         outsiders = 0
         for entry in entries:
             author = str(entry.get("author") or "")
-            if author and await self._writer(author):
+            if author and await self._worth_reading(author):
                 allowed.append(entry)
             else:
                 outsiders += 1
@@ -522,7 +567,13 @@ class TriggerPoller:
                 outsiders,
                 number,
             )
-            missing = [*missing, f"{outsiders} comment(s) from accounts without write access"]
+            missing = [*missing, f"{outsiders} comment(s) from accounts the runner does not take direction from"]
+        if len(allowed) > MAX_CONVERSATION:
+            # After the filter, never before it: a pull request whose review
+            # is fifteen comments long would otherwise spend its allowance
+            # on entries that are about to be dropped.
+            missing = [*missing, f"{len(allowed) - MAX_CONVERSATION} older comment(s), beyond what fits in a task"]
+            allowed = allowed[-MAX_CONVERSATION:]
         return allowed, missing
 
     async def _acknowledge(self, candidate: dict[str, Any]) -> None:
@@ -558,7 +609,10 @@ class TriggerPoller:
                 {
                     "ref": f"issue-{number}",
                     "kind": "issue",
-                    "task": issue_task(issue),
+                    "task": await issue_task(
+                        issue,
+                        conversation_block(*await self._issue_conversation(number, issue)),
+                    ),
                     "workspace": workspace_name("issue", number, title),
                     "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
                     # Every session says something back on the thread it came
@@ -606,7 +660,7 @@ class TriggerPoller:
                     {
                         "ref": f"pr-{number}-review-{review_id}",
                         "kind": "review",
-                        "task": review_task(number, pull["title"], review, comments),
+                        "task": await review_task(number, pull["title"], review, comments),
                         "branch": branch,
                         "workspace": workspace_name("pr", number, pull["title"]),
                         # A submitted review is not a review *comment*: the
@@ -622,7 +676,7 @@ class TriggerPoller:
                     {
                         "ref": f"pr-{number}-assigned",
                         "kind": "takeover",
-                        "task": takeover_task(
+                        "task": await takeover_task(
                             number,
                             pull["title"],
                             pull["body"],
@@ -661,22 +715,56 @@ class TriggerPoller:
                 "branch": await self._writable_head(number),
             }
 
-        for entry in await github.assigned_pull_requests(login):
-            await remember(entry, assigned=True)
+        # Its own first, and deliberately so: `remember` keeps the first
+        # answer for a number, and this repository assigns every pull
+        # request to its author. Without this order the agent opens a pull
+        # request, is assigned it seconds later, and takes over its own
+        # work — a session to "carry it the rest of the way" when it has
+        # just carried it. Reviews and questions on those pull requests
+        # still reach it; a handover of its own work does not.
         for entry in await github.authored_pull_requests(login):
             await remember(entry, assigned=False)
+        for entry in await github.assigned_pull_requests(login):
+            await remember(entry, assigned=True)
         return pulls
 
     async def _writer(self, login: str) -> bool:
-        """Whether an account may write to this repository.
+        """Whether this account's word may direct the agent.
+
+        Team membership decides where it can be established: a session
+        pushes branches and answers in the repository's name, and who may
+        ask it to is a question about people, not about a permission that
+        happens to come with a fork or a triage role.
+
+        Where it cannot be established — no teams configured, or a token
+        without `read:org` — the older rule applies: whoever may write to
+        this repository. An unanswerable question is not a refusal; treating
+        it as one would silence the whole repository the first time somebody
+        reissued the token without the scope.
 
         Cached for the pass: one conversation is usually one person, and a
         lookup per comment would spend requests on the same answer.
         """
         key = login.lower()
         if key not in self._writers:
-            self._writers[key] = await github.may_push(login)
+            member = await github.in_a_trusted_team(login)
+            self._writers[key] = await github.may_push(login) if member is None else member
         return self._writers[key]
+
+    async def _worth_reading(self, login: str) -> bool:
+        """Whether this account's words belong in a task.
+
+        Wider than :meth:`_writer`, and only here. Directing the agent is a
+        decision about people; *reading* a review is not, and this
+        repository's review runs on two apps that are in no team and may
+        push nothing. Dropping them left a session taking over its own pull
+        request to address a review it had not been shown.
+
+        They still direct nothing: no review of theirs starts a session and
+        no comment of theirs steers one — a person the runner listens to has
+        already decided that this work happens.
+        """
+        return login.lower() in settings.review_bots or await self._writer(login)
 
     async def _may_direct_changes(self, comments: list[dict[str, Any]]) -> bool:
         """Whether anyone in this conversation may direct a code change."""
@@ -795,7 +883,7 @@ class TriggerPoller:
                     # one pull request has many of them.
                     "ref": (f"thread-{number}-inline-{key}-{newest}" if inline else f"thread-{number}-issue-{newest}"),
                     "kind": "comment",
-                    "task": thread_task(number, title, thread["comments"], branch=branch),
+                    "task": await thread_task(number, title, thread["comments"], branch=branch),
                     "branch": branch,
                     "workspace": workspace_name("pr", number, title) if branch else None,
                     "urgency": priority.of("comment", pull["labels"] if pull else ()),
