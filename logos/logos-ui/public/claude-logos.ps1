@@ -51,7 +51,7 @@ $ErrorActionPreference = 'Stop'
 # Bump on every change installed copies should pick up. Keep in step with the same
 # constant in claude-logos.sh — the two wrappers are one tool with two front ends.
 # A monotonic integer, not a version string: the comparison cannot misread anything.
-$ClaudeLogosVersion = 1          # 2026-08-25
+$ClaudeLogosVersion = 2          # 2026-09-04
 
 $ConfigDir = if ($env:LOGOS_CONFIG_DIR) { $env:LOGOS_CONFIG_DIR }
              else { Join-Path $env:USERPROFILE '.config\claude-logos' }
@@ -100,7 +100,10 @@ $ContextFallback = [int](Get-Setting 'LOGOS_CONTEXT_FALLBACK' 111200)
 
 # Claude Code caps what it reserves for output at 20000 tokens no matter how large a
 # CLAUDE_CODE_MAX_OUTPUT_TOKENS it is given, and subtracts that reservation from the
-# window itself. Asking for more buys nothing and costs context.
+# window itself. Asking for more buys nothing and costs context. Lowering it is the
+# one knob that makes a narrow window usable: under ~37000 tokens the default leaves
+# less input room than Claude Code's own opening prompt and the session is refused
+# before it starts (see the floor check below, which prints the value that fits).
 $MaxOutputTokens = [int](Get-Setting 'LOGOS_MAX_OUTPUT_TOKENS' 20000)
 
 # Logos rejects reasoning effort "high" with HTTP 500 before the model sees anything,
@@ -437,10 +440,6 @@ if ($Headroom -le 0) {
     # small window alive.
     $Headroom = [Math]::Min(8192, [Math]::Max(1024, [int]($ContextTokens / 50)))
 }
-if ($Headroom + $MaxOutputTokens -ge $ContextTokens) {
-    Stop-WithError "context window $ContextTokens is too small for the $MaxOutputTokens-token output reservation plus $Headroom headroom"
-}
-
 # The number handed to Claude Code is the window MINUS the headroom and nothing else.
 # Claude Code subtracts its own output reservation — min(CLAUDE_CODE_MAX_OUTPUT_TOKENS,
 # 20000) — from whatever it is told, and then compacts 13000 tokens below that.
@@ -449,6 +448,27 @@ if ($Headroom + $MaxOutputTokens -ge $ContextTokens) {
 $ContextForCli = $ContextTokens - $Headroom
 $CompactAt = $ContextForCli - $MaxOutputTokens - 13000
 $HardStopAt = $ContextForCli - $MaxOutputTokens - 3000
+
+# ── Is there room for a session at all? ─────────────────────────────────────────
+# Claude Code's opening prompt — its system prompt plus the schemas of every tool
+# it carries — is around 13000 tokens before the user has typed anything, and none
+# of it is compactable. Since the output reservation is charged against the same
+# window, a narrow window can leave less input room than that, and then the FIRST
+# request of the session comes back as "maximum context length is 32768 tokens.
+# However, you requested 20000 output tokens and your prompt contains at least
+# 12769 input tokens" — with nothing to compact yet, and so no way back. The check
+# that used to sit here only caught the arithmetic going negative, which a
+# 32768-token window passes comfortably while being unusable.
+#
+# Recorded rather than acted on immediately: -Check exists to diagnose exactly
+# this, so it prints the arithmetic and only a real start refuses to run.
+$ClaudeCodeBasePromptTokens = 13000
+$ContextTooSmall = $HardStopAt -lt $ClaudeCodeBasePromptTokens
+# What the reservation would have to be for the opening prompt to fit — measured
+# against the auto-compact point (13000) rather than the hard stop (3000), because
+# a value that only clears the hard stop leaves auto-compaction firing on every
+# turn. Offered only when what is left is still a usable reply length.
+$AffordableOutputTokens = $ContextTokens - $Headroom - 13000 - $ClaudeCodeBasePromptTokens
 
 # ── New models since the last run ───────────────────────────────────────────────
 # Models get added to a team without anyone telling the people on it, and the
@@ -492,8 +512,10 @@ function Write-ContextReport {
         Write-Host ("context  : {0:N0} tokens (an estimate — Logos reports no size for this model)" -f $ContextTokens)
     } elseif ($ContextOrigin -eq 'cold') {
         Write-Host ("context  : {0:N0} tokens, the maximum this model is served with" -f $ContextTokens)
-        Write-Host '           (no lane is up yet, so Logos reports no current size — the first'
-        Write-Host '            request brings one up and it is sized against this number)'
+        Write-Host '           (no lane is up yet, so Logos reports no current size. The first request'
+        Write-Host '            brings one up, and how wide it comes up is decided then from whatever'
+        Write-Host '            capacity is free — it can land well below this number, in which case'
+        Write-Host '            that request is turned down and the next start sizes itself correctly)'
     } else {
         Write-Host ("context  : {0:N0} tokens, using ""{1}"" of what Logos offers" -f $ContextTokens, $ContextOrigin)
         Write-Host ("           (guaranteed {0:N0} / available now {1:N0} / model max {2:N0})" -f `
@@ -504,6 +526,25 @@ function Write-ContextReport {
         $ContextForCli, $Headroom, $MaxOutputTokens)
     if ($KnownModelIds.Count -gt 0) {
         Write-Host ("warning  : {0} is not served here. Known models: {1}" -f $LogosModel, ($KnownModelIds -join ' '))
+    }
+    if ($ContextTooSmall) {
+        Write-Host 'BLOCKED  : this window cannot host a Claude Code session.'
+        Write-Host ("           {0:N0} tokens of input are left after the {1:N0} reserved for replies and" -f `
+            $HardStopAt, $MaxOutputTokens)
+        Write-Host ("           the {0:N0} of headroom, and Claude Code needs about {1:N0} of that for its own" -f `
+            $Headroom, $ClaudeCodeBasePromptTokens)
+        Write-Host '           system prompt and tool definitions — so the first request is rejected.'
+        if ($AffordableOutputTokens -ge 4096) {
+            Write-Host '           Reserving less fits, at the cost of reply length:'
+            Write-Host ("             `$env:LOGOS_MAX_OUTPUT_TOKENS={0}; claude-logos" -f $AffordableOutputTokens)
+        }
+        Write-Host ("           Otherwise pick a model Logos serves with a wider window (at least {0:N0});" -f `
+            ($ClaudeCodeBasePromptTokens + 20000 + 3000 + 1024))
+        Write-Host '           the AI Tools page shows what each one gets.'
+    } elseif ($CompactAt -lt $ClaudeCodeBasePromptTokens) {
+        Write-Host 'warning  : this window is workable but tight — auto-compaction starts almost'
+        Write-Host ("           immediately, because {0:N0} tokens are left before it fires and the system" -f $CompactAt)
+        Write-Host ("           prompt and tools already take about {0:N0}." -f $ClaudeCodeBasePromptTokens)
     }
     if ($LogosModel -like 'claude-*' -or $LogosModel -like '*[[]1m[]]*') {
         Write-Host 'warning  : Claude Code resolves this id to one of its own models and ignores'
@@ -549,6 +590,15 @@ if ($Check) {
 }
 
 # ── Launch ──────────────────────────────────────────────────────────────────────
+# A window too narrow for the opening prompt is refused here rather than handed to
+# Claude Code, whose first request would come back as a 400 from the worker that
+# reads like a bug in Logos. The report says what is left and how to get around
+# it, and -Check above still prints all of it without refusing anything.
+if ($ContextTooSmall) {
+    Write-ContextReport
+    Stop-WithError 'refusing to start: see BLOCKED above'
+}
+
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
     Stop-WithError 'claude is not on your PATH — install Claude Code first'
 }
