@@ -1,6 +1,7 @@
+from tests.scheduling_data.sdi_test_utils import build_ollama_ps_payload
+
 from logos.queue import Priority, PriorityQueueManager
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
-from tests.scheduling_data.sdi_test_utils import build_ollama_ps_payload
 
 
 def test_logosnode_facade_updates_status_from_ps(monkeypatch):

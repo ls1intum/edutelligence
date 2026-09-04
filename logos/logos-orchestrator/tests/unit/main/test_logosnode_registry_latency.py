@@ -206,9 +206,7 @@ class TestPrefillIngestion:
         # not reject fractional averages; record_prefill must be called.
         store = MagicMock()
         reg = _make_registry(store)
-        reg._absorb_latency_observations(
-            1, _runtime([self._lane_with_prefill(prefill_s=2.5, prefill_tokens=500.4)])
-        )
+        reg._absorb_latency_observations(1, _runtime([self._lane_with_prefill(prefill_s=2.5, prefill_tokens=500.4)]))
         store.record_prefill.assert_called_once_with("test-model", 1, 2.5, 500.4)
 
 

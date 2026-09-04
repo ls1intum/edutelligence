@@ -169,9 +169,7 @@ class LatencyStore:
             state = self._e2e_latency[key]
         self._persist_model_metric(model_name, int(provider_id), _TIER_E2E, state)
 
-    def record_prefill(
-        self, model_name: str, provider_id: int, duration_s: float, input_tokens: float
-    ) -> None:
+    def record_prefill(self, model_name: str, provider_id: int, duration_s: float, input_tokens: float) -> None:
         """Record a prefill observation, storing the learned rate as seconds per input token.
 
         ``duration_s``   — wall time from first token of the prompt to prefill completion.
