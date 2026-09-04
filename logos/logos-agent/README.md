@@ -385,10 +385,13 @@ hourglass, so these three are the states it can show.
 whole report in the first comment is an ordinary way to file one, and a
 session handed the title alone can only say so — which is exactly what
 happened on an issue whose description was a maintainer's comment. The
-comments travel with the task now: the people who may write to the
-repository, and the person who opened it, who is usually the one with the
-details. A passer-by on a public issue is left out and counted, because the
-session that reads this will push a branch.
+comments travel with the task now — the ones from the trusted teams
+(`LOGOS_AGENT_TRUSTED_TEAMS`, `logos-developers` and `logos-maintainers` by
+default). Everybody else is left out and counted, the person who opened the
+issue included: anybody can open one, and the session that reads it will
+push a branch. Where the teams cannot be read at all — a token without
+`read:org` — the coarser rule stands in for them: whoever may write to the
+repository.
 
 **It can see what you attached.** An issue whose whole description is a
 screenshot is unreadable to a sandbox with no network — the agent met one of

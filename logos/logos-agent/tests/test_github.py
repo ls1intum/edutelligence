@@ -874,3 +874,79 @@ class TestWatchingEveryCheck:
         # A GitHub that blinked is not a failed build. Reporting one would
         # queue a session to fix a failure that never happened.
         assert status == "timeout"
+
+
+class TestAskingWhoIsInATeam:
+    """Who may direct a session, asked of the organisation rather than of
+    the repository.
+
+    A write collaborator is not the same thing as a member of the teams
+    that own this runner, and the difference only holds if a non-member can
+    be told apart from a question the token cannot ask: GitHub answers both
+    with a 404.
+    """
+
+    @staticmethod
+    def _github(monkeypatch, answers):
+        """`answers` maps API path to a payload, an int status, or an error."""
+
+        asked: list = []
+
+        async def fake_get(path, params=None, **kwargs):
+            asked.append(path)
+            answer = answers.get(path, 404)
+            if isinstance(answer, int):
+                raise github.GitHubError(f"GET {path} failed ({answer})", status=answer)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(github, "_get", fake_get)
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(github.settings, repo_slug="ls1intum/edutelligence", trusted_teams=("logos-developers",)),
+        )
+        return asked
+
+    async def test_a_member_is_one(self, monkeypatch):
+        self._github(
+            monkeypatch,
+            {"/orgs/ls1intum/teams/logos-developers/memberships/tobias": {"state": "active"}},
+        )
+
+        assert await github.in_a_trusted_team("tobias") is True
+
+    async def test_a_non_member_of_a_visible_team_is_a_no(self, monkeypatch):
+        # The 404 that used to be indistinguishable from "cannot ask", and
+        # so let anybody with push access direct a session.
+        asked = self._github(monkeypatch, {"/orgs/ls1intum/teams/logos-developers": {"slug": "logos-developers"}})
+
+        assert await github.in_a_trusted_team("a-collaborator") is False
+        assert "/orgs/ls1intum/teams/logos-developers" in asked
+
+    async def test_a_token_that_cannot_see_the_team_leaves_it_unanswered(self, monkeypatch):
+        # No `read:org`: every team is a 404, and answering "no" would
+        # silence the whole repository the first time a token was reissued
+        # without the scope.
+        self._github(monkeypatch, {})
+
+        assert await github.in_a_trusted_team("tobias") is None
+
+    async def test_a_refused_request_is_unanswered_too(self, monkeypatch):
+        self._github(monkeypatch, {"/orgs/ls1intum/teams/logos-developers/memberships/tobias": 403})
+
+        assert await github.in_a_trusted_team("tobias") is None
+
+    async def test_a_pending_invitation_is_not_membership(self, monkeypatch):
+        self._github(
+            monkeypatch,
+            {"/orgs/ls1intum/teams/logos-developers/memberships/invited": {"state": "pending"}},
+        )
+
+        assert await github.in_a_trusted_team("invited") is False
+
+    async def test_no_configured_teams_is_not_a_refusal(self, monkeypatch):
+        monkeypatch.setattr(github, "settings", replace(github.settings, trusted_teams=()))
+
+        assert await github.in_a_trusted_team("tobias") is None

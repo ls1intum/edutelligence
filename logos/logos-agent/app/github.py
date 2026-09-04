@@ -37,7 +37,17 @@ _DEPLOY_REF = "main"
 
 
 class GitHubError(RuntimeError):
-    pass
+    """A call to GitHub that did not go through, and what it answered.
+
+    The status is part of the failure, not decoration: "this account is not
+    in that team" and "this token may not ask" both arrive as an exception,
+    and only the code tells them apart. Losing it made every non-member look
+    like an unanswerable question.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class IdentityError(RuntimeError):
@@ -355,7 +365,10 @@ async def _get(path: str, params: dict[str, Any] | None = None, *, timeout_s: fl
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         response = await client.get(f"{_API}{path}", headers=_headers(), params=params or {})
     if response.status_code != 200:
-        raise GitHubError(f"GET {path} failed ({response.status_code}): {response.text[:200]}")
+        raise GitHubError(
+            f"GET {path} failed ({response.status_code}): {response.text[:200]}",
+            status=response.status_code,
+        )
     return response.json()
 
 
@@ -836,19 +849,38 @@ async def in_a_trusted_team(login: str) -> bool | None:
     for team in settings.trusted_teams:
         try:
             membership = await _get(f"/orgs/{org}/teams/{team}/memberships/{login}")
-        except Exception as exc:
-            if getattr(exc, "status", None) == 404:
-                # The team exists and this person is not in it — or the team
-                # does not exist, which the log will show as everybody being
-                # refused.
+        except GitHubError as exc:
+            if exc.status == 404 and await _team_exists(org, team):
+                # A 404 says two different things: this account is not in
+                # that team, or the token cannot see the team at all. Asking
+                # for the team itself separates them — and only the first is
+                # an answer.
                 answered = True
                 continue
+            logger.info("could not ask whether %s is in %s/%s: %s", login, org, team, exc)
+            continue
+        except Exception as exc:
             logger.info("could not ask whether %s is in %s/%s: %s", login, org, team, exc)
             continue
         answered = True
         if str((membership or {}).get("state") or "").lower() == "active":
             return True
     return False if answered else None
+
+
+async def _team_exists(org: str, team: str) -> bool:
+    """Whether this token can see that team at all.
+
+    Only asked when a membership lookup came back 404, which is why it is
+    worth a request: without it a token missing `read:org` looks exactly
+    like an org where nobody is a member, and the runner would answer the
+    difference by falling back to "anyone who may push".
+    """
+    try:
+        await _get(f"/orgs/{org}/teams/{team}")
+    except Exception:
+        return False
+    return True
 
 
 async def react(path: str, content: str = REACTION_QUEUED) -> bool:
