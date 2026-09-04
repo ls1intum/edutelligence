@@ -2,9 +2,9 @@
 # The confirm_close smoke test uses FastAPI TestClient with the real auth dependency
 # (the "secret" token present in application.example.yml, loaded by conftest.py).
 import sys
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
