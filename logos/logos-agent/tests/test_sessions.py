@@ -900,7 +900,10 @@ class TestAnAnswerThatWasNeverWritten:
         posted, _ = self.install(
             monkeypatch,
             tmp_path,
-            {"id": 30, "status": "failed", "reply_target": "issue:886", "reply_posted_at": None, "pr_url": None},
+            # Succeeded and said nothing: the case this path owns. A failed
+            # one is taken up by its settlement, which is where the reason
+            # for the failure is.
+            {"id": 30, "status": "succeeded", "reply_target": "issue:886", "reply_posted_at": None, "pr_url": None},
         )
         taken_up: list = []
 
@@ -4068,6 +4071,80 @@ async def _peek(*, include_triggered: bool = True):
     model.
     """
     return {"id": 7, "model": None, "workspace_id": 1}
+
+
+class TestAFailedRequestComesBack:
+    """A request the runner could not finish is one nobody is coming back to.
+
+    The trigger reference counts as handled forever, so no later pass finds
+    it again: three of them sat failed and permanently invisible until
+    somebody read the database by hand.
+    """
+
+    @staticmethod
+    def install(monkeypatch, row):
+        from app import sessions
+
+        taken_up: list = []
+
+        async def get_session(_session_id):
+            return row
+
+        async def transition(_sid, _target, **_fields):
+            return True
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        async def nothing(*_args, **_kwargs):
+            return None
+
+        async def take_up_again(_self, session, *, by="the runner", note=""):
+            taken_up.append((session["id"], note))
+            return 99
+
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
+        monkeypatch.setattr(sessions.db, "transition_session", transition)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.SessionManager, "_cleanup_container", nothing)
+        monkeypatch.setattr(sessions.SessionManager, "_post_reply", nothing)
+        monkeypatch.setattr(sessions.SessionManager, "_react", nothing)
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+        return taken_up
+
+    async def test_a_failed_triggered_session_is_taken_up_again(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        taken_up = self.install(
+            monkeypatch,
+            {
+                "id": 52,
+                "status": "running",
+                "workspace_id": 1,
+                "task": "answer the review",
+                "trigger_ref": "pr-858-review-1",
+                "error": None,
+            },
+        )
+
+        await sessions.manager._settle(52, exit_code=1, error="the session ran past its budget")
+
+        assert taken_up and taken_up[0][0] == 52
+        assert "did not finish" in taken_up[0][1]
+
+    async def test_a_session_a_person_started_is_theirs(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        taken_up = self.install(
+            monkeypatch,
+            {"id": 52, "status": "running", "workspace_id": 1, "task": "t", "trigger_ref": None, "error": None},
+        )
+
+        await sessions.manager._settle(52, exit_code=1, error="something went wrong")
+
+        assert taken_up == []
 
 
 class TestTakingWorkUpAgain:

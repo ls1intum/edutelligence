@@ -1732,6 +1732,25 @@ class SessionManager:
             # up and started. Saying that it did not work out belongs there
             # too — an answer that never comes is the worst of the three.
             await self._react(session_row, github.REACTION_FAILED)
+            if session_row.get("trigger_ref"):
+                # A request the runner took on and could not finish is a
+                # request nobody is coming back to: the reference counts as
+                # handled forever, so no later pass finds it again, and the
+                # only way back was somebody noticing. Taken up again here,
+                # bounded by the same three attempts as everything else, so
+                # a task that cannot be done stops rather than loops.
+                await self.take_up_again(
+                    session_row,
+                    note=(
+                        "Your last attempt at this did not finish"
+                        + (
+                            f": {str(session_row.get('error') or '').strip()[:400]}"
+                            if session_row.get("error")
+                            else "."
+                        )
+                        + " This is the same piece of work, once more."
+                    ),
+                )
 
         # A session finds out what its own change did to the checks — the one
         # thing it could never learn from inside the sandbox, and the thing
@@ -1878,6 +1897,13 @@ class SessionManager:
             # means is that the request was not dealt with — so it is dealt
             # with again, quietly, and the thread hears from the attempt
             # that has something to report.
+            if str((session or {}).get("status") or "") != SessionStatus.SUCCEEDED.value:
+                # A failed session was already taken up again by its
+                # settlement; doing it here too would spend two of the three
+                # attempts on one failure.
+                logger.info("session %s failed and left no answer; the settlement has it", session_id)
+                await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
+                return
             logger.info("session %s left no answer; taking the work up again instead of saying so", session_id)
             replacement = await self.take_up_again(session or {})
             if replacement is None and await self._may_try_again(session or {}):

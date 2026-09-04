@@ -515,6 +515,13 @@ an `Authorization` header, and the token is what authorises the read.
   shell profiles and build caches are executable configuration written by a
   session that held a push token, and the next session must not inherit
   them. Transcripts are data the same agent already authored.
+- **A request the runner could not finish comes back by itself.** A trigger
+  reference counts as handled the moment a session exists for it — that is
+  what keeps an assignment from producing a pull request a week — so a
+  failed session used to take its request with it, permanently invisible to
+  every later pass. A failure now takes the work up again with the reason
+  attached, bounded by the same three attempts as everything else, so a task
+  that cannot be done stops rather than loops.
 - **Work can be run again.** A failed session keeps its task, its workspace,
   its branch and the thread it came from, and *Run again* queues all of it as
   a new session. This is the only way back for work the runner took on
