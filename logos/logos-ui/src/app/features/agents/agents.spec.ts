@@ -5,6 +5,7 @@ import {
   ACTIVE_SESSION_STATUSES,
   AgentCapacity,
   AgentControls,
+  AgentInstructions,
   AgentModels,
   AgentSession,
   AgentTriggers,
@@ -44,6 +45,7 @@ const makeSession = (overrides: Partial<AgentSession> = {}): AgentSession => ({
   trigger_ref: null,
   priority: 50,
   priority_reason: null,
+  environment_notes: null,
   ...overrides,
 });
 
@@ -65,6 +67,28 @@ class FakeAgentService {
   sessions: AgentSession[] = [];
   sessionCalls = 0;
   capacityCalls = 0;
+  instructionBodies: Record<string, unknown>[] = [];
+
+  async getInstructions(): Promise<AgentInstructions> {
+    return {
+      house_rules: 'the shipped rules',
+      environment_notes: 'the shipped notes',
+      house_rules_default: true,
+      environment_notes_default: true,
+      updated_by: '',
+    };
+  }
+
+  async setInstructions(body: Record<string, unknown>): Promise<AgentInstructions> {
+    this.instructionBodies.push(body);
+    return {
+      house_rules: 'the shipped rules',
+      environment_notes: 'the shipped notes',
+      house_rules_default: true,
+      environment_notes_default: true,
+      updated_by: 'tester',
+    };
+  }
 
   async getSessions(): Promise<AgentSession[]> {
     this.sessionCalls += 1;
@@ -157,6 +181,36 @@ describe('Agents', () => {
 
       expect(component.activeSessions().map((s) => s.id)).toEqual([1]);
       expect(component.finishedSessions().map((s) => s.id)).toEqual([2]);
+    });
+  });
+
+  describe('the standing instructions', () => {
+    /**
+     * Reset is a statement about one box. The other one may hold an edit
+     * nobody has saved yet, and sending it along would save it behind the
+     * operator's back — and refilling it from the answer would throw it
+     * away on screen as well.
+     */
+    it('resets one half without submitting the other half\'s draft', async () => {
+      component.houseRulesDraft.set('rules nobody saved');
+      component.environmentNotesDraft.set('notes nobody saved');
+
+      await component.resetInstructions('house_rules');
+
+      expect(agentService.instructionBodies).toEqual([{ reset_house_rules: true }]);
+      expect(component.environmentNotesDraft()).toBe('notes nobody saved');
+      expect(component.houseRulesDraft()).toBe('the shipped rules');
+    });
+
+    it('saves both halves when both are being saved', async () => {
+      component.houseRulesDraft.set('be brief');
+      component.environmentNotesDraft.set('a container');
+
+      await component.saveInstructions();
+
+      expect(agentService.instructionBodies).toEqual([
+        { house_rules: 'be brief', environment_notes: 'a container' },
+      ]);
     });
   });
 

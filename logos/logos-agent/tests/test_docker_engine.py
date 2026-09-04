@@ -167,3 +167,53 @@ class TestNetworkDetach:
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
         assert await docker_engine.connect_network("logos-agent-net", "cid") is True
+
+
+class TestThawingSomethingThatIsAlreadyRunning:
+    """Docker has two ways of saying "it is not frozen".
+
+    In production the second one — a 500 with "Container … is not paused" —
+    escaped as an exception and killed the whole scheduler pass, which then
+    stopped resuming, admitting and sweeping until the next tick.
+    """
+
+    async def test_a_304_means_it_is_running(self, monkeypatch):
+        from app import docker_engine
+
+        async def refuses(*_args, **_kwargs):
+            raise docker_engine.DockerError(304, "not paused")
+
+        monkeypatch.setattr(docker_engine, "_request", refuses)
+
+        assert await docker_engine.unpause_container("cid") is True
+
+    async def test_a_500_saying_the_same_thing_means_the_same_thing(self, monkeypatch):
+        from app import docker_engine
+
+        async def refuses(*_args, **_kwargs):
+            raise docker_engine.DockerError(500, "Container e2dd8c92 is not paused")
+
+        monkeypatch.setattr(docker_engine, "_request", refuses)
+
+        assert await docker_engine.unpause_container("cid") is True
+
+    async def test_a_container_that_is_gone_is_not_running(self, monkeypatch):
+        from app import docker_engine
+
+        async def refuses(*_args, **_kwargs):
+            raise docker_engine.DockerError(404, "no such container")
+
+        monkeypatch.setattr(docker_engine, "_request", refuses)
+
+        assert await docker_engine.unpause_container("cid") is False
+
+    async def test_another_500_is_still_an_error(self, monkeypatch):
+        from app import docker_engine
+
+        async def refuses(*_args, **_kwargs):
+            raise docker_engine.DockerError(500, "devicemapper: something went wrong")
+
+        monkeypatch.setattr(docker_engine, "_request", refuses)
+
+        with pytest.raises(docker_engine.DockerError):
+            await docker_engine.unpause_container("cid")

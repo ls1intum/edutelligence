@@ -10,7 +10,7 @@ the policy build their own.
 from __future__ import annotations
 
 import pytest
-from app import controls, db, docker_engine, model_policy
+from app import controls, conventions, db, docker_engine, model_policy
 
 
 @pytest.fixture(autouse=True)
@@ -70,6 +70,14 @@ def session_image_present(monkeypatch):
 
     monkeypatch.setattr(docker_engine, "image_present", present)
 
+    async def running(_container_id: str):
+        return "running", None
+
+    # Same reason: the resume path asks whether a paused session's container
+    # is still there, and unstubbed that question goes to whatever daemon is
+    # running on this machine — which has never heard of "cid-7".
+    monkeypatch.setattr(docker_engine, "container_state", running)
+
 
 @pytest.fixture(autouse=True)
 def no_sessions_by_default(monkeypatch):
@@ -94,10 +102,55 @@ def nothing_queued_by_default(monkeypatch):
     admission provide their own answer, together with the claim it precedes.
     """
 
-    async def none():
+    async def none(*, include_triggered: bool = True):
         return None
 
     monkeypatch.setattr(db, "next_queued_session", none)
+
+
+@pytest.fixture(autouse=True)
+def no_triggered_sessions_by_default(monkeypatch):
+    """Admission asks how much of its quota the automation is using."""
+
+    async def none():
+        return 0
+
+    monkeypatch.setattr(db, "count_active_trigger_sessions", none)
+
+
+@pytest.fixture(autouse=True)
+def nothing_owed_by_default(monkeypatch):
+    """Both reconciles run beside every scheduler pass and on startup.
+
+    Unstubbed they ask a database that is not there. Tests about either one
+    answer for themselves.
+    """
+
+    async def no_checks():
+        return []
+
+    async def no_replacements(*, max_attempts, since):
+        return []
+
+    monkeypatch.setattr(db, "sessions_awaiting_checks", no_checks)
+    monkeypatch.setattr(db, "sessions_owing_a_replacement", no_replacements)
+
+
+@pytest.fixture(autouse=True)
+def default_instructions(monkeypatch):
+    """The standing instructions as the code ships them.
+
+    They are overridable at runtime, which means reading a row: unstubbed
+    every task builder would ask a database that is not there.
+    """
+
+    async def none():
+        return None
+
+    monkeypatch.setattr(db, "get_instructions", none)
+    conventions.forget()
+    yield
+    conventions.forget()
 
 
 @pytest.fixture(autouse=True)

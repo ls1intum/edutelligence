@@ -6,6 +6,7 @@ import {
   AgentCapacity,
   AgentControls,
   AgentEvent,
+  AgentInstructions,
   AgentModels,
   AgentSession,
   AgentTriggers,
@@ -56,6 +57,13 @@ export class AgentService {
   cancelSession(id: number): Promise<{ cancelled: boolean }> {
     return firstValueFrom(
       this.http.post<{ cancelled: boolean }>(`${AgentService.BASE}/sessions/${id}/cancel`, {}),
+    );
+  }
+
+  /** Move a queued session up, down, or to the front of the queue. */
+  moveInQueue(id: number, move: 'up' | 'down' | 'first'): Promise<AgentSession> {
+    return firstValueFrom(
+      this.http.post<AgentSession>(`${AgentService.BASE}/sessions/${id}/queue`, { move }),
     );
   }
 
@@ -157,6 +165,24 @@ export class AgentService {
         `${AgentService.BASE}/sessions/${sessionId}/screenshots/${encodeURIComponent(name)}`,
         { responseType: 'blob' },
       ),
+    );
+  }
+
+  // ── what every session is told ───────────────────────────────────────────
+  getInstructions(): Promise<AgentInstructions> {
+    return firstValueFrom(
+      this.http.get<AgentInstructions>(`${AgentService.BASE}/instructions`),
+    );
+  }
+
+  setInstructions(body: {
+    house_rules?: string;
+    environment_notes?: string;
+    reset_house_rules?: boolean;
+    reset_environment_notes?: boolean;
+  }): Promise<AgentInstructions> {
+    return firstValueFrom(
+      this.http.put<AgentInstructions>(`${AgentService.BASE}/instructions`, body),
     );
   }
 

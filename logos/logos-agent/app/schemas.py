@@ -161,6 +161,48 @@ class SessionSummary(BaseModel):
     # How urgent this work is, and the sentence explaining it.
     priority: int = 50
     priority_reason: str | None = None
+    # The environment notes this session was handed, as they stood when it
+    # started. Null for a session that never started, and for the ones that
+    # ran before the runner kept a copy — the page says so rather than
+    # showing today's text as if it were theirs.
+    environment_notes: str | None = None
+
+
+class InstructionState(BaseModel):
+    """The standing text every session is given."""
+
+    house_rules: str
+    environment_notes: str
+    # Whether each half is what the code ships with, or somebody's decision.
+    house_rules_default: bool
+    environment_notes_default: bool
+    updated_by: str = ""
+
+
+class InstructionUpdate(BaseModel):
+    """New standing text.
+
+    Each half is optional and left as it is stored when it is absent, so a
+    page can save or reset one box without also submitting whatever is
+    typed in the other. `reset_*` is the third state: back to the text the
+    code ships with, which an empty string does not mean.
+    """
+
+    house_rules: str | None = Field(default=None, max_length=20000)
+    environment_notes: str | None = Field(default=None, max_length=20000)
+    reset_house_rules: bool = False
+    reset_environment_notes: bool = False
+
+
+class QueueMove(BaseModel):
+    """Where an operator wants a queued session to sit.
+
+    A move rather than a number: the order is what the runner works on
+    while the platform is busy, and picking a number means guessing what
+    the neighbours are.
+    """
+
+    move: str = Field(pattern="^(up|down|first)$")
 
 
 class SessionEvent(BaseModel):

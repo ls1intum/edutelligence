@@ -93,12 +93,24 @@ class ModelPolicy:
     # The same, split by the model they serve, so a reading can be taken on
     # the one model a session will actually use.
     deployments_by_model: Mapping[str, frozenset[tuple[str, str]]] = field(default_factory=dict)
+    # Every name a model answers to, mapped to the one the scheduler calls
+    # it. A session can be created with an alias; the platform's own
+    # figures are keyed by the canonical name, and a count under the wrong
+    # key is a count that matches nothing.
+    canonical_names: Mapping[str, str] = field(default_factory=dict)
     ok: bool = False
     detail: str = "model policy not evaluated yet"
     # Set when the policy could not be established at all (no database, no
     # key). Distinguished from a clean 'nothing reachable' so the UI and the
     # logs can say which it was.
     unknown: bool = True
+
+    def canonical(self, model: str | None) -> str:
+        """What the scheduler calls this model, whatever name was used."""
+        wanted = (model or "").strip().lower()
+        if not wanted:
+            return ""
+        return self.canonical_names.get(wanted, model or "")
 
     def lane(self, model: str | None = None) -> frozenset[tuple[str, str]] | None:
         """The deployments a session of this runner would be served by.
@@ -218,7 +230,7 @@ def classify(rows: Iterable[dict[str, Any]]) -> tuple[frozenset[str], frozenset[
 
 def _deployments_of(
     rows: Iterable[dict[str, Any]], local_names: frozenset[str]
-) -> tuple[frozenset[tuple[str, str]], dict[str, frozenset[tuple[str, str]]]]:
+) -> tuple[frozenset[tuple[str, str]], dict[str, frozenset[tuple[str, str]]], dict[str, str]]:
     """The (provider, model) pairs behind the locally served names.
 
     Keyed the way the scheduler's own payload is keyed, so a load reading
@@ -227,6 +239,7 @@ def _deployments_of(
     """
     pairs: set[tuple[str, str]] = set()
     per_model: dict[str, set[tuple[str, str]]] = {}
+    canonical: dict[str, str] = {}
     for row in rows:
         if not is_local_provider_type(row.get("provider_type")):
             continue
@@ -240,9 +253,11 @@ def _deployments_of(
         pairs.add(pair)
         # Under every name the model answers to, so a lane can be asked for
         # by whatever name a session was created with.
+        served = str(row.get("model_name") or names[0])
         for name in names:
             per_model.setdefault(name, set()).add(pair)
-    return frozenset(pairs), {name: frozenset(found) for name, found in per_model.items()}
+            canonical.setdefault(name, served)
+    return frozenset(pairs), {name: frozenset(found) for name, found in per_model.items()}, canonical
 
 
 def evaluate(rows: Iterable[dict[str, Any]]) -> ModelPolicy:
@@ -269,13 +284,14 @@ def evaluate(rows: Iterable[dict[str, Any]]) -> ModelPolicy:
             unknown=False,
             detail="the agent key reaches no locally served model, so there is nothing a session could be driven by",
         )
-    deployments, by_model = _deployments_of(rows, local)
+    deployments, by_model, canonical = _deployments_of(rows, local)
     return ModelPolicy(
         local_models=local,
         cloud_models=frozenset(),
         offered=offered,
         local_deployments=deployments,
         deployments_by_model=by_model,
+        canonical_names=canonical,
         ok=True,
         unknown=False,
         detail=f"{len(offered)} locally served model(s) reachable, no cloud provider",

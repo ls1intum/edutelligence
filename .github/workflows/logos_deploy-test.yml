@@ -52,8 +52,24 @@ jobs:
 
       - name: Create .env file
         run: |
+          # Checked before it is written anywhere: this comes from whoever
+          # dispatched the workflow, and a value carrying a newline would
+          # add lines of its own to a file every later step reads as
+          # configuration. Matched with `case` rather than a regular
+          # expression because that is line-based, and a newline is exactly
+          # what has to be caught.
+          case "$WORKSPACE_IMAGE_TAG" in
+            "" | *[!A-Za-z0-9._-]* | [!A-Za-z0-9_]* )
+              echo "image-tag is not a Docker tag" >&2
+              exit 1
+              ;;
+          esac
+          if [ "${#WORKSPACE_IMAGE_TAG}" -gt 128 ]; then
+            echo "image-tag is too long for a Docker tag" >&2
+            exit 1
+          fi
           echo "ENVIRONMENT=${{ matrix.environment }}" > .env
-          echo "IMAGE_TAG=${{ inputs.image-tag }}" >> .env
+          echo "IMAGE_TAG=$WORKSPACE_IMAGE_TAG" >> .env
           echo "REGISTRY=${{ vars.LOGOS_HARBOR_REGISTRY }}/logos" >> .env
 
           echo "$SECRETS_CONTEXT" | jq -r '
@@ -85,6 +101,7 @@ jobs:
         env:
           VARS_CONTEXT: ${{ toJson(vars) }}
           SECRETS_CONTEXT: ${{ toJson(secrets) }}
+          WORKSPACE_IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
 
       - name: Copy .env file to VM
         uses: appleboy/scp-action@v1.0.0

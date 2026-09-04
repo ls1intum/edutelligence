@@ -132,6 +132,83 @@ async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+class Unchanged:
+    """ "Leave this alone", as a value.
+
+    Null already means something here — "clear the override" — so a half
+    nobody touched cannot be expressed as null, and a default of null would
+    quietly reset it.
+    """
+
+    __slots__ = ()
+
+
+UNCHANGED = Unchanged()
+
+
+async def get_instructions() -> dict[str, Any] | None:
+    """The standing instructions, or None when the row is missing."""
+    async with sessionmaker()() as db:
+        row = (
+            (
+                await db.execute(
+                    text(
+                        """
+                        SELECT house_rules, environment_notes, updated_by, updated_at
+                          FROM agent_instructions WHERE id = 1
+                        """
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row else None
+
+
+async def set_instructions(
+    *,
+    house_rules: str | None | Unchanged = UNCHANGED,
+    environment_notes: str | None | Unchanged = UNCHANGED,
+    updated_by: str,
+) -> None:
+    """Store the standing instructions.
+
+    Three things can be meant about a half, and they are all different:
+    text replaces it, null clears the override back to what the code ships
+    with, and `UNCHANGED` leaves what is stored alone. The last one is why
+    the write is per-half — resetting the house rules must not save
+    whatever happens to be sitting in the other box on somebody's screen.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                INSERT INTO agent_instructions (id, house_rules, environment_notes, updated_by, updated_at)
+                VALUES (1, :house_rules, :environment_notes, :updated_by, :now)
+                ON CONFLICT (id) DO UPDATE SET
+                    house_rules = CASE WHEN :write_house
+                        THEN :house_rules ELSE agent_instructions.house_rules END,
+                    environment_notes = CASE WHEN :write_notes
+                        THEN :environment_notes ELSE agent_instructions.environment_notes END,
+                    updated_by = :updated_by,
+                    updated_at = :now
+                """
+            ),
+            {
+                # There is no row to keep on the insert path, so an untouched
+                # half starts out as no override at all.
+                "house_rules": None if isinstance(house_rules, Unchanged) else house_rules,
+                "environment_notes": None if isinstance(environment_notes, Unchanged) else environment_notes,
+                "write_house": not isinstance(house_rules, Unchanged),
+                "write_notes": not isinstance(environment_notes, Unchanged),
+                "updated_by": updated_by,
+                "now": _now(),
+            },
+        )
+        await db.commit()
+
+
 # --- what an operator changed while the runner was running ----------------
 
 
@@ -762,11 +839,15 @@ async def abandon_reply(session_id: int, *, attempts: int) -> None:
 
 
 async def count_active_trigger_sessions() -> int:
-    """Active sessions the runner queued by itself.
+    """Self-queued sessions that are occupying capacity right now.
 
-    The ceiling this feeds is separate from the parallel-session ceiling: a
-    person asking for work must not find the queue already full of the
-    runner's own ideas.
+    Queued ones are deliberately not counted. The ceiling this feeds is
+    about how much of the platform the automation may be *using*, and a
+    queued session uses nothing — it is a piece of work waiting its turn,
+    which is what a queue is for and what the page shows. Counting the
+    queue against the ceiling meant the runner refused to write down work
+    it had already found, so nothing was ever waiting: the backlog lived in
+    the repository, invisible.
     """
     async with sessionmaker()() as db:
         count = (
@@ -777,7 +858,7 @@ async def count_active_trigger_sessions() -> int:
                      WHERE trigger_ref IS NOT NULL AND status = ANY(:active)
                     """
                 ),
-                {"active": [s.value for s in ACTIVE_STATUSES]},
+                {"active": [s.value for s in ACTIVE_STATUSES if s is not SessionStatus.QUEUED]},
             )
         ).scalar_one()
     return int(count or 0)
@@ -790,7 +871,7 @@ _SESSION_SELECT = """
            s.container_id, s.open_pull_request, s.deploy_to_dev,
            s.screenshot_paths, s.trigger_kind, s.trigger_ref, s.reply_target,
            s.reaction_target,
-           s.priority, s.priority_reason,
+           s.priority, s.priority_reason, s.environment_notes,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_usd, 0) AS cost_usd,
@@ -832,7 +913,128 @@ async def list_sessions(
     return [dict(r) for r in rows]
 
 
-async def next_queued_session() -> dict[str, Any] | None:
+# How long a queue can still be put in an exact order using the priority
+# column alone. Beyond it two rows must share a number, and the tie falls to
+# age — which is what a move overrules, so the move would not hold.
+_ORDERABLE = 100
+
+
+def _renumbered(order: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Priorities that put this list in exactly this order.
+
+    Spread across the range the column allows rather than nudged by one:
+    a queue whose top row is already at the maximum has no room above it,
+    and a move that cannot change the order is a move that did not happen.
+    Only rows whose number actually changes are written.
+    """
+    count = len(order)
+    if count == 0:
+        return []
+    if count > _ORDERABLE:
+        # More rows than the column has distinct values: two of them would
+        # share a number and the tie would fall to age, which is the very
+        # thing a move is trying to overrule. The caller refuses instead of
+        # pretending.
+        raise ValueError(f"a queue of {count} cannot be ordered by priority alone")
+    step = max(1, 100 // (count + 1))
+    for index, row in enumerate(order):
+        row["priority"] = max(0, min(100, 100 - (index + 1) * step))
+    return order
+
+
+async def _one_session(session_id: int) -> dict[str, Any] | None:
+    async with sessionmaker()() as db:
+        row = (await db.execute(text(_SESSION_SELECT + " WHERE s.id = :id"), {"id": session_id})).mappings().first()
+    return dict(row) if row else None
+
+
+async def move_in_queue(session_id: int, move: str, *, by: str) -> dict[str, Any] | None:
+    """Put a queued session somewhere else in the queue.
+
+    The order is `priority DESC, created_at` — what the runner works on
+    while the platform is busy — and an operator watching a backlog knows
+    things the priority rules cannot: that this review is holding up a
+    release, that this issue can wait. So they can say so.
+
+    Expressed as a move rather than as a number, because a number invites
+    guessing what the neighbours are. Moving past a session of equal
+    priority means going one above it: ties are broken by age, and nothing
+    here can make a session older.
+
+    Returns the session as it now stands, or None if it is not queued.
+    """
+    if move not in ("up", "down", "first"):
+        raise ValueError(f"unknown move '{move}' (expected up, down or first)")
+    async with sessionmaker()() as db:
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        """
+                    SELECT id, priority FROM agent_sessions
+                     WHERE status = 'queued'
+                     ORDER BY priority DESC, created_at, id
+                     FOR UPDATE
+                    """
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        order = [dict(row) for row in rows]
+        at = next((index for index, row in enumerate(order) if row["id"] == session_id), None)
+        if at is None:
+            await db.rollback()
+            return None
+        # The move expressed as a position, so the boundaries cannot swallow
+        # it: at 100 there is no "one above", and clamping would leave the
+        # order exactly as it was while telling the operator it had moved.
+        wanted = {"first": 0, "up": max(at - 1, 0), "down": min(at + 1, len(order) - 1)}[move]
+        if wanted == at:
+            await db.rollback()
+            return await _one_session(session_id)
+        moved = order.pop(at)
+        order.insert(wanted, moved)
+        try:
+            order = _renumbered(order)
+        except ValueError:
+            await db.rollback()
+            raise
+        reason = f"moved in the queue by {by}"
+        for position, row in enumerate(order):
+            await db.execute(
+                text(
+                    """
+                    UPDATE agent_sessions
+                       SET priority = :priority,
+                           priority_reason = CASE WHEN id = :moved THEN :reason ELSE priority_reason END
+                     WHERE id = :id AND status = 'queued'
+                    """
+                ),
+                {"id": row["id"], "priority": row["priority"], "moved": session_id, "reason": reason},
+            )
+            del position
+        row = (await db.execute(text(_SESSION_SELECT + " WHERE s.id = :id"), {"id": session_id})).mappings().first()
+        await db.commit()
+    return dict(row) if row else None
+
+
+async def attempts_for_trigger(ref: str) -> int:
+    """How many sessions this one request has already had."""
+    if not ref:
+        return 0
+    async with sessionmaker()() as db:
+        count = (
+            await db.execute(
+                text("SELECT COUNT(*) FROM agent_sessions WHERE trigger_ref = :ref"),
+                {"ref": ref},
+            )
+        ).scalar_one()
+    return int(count or 0)
+
+
+async def next_queued_session(*, include_triggered: bool = True) -> dict[str, Any] | None:
     """The session a claim would take next, without taking it.
 
     Admission decides against a capacity reading, and the reading has to be
@@ -850,6 +1052,7 @@ async def next_queued_session() -> dict[str, Any] | None:
                     SELECT s.id, s.model, s.workspace_id
                       FROM agent_sessions s
                      WHERE s.status = 'queued'
+                       AND (:include_triggered OR s.trigger_ref IS NULL)
                        AND NOT EXISTS (
                              SELECT 1 FROM agent_sessions busy
                               WHERE busy.workspace_id = s.workspace_id
@@ -860,12 +1063,13 @@ async def next_queued_session() -> dict[str, Any] | None:
                     """
                     ),
                     {
+                        "include_triggered": include_triggered,
                         "occupying": [
                             SessionStatus.STARTING.value,
                             SessionStatus.RUNNING.value,
                             SessionStatus.PAUSED.value,
                             SessionStatus.FINALIZING.value,
-                        ]
+                        ],
                     },
                 )
             )
@@ -875,7 +1079,80 @@ async def next_queued_session() -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
+async def claim_session(session_id: int, *, trigger_quota: int | None = None) -> dict[str, Any] | None:
+    """Take this exact queued session, or nothing.
+
+    Admission measures the lane of the session it intends to start, and the
+    peek and the claim are separate statements: in between, that row can be
+    cancelled, or a more urgent one on another model can be queued. Claiming
+    "the next one" would then start a session whose lane nobody measured.
+
+    ``trigger_quota`` is how many self-queued sessions may be running at
+    once, counted *inside this statement*. Counting it beforehand and
+    claiming afterwards leaves a window in which two schedulers both see
+    room — the automation would then take the places kept for people.
+    """
+    async with sessionmaker()() as db:
+        if trigger_quota is not None:
+            # One admission at a time, across every replica: two schedulers
+            # locking different rows would otherwise both read the same
+            # count of active triggered sessions and both pass the check
+            # below, taking the places kept for people. Held to the end of
+            # this transaction, which is the claim.
+            await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('logos-agent-admission'))"))
+        claimed = (
+            await db.execute(
+                text(
+                    """
+                    SELECT s.id FROM agent_sessions s
+                     WHERE s.id = :session_id
+                       AND s.status = 'queued'
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions busy
+                              WHERE busy.workspace_id = s.workspace_id
+                                AND busy.status = ANY(:occupying)
+                           )
+                       AND (
+                             s.trigger_ref IS NULL
+                             OR CAST(:trigger_quota AS INTEGER) IS NULL
+                             OR (
+                                  SELECT COUNT(*) FROM agent_sessions mine
+                                   WHERE mine.trigger_ref IS NOT NULL
+                                     AND mine.status = ANY(:occupying)
+                                ) < CAST(:trigger_quota AS INTEGER)
+                           )
+                     FOR UPDATE OF s SKIP LOCKED
+                    """
+                ),
+                {
+                    "session_id": session_id,
+                    "trigger_quota": trigger_quota,
+                    "occupying": [
+                        SessionStatus.STARTING.value,
+                        SessionStatus.RUNNING.value,
+                        SessionStatus.PAUSED.value,
+                        SessionStatus.FINALIZING.value,
+                    ],
+                },
+            )
+        ).scalar_one_or_none()
+        if claimed is None:
+            await db.rollback()
+            return None
+        await db.execute(
+            text("UPDATE agent_sessions SET status = 'starting' WHERE id = :session_id"),
+            {"session_id": session_id},
+        )
+        row = (
+            (await db.execute(text(_SESSION_SELECT + " WHERE s.id = :session_id"), {"session_id": session_id}))
+            .mappings()
+            .first()
+        )
+        await db.commit()
+    return dict(row) if row else None
+
+
+async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -> list[dict[str, Any]]:
     """Take up to `limit` startable queued sessions and mark them starting.
 
     A session is startable only when no other session is already occupying its
@@ -896,6 +1173,10 @@ async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
                         """
                     SELECT s.id FROM agent_sessions s
                      WHERE s.status = 'queued'
+                       -- The automation may fill the platform, but not the
+                       -- last places in it: with its quota used up, only
+                       -- work a person queued is claimable.
+                       AND (:include_triggered OR s.trigger_ref IS NULL)
                        AND NOT EXISTS (
                              SELECT 1 FROM agent_sessions busy
                               WHERE busy.workspace_id = s.workspace_id
@@ -926,6 +1207,7 @@ async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
                     ),
                     {
                         "limit": limit,
+                        "include_triggered": include_triggered,
                         "occupying": [
                             SessionStatus.STARTING.value,
                             SessionStatus.RUNNING.value,
@@ -955,6 +1237,81 @@ async def claim_queued_sessions(limit: int) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+async def sessions_awaiting_checks() -> list[dict[str, Any]]:
+    """Finished sessions whose pushed commit nobody has judged yet.
+
+    The follow-up on a red build outlives the process that started it: a
+    redeploy in the couple of minutes between pushing and CI concluding
+    used to drop it silently. Asked on startup and on every scheduler pass,
+    and almost always empty.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT id, workspace_id, task, model, branch_name, checks_sha,
+                           trigger_kind, trigger_ref, reply_target, reaction_target,
+                           priority, priority_reason, open_pull_request, finished_at
+                      FROM agent_sessions
+                     WHERE checks_watch = 'pending'
+                     ORDER BY id
+                    """
+                )
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
+async def sessions_owing_a_replacement(*, max_attempts: int, since: datetime) -> list[dict[str, Any]]:
+    """Failed requests that were never taken up again, and still could be.
+
+    Derived rather than flagged, and deliberately so. A row already says
+    everything needed to know whether a replacement is owed — it failed, it
+    came from a request, nothing newer has been tried for that request, and
+    the request has attempts left — so there is no intent to write, nothing
+    to keep in step with the rows it describes, and no way for the intent
+    and the fact to disagree. It also covers the sessions that failed
+    before any of this existed, which a flag written at settlement never
+    could.
+
+    ``id > s.id`` is what makes "nothing newer" cheap and exact: a
+    replacement that is queued, running or itself failed is a later row
+    with the same reference, and any of the three means this row is no
+    longer the one that owes anything.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT s.id, s.workspace_id, s.task, s.model, s.branch_name,
+                           s.trigger_kind, s.trigger_ref, s.reply_target, s.reaction_target,
+                           s.priority, s.priority_reason, s.open_pull_request, s.error,
+                           s.finished_at
+                      FROM agent_sessions s
+                     WHERE s.status = 'failed'
+                       AND COALESCE(s.trigger_ref, '') <> ''
+                       AND s.finished_at IS NOT NULL
+                       AND s.finished_at > :since
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions newer
+                              WHERE newer.trigger_ref = s.trigger_ref
+                                AND newer.id > s.id
+                           )
+                       AND (
+                             SELECT COUNT(*) FROM agent_sessions tried
+                              WHERE tried.trigger_ref = s.trigger_ref
+                           ) < :max_attempts
+                     ORDER BY s.id
+                    """
+                ),
+                {"since": since, "max_attempts": max_attempts},
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
 async def update_session(session_id: int, **fields: Any) -> None:
     """Patch a session row. Callers pass only the columns they mean to change."""
     if not fields:
@@ -972,6 +1329,13 @@ async def update_session(session_id: int, **fields: Any) -> None:
         "tokens_out",
         "cost_usd",
         "deployed_at",
+        # The text this session was handed, as opposed to the text sessions
+        # are handed now — the instructions are editable.
+        "environment_notes",
+        # The commit whose checks somebody still has to look at, and whether
+        # anybody still owes that.
+        "checks_sha",
+        "checks_watch",
     }
     unknown = set(fields) - allowed
     if unknown:

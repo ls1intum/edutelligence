@@ -188,3 +188,188 @@ class TestStatementTypes:
         source = inspect.getsource(db.handled_trigger_refs)
 
         assert "CAST(:attempts AS INTEGER)" in source
+
+
+class TestMovingInTheQueue:
+    """What an operator can say about the order.
+
+    Priority is derived from what a request is — a review outranks a fresh
+    issue — and that is right most of the time. Which review is holding up a
+    release is not something the rules can know.
+    """
+
+    @staticmethod
+    def queue(*rows):
+        """A fake database holding one queued list."""
+        state = [dict(row) for row in rows]
+
+        class _Rows:
+            def __init__(self, values):
+                self._values = values
+
+            def mappings(self):
+                return self
+
+            def all(self):
+                return list(self._values)
+
+            def first(self):
+                return self._values[0] if self._values else None
+
+        class _Session:
+            async def execute(self, statement, params=None):
+                sql = str(statement)
+                if "ORDER BY priority DESC" in sql:
+                    # The production key: priority, then age, then id. A
+                    # fake that ordered by id would accept a move that the
+                    # database's own tie-break would undo.
+                    return _Rows(
+                        sorted(
+                            state,
+                            key=lambda row: (-row["priority"], row.get("created_at", ""), row["id"]),
+                        )
+                    )
+                if sql.strip().startswith("UPDATE"):
+                    for row in state:
+                        if row["id"] == params["id"]:
+                            row["priority"] = params["priority"]
+                            # Mirrors the statement's CASE: the reason
+                            # belongs to the row somebody moved, not to the
+                            # ones renumbered around it.
+                            if row["id"] == params.get("moved"):
+                                row["priority_reason"] = params["reason"]
+                    return _Rows([])
+                return _Rows([row for row in state if row["id"] == params.get("id")])
+
+            async def commit(self):
+                return None
+
+            async def rollback(self):
+                return None
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return None
+
+        return state, (lambda: _Session())
+
+    @staticmethod
+    def order(state):
+        """The queue as the scheduler would read it."""
+        return [
+            row["id"] for row in sorted(state, key=lambda row: (-row["priority"], row.get("created_at", ""), row["id"]))
+        ]
+
+    async def test_moving_up_changes_the_order(self, monkeypatch):
+        state, session = self.queue(
+            {"id": 1, "priority": 80},
+            {"id": 2, "priority": 60},
+            {"id": 3, "priority": 60},
+        )
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(3, "up", by="tobias")
+
+        assert self.order(state) == [1, 3, 2]
+
+    async def test_moving_to_the_front_changes_the_order(self, monkeypatch):
+        state, session = self.queue({"id": 1, "priority": 80}, {"id": 2, "priority": 60})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(2, "first", by="tobias")
+
+        assert self.order(state) == [2, 1]
+
+    async def test_moving_down_changes_the_order(self, monkeypatch):
+        state, session = self.queue({"id": 1, "priority": 80}, {"id": 2, "priority": 60})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(1, "down", by="tobias")
+
+        assert self.order(state) == [2, 1]
+
+    async def test_a_full_priority_at_the_top_is_no_obstacle(self, monkeypatch):
+        # The boundary: there is nothing above 100, so nudging by one would
+        # clamp, tie on age, and leave the order exactly as it was.
+        state, session = self.queue({"id": 1, "priority": 100}, {"id": 2, "priority": 100})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(2, "first", by="tobias")
+
+        assert self.order(state) == [2, 1]
+
+    async def test_the_bottom_of_the_range_is_no_obstacle_either(self, monkeypatch):
+        state, session = self.queue({"id": 1, "priority": 0}, {"id": 2, "priority": 0})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(1, "down", by="tobias")
+
+        assert self.order(state) == [2, 1]
+
+    async def test_the_last_one_cannot_go_further_down(self, monkeypatch):
+        state, session = self.queue({"id": 1, "priority": 80}, {"id": 2, "priority": 60})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(2, "down", by="tobias")
+
+        assert self.order(state) == [1, 2]
+
+    async def test_a_session_that_is_not_queued_is_not_moved(self, monkeypatch):
+        _, session = self.queue({"id": 1, "priority": 80})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        assert await db.move_in_queue(4711, "up", by="tobias") is None
+
+    async def test_an_unknown_move_is_refused(self, monkeypatch):
+        _, session = self.queue({"id": 1, "priority": 80})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        with pytest.raises(ValueError, match="unknown move"):
+            await db.move_in_queue(1, "sideways", by="tobias")
+
+    async def test_the_reason_says_who_moved_it(self, monkeypatch):
+        state, session = self.queue({"id": 1, "priority": 80}, {"id": 2, "priority": 60})
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        await db.move_in_queue(2, "first", by="tobias")
+
+        # Only on the row that was moved: the others were renumbered to
+        # keep the order, which is not a decision anybody made about them.
+        moved = next(row for row in state if row["id"] == 2)
+        assert "tobias" in str(moved.get("priority_reason"))
+        assert not next(row for row in state if row["id"] == 1).get("priority_reason")
+
+
+class TestMovingWhenAgeAndIdDisagree:
+    """The queue is ordered by age among equals, not by row id.
+
+    A fake that sorted by id would accept a move the database's own
+    tie-break undoes — the rows here are deliberately numbered against
+    their order in time.
+    """
+
+    async def test_a_move_holds_when_the_older_row_has_the_higher_id(self, monkeypatch):
+        state, session = TestMovingInTheQueue.queue(
+            {"id": 9, "priority": 60, "created_at": "2026-09-03T10:00:00"},
+            {"id": 1, "priority": 60, "created_at": "2026-09-03T11:00:00"},
+        )
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        # 9 is older, so it is first; moving 1 to the front has to hold
+        # against that.
+        assert TestMovingInTheQueue.order(state) == [9, 1]
+        await db.move_in_queue(1, "first", by="tobias")
+
+        assert TestMovingInTheQueue.order(state) == [1, 9]
+
+    async def test_a_queue_too_long_to_order_is_refused(self, monkeypatch):
+        rows = [{"id": index, "priority": 50, "created_at": f"2026-09-03T{index:02d}:00:00"} for index in range(120)]
+        state, session = TestMovingInTheQueue.queue(*rows)
+        monkeypatch.setattr(db, "sessionmaker", lambda: session)
+
+        # Two rows would have to share a number, and the tie falls to age —
+        # which is the thing the move is overruling.
+        with pytest.raises(ValueError, match="cannot be ordered"):
+            await db.move_in_queue(119, "first", by="tobias")

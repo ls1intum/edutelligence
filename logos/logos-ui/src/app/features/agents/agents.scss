@@ -479,6 +479,55 @@
   }
 }
 
+.panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.prompt-editor {
+  width: 100%;
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-loose);
+  resize: vertical;
+}
+
+.prompt {
+  margin: 0.75rem 0;
+}
+
+.prompt__summary {
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-300));
+}
+
+.prompt__text {
+  margin: 0.5rem 0;
+  padding: 0.75rem;
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-loose);
+  background: rgb(var(--color-background-800));
+  border-radius: var(--radius-md);
+}
+
+.session__queue {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 0.75rem 0.5rem;
+}
+
+.btn--icon {
+  padding: 0.2rem 0.45rem;
+  line-height: 1;
+}
+
 .field__value {
   margin-left: 0.4rem;
   font-size: var(--font-size-sm);

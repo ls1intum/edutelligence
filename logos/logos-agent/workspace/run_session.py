@@ -248,6 +248,35 @@ def _reset_agent_home() -> None:
     elif home.exists():
         home.unlink()
     home.mkdir(parents=True, exist_ok=True)
+    _seed_hook_store(home)
+
+
+def _seed_hook_store(home: Path) -> None:
+    """Give this session a writable pre-commit store of its own.
+
+    The hook environments are baked into the image, which is exactly what
+    lets a session with no network run the linters CI runs. What cannot be
+    baked in is the store itself: pre-commit takes a lock file and records
+    the config it just ran in a small sqlite database, and the image's root
+    filesystem is read-only — so the advertised offline command failed on
+    the first thing it tried to write.
+
+    Only the database is copied. Its rows hold the paths of the installed
+    environments, which stay where they are: pre-commit reads and executes
+    them, and writes to neither.
+    """
+    store = Path(os.environ.get("PRE_COMMIT_HOME") or (home / "pre-commit"))
+    seeded = Path(os.environ.get("PRE_COMMIT_STORE") or "/opt/pre-commit")
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+        database = seeded / "db.db"
+        if database.is_file():
+            shutil.copy2(database, store / "db.db")
+    except OSError as exc:
+        # Not fatal: pre-commit falls back to installing the hooks itself,
+        # fails without a network, and says so. Better a linter the agent
+        # is told is unavailable than a session that never starts.
+        print(f"[setup] could not prepare the pre-commit store: {exc}", flush=True)
 
 
 def _clear_checkout() -> None:
@@ -486,6 +515,15 @@ def build_prompt(task: str) -> str:
             "Look at them before you decide anything — on a visual report they "
             "are usually the whole description.\n"
         )
+    # What this container is, as the runner describes it — an operator can
+    # adjust that text, and the page shows exactly what was handed over. The
+    # text below is the fallback for a session started by an older runner,
+    # which is why the test is whether the runner said anything at all: an
+    # operator who empties the notes has decided nothing should be said
+    # here, and answering that decision with a page of defaults ignores it.
+    if "LOGOS_SESSION_ENVIRONMENT_NOTES" in os.environ:
+        notes = os.environ["LOGOS_SESSION_ENVIRONMENT_NOTES"].strip()
+        return f"{task}{pictures}\n\n{notes}\n" if notes else f"{task}{pictures}\n"
     return (
         f"{task}"
         f"{pictures}\n\n"
@@ -501,8 +539,17 @@ def build_prompt(task: str) -> str:
         "does — 'Cancel the queued request when the client goes away', not "
         "'Fixed stuff' and not a description of the task you were given. No "
         "body, no bullet points, no issue numbers.\n"
-        "- Run the project's tests or linters for the code you touch, and fix "
-        "what you break.\n"
+        "- Run the project's tests for the code you touch, and fix what you "
+        "break.\n"
+        "- Lint what you changed: from the top of the checkout, `pre-commit "
+        "run --files <the files you changed>`. Same command and same pinned "
+        "hooks as CI, installed in this image, no network needed. Several of "
+        "them reformat in place, so a hook that says it modified your files "
+        "has already fixed them — run it once more and it passes. To chase one "
+        "hook, name it: `pre-commit run flake8 --files <files>`. "
+        "The `pylint` and `mypy` hooks under iris/ and memiris/ go through "
+        "poetry and cannot run in here; say so if one of those is what "
+        "failed.\n"
         "- If the task turns out to be impossible or already done, say so "
         "plainly instead of inventing changes.\n"
         f"- Changing nothing is a legitimate outcome, but it is never a silent "
@@ -581,6 +628,7 @@ def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool]:
         _render_event(event)
         if event.get("type") == "result":
             usage = event
+            _account_for(event)
     return process.wait(), usage, interrupted
 
 
@@ -676,26 +724,56 @@ _spent = {"in": 0, "out": 0}
 def _report_usage(message: dict) -> None:
     """Print what has been spent so far, when it changes.
 
-    Both sides accumulate, because that is what the agent is charged for and
-    what the result file reports at the end: a turn's input is billed as
-    input even though most of it is the conversation being re-read. Taking
-    the largest turn instead would read lower here than in the final total,
-    and a number that jumps when the session ends is worse than no number.
+    Cache reads are deliberately not counted. Every turn re-reads the whole
+    conversation out of the cache, so summing that key means counting the
+    same tokens once per turn: a session reported seventeen million input
+    tokens against no output at all, which is a true sum of a meaningless
+    quantity. What is counted is what the model had to take in anew —
+    fresh input and cache writes — and what it wrote.
+
+    What it wrote is usually not there yet. The usage on an assistant event
+    is the count as the turn *began*, so the output figure is zero all the
+    way through a run and only the result event knows the total — which is
+    why a session that had written a hundred thousand tokens spent its whole
+    life reporting `out=0` on the page. So the number is printed when there
+    is one, and left out when there is not: an absent figure reads as
+    unknown, and a zero reads as nothing written.
     """
     usage = message.get("usage")
     if not isinstance(usage, dict):
         return
     read = sum(
-        value
-        for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
-        if isinstance(value := usage.get(key), int)
+        value for key in ("input_tokens", "cache_creation_input_tokens") if isinstance(value := usage.get(key), int)
     )
     written = usage.get("output_tokens")
     before = dict(_spent)
     _spent["in"] += read
     _spent["out"] += written if isinstance(written, int) else 0
     if _spent != before:
-        print(f"[usage] in={_spent['in']} out={_spent['out']}", flush=True)
+        _print_usage()
+
+
+def _print_usage() -> None:
+    """One transcript line for the running total."""
+    written = f" out={_spent['out']}" if _spent["out"] else ""
+    print(f"[usage] in={_spent['in']}{written}", flush=True)
+
+
+def _account_for(result: dict) -> None:
+    """Take the authoritative totals of a finished invocation.
+
+    The result event is the only place the output count appears, so it is
+    folded into the running figures rather than left to the settlement: a
+    paused session, a continued one, and the page in between all read the
+    transcript, and the transcript should not be the one account that is
+    permanently missing half the number.
+    """
+    tokens_in, tokens_out, _cost = usage_totals(result)
+    if tokens_out > _spent["out"]:
+        _spent["out"] = tokens_out
+    if tokens_in > _spent["in"]:
+        _spent["in"] = tokens_in
+    _print_usage()
 
 
 def _render_event(event: dict) -> None:
@@ -802,7 +880,11 @@ def usage_totals(usage: dict[str, object]) -> tuple[int, int, float]:
                 return value
         return 0
 
-    tokens_in = as_int("input_tokens") + as_int("cache_creation_input_tokens") + as_int("cache_read_input_tokens")
+    # Same definition as the running figures the session reports on its
+    # transcript, so the number does not change meaning when the session
+    # ends: fresh input and cache writes, not the conversation re-read out
+    # of the cache on every turn.
+    tokens_in = as_int("input_tokens") + as_int("cache_creation_input_tokens")
     tokens_out = as_int("output_tokens")
     # The CLI reports USD; Logos accounts in EUR. Without a live rate the
     # honest thing is to carry the number through unconverted and let the
@@ -927,34 +1009,19 @@ def _as_subject(text: str) -> str:
     return f"`Logos`: {cleaned}"
 
 
-def _asked_for(task: str) -> str:
-    """The request, without the standing conventions appended to every task.
-
-    The house rules are the same in every session; repeating them in every
-    pull request buries the one part that differs.
-    """
-    body = task.split("--- How work is done here ---", 1)[0].strip()
-    return (body or task.strip())[:4000]
-
-
 def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
     slug = os.environ.get("LOGOS_REPO_SLUG", "").strip()
     if not slug:
         log("no repository slug configured; skipping pull request")
         return None
 
+    # Title only. The description is the author's to write, and a pull
+    # request opened with a wall of generated text — a summary nobody wrote,
+    # the task pasted back, a checklist — buries the diff under boilerplate
+    # and gives the reviewer a page of things they already know. What the
+    # change does belongs in the commit subject; why it was made belongs to
+    # whoever picks it up.
     title = _commit_subject(task)
-    body = (
-        "## Summary\n\n"
-        "Opened by an unattended Logos agent session running on spare platform "
-        "capacity. **Nothing here has been reviewed by a human yet.**\n\n"
-        "## Task given to the agent\n\n"
-        f"```\n{_asked_for(task)}\n```\n\n"
-        "## Steps for Testing\n\n"
-        "1. Read the diff — this is the first point a person sees this work.\n"
-        "2. Check that the tests the agent ran actually cover the change.\n\n"
-        f"Session: `{os.environ.get('LOGOS_SESSION_ID', '?')}`\n"
-    )
     process = run(
         [
             "gh",
@@ -968,9 +1035,10 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
             branch,
             "--title",
             title,
+            # Empty rather than absent: `gh` prompts for a body it was not
+            # given, and a session has no terminal to prompt at.
             "--body",
-            body,
-            "--draft",
+            "",
         ],
         cwd=CHECKOUT,
         check=False,
