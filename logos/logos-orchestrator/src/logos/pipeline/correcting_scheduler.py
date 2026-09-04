@@ -475,6 +475,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 # constant, which matters for cold-provider selection when a
                 # lane has been removed but history is still persisted.
                 cold_s = OVERHEAD_COLD_S
+                _nl_learned_ttft: Optional[float] = None
+                _nl_prefill_s: Optional[float] = None
                 if self._latency_store is not None:
                     _no_lane_model_name = self._logosnode.get_model_name(model_id, provider_id)
                     if _no_lane_model_name:
@@ -503,11 +505,25 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                             model_vram_mb=_nl_vram_mb,
                             tp_size=_nl_tp_size,
                         )
+                        _nl_learned_ttft = self._latency_store.get_ttft_s(
+                            _no_lane_model_name, provider_id
+                        )
+                        if input_tokens > 0:
+                            _nl_prefill_s = self._latency_store.get_prefill_s(
+                                _no_lane_model_name, provider_id, input_tokens
+                            )
+                _nl_added = (_nl_learned_ttft or 0.0) + (_nl_prefill_s or 0.0)
+                _nl_parts: list[str] = [f"cold {cold_s:.2f}s"]
+                if _nl_learned_ttft is not None:
+                    _nl_parts.append(f"TTFT {_nl_learned_ttft:.2f}s")
+                if _nl_prefill_s is not None:
+                    _nl_parts.append(f"prefill {_nl_prefill_s:.2f}s ({input_tokens} tok)")
                 return EttftEstimate(
-                    expected_wait_s=cold_s,
+                    expected_wait_s=cold_s + _nl_added,
                     tier=ReadinessTier.COLD,
-                    reasoning=f"No lanes for logosnode model {model_id}, cold-load required",
+                    reasoning=f"No lanes for logosnode model {model_id}: {' + '.join(_nl_parts)}",
                     state_overhead_s=cold_s,
+                    prefill_s=_nl_prefill_s or 0.0,
                     warmth_state=-1,
                 )
 
