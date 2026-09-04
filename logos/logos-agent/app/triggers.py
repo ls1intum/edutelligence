@@ -503,28 +503,29 @@ class TriggerPoller:
         file one, and a session handed the title alone can only say that it
         was handed the title alone.
 
-        Kept: the people who may write to the repository, and the person who
-        opened the issue — who is usually the one with the details, and
-        whose report is why anybody assigned this. Everybody else is a
-        stranger commenting on a public issue, and this session will push a
-        branch.
+        Kept: what people the runner trusts have said. Not the reporter by
+        virtue of having reported — anybody can open an issue on a public
+        repository, and the session that reads this will push a branch. If
+        the description only exists in an outsider's comment, the agent is
+        told that comments were withheld and a maintainer can repeat what
+        matters in their own words, which is a small cost against letting a
+        stranger write the task.
         """
         try:
             entries, missing = await github.issue_conversation(number)
         except Exception as exc:
             logger.info("could not read the conversation of issue #%s: %s", number, exc)
             return [], ["the issue's comments"]
-        reporter = str((issue.get("user") or {}).get("login") or "").lower()
         allowed: list[dict[str, Any]] = []
         outsiders = 0
         for entry in entries:
             author = str(entry.get("author") or "")
-            if author and (author.lower() == reporter or await self._writer(author)):
+            if author and await self._writer(author):
                 allowed.append(entry)
             else:
                 outsiders += 1
         if outsiders:
-            missing = [*missing, f"{outsiders} comment(s) from accounts without write access"]
+            missing = [*missing, f"{outsiders} comment(s) from accounts the runner does not take direction from"]
         return allowed, missing
 
     async def _conversation(self, number: int) -> tuple[list[dict[str, Any]], list[str]]:
@@ -558,7 +559,7 @@ class TriggerPoller:
                 outsiders,
                 number,
             )
-            missing = [*missing, f"{outsiders} comment(s) from accounts without write access"]
+            missing = [*missing, f"{outsiders} comment(s) from accounts the runner does not take direction from"]
         return allowed, missing
 
     async def _acknowledge(self, candidate: dict[str, Any]) -> None:
@@ -700,21 +701,40 @@ class TriggerPoller:
                 "branch": await self._writable_head(number),
             }
 
-        for entry in await github.assigned_pull_requests(login):
-            await remember(entry, assigned=True)
+        # Its own first, and deliberately so: `remember` keeps the first
+        # answer for a number, and this repository assigns every pull
+        # request to its author. Without this order the agent opens a pull
+        # request, is assigned it seconds later, and takes over its own
+        # work — a session to "carry it the rest of the way" when it has
+        # just carried it. Reviews and questions on those pull requests
+        # still reach it; a handover of its own work does not.
         for entry in await github.authored_pull_requests(login):
             await remember(entry, assigned=False)
+        for entry in await github.assigned_pull_requests(login):
+            await remember(entry, assigned=True)
         return pulls
 
     async def _writer(self, login: str) -> bool:
-        """Whether an account may write to this repository.
+        """Whether this account's word may direct the agent.
+
+        Team membership decides where it can be established: a session
+        pushes branches and answers in the repository's name, and who may
+        ask it to is a question about people, not about a permission that
+        happens to come with a fork or a triage role.
+
+        Where it cannot be established — no teams configured, or a token
+        without `read:org` — the older rule applies: whoever may write to
+        this repository. An unanswerable question is not a refusal; treating
+        it as one would silence the whole repository the first time somebody
+        reissued the token without the scope.
 
         Cached for the pass: one conversation is usually one person, and a
         lookup per comment would spend requests on the same answer.
         """
         key = login.lower()
         if key not in self._writers:
-            self._writers[key] = await github.may_push(login)
+            member = await github.in_a_trusted_team(login)
+            self._writers[key] = await github.may_push(login) if member is None else member
         return self._writers[key]
 
     async def _may_direct_changes(self, comments: list[dict[str, Any]]) -> bool:

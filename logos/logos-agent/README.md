@@ -330,6 +330,21 @@ use it the way you use a person's:
 | comment on a pull request it is responsible for | reads the thread and answers (within a day of writing) |
 | mention it anywhere by name | answers there (within a day); changes code only if that is what was asked |
 
+**Whose word counts.** A session pushes branches and answers in this
+repository's name, so what may direct it is a question about people:
+membership of the `logos-developers` or `logos-maintainers` team
+(`LOGOS_AGENT_TRUSTED_TEAMS`). Where the runner cannot ask — a token without
+`read:org` — it falls back to the coarser rule of write permission on the
+repository. Comments from anybody else are left out of the task and the
+omission is disclosed, the reporter's own included: anybody can open an
+issue on a public repository, and a maintainer can repeat what matters in
+their own words.
+
+**It does not take over its own work.** This repository assigns every pull
+request to its author, so one the agent opens comes back a moment later as
+one assigned to it. Reviews and questions on it still reach the agent; a
+handover of what it has just written does not.
+
 No labels and no separate vocabulary — the ordinary gestures. **Consent is
 per item:** nothing is picked up because it exists, only because somebody
 assigned it, reviewed its work, or asked it something by name. That is why

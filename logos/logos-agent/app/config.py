@@ -136,6 +136,17 @@ class Settings:
     # per-session artefact directory on the host as root, so it must hand it
     # over to this UID or the session cannot write its own output.
     session_uid: int = _int("LOGOS_AGENT_SESSION_UID", 10001)
+    # Whose word the agent acts on. A session pushes branches and answers on
+    # behalf of this repository, so what may direct it is a decision about
+    # people, not about permissions that happen to be attached to a fork or
+    # a triage role. Named teams in the repository's own organisation; the
+    # runner falls back to "may write to this repository" when it cannot ask
+    # (a token without `read:org`), which is the older, coarser rule.
+    trusted_teams: tuple[str, ...] = tuple(
+        team.strip()
+        for team in os.getenv("LOGOS_AGENT_TRUSTED_TEAMS", "logos-developers,logos-maintainers").split(",")
+        if team.strip()
+    )
     # Wall-clock ceiling for one session, or 0 for none — which is the
     # default. A clock is the wrong thing to stop an agent with: a session
     # that has read the repository for two hours and is halfway through a

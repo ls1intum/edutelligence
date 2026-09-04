@@ -756,6 +756,37 @@ REACTION_RUNNING = "rocket"
 REACTION_FAILED = "confused"
 
 
+async def in_a_trusted_team(login: str) -> bool | None:
+    """Whether this account belongs to one of the trusted teams.
+
+    ``None`` means the question could not be answered — no teams
+    configured, or a token without `read:org`, which is not the same as
+    "no". The caller falls back to the coarser rule rather than treating an
+    unanswerable question as a refusal, because that would silence the
+    whole repository the first time a token was reissued without the scope.
+    """
+    if not login or not settings.trusted_teams:
+        return None
+    org = settings.repo_slug.split("/", 1)[0]
+    answered = False
+    for team in settings.trusted_teams:
+        try:
+            membership = await _get(f"/orgs/{org}/teams/{team}/memberships/{login}")
+        except Exception as exc:
+            if getattr(exc, "status", None) == 404:
+                # The team exists and this person is not in it — or the team
+                # does not exist, which the log will show as everybody being
+                # refused.
+                answered = True
+                continue
+            logger.info("could not ask whether %s is in %s/%s: %s", login, org, team, exc)
+            continue
+        answered = True
+        if str((membership or {}).get("state") or "").lower() == "active":
+            return True
+    return False if answered else None
+
+
 async def react(path: str, content: str = REACTION_QUEUED) -> bool:
     """Leave a reaction, so a person can see their request was picked up.
 
