@@ -37,6 +37,12 @@ services:
       # not exist" for the orchestrator routes until the webservice came up.
       - "traefik.enable=true"
       - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
+      # The agent service is mounted at /api/agent, not /api: its routes are
+      # defined without any prefix, so the whole mounted prefix has to come
+      # off. stripprefix.prefixes is a list of alternatives, not a sequence
+      # of strips — a "/api,/agent" list strips only the first match (/api)
+      # and hands FastAPI /agent/... paths, which 404.
+      - "traefik.http.middlewares.strip-api-agent.stripprefix.prefixes=/api/agent"
     networks:
       - internal
 
@@ -333,6 +339,163 @@ services:
     networks:
       - internal
 
+  logos-agent:
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent:${IMAGE_TAG:-latest}
+    container_name: logos-agent
+    # Long enough to freeze every running session before the process is
+    # killed. A deploy restarts this service and the model gateway together;
+    # a session frozen first survives that, one left talking to a gateway
+    # being replaced loses the turn it was in the middle of.
+    stop_grace_period: 30s
+    restart: unless-stopped
+    # Opt-in: the service does nothing until a profile enables it, so an
+    # existing deployment that does not want agent sessions is unchanged by
+    # this file. Enable with COMPOSE_PROFILES=agent.
+    profiles: ["agent"]
+    depends_on:
+      logos-db:
+        condition: service_healthy
+      # The sessions' model endpoint is this gateway. A targeted
+      # `docker compose up -d logos-agent` must bring it up with the runner,
+      # or every session's model call fails DNS resolution.
+      logos-agent-gateway:
+        condition: service_healthy
+    environment:
+      DB_HOST: logos-db
+      DB_PORT: 5432
+      DB_NAME: logosdb
+      DB_USER: postgres
+      DB_PASSWORD: root
+      LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
+      LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+
+      # Identity: this service is reached from the browser, so it verifies
+      # Keycloak tokens itself rather than behind the Spring webservice.
+      KEYCLOAK_ISSUER_URI: "${KEYCLOAK_ISSUER_URI:?KEYCLOAK_ISSUER_URI must be set}"
+      KEYCLOAK_JWKS_URI: "${KEYCLOAK_JWKS_URI:-${KEYCLOAK_ISSUER_URI}/protocol/openid-connect/certs}"
+      KEYCLOAK_AUDIENCE: "${KEYCLOAK_AUDIENCE:-}"
+      KEYCLOAK_CLIENT_ID: "${KEYCLOAK_CLIENT_ID:-logos}"
+      # External Keycloak role(s) that grant the required internal role — the
+      # same variable (and default) the webservice reads, so one .env names
+      # the deployment's admin role for both services.
+      KEYCLOAK_ROLES_LOGOS_ADMIN: "${KEYCLOAK_ROLES_LOGOS_ADMIN:-itg-admin}"
+      LOGOS_AGENT_REQUIRED_ROLE: "${LOGOS_AGENT_REQUIRED_ROLE:-logos_admin}"
+
+      # The Logos key sessions call models with. Give it LOW priority so agent
+      # traffic never outranks a user at the scheduler.
+      LOGOS_AGENT_API_KEY: "${LOGOS_AGENT_API_KEY:-}"
+      LOGOS_AGENT_DEFAULT_MODEL: "${LOGOS_AGENT_DEFAULT_MODEL:-}"
+
+      # Sessions run in this image, on this network, under these ceilings.
+      LOGOS_AGENT_WORKSPACE_IMAGE: "${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent-workspace:${IMAGE_TAG:-latest}"
+      # The internal session network: no external egress, the model gateway
+      # is the only reachable peer. The egress network is for the runner's
+      # trusted helper containers (checkout preparation, post-agent
+      # commit/push, screenshots) — never for the agent itself.
+      LOGOS_AGENT_SESSION_NETWORK: "${LOGOS_AGENT_SESSION_NETWORK:-logos-agent-net}"
+      LOGOS_AGENT_SESSION_EGRESS_NETWORK: "${LOGOS_AGENT_SESSION_EGRESS_NETWORK:-logos-agent-egress-net}"
+      # Where sessions send model traffic: the gateway that exposes only the
+      # orchestrator's /v1 model surface on the session network.
+      LOGOS_AGENT_SESSION_MODEL_URL: "${LOGOS_AGENT_SESSION_MODEL_URL:-http://logos-agent-gateway}"
+      LOGOS_AGENT_MAX_PARALLEL_SESSIONS: "${LOGOS_AGENT_MAX_PARALLEL_SESSIONS:-10}"
+      LOGOS_AGENT_SESSION_MEMORY_MB: "${LOGOS_AGENT_SESSION_MEMORY_MB:-4096}"
+      LOGOS_AGENT_SESSION_CPUS: "${LOGOS_AGENT_SESSION_CPUS:-2}"
+      # The uid the session image runs as; the runner chowns the per-session
+      # artefact directories it creates to this user.
+      LOGOS_AGENT_SESSION_UID: "${LOGOS_AGENT_SESSION_UID:-10001}"
+      LOGOS_AGENT_SESSION_TIMEOUT_S: "${LOGOS_AGENT_SESSION_TIMEOUT_S:-10800}"
+
+      # Capacity gates: start only below the first threshold, hand capacity
+      # back above the second. Pause must exceed start or sessions flap.
+      LOGOS_AGENT_START_BELOW_LOAD: "${LOGOS_AGENT_START_BELOW_LOAD:-0.60}"
+      LOGOS_AGENT_PAUSE_ABOVE_LOAD: "${LOGOS_AGENT_PAUSE_ABOVE_LOAD:-0.85}"
+
+      # What a session may reach. The workflow-scoped token stays here; the
+      # session token below should carry contents + pull-request write only.
+      LOGOS_AGENT_REPO_URL: "${LOGOS_AGENT_REPO_URL:-https://github.com/ls1intum/edutelligence.git}"
+      LOGOS_AGENT_REPO_SLUG: "${LOGOS_AGENT_REPO_SLUG:-ls1intum/edutelligence}"
+      # The account every agent token must belong to. Both tokens are checked
+      # against it at startup, and the finalizer checks again before it pushes.
+      LOGOS_AGENT_GITHUB_LOGIN: "${LOGOS_AGENT_GITHUB_LOGIN:-LogosOSSAgent}"
+      LOGOS_AGENT_GITHUB_TOKEN: "${LOGOS_AGENT_GITHUB_TOKEN:-}"
+      # Optional: a second token of the same account without 'workflow' scope,
+      # handed to session containers. Falls back to the token above.
+      LOGOS_AGENT_SESSION_GITHUB_TOKEN: "${LOGOS_AGENT_SESSION_GITHUB_TOKEN:-}"
+      # Whether the agent's GitHub account may be used like a colleague's:
+      # assignments, reviews on its pull requests, and comments addressed to
+      # it queue sessions. On unless explicitly switched off — running this
+      # service is already the deliberate step, and the assignment or the
+      # mention is the per-item consent.
+      LOGOS_AGENT_TRIGGERS_ENABLED: "${LOGOS_AGENT_TRIGGERS_ENABLED:-true}"
+      LOGOS_AGENT_DEPLOY_ENABLED: "${LOGOS_AGENT_DEPLOY_ENABLED:-false}"
+      LOGOS_AGENT_DEV_BASE_URL: "${LOGOS_AGENT_DEV_BASE_URL:-https://logos-dev.aet.cit.tum.de}"
+    volumes:
+      # Needed to create session containers. This is the one privileged thing
+      # the runner holds — and precisely what it never passes on: session
+      # containers get no socket, no root, and no capabilities.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent_artifacts:/var/lib/logos-agent/artifacts
+    expose:
+      - "8082"
+    # On purpose *not* attached to the agent network: the runner controls
+    # everything through the Docker socket, and attaching it there would let
+    # an agent container reach the runner's own API. The only peer on that
+    # network is the gateway, and that is the whole design.
+    labels:
+      - "traefik.enable=true"
+
+      # === Routing: /api/agent ===
+      - "traefik.http.routers.agent-api.rule=PathPrefix(`/api/agent`)"
+      - "traefik.http.routers.agent-api.entrypoints=websecure"
+      - "traefik.http.routers.agent-api.tls=true"
+      - "traefik.http.routers.agent-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.agent-api.service=logos-agent-svc"
+      - "traefik.http.routers.agent-api.middlewares=strip-api-agent"
+      - "traefik.http.routers.agent-api.priority=200"
+
+      - "traefik.http.services.logos-agent-svc.loadbalancer.server.port=8082"
+    networks:
+      - internal
+
+  # The only bridge between the session network and the internal network.
+  # Sessions run with permission prompts disabled and hold no credentials,
+  # so they must not be able to reach the orchestrator's other endpoints
+  # (or, via `internal`, the database, Keycloak, and worker APIs): this
+  # gateway forwards exactly the /v1 model surface, and nothing else — and
+  # it is also where the model credential lives, injected into the traffic
+  # so the session containers never carry it. See agent-gateway/nginx.conf.
+  logos-agent-gateway:
+    # The nginx configuration is baked into this image, not mounted from the
+    # host: a deployment copies only the compose file to its VM, so a bind
+    # mount of ./agent-gateway/nginx.conf resolved to a missing path there,
+    # Docker created an empty directory in its place, and the gateway served
+    # its stock configuration and failed its health check forever.
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent-gateway:${IMAGE_TAG:-latest}
+    container_name: logos-agent-gateway
+    restart: unless-stopped
+    profiles: ["agent"]
+    # Validate the configuration and probe the local listener. `service
+    # nginx status` cannot work here: nginx:alpine runs without an init
+    # system, the check failed forever, the gateway stayed unhealthy, and
+    # logos-agent's service_healthy dependency never released.
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t && wget -q --spider http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - logos-orchestrator
+    environment:
+      # The Logos key the gateway injects into the agent's model calls. The
+      # image ships the configuration as a template, and its entrypoint runs
+      # envsubst at container start, so the key enters the running
+      # configuration here and never has to be passed to a session
+      # container — nor does it sit in an image layer.
+      LOGOS_AGENT_API_KEY: "${LOGOS_AGENT_API_KEY:-}"
+    networks:
+      - internal
+      - agent
+
   logos-ui:
     image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-ui:${IMAGE_TAG:-latest}
     container_name: logos-ui
@@ -362,7 +525,23 @@ services:
 volumes:
   data_volume:
   postgres_data:
+  agent_artifacts:
 
 networks:
   internal:
+    driver: bridge
+  # The untrusted agent phase lives here. It is *internal*: Docker gives
+  # containers on it no external egress at all, so the only reachable peer
+  # is the gateway on the same network, which is precisely where model
+  # traffic must go. The runner creates it if it does not exist.
+  agent:
+    name: ${LOGOS_AGENT_SESSION_NETWORK:-logos-agent-net}
+    driver: bridge
+    internal: true
+  # The runner's trusted helper containers (checkout preparation, post-agent
+  # commit/push, screenshots) run here: a plain bridge with egress, because
+  # they legitimately talk to GitHub and the dev environment — and because
+  # the agent itself never runs on it.
+  agent-egress:
+    name: ${LOGOS_AGENT_SESSION_EGRESS_NETWORK:-logos-agent-egress-net}
     driver: bridge

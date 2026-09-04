@@ -2,12 +2,13 @@
 Priority Queue Manager for multi-level request queuing.
 
 Phase 2: model-only queue. Queues are keyed solely by ``model_id`` so a
-queued request can be served by any provider with capability for that model
-— there is no longer a per-(model, provider) partition to migrate across.
+normal queued request can be served by any provider with capability for that
+model. Individual internal requests may carry a provider affinity when their
+result must be attributable to one exact worker.
 
 For backward compatibility every public method that previously took a
-``provider_id`` still accepts it (positional or kwarg) and silently ignores
-it. The kwarg pattern lets callers be migrated gradually.
+``provider_id`` still accepts it. Enqueue and aggregate metrics ignore it;
+dequeue uses it only to keep provider-affine entries on their required worker.
 """
 
 import heapq
@@ -33,9 +34,12 @@ class PriorityQueueManager:
     - Pure queue operations — no scheduling policy.
     - Thread-safe via ``RLock``.
     - No provider partition: any provider that serves the model can dispatch
-      from the same queue (release path picks via lane_comparator).
+      normal requests from the same queue (release path picks via
+      lane_comparator).
+    - Optional per-entry affinity: benchmark requests can be restricted to one
+      provider without splitting the model-wide queue.
     - Backward-compatible: every method that previously accepted
-      ``provider_id`` still accepts it and ignores it.
+      ``provider_id`` still accepts it; unpinned behavior stays model-wide.
     """
 
     def __init__(self):
@@ -63,11 +67,13 @@ class PriorityQueueManager:
         provider_id: int = None,  # Ignored — kept for back-compat.
         priority: Priority = Priority.NORMAL,
         is_cold_at_queue: bool = False,
+        provider_affinity: int | None = None,
     ) -> str:
         """Add a task to the priority queue for ``model_id``.
 
-        ``provider_id`` is accepted but ignored (back-compat). Any provider
-        with capability for ``model_id`` can later dispatch this task.
+        ``provider_id`` is accepted but ignored (back-compat). Unless
+        ``provider_affinity`` is set, any provider with capability for
+        ``model_id`` can later dispatch this task.
         """
         with self._lock:
             self._entry_counter += 1
@@ -81,6 +87,7 @@ class PriorityQueueManager:
                 current_priority=priority,
                 enqueue_time=datetime.now(),
                 is_cold_at_queue=is_cold_at_queue,
+                provider_affinity=provider_affinity,
             )
 
             heap_entry = (
@@ -106,14 +113,15 @@ class PriorityQueueManager:
     ) -> Optional[any]:
         """Remove and return the highest-priority task for ``model_id``.
 
-        ``provider_id`` is accepted but ignored.
+        ``provider_id`` selects entries eligible for that provider. Unpinned
+        entries remain eligible for every provider.
         """
         with self._lock:
             if priority is not None:
-                task, _ = self._dequeue_from_priority(model_id, priority)
+                task, _ = self._dequeue_from_priority(model_id, priority, provider_id)
                 return task
             for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
-                task, _ = self._dequeue_from_priority(model_id, p)
+                task, _ = self._dequeue_from_priority(model_id, p, provider_id)
                 if task is not None:
                     return task
             return None
@@ -127,9 +135,9 @@ class PriorityQueueManager:
         """Dequeue and return both the task and its QueueEntry metadata."""
         with self._lock:
             if priority is not None:
-                return self._dequeue_from_priority(model_id, priority)
+                return self._dequeue_from_priority(model_id, priority, provider_id)
             for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
-                task, entry = self._dequeue_from_priority(model_id, p)
+                task, entry = self._dequeue_from_priority(model_id, p, provider_id)
                 if task is not None:
                     return task, entry
             return None, None
@@ -138,13 +146,30 @@ class PriorityQueueManager:
         self,
         model_id: int,
         priority: Priority,
+        provider_id: int | None = None,
     ) -> Tuple[Optional[any], Optional[QueueEntry]]:
         """Dequeue from a specific priority heap. Caller must hold ``_lock``."""
         queue = self._queues[model_id][priority]
         if not queue:
             return None, None
 
-        _, _, entry_id, entry = heapq.heappop(queue)
+        eligible_index = next(
+            (
+                index
+                for index, (_, _, _, candidate) in sorted(enumerate(queue), key=lambda item: item[1][:3])
+                if provider_id is None or candidate.provider_affinity in (None, provider_id)
+            ),
+            None,
+        )
+        if eligible_index is None:
+            return None, None
+
+        _, _, entry_id, entry = queue[eligible_index]
+        if eligible_index == 0:
+            heapq.heappop(queue)
+        else:
+            del queue[eligible_index]
+            heapq.heapify(queue)
         del self._entry_lookup[entry_id]
 
         logging.debug(
@@ -307,7 +332,8 @@ class PriorityQueueManager:
         """Return True if any queued entry for ``model_id`` was flagged
         ``is_cold_at_queue`` at enqueue.
 
-        ``provider_id`` is accepted but ignored.
+        Unpinned entries count for every provider; pinned entries count only
+        for their required provider.
         """
         with self._lock:
             model_queues = self._queues.get(model_id)
@@ -315,7 +341,8 @@ class PriorityQueueManager:
                 return False
             for queue in model_queues.values():
                 for _neg_pri, _ts, _eid, entry in queue:
-                    if entry.is_cold_at_queue:
+                    eligible = provider_id is None or entry.provider_affinity in (None, provider_id)
+                    if eligible and entry.is_cold_at_queue:
                         return True
             return False
 

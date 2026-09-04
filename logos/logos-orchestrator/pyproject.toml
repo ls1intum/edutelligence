@@ -32,6 +32,7 @@ matplotlib = "^3.9.2"
 aiohttp = "^3.9.0"
 prometheus-client = "^0.21.0"
 python-multipart = ">=0.0.20"
+guidellm = {version = "0.7.2", extras = ["recommended"]}
 
 [tool.poetry]
 packages = [{ include = "logos", from = "src" }]
