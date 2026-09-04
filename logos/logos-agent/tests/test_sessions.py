@@ -4749,3 +4749,116 @@ class TestTakingUpAWatchAgain:
         await asyncio.sleep(0.1)
 
         assert len(polls) == 1
+
+
+class TestARequestThatLostItsReplacement:
+    """A failed session queues the next attempt itself — until it cannot.
+
+    When that one call fails, the request is gone for good: its reference
+    counts as handled forever, so no poll finds it again, and its reply has
+    been abandoned. Nobody is coming back to it. So the rows are asked
+    instead of a flag: a failure that is the newest attempt at a request
+    with attempts left is a request owing a replacement, whether the
+    settlement wrote anything down or not.
+    """
+
+    ROW = {
+        "id": 31,
+        "workspace_id": 3,
+        "task": "Fix the alignment.",
+        "model": None,
+        "branch_name": "logos/agent/issue-800",
+        "trigger_kind": "issue",
+        "trigger_ref": "issue-800",
+        "reply_target": "issue:800",
+        "reaction_target": "/repos/x/y/issues/800",
+        "priority": 50,
+        "priority_reason": None,
+        "open_pull_request": True,
+        "error": "the container disappeared",
+        "finished_at": None,
+    }
+
+    @staticmethod
+    def install(monkeypatch, rows):
+        from app import sessions
+
+        asked: list = []
+        taken: list = []
+
+        async def sessions_owing_a_replacement(*, max_attempts, since):
+            asked.append((max_attempts, since))
+            return [dict(row) for row in rows]
+
+        async def take_up_again(_self, session, *, by="the runner", note=""):
+            taken.append((session["id"], note))
+            return 99
+
+        monkeypatch.setattr(sessions.db, "sessions_owing_a_replacement", sessions_owing_a_replacement)
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+        return asked, taken
+
+    async def test_a_failure_nobody_replaced_is_taken_up(self, monkeypatch):
+        from app import sessions
+
+        _, taken = self.install(monkeypatch, [self.ROW])
+
+        await sessions.manager.resume_retries()
+
+        assert taken and taken[0][0] == 31
+        # The replacement is told what happened to the attempt before it,
+        # in the same words the settlement would have used.
+        assert "the container disappeared" in taken[0][1]
+
+    async def test_the_attempt_limit_is_carried_into_the_question(self, monkeypatch):
+        from app import sessions
+
+        asked, _ = self.install(monkeypatch, [])
+
+        await sessions.manager.resume_retries()
+
+        # Asked of the database rather than filtered afterwards: a request
+        # at its limit must not come back every fifteen seconds to be
+        # refused again.
+        assert asked[0][0] == sessions._MAX_ATTEMPTS_PER_REQUEST
+
+    async def test_nothing_owed_is_the_ordinary_case(self, monkeypatch):
+        from app import sessions
+
+        _, taken = self.install(monkeypatch, [])
+
+        await sessions.manager.resume_retries()
+
+        assert taken == []
+
+    async def test_a_database_that_will_not_answer_costs_nothing(self, monkeypatch):
+        from app import sessions
+
+        async def broken(*, max_attempts, since):
+            raise RuntimeError("no database")
+
+        monkeypatch.setattr(sessions.db, "sessions_owing_a_replacement", broken)
+
+        await sessions.manager.resume_retries()  # the pass goes on
+
+    async def test_a_settlement_whose_retry_failed_is_picked_up_next_pass(self, monkeypatch):
+        from app import sessions
+
+        # The case the whole thing exists for: the settlement asked, the
+        # database blinked, and the row is all that is left of the request.
+        attempts: list = []
+
+        async def take_up_again(_self, session, *, by="the runner", note=""):
+            attempts.append(session["id"])
+            return None if len(attempts) == 1 else 99
+
+        async def sessions_owing_a_replacement(*, max_attempts, since):
+            return [dict(self.ROW)] if len(attempts) < 2 else []
+
+        monkeypatch.setattr(sessions.db, "sessions_owing_a_replacement", sessions_owing_a_replacement)
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+
+        await sessions.manager.resume_retries()
+        await sessions.manager.resume_retries()
+
+        assert attempts == [31, 31]

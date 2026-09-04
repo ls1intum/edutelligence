@@ -1263,6 +1263,55 @@ async def sessions_awaiting_checks() -> list[dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
+async def sessions_owing_a_replacement(*, max_attempts: int, since: datetime) -> list[dict[str, Any]]:
+    """Failed requests that were never taken up again, and still could be.
+
+    Derived rather than flagged, and deliberately so. A row already says
+    everything needed to know whether a replacement is owed — it failed, it
+    came from a request, nothing newer has been tried for that request, and
+    the request has attempts left — so there is no intent to write, nothing
+    to keep in step with the rows it describes, and no way for the intent
+    and the fact to disagree. It also covers the sessions that failed
+    before any of this existed, which a flag written at settlement never
+    could.
+
+    ``id > s.id`` is what makes "nothing newer" cheap and exact: a
+    replacement that is queued, running or itself failed is a later row
+    with the same reference, and any of the three means this row is no
+    longer the one that owes anything.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT s.id, s.workspace_id, s.task, s.model, s.branch_name,
+                           s.trigger_kind, s.trigger_ref, s.reply_target, s.reaction_target,
+                           s.priority, s.priority_reason, s.open_pull_request, s.error,
+                           s.finished_at
+                      FROM agent_sessions s
+                     WHERE s.status = 'failed'
+                       AND COALESCE(s.trigger_ref, '') <> ''
+                       AND s.finished_at IS NOT NULL
+                       AND s.finished_at > :since
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions newer
+                              WHERE newer.trigger_ref = s.trigger_ref
+                                AND newer.id > s.id
+                           )
+                       AND (
+                             SELECT COUNT(*) FROM agent_sessions tried
+                              WHERE tried.trigger_ref = s.trigger_ref
+                           ) < :max_attempts
+                     ORDER BY s.id
+                    """
+                ),
+                {"since": since, "max_attempts": max_attempts},
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
 async def update_session(session_id: int, **fields: Any) -> None:
     """Patch a session row. Callers pass only the columns they mean to change."""
     if not fields:

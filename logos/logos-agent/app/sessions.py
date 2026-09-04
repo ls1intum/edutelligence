@@ -216,6 +216,11 @@ class _Launch:
 # never ran stops being asked about.
 CHECK_WATCH_HORIZON_S = 6 * 60 * 60
 
+# How far back a failure is still worth another attempt. A request that
+# failed yesterday and was never taken up again has been overtaken by the
+# repository; picking it up now would answer a thread nobody is reading.
+RETRY_HORIZON_S = 6 * 60 * 60
+
 
 def _older_than(moment: Any, seconds: float) -> bool:
     """Whether `moment` is further in the past than `seconds`.
@@ -227,6 +232,16 @@ def _older_than(moment: Any, seconds: float) -> bool:
         return False
     when = moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - when).total_seconds() > seconds
+
+
+def _another_attempt_at(session: dict[str, Any]) -> str:
+    """What a replacement session is told about the attempt before it."""
+    reason = str(session.get("error") or "").strip()[:400]
+    return (
+        "Your last attempt at this did not finish"
+        + (f": {reason}" if reason else ".")
+        + " This is the same piece of work, once more."
+    )
 
 
 class SessionManager:
@@ -273,6 +288,7 @@ class SessionManager:
         await docker_engine.ensure_volume(settings.artifact_volume, labels={"logos.agent": "artifacts"})
         await self._reconcile()
         await self.resume_check_watches()
+        await self.resume_retries()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop(), name="agent-scheduler")
 
     async def stop(self) -> None:
@@ -557,6 +573,14 @@ class SessionManager:
                 raise
             except Exception:
                 logger.exception("taking up check follow-ups failed")
+            try:
+                # Requests whose failed session never got a replacement,
+                # because the attempt to create one failed too.
+                await self.resume_retries()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("taking up failed requests again failed")
             try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=settings.scheduler_interval_s)
             except asyncio.TimeoutError:
@@ -1630,6 +1654,35 @@ class SessionManager:
                 logger.info("taking up the check follow-up of session %s again", session.get("id"))
             self._start_watching(session, branch, sha)
 
+    async def resume_retries(self) -> None:
+        """Take up the requests whose replacement was never created.
+
+        A settlement queues the next attempt itself. When that fails — a
+        database that blinked in the one second it was asked — the request
+        is gone for good: its reference counts as handled forever, so no
+        poll finds it again, and its reply has been abandoned. Nobody is
+        coming back to it.
+
+        So the failure is read off the rows on every pass. What this does is
+        the settlement's own retry, one pass later, and the attempt count
+        bounds it exactly as it bounds that one.
+        """
+        try:
+            owed = await db.sessions_owing_a_replacement(
+                max_attempts=_MAX_ATTEMPTS_PER_REQUEST,
+                since=datetime.now(timezone.utc) - timedelta(seconds=RETRY_HORIZON_S),
+            )
+        except Exception as exc:
+            logger.info("could not look for requests owing another attempt: %s", exc)
+            return
+        for session in owed:
+            logger.info(
+                "session %s failed without a replacement; taking %s up again",
+                session.get("id"),
+                session.get("trigger_ref"),
+            )
+            await self.take_up_again(session, note=_another_attempt_at(session))
+
     async def _checks_settled(self, session_id: int) -> None:
         """Say that nobody owes this session's checks anything further."""
         try:
@@ -1857,18 +1910,12 @@ class SessionManager:
                 # only way back was somebody noticing. Taken up again here,
                 # bounded by the same three attempts as everything else, so
                 # a task that cannot be done stops rather than loops.
-                await self.take_up_again(
-                    session_row,
-                    note=(
-                        "Your last attempt at this did not finish"
-                        + (
-                            f": {str(session_row.get('error') or '').strip()[:400]}"
-                            if session_row.get("error")
-                            else "."
-                        )
-                        + " This is the same piece of work, once more."
-                    ),
-                )
+                #
+                # What comes of this is not checked here on purpose. A
+                # database that blinked during the attempt would otherwise
+                # lose the request for good, and the row it left behind is
+                # exactly what `resume_retries` looks for.
+                await self.take_up_again(session_row, note=_another_attempt_at(session_row))
 
         # A session finds out what its own change did to the checks — the one
         # thing it could never learn from inside the sandbox, and the thing

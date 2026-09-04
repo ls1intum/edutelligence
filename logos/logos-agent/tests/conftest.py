@@ -119,6 +119,24 @@ def no_triggered_sessions_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def nothing_owed_by_default(monkeypatch):
+    """Both reconciles run beside every scheduler pass and on startup.
+
+    Unstubbed they ask a database that is not there. Tests about either one
+    answer for themselves.
+    """
+
+    async def no_checks():
+        return []
+
+    async def no_replacements(*, max_attempts, since):
+        return []
+
+    monkeypatch.setattr(db, "sessions_awaiting_checks", no_checks)
+    monkeypatch.setattr(db, "sessions_owing_a_replacement", no_replacements)
+
+
+@pytest.fixture(autouse=True)
 def default_instructions(monkeypatch):
     """The standing instructions as the code ships them.
 
