@@ -113,11 +113,12 @@ def _count_images_in_content(content: Any) -> int:
 
 
 def _image_pixels_in_content(content: Any) -> int:
-    """Sum pixels only where the request explicitly supplies dimensions.
+    """Sum pixels for images whose dimensions are knowable without guessing.
 
-    Remote URLs and opaque base64 blobs cannot be inspected safely here. They
-    remain unbilled by pixel unless their part carries width/height or a size
-    string; guessing would create non-reproducible invoices.
+    A part is counted when it carries an explicit width/height or size string,
+    or when it embeds bounded inline bytes whose header we can read (PNG, GIF,
+    JPEG). Remote URLs are never fetched and undecodable blobs stay unbilled by
+    pixel, so the count is always reproducible from the request alone.
     """
     if not isinstance(content, list):
         return 0

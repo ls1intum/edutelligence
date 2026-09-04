@@ -252,6 +252,20 @@ class PriceUpdaterServiceTest {
     }
 
     @Test
+    void plainTokenPricesWinOverDbuPricesDeterministically() {
+        List<SavedPrice> rows = ingest(Map.of(
+            "input_dbu_cost_per_token", 9.0e-6,
+            "input_cost_per_token", 2.0e-6,
+            "output_dbu_cost_per_token", 8.0e-6,
+            "output_cost_per_token", 3.0e-6
+        ));
+        assertThat(rows).containsExactlyInAnyOrder(
+            new SavedPrice("billed_input_uncached", "token", 0, "default", Math.round(2.0e-6 * 1e11)),
+            new SavedPrice("billed_output_text", "token", 0, "default", Math.round(3.0e-6 * 1e11))
+        );
+    }
+
+    @Test
     void perPromptSearchMetadataChangesThePricedQuantity() {
         List<SavedPrice> rows = ingest(Map.of(
             "web_search_billing_unit", "per_prompt",

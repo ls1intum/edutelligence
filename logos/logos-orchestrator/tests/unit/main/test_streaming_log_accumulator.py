@@ -37,6 +37,28 @@ def test_chat_completions_stream_accumulates_text_and_usage():
     assert payload["usage"]["total_tokens"] == 5
 
 
+def test_mid_stream_error_frame_is_captured():
+    # A content filter / context-length error that fires after generation began
+    # arrives as a data: {"error": {...}} frame with an HTTP 200 stream.
+    acc = _StreamingLogAccumulator()
+    acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":"Partial"}}]}\n\n')
+    acc.feed(b'data: {"error":{"message":"content flagged mid-stream","type":"invalid_request_error"}}\n\n')
+    acc.finish()
+
+    assert acc.full_text == "Partial"
+    assert acc.upstream_error == {"message": "content flagged mid-stream", "type": "invalid_request_error"}
+
+
+def test_clean_chat_stream_has_no_upstream_error():
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"id": "c1", "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]},
+        {"id": "c1", "choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+    )
+    assert acc.upstream_error is None
+
+
 def test_stream_decodes_utf8_code_points_split_across_byte_chunks():
     event = {"id": "c1", "choices": [{"delta": {"content": "Grüße 👋"}}]}
     raw = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
@@ -220,6 +242,36 @@ def test_enricher_skips_output_only_partial_usage_frame(monkeypatch):
     frame = b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}\n\n'
     out = b"".join(enricher.feed(frame))
     assert out == frame  # forwarded verbatim, no usage.cost injected
+
+
+def test_enricher_skips_non_terminal_gemini_usage_metadata(monkeypatch):
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get_usage_cost_micro_cents(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError("non-terminal Gemini usage should not be priced")
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    enricher = main._StreamingCostEnricher(provider_id=12, model_id=27)
+    frame = (
+        b'data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}],'
+        b'"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}}\n\n'
+    )
+
+    assert b"".join(enricher.feed(frame)) == frame
+
+
+def test_enricher_accepts_terminal_gemini_usage_metadata():
+    assert main._StreamingCostEnricher._frame_usage_is_settled(
+        {
+            "candidates": [{"finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 2},
+        }
+    )
 
 
 # ── Anthropic Messages streams ───────────────────────────────────────────────

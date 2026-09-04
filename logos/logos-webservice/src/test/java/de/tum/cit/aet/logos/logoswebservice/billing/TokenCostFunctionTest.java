@@ -339,6 +339,41 @@ class TokenCostFunctionTest {
     }
 
     @Test
+    void priceUsage_imagePricedPerToken_suppressesPixelAndFlatImageForTheSameImage() {
+        int model = seedModel();
+        int provider = seedCloudProvider("gemini");
+        seedPrice(model, provider, "billed_input_image_tokens", "token", 0, "default", 30000, "2020-01-01");
+        seedPrice(model, provider, "billed_input_pixels", "pixel", 0, "default", 100, "2020-01-01");
+        seedPrice(model, provider, "billed_input_images", "image", 0, "default", 40_000_000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"prompt_image_tokens\":200,\"billed_input_pixels\":500000,\"billed_input_images\":2}");
+        assertThat(cost).isEqualTo(200L * 30000 / 1000);
+    }
+
+    @Test
+    void priceUsage_imagePricedPerPixel_suppressesFlatImageForTheSameImage() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_input_pixels", "pixel", 0, "default", 100, "2020-01-01");
+        seedPrice(model, provider, "billed_input_images", "image", 0, "default", 40_000_000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"billed_input_pixels\":500000,\"billed_input_images\":2}");
+        assertThat(cost).isEqualTo(500000L * 100 / 1000);
+    }
+
+    @Test
+    void priceUsage_flatImagePriceStillChargesWhenItIsTheOnlyImagePrice() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_input_images", "image", 0, "default", 40_000_000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null, "{\"billed_input_images\":2}");
+        assertThat(cost).isEqualTo(2L * 40_000_000 / 1000);
+    }
+
+    @Test
     void priceUsage_pricesOutputImagesAsTheirOwnDimension() {
         int model = seedModel();
         int provider = seedCloudProvider("openai");
@@ -509,6 +544,22 @@ class TokenCostFunctionTest {
         seedUsageToken(le, "billed_output_images", 4);
         seedUsageToken(le, "billed_output_pixels", 4 * 1024 * 1024);
         seedUsageToken(le, "billed_output_milliseconds", 8000);
+
+        Long viaLec = jdbc.queryForObject(
+            "SELECT cost_micro_cents FROM log_entry_cost WHERE log_entry_id = ?", Long.class, le);
+        assertThat(viaLec).isNull();
+    }
+
+    @Test
+    void logEntryCost_failedGeneration_doesNotBillTieredInputVideoDuration() {
+        int model = seedModel();
+        int provider = seedCloudProvider("gemini");
+        seedPrice(model, provider, "billed_input_video_milliseconds_above_8s", "millisecond", 0, "default", 200, "2020-01-01");
+        seedPrice(model, provider, "billed_input_video_milliseconds_above_15s", "millisecond", 0, "default", 300, "2020-01-01");
+        int apiKey = seedApiKey(seedTeam());
+        int le = seedLogEntry(apiKey, model, provider, "2026-05-10T12:00:00Z", "error");
+        seedUsageToken(le, "billed_input_video_milliseconds_above_8s", 16_000);
+        seedUsageToken(le, "billed_input_video_milliseconds_above_15s", 16_000);
 
         Long viaLec = jdbc.queryForObject(
             "SELECT cost_micro_cents FROM log_entry_cost WHERE log_entry_id = ?", Long.class, le);

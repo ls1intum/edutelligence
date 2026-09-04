@@ -106,7 +106,9 @@ public class PriceUpdaterService {
         "input_cost_per_query",           1,
         "input_cost_per_second",          1,
         "output_cost_per_second",         1,
-        "ocr_cost_per_credit",            1
+        "ocr_cost_per_credit",            1,
+        "input_dbu_cost_per_token",       1,
+        "output_dbu_cost_per_token",      1
     );
 
     /** The identity of one price dimension; aliased catalog keys resolve to the same one. */

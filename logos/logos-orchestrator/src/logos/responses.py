@@ -454,6 +454,7 @@ def extract_token_usage(usage: dict) -> dict:
     if isinstance(cache_details, list):
         five_min = 0
         one_hour = 0
+        unknown = 0
         found = False
         for detail in cache_details:
             if not isinstance(detail, dict):
@@ -469,8 +470,16 @@ def extract_token_usage(usage: dict) -> dict:
             elif normalized_ttl in {"PT5M", "5M", "300", "300S"}:
                 five_min += count
                 found = True
+            else:
+                unknown += count
         if found:
-            usage_tokens["prompt_cache_write_tokens"] = five_min
+            aggregate = usage.get("cacheWriteInputTokens")
+            if isinstance(aggregate, bool) or not isinstance(aggregate, int) or aggregate < 0:
+                aggregate = five_min + one_hour + unknown
+            # Unknown/new TTLs remain billable at the ordinary cache-write rate.
+            # Prefer the aggregate remainder so cacheDetails cannot double count.
+            unclassified = max(aggregate - five_min - one_hour, 0)
+            usage_tokens["prompt_cache_write_tokens"] = five_min + unclassified
             usage_tokens["prompt_cache_write_1h_tokens"] = one_hour
 
     # Flag the native disjoint shape so logos_price_usage decomposes a

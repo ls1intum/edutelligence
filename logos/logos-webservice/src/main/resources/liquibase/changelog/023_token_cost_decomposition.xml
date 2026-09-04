@@ -2,6 +2,7 @@
 <databaseChangeLog
     xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    logicalFilePath="liquibase/changelog/022_token_cost_decomposition.xml"
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
@@ -248,7 +249,7 @@
         ]]></sql>
     </changeSet>
 
-    <changeSet id="022-3-price-usage" author="logos">
+    <changeSet id="022-3-price-usage" author="logos" runOnChange="true">
         <sql splitStatements="false"><![CDATA[
             CREATE OR REPLACE FUNCTION logos_price_usage(
                 p_model_id     integer,
@@ -277,6 +278,8 @@
                 has_input_token_price boolean;
                 has_output_token_price boolean;
                 has_ocr_page_price boolean;
+                has_input_image_token_price boolean;
+                has_input_pixel_price boolean;
                 has_video_8s_price boolean;
                 has_video_15s_price boolean;
                 total numeric := 0;
@@ -390,6 +393,17 @@
                 has_ocr_page_price :=
                     logos_resolve_unit_price('billed_ocr_pages', p_model_id, p_provider_id,
                                              p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                -- One input image is described by up to three derived quantities:
+                -- a provider image-token count, a measured pixel area, and a flat
+                -- count. They are the same image. Charge only the most specific
+                -- one the catalogue prices: image tokens over pixels over the
+                -- flat per-image price.
+                has_input_image_token_price :=
+                    logos_resolve_unit_price('billed_input_image_tokens', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                has_input_pixel_price :=
+                    logos_resolve_unit_price('billed_input_pixels', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
                 has_video_8s_price := (u ? 'billed_input_video_milliseconds_above_8s') AND
                     logos_resolve_unit_price('billed_input_video_milliseconds_above_8s', p_model_id, p_provider_id,
                                              p_valid_at, ctx, p_service_tier) IS NOT NULL;
@@ -424,11 +438,13 @@
                              CASE WHEN has_output_token_price THEN 0
                                   ELSE COALESCE((u->>'billed_output_characters')::bigint, 0) END),
                         ('billed_input_images',
-                             COALESCE((u->>'billed_input_images')::bigint, 0)),
+                             CASE WHEN has_input_image_token_price OR has_input_pixel_price THEN 0
+                                  ELSE COALESCE((u->>'billed_input_images')::bigint, 0) END),
                         ('billed_output_images',
                              COALESCE((u->>'billed_output_images')::bigint, 0)),
                         ('billed_input_pixels',
-                             COALESCE((u->>'billed_input_pixels')::bigint, 0)),
+                             CASE WHEN has_input_image_token_price THEN 0
+                                  ELSE COALESCE((u->>'billed_input_pixels')::bigint, 0) END),
                         ('billed_output_pixels',
                              COALESCE((u->>'billed_output_pixels')::bigint, 0)),
                         ('audio_milliseconds',
@@ -504,9 +520,9 @@
         ]]></sql>
     </changeSet>
 
-    <changeSet id="022-4-log-entry-cost-view" author="logos">
+    <changeSet id="022-4-log-entry-cost-view" author="logos" runOnChange="true">
         <sql splitStatements="false"><![CDATA[
-            CREATE VIEW log_entry_cost AS
+            CREATE OR REPLACE VIEW log_entry_cost AS
             SELECT le.id            AS log_entry_id,
                    le.api_key_id    AS api_key_id,
                    le.timestamp_request AS timestamp_request,
@@ -541,6 +557,8 @@
                                                  'billed_input_pixels',
                                                  'billed_input_images',
                                                  'billed_input_video_milliseconds',
+                                                 'billed_input_video_milliseconds_above_8s',
+                                                 'billed_input_video_milliseconds_above_15s',
                                                  'billed_output_images',
                                                  'billed_output_pixels',
                                                  'billed_output_milliseconds',

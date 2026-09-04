@@ -158,6 +158,21 @@ def test_extract_token_usage_normalizes_bedrock_cache_write_ttls():
     assert out["usage_shape_disjoint"] == 1
 
 
+def test_extract_token_usage_preserves_unknown_bedrock_cache_write_ttls():
+    out = extract_token_usage(
+        {
+            "cacheWriteInputTokens": 15,
+            "cacheDetails": [
+                {"cacheTtl": "PT5M", "inputTokens": 3},
+                {"cacheTtl": "PT1H", "inputTokens": 10},
+                {"cacheTtl": "PT30M", "inputTokens": 2},
+            ],
+        }
+    )
+    assert out["prompt_cache_write_tokens"] == 5
+    assert out["prompt_cache_write_1h_tokens"] == 10
+
+
 def test_usage_extraction_normalizes_native_gemini_usage_metadata():
     assert main._usage_tokens_from_payload(
         {

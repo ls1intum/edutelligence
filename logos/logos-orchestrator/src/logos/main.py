@@ -1339,6 +1339,11 @@ class _StreamingLogAccumulator:
     # event. Treat that as a completed response, even if the worker transport's
     # following stream_end frame has not been consumed yet.
     terminal_event_received: bool = False
+    # An upstream ``data: {"error": {...}}`` frame delivered mid-stream with an
+    # HTTP 200 (a content filter, context-length, or rate limit that fired after
+    # generation began). The bytes are forwarded to the client, but the request
+    # is not a success.
+    upstream_error: Optional[Dict[str, Any]] = None
     # Text deltas seen so far. The exact completion count only arrives with the
     # terminal usage event, which is no help to anyone watching the request run
     # — so the delta count stands in for it until then. See streamed_tokens.
@@ -1468,6 +1473,12 @@ class _StreamingLogAccumulator:
             return
         if not isinstance(blob, dict):
             return
+
+        blob_error = blob.get("error")
+        if isinstance(blob_error, dict) and blob_error:
+            self.upstream_error = blob_error
+        elif isinstance(blob_error, str) and blob_error:
+            self.upstream_error = {"message": blob_error}
 
         event_type = blob.get("type")
         if isinstance(event_type, str) and event_type.startswith("response."):
@@ -1687,14 +1698,21 @@ class _StreamingCostEnricher:
         alone yields an output-only, undercharged cost. Enrich only frames whose
         usage settles the input side too — the Chat Completions terminal chunk,
         the Responses ``response.completed`` object, or a duration/usageMetadata
-        payload — and leave native Anthropic streams without a live cost rather
-        than a wrong one (the persisted ledger still prices them correctly)."""
+        payload. Native Gemini usage is cumulative, so require a candidate's
+        terminal finishReason as well. Leave native Anthropic streams without a
+        live cost rather than a wrong one (the persisted ledger still prices
+        them correctly)."""
         usage = target.get("usage")
         if isinstance(usage, dict):
             return any(
                 k in usage for k in ("prompt_tokens", "input_tokens", "inputTokens", "promptTokens", "total_tokens")
             )
-        return isinstance(target.get("usageMetadata"), dict) or target.get("duration") is not None
+        if isinstance(target.get("usageMetadata"), dict):
+            candidates = target.get("candidates")
+            return isinstance(candidates, list) and any(
+                isinstance(candidate, dict) and candidate.get("finishReason") is not None for candidate in candidates
+            )
+        return target.get("duration") is not None
 
     def _enrich_frame(self, frame: bytes, payload_end: int, delimiter: bytes) -> bytes:
         event = frame[:payload_end]
@@ -3916,6 +3934,8 @@ async def _streaming_response(
             _live_streams.finish(request_id)
             if error_message is None:
                 error_message = stream_status.error
+            if error_message is None and stream_log.upstream_error:
+                error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
             failed = error_message is not None
             stream_log.finish()
             response_payload = stream_log.response_payload()
@@ -4351,6 +4371,8 @@ def _proxy_streaming_response(
         finally:
             if error_message is None:
                 error_message = stream_status.error
+            if error_message is None and stream_log.upstream_error:
+                error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
             failed = error_message is not None
             # Log completion
             if log_id:
