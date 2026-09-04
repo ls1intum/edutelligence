@@ -1,5 +1,9 @@
 """Tests for ETTFT estimation, range-scaled correction, and weight span."""
 
+import math
+
+import pytest
+
 from logos import (
     CLOUD_LOW_HEADROOM_S,
     CLOUD_OVERHEAD_S,
@@ -15,7 +19,12 @@ from logos import (
     compute_weight_span,
     estimate_ettft_azure,
 )
-from logos.pipeline.ettft_estimator import estimate_ettft_local
+from logos.pipeline.ettft_estimator import (
+    DEFAULT_GENERATION_TIME_S,
+    RECLAIM_IDLE_EVICT_S,
+    _estimate_reclaim_overhead_s,
+    estimate_ettft_local,
+)
 
 
 def _make_view(
@@ -393,3 +402,177 @@ def test_queue_wait_adds_to_cold_overhead():
     assert est.queue_wait_s == 6.0
     assert est.state_overhead_s == 45.0
     assert est.expected_wait_s == 51.0
+
+
+# ---------------------------------------------------------------------------
+# _estimate_reclaim_overhead_s — dynamic drain estimation
+# ---------------------------------------------------------------------------
+
+
+def _make_lane(
+    model_name="other-model",
+    runtime_state="loaded",
+    active_requests=0,
+    queue_waiting=0.0,
+    requests_running=0.0,
+    e2e_latency_p50_seconds=0.0,
+    num_parallel=4,
+) -> LaneSchedulerSignals:
+    return LaneSchedulerSignals(
+        lane_id="lane-x",
+        model_name=model_name,
+        runtime_state=runtime_state,
+        sleep_state="awake",
+        is_vllm=True,
+        active_requests=active_requests,
+        queue_waiting=queue_waiting,
+        requests_running=requests_running,
+        gpu_cache_usage_percent=None,
+        ttft_p95_seconds=0.0,
+        e2e_latency_p50_seconds=e2e_latency_p50_seconds,
+        effective_vram_mb=8000.0,
+        num_parallel=num_parallel,
+    )
+
+
+def test_reclaim_no_siblings_returns_idle_evict():
+    assert _estimate_reclaim_overhead_s([], "target") == RECLAIM_IDLE_EVICT_S
+
+
+def test_reclaim_idle_victim_returns_idle_evict():
+    lane = _make_lane(runtime_state="loaded", active_requests=0)
+    assert _estimate_reclaim_overhead_s([lane], "target") == RECLAIM_IDLE_EVICT_S
+
+
+def test_reclaim_sleeping_victim_returns_idle_evict():
+    lane = _make_lane(runtime_state="sleeping", active_requests=0)
+    assert _estimate_reclaim_overhead_s([lane], "target") == RECLAIM_IDLE_EVICT_S
+
+
+def test_reclaim_busy_victim_uses_queue_drain():
+    """Busy victim with 1 running + 3 queued at 5 s e2e, 1 parallel → 20 s drain + 3 s unload."""
+    lane = _make_lane(
+        runtime_state="running",
+        active_requests=1,
+        queue_waiting=3.0,
+        requests_running=1.0,
+        e2e_latency_p50_seconds=5.0,
+        num_parallel=1,
+    )
+    # total = 1 running + 3 waiting = 4; rounds = 4/1 = 4; drain = 4 * 5 = 20 s
+    cost = _estimate_reclaim_overhead_s([lane], "target")
+    assert cost == pytest.approx(20.0 + RECLAIM_IDLE_EVICT_S)
+
+
+def test_reclaim_one_running_no_queue():
+    """A single in-flight request with no queued work must still drain before eviction."""
+    lane = _make_lane(
+        runtime_state="running",
+        active_requests=1,
+        queue_waiting=0.0,
+        requests_running=1.0,
+        e2e_latency_p50_seconds=5.0,
+        num_parallel=4,
+    )
+    # total = 1 running + 0 waiting = 1; ceil(1/4) = 1 full round; drain = 1 * 5 = 5 s
+    cost = _estimate_reclaim_overhead_s([lane], "target")
+    assert cost == pytest.approx(5.0 + RECLAIM_IDLE_EVICT_S)
+
+
+def test_reclaim_picks_cheapest_victim():
+    """When one victim is idle and another is busy, the idle one wins."""
+    busy = _make_lane(
+        model_name="busy-model",
+        runtime_state="running",
+        active_requests=2,
+        queue_waiting=10.0,
+        requests_running=2.0,
+        e2e_latency_p50_seconds=5.0,
+        num_parallel=2,
+    )
+    idle = _make_lane(model_name="idle-model", runtime_state="loaded", active_requests=0)
+    cost = _estimate_reclaim_overhead_s([busy, idle], "target")
+    assert cost == pytest.approx(RECLAIM_IDLE_EVICT_S)
+
+
+def test_reclaim_skips_target_model_lane():
+    """The target model's own lanes must not be counted as eviction candidates."""
+    lane = _make_lane(model_name="target", runtime_state="loaded", active_requests=0)
+    # Only lane is the target itself — no candidates → fallback
+    assert _estimate_reclaim_overhead_s([lane], "target") == RECLAIM_IDLE_EVICT_S
+
+
+def test_reclaim_cold_lane_skipped_as_candidate():
+    """A cold lane provides no VRAM to reclaim and must be skipped."""
+    cold = _make_lane(runtime_state="cold")
+    # Only cold lane → no usable candidates → fallback
+    assert _estimate_reclaim_overhead_s([cold], "target") == RECLAIM_IDLE_EVICT_S
+
+
+def test_reclaim_busy_no_e2e_falls_back_to_generation_constant():
+    """If the victim lane has no e2e history, DEFAULT_GENERATION_TIME_S is used."""
+    lane = _make_lane(
+        runtime_state="running",
+        active_requests=1,
+        queue_waiting=2.0,
+        requests_running=1.0,
+        e2e_latency_p50_seconds=0.0,  # no history
+        num_parallel=1,
+    )
+    # total = 1 running + 2 waiting = 3; drain = 3/1 * DEFAULT_GENERATION_TIME_S
+    expected_drain = 3.0 * DEFAULT_GENERATION_TIME_S
+    cost = _estimate_reclaim_overhead_s([lane], "target")
+    assert cost == pytest.approx(expected_drain + RECLAIM_IDLE_EVICT_S)
+
+
+def test_reclaim_set_cover_selects_multiple_victims_when_needed():
+    """When one victim's VRAM is insufficient, cheaper additional victims are added.
+
+    _make_lane defaults to effective_vram_mb=8 000 MB per lane.  A deficit of
+    10 000 MB exceeds any single lane, so both idle lanes must be selected.
+    """
+    lane_a = _make_lane(model_name="model-a", runtime_state="loaded", active_requests=0)
+    lane_b = _make_lane(model_name="model-b", runtime_state="loaded", active_requests=0)
+    cost = _estimate_reclaim_overhead_s([lane_a, lane_b], "target", vram_deficit_mb=10_000.0)
+    assert cost == pytest.approx(2 * RECLAIM_IDLE_EVICT_S)
+
+
+def test_reclaim_set_cover_stops_early_when_deficit_covered():
+    """Greedy selection stops as soon as freed VRAM covers the deficit."""
+    idle = _make_lane(model_name="idle-model", runtime_state="loaded", active_requests=0)
+    busy = _make_lane(
+        model_name="busy-model",
+        runtime_state="running",
+        active_requests=2,
+        queue_waiting=10.0,
+        requests_running=2.0,
+        e2e_latency_p50_seconds=5.0,
+        num_parallel=2,
+    )
+    # idle has 8 000 MB which already covers a 5 000 MB deficit → busy lane not needed.
+    cost = _estimate_reclaim_overhead_s([idle, busy], "target", vram_deficit_mb=5_000.0)
+    assert cost == pytest.approx(RECLAIM_IDLE_EVICT_S)
+
+
+def test_reclaim_returns_inf_when_total_vram_insufficient():
+    """When all candidates together cannot free enough VRAM, the result is inf."""
+    # Two idle lanes, each 8 000 MB = 16 000 MB total.  Deficit of 20 000 MB exceeds that.
+    lane_a = _make_lane(model_name="model-a", runtime_state="loaded", active_requests=0)
+    lane_b = _make_lane(model_name="model-b", runtime_state="loaded", active_requests=0)
+    cost = _estimate_reclaim_overhead_s([lane_a, lane_b], "target", vram_deficit_mb=20_000.0)
+    assert math.isinf(cost)
+
+
+def test_estimate_ettft_local_unavailable_when_cold_reclaim_infeasible():
+    """estimate_ettft_local returns UNAVAILABLE when victim VRAM cannot cover the cold deficit."""
+    # Model needs 20 000 MB but only 2 000 MB available; the single sibling lane frees
+    # 8 000 MB — still 10 000 MB short → infeasible, not COLD_RECLAIM with a finite cost.
+    sibling = _make_lane(model_name="other-model", runtime_state="loaded", active_requests=0)
+    est = estimate_ettft_local(
+        _make_view(best_lane_state="cold", is_loaded=False),
+        available_vram_mb=2_000.0,
+        model_vram_mb=20_000.0,
+        all_provider_lanes=[sibling],
+    )
+    assert est.tier == ReadinessTier.UNAVAILABLE
+    assert math.isinf(est.expected_wait_s)

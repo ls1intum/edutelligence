@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     Numeric,
@@ -311,3 +312,29 @@ class Job(Base):
     )
 
     api_key = relationship("ApiKey")
+
+
+class LatencyObservation(Base):
+    """Persistent EWMA state for the dynamic scheduler's LatencyStore.
+
+    Each row stores one EWMA keyed by (model_name, provider_id, tier).
+    ``tier`` is one of the ReadinessTier string values for load/wake overhead,
+    or the literal strings ``"ttft"``, ``"e2e"``, ``"prefill_per_token"``
+    for the per-model latency metrics.  The real provider_id is always stored.
+    """
+
+    __tablename__ = "latency_observations"
+    __table_args__ = (UniqueConstraint("model_name", "provider_id", "tier"),)
+
+    id = Column(Integer, primary_key=True)
+    model_name = Column(String, nullable=False)
+    provider_id = Column(Integer, nullable=False)
+    tier = Column(String, nullable=False)
+    ewma_value = Column(Float, nullable=False)
+    n = Column(Integer, nullable=False, default=1)
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
