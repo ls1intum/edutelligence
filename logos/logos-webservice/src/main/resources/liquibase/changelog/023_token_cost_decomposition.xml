@@ -6,12 +6,10 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!--
-      Token cost formula: decompose usage into non-overlapping billable quantities,
-      price each through a fallback chain, generalise token_prices beyond per-token
-      units, add context / service-mode tiers, and route every cost reader through
-      one function. See docs/superpowers/specs/2026-09-03-token-cost-formula-design.md
-    -->
+    <!-- Token cost formula: split usage into non-overlapping billable quantities,
+         price each via a fallback chain, generalise token_prices beyond per-token
+         units, add context/service-tier rows, route all cost reads through one
+         function. Spec: docs/superpowers/specs/2026-09-03-token-cost-formula-design.md -->
 
     <changeSet id="022-1-schema-and-remap" author="logos">
         <sql><![CDATA[
@@ -23,8 +21,8 @@
             ALTER TABLE log_entry ADD COLUMN service_tier TEXT;
             ALTER TABLE log_entry ADD COLUMN settled_cost_micro_cents BIGINT;
 
-            -- Response finalisation is retryable. Keep the most recently written
-            -- value for legacy duplicates, then make subsequent writes idempotent.
+            -- Response finalisation is retryable: keep the newest value for legacy
+            -- duplicates, then enforce idempotent writes.
             DELETE FROM usage_tokens older
             USING usage_tokens newer
             WHERE older.log_entry_id = newer.log_entry_id
@@ -33,8 +31,8 @@
             ALTER TABLE usage_tokens
                 ADD CONSTRAINT uq_usage_tokens_log_type UNIQUE (log_entry_id, type_id);
 
-            -- Every canonical billable-quantity type must exist so price rows and
-            -- the decomposition function can reference them by name.
+            -- Canonical billable-quantity types, referenced by name from price rows
+            -- and the decomposition function.
             INSERT INTO token_types (name, description)
             SELECT x.n, 'billable quantity'
             FROM (VALUES
@@ -87,10 +85,9 @@
             ) AS x(n)
             WHERE NOT EXISTS (SELECT 1 FROM token_types t WHERE t.name = x.n);
 
-            -- Old extraction stored several provider spellings verbatim. Move
-            -- those historical rows onto the canonical usage vocabulary used by
-            -- logos_price_usage. GREATEST avoids double-charging responses which
-            -- happened to contain both an alias and its canonical equivalent.
+            -- Old extraction stored provider spellings verbatim. Move those rows
+            -- onto the canonical vocabulary used by logos_price_usage; GREATEST
+            -- avoids double-charging rows holding both an alias and its canonical.
             INSERT INTO token_types (name, description)
             SELECT x.n, 'canonical usage quantity'
             FROM (VALUES
@@ -99,11 +96,10 @@
                 ('prompt_cache_write_1h_tokens'),
                 ('completion_video_tokens'),
                 ('citation_tokens'),
-                -- Not a token count: a 1/absent flag the orchestrator sets when
-                -- the response arrived in the native Anthropic/Bedrock shape
-                -- (input_tokens is the uncached remainder, cache reads/writes are
-                -- disjoint siblings). logos_price_usage reads it to pick the
-                -- decomposition; it is priced by nothing.
+                -- Not a token count: a flag the orchestrator sets when the response
+                -- arrived in the native Anthropic/Bedrock shape (input_tokens is the
+                -- uncached remainder, cache reads/writes disjoint). logos_price_usage
+                -- reads it to pick the decomposition; never priced.
                 ('usage_shape_disjoint')
             ) AS x(n)
             WHERE NOT EXISTS (SELECT 1 FROM token_types t WHERE t.name = x.n);
@@ -141,9 +137,8 @@
                   'cacheCreationInputTokens', 'prompt_created_cache_tokens'
               );
 
-            -- Repoint existing price rows from the old usage-type names onto the
-            -- new billable-quantity names. Historical usage rows now use the
-            -- canonical usage vocabulary normalized above.
+            -- Repoint existing price rows from old usage-type names onto the new
+            -- billable-quantity names (usage rows already normalized above).
             WITH remap(old_name, new_name, new_unit) AS (
                 VALUES
                     ('prompt_tokens',               'billed_input_uncached',    'token'),
@@ -196,11 +191,8 @@
                         ('billed_output_audio',         'billed_output_text',       1),
                         ('billed_output_image_tokens',  'billed_output_text',       1)
                         ,('billed_output_video_tokens', 'billed_output_text',       1)
-                        -- Most catalogues carry only the scalar search price
-                        -- (search_context_cost_per_query / input_cost_per_query).
-                        -- A request that asks for a low/high context size derives
-                        -- the size-suffixed quantity, so fall those back to the
-                        -- scalar price when no size-specific row exists.
+                        -- Most catalogues carry only the scalar search price, so
+                        -- fall size-suffixed low/high quantities back to it.
                         ,('billed_search_queries_low',  'billed_search_queries',    1)
                         ,('billed_search_queries_high', 'billed_search_queries',    1)
                         ,('billed_search_prompts_low',  'billed_search_prompts',    1)
@@ -280,6 +272,8 @@
                 has_ocr_page_price boolean;
                 has_input_image_token_price boolean;
                 has_input_pixel_price boolean;
+                has_output_image_token_price boolean;
+                has_output_pixel_price boolean;
                 has_video_8s_price boolean;
                 has_video_15s_price boolean;
                 total numeric := 0;
@@ -316,31 +310,23 @@
                 b_in_audio_write := iaudio_write;
                 b_in_image       := pimage;
 
-                -- Select the decomposition from the payload shape, not the
-                -- provider identity. OpenAI/Azure/Gemini/Groq/DeepSeek report
-                -- prompt_tokens as the whole prompt with cache reads/writes as
-                -- subsets; Anthropic and Bedrock Converse report input_tokens as
-                -- the uncached remainder with cache reads/writes as disjoint
-                -- siblings. An Anthropic/Bedrock model reached through an
-                -- OpenAI-compatible surface reports the *inclusive* shape, so the
+                -- Pick the decomposition from the payload shape, not the provider.
+                -- OpenAI/Azure/Gemini/Groq/DeepSeek report prompt_tokens as the
+                -- whole prompt with cache reads/writes as subsets; Anthropic and
+                -- Bedrock Converse report input_tokens as the uncached remainder
+                -- with cache reads/writes disjoint. A native model behind an
+                -- OpenAI-compatible surface reports the inclusive shape, so the
                 -- payload must prove it is disjoint:
-                --   * usage_shape_disjoint is set: the orchestrator normalized a
-                --     native Anthropic/Bedrock cache spelling
-                --     (cache_read_input_tokens / cache_creation*), a spelling no
-                --     OpenAI-compatible surface emits. This is authoritative on
-                --     its own -- it holds even when the provider row's
-                --     cloud_provider_type is missing or wrong (a custom gateway).
-                --   * otherwise, for an anthropic/bedrock-typed provider: a
-                --     cache-write count is present (only the native family emits
-                --     one), or prompt_cached_tokens exceeds prompt_tokens, which
-                --     is impossible when cached is a subset of the prompt.
-                -- The flag covers native cache-read-only turns, whose cached
-                -- count need not exceed the uncached input and which carry no
-                -- cache-write count -- previously a bounded undercharge (cached
-                -- priced once at the read rate), now decomposed correctly, and
-                -- still never the double-charge of issue #892. Rows persisted
-                -- before the orchestrator emitted the flag fall back to the
-                -- count-based proofs.
+                --   * usage_shape_disjoint set: orchestrator normalized a native
+                --     cache spelling (cache_read_input_tokens / cache_creation*) no
+                --     OpenAI-compatible surface emits. Authoritative even when the
+                --     provider row's cloud_provider_type is missing or wrong.
+                --   * else, for an anthropic/bedrock provider: a cache-write count
+                --     is present, or prompt_cached_tokens exceeds prompt_tokens.
+                -- The flag also covers native cache-read-only turns (no cache-write
+                -- count, cached need not exceed input): previously a bounded
+                -- undercharge, now decomposed correctly, still never the
+                -- double-charge of issue #892. Pre-flag rows use the count proofs.
                 disjoint := (u ? 'usage_shape_disjoint')
                          OR (v_disjoint_cache_provider
                              AND ((u ? 'prompt_cache_write_tokens')
@@ -386,23 +372,35 @@
                     logos_resolve_unit_price('billed_output_text', p_model_id, p_provider_id,
                                              p_valid_at, ctx, p_service_tier) IS NOT NULL;
                 -- OCR is derived as both billed_ocr_pages and billed_ocr_credits
-                -- (one credit per result page) so a catalogue can price it in
-                -- either vocabulary. If it prices pages, the credits count is the
-                -- same quantity again -- suppress it so the page isn't billed
-                -- twice.
+                -- (one credit per page) so either vocabulary can price it. If pages
+                -- are priced, suppress credits so the page isn't billed twice.
                 has_ocr_page_price :=
                     logos_resolve_unit_price('billed_ocr_pages', p_model_id, p_provider_id,
                                              p_valid_at, ctx, p_service_tier) IS NOT NULL;
-                -- One input image is described by up to three derived quantities:
-                -- a provider image-token count, a measured pixel area, and a flat
-                -- count. They are the same image. Charge only the most specific
-                -- one the catalogue prices: image tokens over pixels over the
-                -- flat per-image price.
-                has_input_image_token_price :=
+                -- One input image yields up to three quantities (image tokens,
+                -- pixel area, flat count) for the same image. Charge only the most
+                -- specific one that is BOTH carried by this payload AND priced:
+                -- image tokens > pixels > flat per-image. The presence test
+                -- matters because billed_input_image_tokens falls back to
+                -- billed_input_uncached (022-2): resolving it alone is true for
+                -- almost every model, so a bare price check would zero a pixel or
+                -- flat-image count that has its own rate. Same shape as the video
+                -- surcharge gates below.
+                has_input_image_token_price := b_in_image > 0 AND
                     logos_resolve_unit_price('billed_input_image_tokens', p_model_id, p_provider_id,
                                              p_valid_at, ctx, p_service_tier) IS NOT NULL;
-                has_input_pixel_price :=
+                has_input_pixel_price := COALESCE((u->>'billed_input_pixels')::bigint, 0) > 0 AND
                     logos_resolve_unit_price('billed_input_pixels', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                -- Generated images: same alternatives as input images, same
+                -- present-and-priced gate (billed_output_image_tokens falls back
+                -- to billed_output_text). Prefer image tokens, then pixels, then
+                -- the flat delivered-image count.
+                has_output_image_token_price := b_out_image > 0 AND
+                    logos_resolve_unit_price('billed_output_image_tokens', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                has_output_pixel_price := COALESCE((u->>'billed_output_pixels')::bigint, 0) > 0 AND
+                    logos_resolve_unit_price('billed_output_pixels', p_model_id, p_provider_id,
                                              p_valid_at, ctx, p_service_tier) IS NOT NULL;
                 has_video_8s_price := (u ? 'billed_input_video_milliseconds_above_8s') AND
                     logos_resolve_unit_price('billed_input_video_milliseconds_above_8s', p_model_id, p_provider_id,
@@ -441,12 +439,14 @@
                              CASE WHEN has_input_image_token_price OR has_input_pixel_price THEN 0
                                   ELSE COALESCE((u->>'billed_input_images')::bigint, 0) END),
                         ('billed_output_images',
-                             COALESCE((u->>'billed_output_images')::bigint, 0)),
+                             CASE WHEN has_output_image_token_price OR has_output_pixel_price THEN 0
+                                  ELSE COALESCE((u->>'billed_output_images')::bigint, 0) END),
                         ('billed_input_pixels',
                              CASE WHEN has_input_image_token_price THEN 0
                                   ELSE COALESCE((u->>'billed_input_pixels')::bigint, 0) END),
                         ('billed_output_pixels',
-                             COALESCE((u->>'billed_output_pixels')::bigint, 0)),
+                             CASE WHEN has_output_image_token_price THEN 0
+                                  ELSE COALESCE((u->>'billed_output_pixels')::bigint, 0) END),
                         ('audio_milliseconds',
                              COALESCE((u->>'audio_milliseconds')::bigint, 0)),
                         ('billed_output_milliseconds',
@@ -505,15 +505,15 @@
                     END IF;
                 END LOOP;
 
-                -- No pricing knowledge at all for this response: return NULL so the
-                -- logs UI can omit the cost line instead of asserting a confident
-                -- zero. budget_usage SUM()s over NULLs harmlessly.
+                -- No pricing knowledge for this response: return NULL so the logs
+                -- UI omits the cost line rather than assert a confident zero
+                -- (budget_usage SUM()s over NULLs harmlessly).
                 IF NOT any_priced THEN
                     RETURN NULL;
                 END IF;
 
-                -- Preserve fractional micro-cents between dimensions and round
-                -- once per response instead of undercharging each component.
+                -- Round once per response, not per dimension, to keep fractional
+                -- micro-cents.
                 RETURN ROUND(total)::bigint;
             END;
             $fn$;
@@ -526,20 +526,14 @@
             SELECT le.id            AS log_entry_id,
                    le.api_key_id    AS api_key_id,
                    le.timestamp_request AS timestamp_request,
-                   -- A completed request prices its full usage (from the frozen
-                   -- snapshot when present, else live). A failed or timed-out
-                   -- request still prices what it measurably delivered -- the
-                   -- provider bills Logos for a stream that produced tokens or
-                   -- characters and then dropped -- but never the flat per-request
-                   -- fee, nor any quantity that is only an estimate from the
-                   -- request when the response is absent: the input estimates
-                   -- (characters / pixels / images / video ms) and the output
-                   -- generation quantities that fall back to the requested count
-                   -- or duration (images, pixels, milliseconds). In-flight rows
-                   -- (result_status NULL) are not priced until they finish. NULL
-                   -- is also returned when Logos has no pricing knowledge (local
-                   -- provider, or a cloud model with no catalog price): the logs
-                   -- UI omits the cost line, budget SUM()s ignore it.
+                   -- success: price full usage (frozen snapshot if present, else
+                   -- live). error/timeout: price only what was measurably delivered
+                   -- -- never the flat per-request fee, nor request-only estimates
+                   -- (input characters/pixels/images/video ms; output images/pixels/
+                   -- milliseconds that fall back to the requested count). In-flight
+                   -- rows (result_status NULL) aren't priced. NULL when Logos has no
+                   -- pricing knowledge: logs UI omits the cost line, budget SUM()s
+                   -- ignore it.
                    CASE
                        WHEN le.result_status = 'success' THEN COALESCE(
                            le.settled_cost_micro_cents,
@@ -594,9 +588,8 @@
             CREATE INDEX idx_token_prices_resolve
                 ON token_prices (type_id, valid_from DESC);
 
-            -- Budget admission always scopes by API key and month. Separate
-            -- indexes on these columns force a bitmap merge (or a broad scan)
-            -- before the comparatively expensive per-entry pricing function.
+            -- Budget admission scopes by API key and month; a composite index
+            -- avoids a bitmap merge before the expensive per-entry pricing.
             CREATE INDEX idx_log_entry_api_key_timestamp_request
                 ON log_entry (api_key_id, timestamp_request)
                 WHERE api_key_id IS NOT NULL;
@@ -650,9 +643,8 @@
                     AND (tp.provider_id = le.provider_id OR tp.provider_id IS NULL)
                     AND tp.valid_from <= COALESCE(le.timestamp_response, le.timestamp_request)
               )
-              -- Character counts are deliberately ignored when that direction
-              -- has token pricing; do not report those suppressed dimensions as
-              -- permanent catalogue gaps.
+              -- Character counts are ignored when that direction has token
+              -- pricing; don't report those as catalogue gaps.
               AND NOT (
                   o.quantity IN ('billed_input_characters', 'billed_output_characters')
                   AND EXISTS (
@@ -674,11 +666,10 @@
 
     <changeSet id="022-7-collapse-synthetic-price-sentinels" author="logos">
         <sql splitStatements="false"><![CDATA[
-            -- Older PriceUpdaterService versions invented a 2020-01-01 start for
-            -- the first observed price. Where a real later generation exists,
-            -- discard that synthetic sentinel and let the earliest corrected
-            -- generation cover the historical interval. Keep lone sentinels:
-            -- they remain the only available estimate for that price dimension.
+            -- Older PriceUpdaterService invented a 2020-01-01 start for the first
+            -- observed price. Where a later real generation exists, drop the
+            -- sentinel and back-date the earliest one. Keep lone sentinels: the
+            -- only estimate for that dimension.
             CREATE OR REPLACE FUNCTION logos_collapse_price_sentinels()
             RETURNS integer
             LANGUAGE plpgsql AS $fn$
@@ -721,8 +712,7 @@
             SELECT logos_collapse_price_sentinels();
 
             -- Snapshot historical successful requests after repairing legacy
-            -- price generations. Future catalogue refreshes can no longer
-            -- rewrite completed budget history.
+            -- prices, so future refreshes can't rewrite completed budget history.
             UPDATE log_entry le
             SET settled_cost_micro_cents = logos_price_usage(
                 le.model_id, le.provider_id,

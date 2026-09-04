@@ -156,6 +156,26 @@ class PriceUpdaterServiceTest {
     }
 
     @Test
+    void mapsLegacyDallEGenerationPriceToDeliveredOutputImages() {
+        List<SavedPrice> rows = ingest(Map.of(
+            "mode", "image_generation",
+            "input_cost_per_image", 4.0e-2));
+
+        assertThat(rows).containsExactly(
+            new SavedPrice("billed_output_images", "image", 0, "default", Math.round(4.0e-2 * 1e11)));
+    }
+
+    @Test
+    void preservesInputImagePriceOutsideImageGenerationMode() {
+        List<SavedPrice> rows = ingest(Map.of(
+            "mode", "chat",
+            "input_cost_per_image", 4.0e-2));
+
+        assertThat(rows).containsExactly(
+            new SavedPrice("billed_input_images", "image", 0, "default", Math.round(4.0e-2 * 1e11)));
+    }
+
+    @Test
     void expandsStructuredGuardrailUnitPrices() {
         assertThat(ingest(Map.of("guardrail_cost_per_unit", Map.of(
             "contentPolicyUnits", 1.5e-4,

@@ -385,6 +385,75 @@ class TokenCostFunctionTest {
     }
 
     @Test
+    void priceUsage_outputImageTokensSuppressPixelAndFlatRepresentations() {
+        int model = seedModel();
+        int provider = seedCloudProvider("azure");
+        seedPrice(model, provider, "billed_output_image_tokens", "token", 0, "default", 150000, "2020-01-01");
+        seedPrice(model, provider, "billed_output_pixels", "pixel", 0, "default", 300, "2020-01-01");
+        seedPrice(model, provider, "billed_output_images", "image", 0, "default", 40_000_000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"completion_tokens\":100,\"completion_image_tokens\":100,"
+            + "\"billed_output_pixels\":1048576,\"billed_output_images\":1}");
+        assertThat(cost).isEqualTo(100L * 150000 / 1000);
+    }
+
+    @Test
+    void priceUsage_outputPixelsSuppressFlatImageRepresentation() {
+        int model = seedModel();
+        int provider = seedCloudProvider("azure");
+        seedPrice(model, provider, "billed_output_pixels", "pixel", 0, "default", 300, "2020-01-01");
+        seedPrice(model, provider, "billed_output_images", "image", 0, "default", 40_000_000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"billed_output_pixels\":1048576,\"billed_output_images\":1}");
+        assertThat(cost).isEqualTo(Math.round(1048576L * 300 / 1000.0));
+    }
+
+    @Test
+    void priceUsage_pixelPriceSurvivesABaseInputTokenPrice() {
+        // billed_input_image_tokens falls back to billed_input_uncached, so a
+        // model with an ordinary input-token price must NOT have its pixel count
+        // zeroed when the payload carries no prompt_image_tokens.
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_input_uncached", "token", 0, "default", 20000, "2020-01-01");
+        seedPrice(model, provider, "billed_input_pixels", "pixel", 0, "default", 100, "2020-01-01");
+        seedPrice(model, provider, "billed_input_images", "image", 0, "default", 40_000_000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"prompt_tokens\":1000,"
+            + "\"billed_input_pixels\":500000,\"billed_input_images\":2}");
+        // text tokens + pixels; flat image count stays suppressed by pixels.
+        assertThat(cost).isEqualTo(1000L * 20000 / 1000 + 500000L * 100 / 1000);
+    }
+
+    @Test
+    void priceUsage_outputPixelPriceSurvivesABaseOutputTokenPrice() {
+        int model = seedModel();
+        int provider = seedCloudProvider("azure");
+        seedPrice(model, provider, "billed_output_text", "token", 0, "default", 120000, "2020-01-01");
+        seedPrice(model, provider, "billed_output_pixels", "pixel", 0, "default", 300, "2020-01-01");
+        seedPrice(model, provider, "billed_output_images", "image", 0, "default", 40_000_000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"completion_tokens\":100,\"billed_output_pixels\":1048576,\"billed_output_images\":1}");
+        assertThat(cost).isEqualTo(100L * 120000 / 1000 + Math.round(1048576L * 300 / 1000.0));
+    }
+
+    @Test
+    void priceUsage_flatImagePriceSurvivesABaseInputTokenPrice() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_input_uncached", "token", 0, "default", 20000, "2020-01-01");
+        seedPrice(model, provider, "billed_input_images", "image", 0, "default", 40_000_000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"prompt_tokens\":1000,\"billed_input_images\":2}");
+        assertThat(cost).isEqualTo(1000L * 20000 / 1000 + 2L * 40_000_000 / 1000);
+    }
+
+    @Test
     void priceUsage_flatRequestFee_alwaysApplies() {
         int model = seedModel();
         int provider = seedCloudProvider("openai");

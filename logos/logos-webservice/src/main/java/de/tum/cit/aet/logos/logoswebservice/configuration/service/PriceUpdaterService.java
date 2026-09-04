@@ -108,7 +108,9 @@ public class PriceUpdaterService {
         "output_cost_per_second",         1,
         "ocr_cost_per_credit",            1,
         "input_dbu_cost_per_token",       1,
-        "output_dbu_cost_per_token",      1
+        "output_dbu_cost_per_token",      1,
+        // Legacy image-generation spelling; an explicit output price wins.
+        "input_cost_per_image",           1
     );
 
     /** The identity of one price dimension; aliased catalog keys resolve to the same one. */
@@ -332,6 +334,15 @@ public class PriceUpdaterService {
             }
             if (searchPerPrompt && "billed_search_queries".equals(tu.quantity())) {
                 tu = new TypeUnit("billed_search_prompts", "request");
+            }
+            // LiteLLM's image-generation catalogue historically names the
+            // generated-image price input_cost_per_image (notably DALL-E 2/3).
+            // Generation responses emit billed_output_images, so route that
+            // legacy spelling to the delivered output. Outside generation mode
+            // it remains genuine input-image pricing (vision, edits, etc.).
+            if ("input_cost_per_image".equals(key)
+                    && "image_generation".equals(data.get("mode"))) {
+                tu = new TypeUnit("billed_output_images", "image");
             }
 
             double cost = ((Number) costObj).doubleValue();
