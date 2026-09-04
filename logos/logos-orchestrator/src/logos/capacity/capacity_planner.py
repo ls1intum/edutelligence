@@ -2734,6 +2734,19 @@ class CapacityPlanner:
             elif key not in self._lane_idle_since:
                 self._lane_idle_since[key] = now
 
+            # A request that began or finished since the last poll is activity
+            # the instantaneous concurrency sample above cannot see: a blocking
+            # action (e.g. a long cold load) can stall the cycle long enough that
+            # a short request starts and completes entirely between two polls. The
+            # facade records a monotonic last-activity timestamp fed by request
+            # events; a lane cannot have been idle since before it last did work,
+            # so push the idle start forward to that point.
+            last_activity = self._facade.get_model_last_activity(provider_id, lane.model_name)
+            if last_activity is not None:
+                current = self._lane_idle_since.get(key)
+                if current is None or last_activity > current:
+                    self._lane_idle_since[key] = last_activity
+
             if is_sleeping:
                 self._lane_sleep_since.setdefault(key, now)
                 self._lane_sleep_level[key] = max(self._lane_sleep_level.get(key, 0), 1)
