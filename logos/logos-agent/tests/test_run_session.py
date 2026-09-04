@@ -152,10 +152,11 @@ def test_the_agent_home_is_replaced_not_reused(tmp_path, monkeypatch):
 
     _reset_agent_home()
 
-    # A fresh, empty home: the global hooksPath, the CLI settings, and any
-    # poisoned tool caches a previous session wrote are all gone.
+    # A fresh home: the global hooksPath, the CLI settings, and any poisoned
+    # tool caches a previous session wrote are all gone. What the harness
+    # puts there itself is the only thing in it.
     assert home.is_dir()
-    assert list(home.iterdir()) == []
+    assert [entry.name for entry in home.iterdir()] == ["pre-commit"]
 
 
 def test_a_home_left_as_a_symlink_is_replaced_too(tmp_path, monkeypatch):
@@ -175,7 +176,7 @@ def test_a_home_left_as_a_symlink_is_replaced_too(tmp_path, monkeypatch):
     _reset_agent_home()
 
     assert home.is_dir() and not home.is_symlink()
-    assert list(home.iterdir()) == []
+    assert [entry.name for entry in home.iterdir()] == ["pre-commit"]
     # Whatever the symlink pointed at is untouched: we never followed it.
     assert (outside / ".gitconfig").exists()
 
@@ -196,7 +197,7 @@ def test_a_dangling_home_symlink_is_removed_not_kept(tmp_path, monkeypatch):
     _reset_agent_home()
 
     assert home.is_dir() and not home.is_symlink()
-    assert list(home.iterdir()) == []
+    assert [entry.name for entry in home.iterdir()] == ["pre-commit"]
 
 
 def test_a_dangling_checkout_symlink_is_removed_before_the_clone(tmp_path, monkeypatch):
@@ -297,7 +298,7 @@ class TestFinalizer:
         # The home and the repository metadata are trusted again: nothing
         # planted survives to run or be read. (--local: the machine's system
         # git config is out of scope for the rebuild.)
-        assert list(home.iterdir()) == []
+        assert [entry.name for entry in home.iterdir()] == ["pre-commit"]
         for key in ("core.hooksPath", "credential.helper"):
             result = subprocess.run(
                 ["git", "config", "--local", "--get", key], cwd=checkout, text=True, capture_output=True
@@ -855,3 +856,189 @@ class TestTranscriptLines:
 
     def test_a_tool_with_nothing_to_show_is_still_named(self):
         assert run_session._tool_line({"name": "Whatever", "input": {}}) == "[tool] Whatever"
+
+
+class TestHowAPullRequestIsOpened:
+    """A title, and nothing else.
+
+    The description belongs to whoever writes it. A pull request opened with
+    a generated wall — a summary nobody wrote, the task pasted back, a
+    checklist — buries the diff under boilerplate and tells the reviewer
+    things they already know.
+    """
+
+    @staticmethod
+    def capture(monkeypatch, tmp_path):
+        calls: list = []
+
+        def fake_run(cmd, **_kwargs):
+            calls.append(cmd)
+
+            class _Done:
+                returncode = 0
+                stdout = "https://github.com/x/y/pull/1"
+
+            return _Done()
+
+        monkeypatch.setenv("LOGOS_REPO_SLUG", "x/y")
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        monkeypatch.setattr(run_session, "run", fake_run)
+        return calls
+
+    def test_it_is_not_a_draft(self, monkeypatch, tmp_path):
+        calls = self.capture(monkeypatch, tmp_path)
+
+        run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        assert "--draft" not in calls[0]
+
+    def test_the_body_is_empty(self, monkeypatch, tmp_path):
+        calls = self.capture(monkeypatch, tmp_path)
+
+        run_session.open_pull_request("logos/agent/x", "main", "a long task with all its house rules")
+
+        body = calls[0][calls[0].index("--body") + 1]
+        assert body == ""
+
+    def test_the_title_still_describes_the_change(self, monkeypatch, tmp_path):
+        calls = self.capture(monkeypatch, tmp_path)
+        (tmp_path / "commit.txt").write_text("Fit the KPI card sparkline to its slot")
+
+        run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        title = calls[0][calls[0].index("--title") + 1]
+        assert title == "`Logos`: Fit the KPI card sparkline to its slot"
+
+
+class TestWhatTheAgentIsTold:
+    """The environment notes an operator can edit, and the fallback.
+
+    The runner passes its own text in; the block written here is only for a
+    session started by a runner too old to send one. Which of the two the
+    agent gets is a question about whether the runner said anything at all
+    — not about whether what it said was empty.
+    """
+
+    def test_the_runner_s_text_is_used_when_it_sends_one(self, monkeypatch):
+        monkeypatch.setenv("LOGOS_SESSION_ENVIRONMENT_NOTES", "--- Notes ---\nBe careful.")
+        monkeypatch.delenv("LOGOS_SESSION_IMAGES", raising=False)
+
+        prompt = run_session.build_prompt("Fix the alignment.")
+
+        assert prompt == "Fix the alignment.\n\n--- Notes ---\nBe careful.\n"
+
+    def test_an_operator_who_empties_the_notes_is_obeyed(self, monkeypatch):
+        # "Say nothing here" is a decision. Answering it with a page of
+        # defaults ignores it.
+        monkeypatch.setenv("LOGOS_SESSION_ENVIRONMENT_NOTES", "   ")
+        monkeypatch.delenv("LOGOS_SESSION_IMAGES", raising=False)
+
+        prompt = run_session.build_prompt("Fix the alignment.")
+
+        assert prompt == "Fix the alignment.\n"
+
+    def test_an_older_runner_that_sends_nothing_gets_the_fallback(self, monkeypatch):
+        monkeypatch.delenv("LOGOS_SESSION_ENVIRONMENT_NOTES", raising=False)
+        monkeypatch.delenv("LOGOS_SESSION_IMAGES", raising=False)
+
+        prompt = run_session.build_prompt("Fix the alignment.")
+
+        assert "Environment notes" in prompt
+        assert "pre-commit run --files" in prompt
+
+    def test_the_images_are_named_either_way(self, monkeypatch):
+        monkeypatch.setenv("LOGOS_SESSION_ENVIRONMENT_NOTES", "")
+        monkeypatch.setenv("LOGOS_SESSION_IMAGES", "/artifacts/attachments/01.png")
+
+        prompt = run_session.build_prompt("The page looks wrong.")
+
+        # An issue whose description is a screenshot is unreadable without
+        # this, whatever the notes say.
+        assert "/artifacts/attachments/01.png" in prompt
+
+
+class TestTheHookStore:
+    """pre-commit needs somewhere to write, and the image is read-only.
+
+    The hook environments are baked into the image — that is what lets a
+    session with no network run the linters CI runs. The store itself
+    cannot be: pre-commit takes a lock and records what it ran in a small
+    database, and the first thing the advertised command did was fail on a
+    read-only filesystem.
+    """
+
+    def test_the_seeded_database_is_copied_into_the_session_home(self, tmp_path, monkeypatch):
+        seeded = tmp_path / "opt" / "pre-commit"
+        seeded.mkdir(parents=True)
+        (seeded / "db.db").write_bytes(b"sqlite")
+        home = tmp_path / "ws" / ".home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("PRE_COMMIT_HOME", str(home / "pre-commit"))
+        monkeypatch.setenv("PRE_COMMIT_STORE", str(seeded))
+        (tmp_path / "ws").mkdir(parents=True, exist_ok=True)
+
+        _reset_agent_home()
+
+        assert (home / "pre-commit" / "db.db").read_bytes() == b"sqlite"
+
+    def test_a_store_that_cannot_be_prepared_does_not_stop_the_session(self, tmp_path, monkeypatch):
+        home = tmp_path / "ws" / ".home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("PRE_COMMIT_HOME", str(home / "pre-commit"))
+        monkeypatch.setenv("PRE_COMMIT_STORE", str(tmp_path / "nothing-here"))
+        (tmp_path / "ws").mkdir(parents=True, exist_ok=True)
+
+        _reset_agent_home()
+
+        # Better a linter the agent is told is unavailable than a session
+        # that never starts.
+        assert home.is_dir()
+
+
+class TestWhatASessionReportsSpending:
+    """The running total on the transcript, and what it may claim to know.
+
+    The usage on an assistant event is the count as that turn *began*, so
+    the output figure is zero for the whole run and only the result event
+    knows the total. Printing that zero told everybody watching that a
+    session which had written a hundred thousand tokens had written none.
+    """
+
+    def setup_method(self):
+        run_session._spent.update(**{"in": 0, "out": 0})
+
+    def test_a_turn_in_flight_reports_only_what_it_knows(self, capsys):
+        run_session._report_usage({"usage": {"input_tokens": 1200, "cache_creation_input_tokens": 300}})
+
+        line = capsys.readouterr().out.strip()
+        assert line == "[usage] in=1500"
+
+    def test_the_conversation_read_out_of_the_cache_is_not_counted(self, capsys):
+        # Every turn re-reads the whole conversation; summing that key
+        # counts the same tokens once per turn, which is how a session
+        # reported seventeen million against no output at all.
+        run_session._report_usage({"usage": {"input_tokens": 100, "cache_read_input_tokens": 900_000}})
+
+        assert capsys.readouterr().out.strip() == "[usage] in=100"
+
+    def test_the_result_event_supplies_the_output_total(self, capsys):
+        run_session._report_usage({"usage": {"input_tokens": 1500}})
+        capsys.readouterr()
+
+        run_session._account_for(
+            {"type": "result", "usage": {"input_tokens": 1500, "output_tokens": 42_000}, "total_cost_usd": 1.5}
+        )
+
+        # The last line of a run matches the row the settlement writes,
+        # rather than being the one account permanently missing half of it.
+        assert capsys.readouterr().out.strip() == "[usage] in=1500 out=42000"
+
+    def test_a_later_report_never_lowers_the_running_total(self, capsys):
+        run_session._account_for({"usage": {"input_tokens": 9000, "output_tokens": 5000}})
+        capsys.readouterr()
+
+        # An interrupted invocation reports only its own share; the session
+        # is the sum of them, and the figure must not go backwards.
+        run_session._account_for({"usage": {"input_tokens": 10, "output_tokens": 10}})
+
+        assert capsys.readouterr().out.strip() == "[usage] in=9000 out=5000"

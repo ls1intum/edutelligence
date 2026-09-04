@@ -403,7 +403,15 @@ services:
       # The uid the session image runs as; the runner chowns the per-session
       # artefact directories it creates to this user.
       LOGOS_AGENT_SESSION_UID: "${LOGOS_AGENT_SESSION_UID:-10001}"
-      LOGOS_AGENT_SESSION_TIMEOUT_S: "${LOGOS_AGENT_SESSION_TIMEOUT_S:-10800}"
+      # Empty by default: a session ends when the agent is done, not when a
+      # clock says so. Set a number of seconds only if a deployment wants
+      # one — what protects capacity here is the pause and the ceilings,
+      # neither of which cares how long a session has been at it.
+      # Whose word the agent acts on: membership of these teams in the
+      # repository's organisation. Empty falls back to "may write to this
+      # repository", which is what the runner used before.
+      LOGOS_AGENT_TRUSTED_TEAMS: "${LOGOS_AGENT_TRUSTED_TEAMS:-logos-developers,logos-maintainers}"
+      LOGOS_AGENT_SESSION_TIMEOUT_S: "${LOGOS_AGENT_SESSION_TIMEOUT_S:-0}"
 
       # Capacity gates: start only below the first threshold, hand capacity
       # back above the second. Pause must exceed start or sessions flap.
