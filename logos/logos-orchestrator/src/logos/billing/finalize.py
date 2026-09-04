@@ -25,11 +25,16 @@ def finalize_billing_inputs(
     (:func:`derive_billable_quantities`); token counts win on any key clash.
     """
     usage_obj = response_payload.get("usage") if isinstance(response_payload, dict) else None
+    if not isinstance(usage_obj, dict) and isinstance(response_payload, dict):
+        # Native Gemini calls use usageMetadata rather than the OpenAI-shaped
+        # usage object exposed by Gemini's compatibility endpoint.
+        usage_obj = response_payload.get("usageMetadata")
     usage: dict = extract_token_usage(usage_obj) if isinstance(usage_obj, dict) else {}
     # Verbose audio transcription responses commonly put duration at the response
     # root and omit usage entirely. Feed the same milliseconds to live pricing and
     # persistence so response usage.cost cannot diverge from stored budget cost.
-    if not usage and isinstance(response_payload, dict):
+    is_output_media = "audio/speech" in (path or "") or "/videos" in (path or "") or (path or "").startswith("videos")
+    if not usage and isinstance(response_payload, dict) and not is_output_media:
         duration = response_payload.get("duration")
         if isinstance(duration, (int, float)) and not isinstance(duration, bool):
             usage = extract_token_usage({"seconds": duration})

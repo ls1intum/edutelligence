@@ -250,6 +250,8 @@ _CANONICAL_USAGE_FIELDS = {
     "completion_reasoning_tokens",
     "completion_audio_tokens",
     "completion_image_tokens",
+    "completion_video_tokens",
+    "citation_tokens",
     "audio_milliseconds",
 }
 
@@ -257,10 +259,13 @@ _USAGE_KEY_MAP = {
     "input_tokens": "prompt_tokens",
     "inputTokens": "prompt_tokens",
     "promptTokens": "prompt_tokens",
+    "promptTokenCount": "prompt_tokens",
     "output_tokens": "completion_tokens",
     "outputTokens": "completion_tokens",
     "completionTokens": "completion_tokens",
+    "candidatesTokenCount": "completion_tokens",
     "totalTokens": "total_tokens",
+    "totalTokenCount": "total_tokens",
     "cache_read_input_tokens": "prompt_cached_tokens",
     "cacheReadInputTokens": "prompt_cached_tokens",
     "prompt_cache_hit_tokens": "prompt_cached_tokens",
@@ -269,6 +274,8 @@ _USAGE_KEY_MAP = {
     "cacheWriteInputTokens": "prompt_cache_write_tokens",
     "cacheCreationInputTokens": "prompt_cache_write_tokens",
     "promptCacheMissTokens": "prompt_cache_miss_tokens",
+    "cachedContentTokenCount": "prompt_cached_tokens",
+    "thoughtsTokenCount": "completion_reasoning_tokens",
     "cache_read_input_audio_tokens": "prompt_cache_read_audio_tokens",
     "cache_creation_input_audio_tokens": "prompt_cache_write_audio_tokens",
 }
@@ -289,6 +296,26 @@ _DETAIL_KEY_MAP = {
     ("completion_", "audio_tokens"): "completion_audio_tokens",
     ("completion_", "image_tokens"): "completion_image_tokens",
     ("completion_", "reasoning_tokens"): "completion_reasoning_tokens",
+}
+
+# Native Anthropic / Bedrock Converse spell cache reads and writes as top-level
+# siblings of ``input_tokens`` (which is then the uncached remainder). An
+# Anthropic model reached through an OpenAI-compatible surface instead nests
+# ``cached_tokens`` under ``prompt_tokens_details`` and reports the inclusive
+# shape, so seeing any of these names is what tells the pricing function the
+# usage is disjoint even on a cache-read-only turn. DeepSeek's
+# ``prompt_cache_hit_tokens`` is deliberately absent: that shape is hit/miss
+# inclusive, not disjoint. The audio cache counters
+# (``cache_read_input_audio_tokens`` / ``cache_creation_input_audio_tokens``)
+# are also deliberately absent: OpenAI-compatible audio surfaces emit them
+# alongside an inclusive ``prompt_tokens``, so their presence does not prove a
+# disjoint shape.
+_NATIVE_DISJOINT_USAGE_KEYS = {
+    "cache_read_input_tokens",
+    "cacheReadInputTokens",
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+    "cacheWriteInputTokens",
 }
 
 _USAGE_META_FIELDS = {
@@ -334,9 +361,15 @@ def extract_token_usage(usage: dict) -> dict:
         usage_tokens[key] = value
 
     for name in usage:
-        if "tokens_details" in name or name == "cache_creation":
+        if "tokens_details" in name or name in {"cache_creation", "cacheDetails"}:
             continue
         if name in _USAGE_META_FIELDS or "/s" in name:
+            continue
+        # ``billed_*`` is Logos's own derived-quantity namespace, priced by
+        # logos_price_usage as flat quantities. A provider that happens to emit a
+        # key in that namespace must not override the locally derived count (a
+        # stray ``billed_requests`` would otherwise be billed as N requests).
+        if name.startswith("billed_"):
             continue
         canonical = _USAGE_KEY_MAP.get(name, name)
         _add(canonical, usage[name])
@@ -355,6 +388,52 @@ def extract_token_usage(usage: dict) -> dict:
             for name, value in details.items():
                 _add(_DETAIL_KEY_MAP.get((prefix, name), prefix + name), value)
 
+    # Gemini's native modality details are arrays rather than OpenAI-style
+    # dictionaries. Their parent prompt/candidate totals are inclusive, so
+    # these remain decomposable subsets of those totals.
+    for details_key, prefix in (
+        ("promptTokensDetails", "prompt_"),
+        ("candidatesTokensDetails", "completion_"),
+        ("cacheTokensDetails", "cache_"),
+    ):
+        details = usage.get(details_key)
+        if not isinstance(details, list):
+            continue
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            count = detail.get("tokenCount")
+            modality = str(detail.get("modality", "")).upper()
+            if modality == "AUDIO":
+                key = {
+                    "prompt_": "prompt_audio_tokens",
+                    "completion_": "completion_audio_tokens",
+                    "cache_": "prompt_cache_read_audio_tokens",
+                }[prefix]
+                _add(key, count)
+            elif modality == "IMAGE" and prefix != "cache_":
+                _add(
+                    "prompt_image_tokens" if prefix == "prompt_" else "completion_image_tokens",
+                    count,
+                )
+            elif modality == "VIDEO" and prefix == "completion_":
+                _add("completion_video_tokens", count)
+
+    # Native Gemini reports visible candidate and thinking tokens as siblings.
+    # logos_price_usage expects completion_tokens to be the inclusive output
+    # total before it subtracts the reasoning subset.
+    candidates = usage.get("candidatesTokenCount")
+    thoughts = usage.get("thoughtsTokenCount")
+    if (
+        isinstance(candidates, int)
+        and not isinstance(candidates, bool)
+        and isinstance(thoughts, int)
+        and not isinstance(thoughts, bool)
+        and candidates >= 0
+        and thoughts >= 0
+    ):
+        usage_tokens["completion_tokens"] = candidates + thoughts
+
     # Anthropic's cache_creation breakdown is authoritative when present; its
     # sibling scalar cache_creation_input_tokens is their sum, so drop it to
     # avoid double counting.
@@ -366,6 +445,39 @@ def extract_token_usage(usage: dict) -> dict:
             usage_tokens["prompt_cache_write_tokens"] = five_min
         if isinstance(one_hour, int) and not isinstance(one_hour, bool):
             usage_tokens["prompt_cache_write_1h_tokens"] = one_hour
+
+    # Bedrock Converse exposes the aggregate in cacheWriteInputTokens and the
+    # authoritative per-TTL split in cacheDetails.  Do not charge a one-hour
+    # write at the ordinary/5-minute rate merely because the aggregate scalar
+    # appeared first.
+    cache_details = usage.get("cacheDetails")
+    if isinstance(cache_details, list):
+        five_min = 0
+        one_hour = 0
+        found = False
+        for detail in cache_details:
+            if not isinstance(detail, dict):
+                continue
+            count = detail.get("inputTokens")
+            ttl = detail.get("cacheTtl") or detail.get("ttl")
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                continue
+            normalized_ttl = str(ttl).upper()
+            if normalized_ttl in {"PT1H", "1H", "3600", "3600S"}:
+                one_hour += count
+                found = True
+            elif normalized_ttl in {"PT5M", "5M", "300", "300S"}:
+                five_min += count
+                found = True
+        if found:
+            usage_tokens["prompt_cache_write_tokens"] = five_min
+            usage_tokens["prompt_cache_write_1h_tokens"] = one_hour
+
+    # Flag the native disjoint shape so logos_price_usage decomposes a
+    # cache-read-only turn correctly instead of billing it inclusively. Stored
+    # as a 1 (one usage_tokens row); it is a signal, priced by nothing.
+    if any(name in usage for name in _NATIVE_DISJOINT_USAGE_KEYS) or isinstance(cache_creation, dict):
+        usage_tokens["usage_shape_disjoint"] = 1
 
     return usage_tokens
 

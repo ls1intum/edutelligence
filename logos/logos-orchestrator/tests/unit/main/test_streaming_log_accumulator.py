@@ -201,6 +201,27 @@ def test_responses_terminal_event_returns_eur_cost(monkeypatch):
     assert enriched_event["response"]["usage"]["cost_currency"] == "USD"
 
 
+def test_enricher_skips_output_only_partial_usage_frame(monkeypatch):
+    # An Anthropic message_delta reports only output_tokens mid-stream; pricing it
+    # alone yields an undercharged, input-less cost. The enricher must leave such
+    # a frame untouched (the persisted ledger prices the merged usage correctly).
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_usage_cost_micro_cents(self, *a, **k):  # pragma: no cover - must not be called
+            raise AssertionError("partial usage frame should not be priced")
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+    enricher = main._StreamingCostEnricher(provider_id=12, model_id=27)
+    frame = b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}\n\n'
+    out = b"".join(enricher.feed(frame))
+    assert out == frame  # forwarded verbatim, no usage.cost injected
+
+
 # ── Anthropic Messages streams ───────────────────────────────────────────────
 # What Claude Code speaks, so every session set up through the AI-tools page
 # arrives in this shape. Usage is split across two events and neither is the

@@ -228,6 +228,26 @@ def derived_reported_context_length(profile: Any) -> int:
     return native
 
 
+# Snapshot the settled cost of a finalised request into log_entry so a later
+# catalogue refresh cannot rewrite completed budget history. Deliberately carries
+# no ``settled_cost_micro_cents IS NULL`` guard: finalisation is retryable, and a
+# retry that corrects the persisted usage rows must be able to correct the stored
+# cost. It is recomputed from the current usage_tokens on every finalisation and
+# is idempotent for a request whose usage no longer changes.
+_SETTLED_COST_SNAPSHOT_SQL = """
+    UPDATE log_entry le
+    SET settled_cost_micro_cents = logos_price_usage(
+        le.model_id, le.provider_id,
+        COALESCE(le.timestamp_response, le.timestamp_request),
+        le.service_tier,
+        (SELECT jsonb_object_agg(tt.name, ut.token_count)
+         FROM usage_tokens ut
+         JOIN token_types tt ON tt.id = ut.type_id
+         WHERE ut.log_entry_id = le.id))
+    WHERE {where_clause}
+"""
+
+
 # noinspection PyUnresolvedReferences
 class DBManager:
     def __init__(self):
@@ -394,13 +414,34 @@ class DBManager:
         if log_id is not None:
             params["log_id"] = log_id
             where_clause = "id = :log_id"
+            settled_where_clause = "le.id = :log_id"
         else:
             params["lookup_request_id"] = request_id
             where_clause = "request_id = :lookup_request_id"
+            settled_where_clause = "le.request_id = :lookup_request_id"
 
         sql = text(f"UPDATE log_entry SET {assignments} WHERE {where_clause}")
         self.session.execute(sql, params)
         self.session.commit()
+
+        # Pricing is the riskier half of finalisation (a function bug, a lock, a
+        # statement timeout). Run it only after the status write is durably
+        # committed and never let its failure surface, so a request cannot be
+        # left stuck at result_status NULL because the snapshot blew up.
+        if update_data.get("result_status") == "success":
+            try:
+                self.session.execute(
+                    text(_SETTLED_COST_SNAPSHOT_SQL.format(where_clause=settled_where_clause)),
+                    params,
+                )
+                self.session.commit()
+            except Exception as exc:  # noqa: BLE001 - snapshot must not break finalisation
+                self.session.rollback()
+                logger.warning(
+                    "settled-cost snapshot failed for %s: %s",
+                    log_id if log_id is not None else request_id,
+                    exc,
+                )
 
     def update_request_log_metrics(
         self,

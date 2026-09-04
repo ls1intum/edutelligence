@@ -23,11 +23,23 @@ def test_finalize_no_usage_object_still_returns_request_quantity():
     assert tier is None
 
 
-def test_finalize_token_counts_win_on_key_clash():
+def test_finalize_binary_output_keeps_request_derived_media_duration():
+    usage, tier = finalize_billing_inputs(
+        {"duration": 1.25},
+        b"binary media",
+        "v1/audio/speech",
+    )
+    assert usage == {"billed_requests": 1, "billed_output_milliseconds": 1250}
+    assert tier is None
+
+
+def test_finalize_rejects_raw_billed_namespace_key():
     resp = {"usage": {"prompt_tokens": 5, "completion_tokens": 2, "billed_requests": 99}}
     usage, _ = finalize_billing_inputs({}, resp, "v1/chat/completions")
-    # billed_requests from usage (99) is kept; derive's 1 does not override
-    assert usage["billed_requests"] == 99
+    # A provider-supplied billed_* key is dropped; the locally derived count wins.
+    assert usage["billed_requests"] == 1
+    assert usage["prompt_tokens"] == 5
+    assert usage["completion_tokens"] == 2
 
 
 def test_finalize_verbose_audio_duration_matches_stored_billing_input():

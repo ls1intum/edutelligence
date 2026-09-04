@@ -1562,13 +1562,14 @@ def _usage_tokens_from_payload(
     response_payload: Any,
     request_payload: Any = None,
     path: str = "",
+    billable_request: bool = True,
 ) -> Dict[str, int]:
     """Canonical token usage for a response, merged with the derived non-token
     billable quantities (``billed_requests``, characters, images, ...) so the
     stored ``usage_tokens`` rows carry everything ``logos_price_usage`` prices."""
-    if not isinstance(response_payload, dict):
-        return {}
     usage, _ = finalize_billing_inputs(request_payload, response_payload, path)
+    if not billable_request:
+        usage.pop("billed_requests", None)
     return usage
 
 
@@ -1587,6 +1588,7 @@ def _response_with_cost(
     response_at: datetime.datetime,
     request_payload: Any = None,
     path: str = "",
+    allow_derived_only: bool = False,
 ) -> tuple[Any, bool]:
     """Add the configured USD cost to a cloud response's usage object.
 
@@ -1598,6 +1600,22 @@ def _response_with_cost(
     if not isinstance(response_payload, dict) or provider_id is None or model_id is None:
         return response_payload, False
     usage = response_payload.get("usage")
+    # Only settle a live cost onto a frame that carries a provider usage signal.
+    # ``finalize_billing_inputs`` always returns at least ``billed_requests``, so
+    # without this gate every ordinary SSE delta frame (which has no usage) would
+    # get a cost injected — clients would see repeated interim costs instead of
+    # one settled terminal cost. A root ``duration`` counts as a signal so
+    # verbose audio transcriptions still price live (see finalize.py).
+    has_provider_usage = isinstance(usage, dict) or isinstance(response_payload.get("usageMetadata"), dict)
+    if not has_provider_usage:
+        duration = response_payload.get("duration")
+        has_provider_usage = isinstance(duration, (int, float, str)) and not isinstance(duration, bool)
+        usage = {}
+    if not has_provider_usage and not allow_derived_only:
+        return response_payload, False
+    # Native Gemini has usageMetadata but no OpenAI-style usage object. Cost is
+    # still exposed under the compatibility `usage` field; start it empty
+    # instead of attempting dict(None) after successful detection.
     if not isinstance(usage, dict):
         usage = {}
     usage_tokens, service_tier = finalize_billing_inputs(request_payload, response_payload, path)
@@ -1661,6 +1679,23 @@ class _StreamingCostEnricher:
         self.buffer = b""
         return [remainder]
 
+    @staticmethod
+    def _frame_usage_is_settled(target: dict) -> bool:
+        """True when this frame carries a *complete* usage picture, not a running
+        partial. An Anthropic ``message_delta`` reports only ``output_tokens``
+        mid-stream (input arrived once in ``message_start``); pricing that frame
+        alone yields an output-only, undercharged cost. Enrich only frames whose
+        usage settles the input side too — the Chat Completions terminal chunk,
+        the Responses ``response.completed`` object, or a duration/usageMetadata
+        payload — and leave native Anthropic streams without a live cost rather
+        than a wrong one (the persisted ledger still prices them correctly)."""
+        usage = target.get("usage")
+        if isinstance(usage, dict):
+            return any(
+                k in usage for k in ("prompt_tokens", "input_tokens", "inputTokens", "promptTokens", "total_tokens")
+            )
+        return isinstance(target.get("usageMetadata"), dict) or target.get("duration") is not None
+
     def _enrich_frame(self, frame: bytes, payload_end: int, delimiter: bytes) -> bytes:
         event = frame[:payload_end]
         newline = b"\r\n" if b"\r\n" in event else b"\n"
@@ -1679,6 +1714,8 @@ class _StreamingCostEnricher:
                 continue
 
             target = blob.get("response") if isinstance(blob.get("response"), dict) else blob
+            if not self._frame_usage_is_settled(target):
+                continue
             enriched_target, changed = _response_with_cost(
                 target,
                 self.provider_id,
@@ -3719,7 +3756,12 @@ async def _streaming_response(
                 _live_streams.finish(request_id)
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload, prepared_payload, request_path or "")
+                usage_tokens = _usage_tokens_from_payload(
+                    response_payload,
+                    prepared_payload,
+                    request_path or "",
+                    billable_request=stream_completed,
+                )
                 if log_id:
                     with DBManager() as db:
                         db.set_response_payload(
@@ -3877,7 +3919,12 @@ async def _streaming_response(
             failed = error_message is not None
             stream_log.finish()
             response_payload = stream_log.response_payload()
-            usage_tokens = _usage_tokens_from_payload(response_payload, prepared_payload, request_path or "")
+            usage_tokens = _usage_tokens_from_payload(
+                response_payload,
+                prepared_payload,
+                request_path or "",
+                billable_request=not failed,
+            )
             if log_id:
                 with DBManager() as db:
                     db.set_response_payload(
@@ -4097,9 +4144,15 @@ async def _sync_response(
                 response_at,
                 request_payload=prepared_payload,
                 path=request_path or "",
+                allow_derived_only=True,
             )
 
-        usage_tokens = _usage_tokens_from_payload(response_payload, prepared_payload, request_path or "")
+        usage_tokens = _usage_tokens_from_payload(
+            response_payload,
+            prepared_payload,
+            request_path or "",
+            billable_request=exec_result.success,
+        )
 
         if log_id:
             with DBManager() as db:
@@ -4303,7 +4356,12 @@ def _proxy_streaming_response(
             if log_id:
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload, payload, _proxy_path)
+                usage_tokens = _usage_tokens_from_payload(
+                    response_payload,
+                    payload,
+                    _proxy_path,
+                    billable_request=not failed,
+                )
 
                 with DBManager() as db:
                     if ttft is None and stream_log.first_chunk is not None and not error_message:
@@ -4362,10 +4420,16 @@ async def _proxy_sync_response(
             response_at,
             request_payload=payload,
             path=_proxy_path,
+            allow_derived_only=True,
         )
 
     if log_id:
-        usage_tokens = _usage_tokens_from_payload(response_payload, payload, _proxy_path)
+        usage_tokens = _usage_tokens_from_payload(
+            response_payload,
+            payload,
+            _proxy_path,
+            billable_request=exec_result.success,
+        )
 
         with DBManager() as db:
             if exec_result.success:

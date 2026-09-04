@@ -6,6 +6,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -69,13 +70,49 @@ public class PriceUpdaterService {
         Map.entry("input_cost_per_pixel",                      new TypeUnit("billed_input_pixels",         "pixel")),
         Map.entry("output_cost_per_pixel",                     new TypeUnit("billed_output_pixels",        "pixel")),
         Map.entry("ocr_cost_per_page",                         new TypeUnit("billed_ocr_pages",            "page")),
-        Map.entry("ocr_cost_per_credit",                       new TypeUnit("billed_ocr_credits",          "credit")),
+        // LiteLLM uses page and credit as alternative names for the same OCR
+        // operation. Collapse them so a catalog carrying both cannot bill it twice.
+        Map.entry("ocr_cost_per_credit",                       new TypeUnit("billed_ocr_pages",            "page")),
         Map.entry("annotation_cost_per_page",                  new TypeUnit("billed_annotation_pages",     "page")),
         Map.entry("search_context_cost_per_query",             new TypeUnit("billed_search_queries",       "query")),
         Map.entry("input_cost_per_query",                      new TypeUnit("billed_search_queries",       "query")),
         Map.entry("input_cost_per_second",                     new TypeUnit("audio_milliseconds",          "millisecond")),
-        Map.entry("input_cost_per_audio_per_second",           new TypeUnit("audio_milliseconds",          "millisecond"))
+        Map.entry("input_cost_per_audio_per_second",           new TypeUnit("audio_milliseconds",          "millisecond")),
+        Map.entry("output_cost_per_second",                    new TypeUnit("billed_output_milliseconds", "millisecond")),
+        Map.entry("output_cost_per_video_per_second",          new TypeUnit("billed_output_milliseconds", "millisecond")),
+        Map.entry("output_cost_per_second_1080p",              new TypeUnit("billed_output_milliseconds_1080p", "millisecond")),
+        Map.entry("output_cost_per_second_4k",                 new TypeUnit("billed_output_milliseconds_4k", "millisecond")),
+        Map.entry("input_cost_per_video_per_second",           new TypeUnit("billed_input_video_milliseconds", "millisecond")),
+        Map.entry("output_cost_per_video_token",               new TypeUnit("billed_output_video_tokens", "token")),
+        Map.entry("citation_cost_per_token",                   new TypeUnit("billed_citation_tokens", "token")),
+        Map.entry("input_dbu_cost_per_token",                  new TypeUnit("billed_input_uncached", "token")),
+        Map.entry("output_dbu_cost_per_token",                 new TypeUnit("billed_output_text", "token")),
+        Map.entry("google_maps_grounding_cost_per_query",      new TypeUnit("billed_google_maps_queries", "query")),
+        Map.entry("code_interpreter_cost_per_session",         new TypeUnit("billed_code_interpreter_sessions", "session"))
     );
+
+    /**
+     * Several litellm keys collapse onto one billable quantity (DeepSeek's
+     * {@code input_cost_per_token_cache_hit} vs {@code cache_read_input_token_cost};
+     * {@code input_cost_per_query} vs {@code search_context_cost_per_query};
+     * {@code input_cost_per_second} vs {@code input_cost_per_audio_per_second}).
+     * If one catalog entry carries two such keys with different values,
+     * persisting both would leave the effective rate at the mercy of row order.
+     * The lower number wins; the more specific / canonical key is preferred. An
+     * unlisted key is priority 0.
+     */
+    private static final Map<String, Integer> KEY_PRIORITY = Map.of(
+        "input_cost_per_token_cache_hit", 1,
+        "input_cost_per_query",           1,
+        "input_cost_per_second",          1,
+        "output_cost_per_second",         1,
+        "ocr_cost_per_credit",            1
+    );
+
+    /** The identity of one price dimension; aliased catalog keys resolve to the same one. */
+    private record PriceDimension(String quantity, String unit, long minContextTokens, String serviceTier) {}
+    /** A price value competing to fill a {@link PriceDimension}, tagged with the priority that proposed it. */
+    private record PriceCandidate(long pricePerK, int priority) {}
 
     // <base>_above_200k_tokens  /  <base>_above_128_tokens
     private static final Pattern CONTEXT_SUFFIX =
@@ -83,6 +120,8 @@ public class PriceUpdaterService {
     // <base>_priority / <base>_flex / <base>_scale / <base>_standard
     private static final Pattern MODE_SUFFIX =
         Pattern.compile("^(?<base>.+?)_(?<mode>priority|flex|scale|standard)$");
+    private static final Pattern DURATION_INTERVAL_SUFFIX =
+        Pattern.compile("^input_cost_per_video_per_second_above_(?<seconds>8|15)s_interval$");
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -207,11 +246,62 @@ public class PriceUpdaterService {
      */
     void ingestCatalog(int modelId, int providerId, String modelName,
                        Map<String, Object> data, Instant validFrom) {
+        // Resolve every catalog key to its price dimension first, keeping only
+        // the highest-priority value per dimension, so two aliased keys can
+        // never persist two rows with the same valid_from (which would make the
+        // effective rate depend on row order).
+        Map<PriceDimension, PriceCandidate> resolved = new HashMap<>();
+        boolean searchPerPrompt = "per_prompt".equals(data.get("web_search_billing_unit"));
         for (Map.Entry<String, Object> entry : data.entrySet()) {
             String rawKey = entry.getKey();
             Object costObj = entry.getValue();
-            if (!(costObj instanceof Number)) continue;
+            // LiteLLM represents search-context pricing as
+            // {low: x, medium: x, high: x}. Preserve low/high as distinct
+            // quantities and use the ordinary search quantity for medium, the
+            // provider default when the request does not specify a size.
+            if ("search_context_cost_per_query".equals(rawKey) && costObj instanceof Map<?, ?> contextPrices) {
+                for (String context : List.of("low", "medium", "high")) {
+                    Object value = contextPrices.get(context);
+                    if (!(value instanceof Number number) || number.doubleValue() < 0) continue;
+                    long pricePerK = Math.round(number.doubleValue() * 1e11);
+                    PriceDimension dim = new PriceDimension(
+                        searchPerPrompt
+                            ? ("medium".equals(context) ? "billed_search_prompts" : "billed_search_prompts_" + context)
+                            : ("medium".equals(context) ? "billed_search_queries" : "billed_search_queries_" + context),
+                        searchPerPrompt ? "request" : "query", 0L, "default");
+                    resolved.put(dim, new PriceCandidate(pricePerK, 0));
+                }
+                continue;
+            }
+            if ("guardrail_cost_per_unit".equals(rawKey) && costObj instanceof Map<?, ?> unitPrices) {
+                for (Map.Entry<?, ?> unitEntry : unitPrices.entrySet()) {
+                    if (!(unitEntry.getKey() instanceof String unitName)
+                            || !(unitEntry.getValue() instanceof Number number)
+                            || number.doubleValue() < 0) continue;
+                    PriceDimension dim = new PriceDimension(
+                        "billed_guardrail_" + unitName, "unit", 0L, "default");
+                    resolved.put(dim, new PriceCandidate(
+                        Math.round(number.doubleValue() * 1e11), 0));
+                }
+                continue;
+            }
+            if (!(costObj instanceof Number)) {
+                if (rawKey.contains("cost") || rawKey.contains("price")) {
+                    log.warn("price_updater: unsupported catalogue price field '{}' for '{}'", rawKey, modelName);
+                }
+                continue;
+            }
             if (rawKey.contains("_batches") || rawKey.contains("_batch")) continue;
+
+            Matcher durationInterval = DURATION_INTERVAL_SUFFIX.matcher(rawKey);
+            if (durationInterval.matches()) {
+                String seconds = durationInterval.group("seconds");
+                long pricePerK = Math.round(((Number) costObj).doubleValue() * 1e8);
+                resolved.put(new PriceDimension(
+                    "billed_input_video_milliseconds_above_" + seconds + "s",
+                    "millisecond", 0L, "default"), new PriceCandidate(pricePerK, 0));
+                continue;
+            }
 
             String key = rawKey;
             long minContextTokens = 0L;
@@ -232,7 +322,15 @@ public class PriceUpdaterService {
             }
 
             TypeUnit tu = LITELLM_BASE_KEYS.get(key);
-            if (tu == null) continue;
+            if (tu == null) {
+                if (rawKey.contains("cost") || rawKey.contains("price")) {
+                    log.warn("price_updater: unsupported catalogue price field '{}' for '{}'", rawKey, modelName);
+                }
+                continue;
+            }
+            if (searchPerPrompt && "billed_search_queries".equals(tu.quantity())) {
+                tu = new TypeUnit("billed_search_prompts", "request");
+            }
 
             double cost = ((Number) costObj).doubleValue();
             // A zero is an effective price update too: skipping it would leave
@@ -245,8 +343,18 @@ public class PriceUpdaterService {
             double unitScale = "millisecond".equals(tu.unit()) ? 1e8 : 1e11;
             long pricePerK = Math.round(cost * unitScale);
 
-            upsertTokenPrice(modelId, providerId, tu.quantity(), tu.unit(),
-                minContextTokens, serviceTier, pricePerK, validFrom);
+            PriceDimension dim = new PriceDimension(tu.quantity(), tu.unit(), minContextTokens, serviceTier);
+            int priority = KEY_PRIORITY.getOrDefault(key, 0);
+            PriceCandidate existing = resolved.get(dim);
+            if (existing == null || priority < existing.priority()) {
+                resolved.put(dim, new PriceCandidate(pricePerK, priority));
+            }
+        }
+
+        for (Map.Entry<PriceDimension, PriceCandidate> e : resolved.entrySet()) {
+            PriceDimension dim = e.getKey();
+            upsertTokenPrice(modelId, providerId, dim.quantity(), dim.unit(),
+                dim.minContextTokens(), dim.serviceTier(), e.getValue().pricePerK(), validFrom);
         }
         log.info("price_updater: prices updated for '{}' (id={}, provider_id={})", modelName, modelId, providerId);
     }

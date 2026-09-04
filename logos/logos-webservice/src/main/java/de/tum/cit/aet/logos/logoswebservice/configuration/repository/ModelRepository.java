@@ -27,7 +27,12 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
                   AND tt.name = 'billed_input_uncached'
                   AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
                   AND tp.valid_from <= NOW()
-                ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
                ) AS input_usd_per_million,
                (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
@@ -35,13 +40,31 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
                   AND tt.name = 'billed_output_text'
                   AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
                   AND tp.valid_from <= NOW()
-                ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
                ) AS output_usd_per_million,
                (SELECT MAX(le.timestamp_request)
                 FROM log_entry le
                 WHERE le.model_id = m.id
                ) AS last_used_at
-        FROM models m ORDER BY m.id
+        FROM models m
+        -- A model can be served by several providers, each with its own catalog
+        -- price. Show the price for the provider the model was most recently
+        -- routed to (idx_log_entry_model_id_timestamp_request makes this a single
+        -- index seek); a never-used model falls through to a stable provider_id
+        -- tiebreak so the figure never flips between equal valid_from rows.
+        LEFT JOIN LATERAL (
+            SELECT le.provider_id
+            FROM log_entry le
+            WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
+            ORDER BY le.timestamp_request DESC
+            LIMIT 1
+        ) dp ON true
+        ORDER BY m.id
         """, nativeQuery = true)
     List<ModelWithPriceProjection> findAllWithPricing();
 
@@ -77,7 +100,12 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
                   AND tt.name = 'billed_input_uncached'
                   AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
                   AND tp.valid_from <= NOW()
-                ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
                ) AS input_usd_per_million,
                (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
@@ -85,10 +113,25 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
                   AND tt.name = 'billed_output_text'
                   AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
                   AND tp.valid_from <= NOW()
-                ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
                ) AS output_usd_per_million
         FROM models m
         JOIN effective_model_ids em ON m.id = em.id
+        -- Same most-recently-routed-provider pick as findAllWithPricing, for the
+        -- same reason. This is a LIMIT 1 index seek, not the per-model MAX the
+        -- comment above rules out.
+        LEFT JOIN LATERAL (
+            SELECT le.provider_id
+            FROM log_entry le
+            WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
+            ORDER BY le.timestamp_request DESC
+            LIMIT 1
+        ) dp ON true
         ORDER BY m.id
         """, nativeQuery = true)
     List<ModelWithPriceProjection> findAllWithPricingForUser(@Param("userId") Integer userId);

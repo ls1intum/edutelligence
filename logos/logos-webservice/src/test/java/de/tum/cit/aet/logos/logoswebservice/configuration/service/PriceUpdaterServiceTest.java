@@ -104,6 +104,12 @@ class PriceUpdaterServiceTest {
             Map.entry("input_cost_per_query", 1.0e-3),
             Map.entry("output_cost_per_image", 4.0e-2),
             Map.entry("input_cost_per_audio_per_second", 1.4e-4),
+            Map.entry("output_cost_per_second", 2.4e-4),
+            Map.entry("output_cost_per_second_1080p", 3.4e-4),
+            Map.entry("input_cost_per_video_per_second", 4.4e-4),
+            Map.entry("output_cost_per_video_token", 7.0e-7),
+            Map.entry("google_maps_grounding_cost_per_query", 1.4e-2),
+            Map.entry("code_interpreter_cost_per_session", 3.0e-2),
             Map.entry("cache_read_input_audio_token_cost", 3.0e-7),
             Map.entry("cache_creation_input_audio_token_cost", 4.0e-7),
             Map.entry("input_cost_per_image_token", 5.0e-7),
@@ -127,11 +133,17 @@ class PriceUpdaterServiceTest {
             new SavedPrice("billed_search_queries",       "query",       0, "default", Math.round(1.0e-3 * 1e11)),
             new SavedPrice("billed_output_images",        "image",       0, "default", Math.round(4.0e-2 * 1e11)),
             new SavedPrice("audio_milliseconds",          "millisecond", 0, "default", Math.round(1.4e-4 * 1e8)),
+            new SavedPrice("billed_output_milliseconds", "millisecond", 0, "default", Math.round(2.4e-4 * 1e8)),
+            new SavedPrice("billed_output_milliseconds_1080p", "millisecond", 0, "default", Math.round(3.4e-4 * 1e8)),
+            new SavedPrice("billed_input_video_milliseconds", "millisecond", 0, "default", Math.round(4.4e-4 * 1e8)),
+            new SavedPrice("billed_output_video_tokens", "token", 0, "default", Math.round(7.0e-7 * 1e11)),
+            new SavedPrice("billed_google_maps_queries", "query", 0, "default", Math.round(1.4e-2 * 1e11)),
+            new SavedPrice("billed_code_interpreter_sessions", "session", 0, "default", Math.round(3.0e-2 * 1e11)),
             new SavedPrice("billed_input_audio_cache_read", "token", 0, "default", Math.round(3.0e-7 * 1e11)),
             new SavedPrice("billed_input_audio_cache_write", "token", 0, "default", Math.round(4.0e-7 * 1e11)),
             new SavedPrice("billed_input_image_tokens", "token", 0, "default", Math.round(5.0e-7 * 1e11)),
             new SavedPrice("billed_output_image_tokens", "token", 0, "default", Math.round(6.0e-7 * 1e11)),
-            new SavedPrice("billed_ocr_credits", "credit", 0, "default", Math.round(7.0e-3 * 1e11)),
+            new SavedPrice("billed_ocr_pages", "page", 0, "default", Math.round(7.0e-3 * 1e11)),
             new SavedPrice("billed_annotation_pages", "page", 0, "default", Math.round(8.0e-3 * 1e11))
         );
     }
@@ -141,6 +153,70 @@ class PriceUpdaterServiceTest {
         List<SavedPrice> rows = ingest(Map.of("input_cost_per_second", 6.0e-6));
         assertThat(rows).containsExactly(
             new SavedPrice("audio_milliseconds", "millisecond", 0, "default", Math.round(6.0e-6 * 1e8)));
+    }
+
+    @Test
+    void expandsStructuredGuardrailUnitPrices() {
+        assertThat(ingest(Map.of("guardrail_cost_per_unit", Map.of(
+            "contentPolicyUnits", 1.5e-4,
+            "topicPolicyUnits", 2.5e-4))))
+            .containsExactlyInAnyOrder(
+                new SavedPrice("billed_guardrail_contentPolicyUnits", "unit", 0, "default", Math.round(1.5e-4 * 1e11)),
+                new SavedPrice("billed_guardrail_topicPolicyUnits", "unit", 0, "default", Math.round(2.5e-4 * 1e11)));
+    }
+
+    @Test
+    void collapsesEqualStructuredSearchContextPrices() {
+        List<SavedPrice> rows = ingest(Map.of(
+            "search_context_cost_per_query", Map.of("low", 0.01, "medium", 0.01, "high", 0.01)));
+        assertThat(rows).containsExactlyInAnyOrder(
+            new SavedPrice("billed_search_queries_low", "query", 0, "default", Math.round(0.01 * 1e11)),
+            new SavedPrice("billed_search_queries", "query", 0, "default", Math.round(0.01 * 1e11)),
+            new SavedPrice("billed_search_queries_high", "query", 0, "default", Math.round(0.01 * 1e11)));
+    }
+
+    @Test
+    void preservesDifferentStructuredSearchContextPrices() {
+        assertThat(ingest(Map.of(
+            "search_context_cost_per_query", Map.of("low", 0.01, "high", 0.02))))
+            .containsExactlyInAnyOrder(
+                new SavedPrice("billed_search_queries_low", "query", 0, "default", Math.round(0.01 * 1e11)),
+                new SavedPrice("billed_search_queries_high", "query", 0, "default", Math.round(0.02 * 1e11)));
+    }
+
+    @Test
+    void aliasedKeysForOneDimensionPersistExactlyOneRow() {
+        // cache_read_input_token_cost and input_cost_per_token_cache_hit both map
+        // to billed_input_cache_read; the canonical key wins and only its row is
+        // persisted, so the effective rate cannot depend on row order.
+        List<SavedPrice> rows = ingest(Map.ofEntries(
+            Map.entry("cache_read_input_token_cost", 3.0e-7),
+            Map.entry("input_cost_per_token_cache_hit", 9.9e-7),
+            Map.entry("search_context_cost_per_query", 1.0e-3),
+            Map.entry("input_cost_per_query", 5.0e-3),
+            Map.entry("input_cost_per_audio_per_second", 1.4e-4),
+            Map.entry("input_cost_per_second", 9.0e-4),
+            Map.entry("output_cost_per_video_per_second", 2.4e-4),
+            Map.entry("output_cost_per_second", 9.0e-4),
+            Map.entry("ocr_cost_per_page", 7.0e-3),
+            Map.entry("ocr_cost_per_credit", 9.0e-3)
+        ));
+
+        assertThat(rows.stream().filter(r -> r.type().equals("billed_input_cache_read")).toList())
+            .containsExactly(new SavedPrice("billed_input_cache_read", "token", 0, "default",
+                Math.round(3.0e-7 * 1e11)));
+        assertThat(rows.stream().filter(r -> r.type().equals("billed_search_queries")).toList())
+            .containsExactly(new SavedPrice("billed_search_queries", "query", 0, "default",
+                Math.round(1.0e-3 * 1e11)));
+        assertThat(rows.stream().filter(r -> r.type().equals("audio_milliseconds")).toList())
+            .containsExactly(new SavedPrice("audio_milliseconds", "millisecond", 0, "default",
+                Math.round(1.4e-4 * 1e8)));
+        assertThat(rows.stream().filter(r -> r.type().equals("billed_output_milliseconds")).toList())
+            .containsExactly(new SavedPrice("billed_output_milliseconds", "millisecond", 0, "default",
+                Math.round(2.4e-4 * 1e8)));
+        assertThat(rows.stream().filter(r -> r.type().equals("billed_ocr_pages")).toList())
+            .containsExactly(new SavedPrice("billed_ocr_pages", "page", 0, "default",
+                Math.round(7.0e-3 * 1e11)));
     }
 
     @Test
@@ -156,5 +232,33 @@ class PriceUpdaterServiceTest {
         List<SavedPrice> rows = ingest(Map.of("input_cost_per_token", 0.0));
         assertThat(rows).containsExactly(
             new SavedPrice("billed_input_uncached", "token", 0, "default", 0));
+    }
+    @Test
+    void ingestsCitationDbuAndVideoIntervalPrices() {
+        List<SavedPrice> rows = ingest(Map.of(
+            "citation_cost_per_token", 2.0e-6,
+            "input_dbu_cost_per_token", 3.0e-6,
+            "output_dbu_cost_per_token", 4.0e-6,
+            "input_cost_per_video_per_second_above_8s_interval", 5.0e-4,
+            "input_cost_per_video_per_second_above_15s_interval", 6.0e-4
+        ));
+        assertThat(rows).contains(
+            new SavedPrice("billed_citation_tokens", "token", 0, "default", Math.round(2.0e-6 * 1e11)),
+            new SavedPrice("billed_input_uncached", "token", 0, "default", Math.round(3.0e-6 * 1e11)),
+            new SavedPrice("billed_output_text", "token", 0, "default", Math.round(4.0e-6 * 1e11)),
+            new SavedPrice("billed_input_video_milliseconds_above_8s", "millisecond", 0, "default", Math.round(5.0e-4 * 1e8)),
+            new SavedPrice("billed_input_video_milliseconds_above_15s", "millisecond", 0, "default", Math.round(6.0e-4 * 1e8))
+        );
+    }
+
+    @Test
+    void perPromptSearchMetadataChangesThePricedQuantity() {
+        List<SavedPrice> rows = ingest(Map.of(
+            "web_search_billing_unit", "per_prompt",
+            "input_cost_per_query", 1.0e-3
+        ));
+        assertThat(rows).containsExactly(
+            new SavedPrice("billed_search_prompts", "request", 0, "default", Math.round(1.0e-3 * 1e11))
+        );
     }
 }

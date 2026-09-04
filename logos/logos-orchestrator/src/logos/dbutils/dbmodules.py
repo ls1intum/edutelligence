@@ -215,6 +215,7 @@ class LogEntry(Base):
     azure_rate_remaining_tokens = Column(Integer)
     result_status = Column(Enum(ResultStatus, name="result_status_enum"))
     error_message = Column(Text)
+    settled_cost_micro_cents = Column(BigInteger)
 
     usage_tokens = relationship("UsageTokens")
     api_key = relationship("ApiKey")

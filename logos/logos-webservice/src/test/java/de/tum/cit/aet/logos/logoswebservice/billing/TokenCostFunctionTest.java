@@ -192,6 +192,66 @@ class TokenCostFunctionTest {
     }
 
     @Test
+    void priceUsage_nativeReadOnlyCacheShape_flag_makesItDisjoint() {
+        // Native Anthropic cache-read-only turn: cached (100) does not exceed the
+        // uncached remainder (1000) and no cache-write count is present, so the
+        // usage_shape_disjoint flag the orchestrator sets is the only proof the
+        // shape is disjoint. Without it this was billed as 900 uncached + 100
+        // read (a bounded undercharge); with it, 1000 uncached + 100 read.
+        int model = seedModel();
+        int provider = seedCloudProvider("anthropic");
+        seedPrice(model, provider, "billed_input_uncached", "token", 0, "default", 20000, "2020-01-01");
+        seedPrice(model, provider, "billed_input_cache_read", "token", 0, "default", 2000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"prompt_tokens\":1000,\"prompt_cached_tokens\":100,\"usage_shape_disjoint\":1}");
+        assertThat(cost).isEqualTo(1000L * 20000 / 1000 + 100L * 2000 / 1000);
+    }
+
+    @Test
+    void priceUsage_disjointFlagIsAuthoritativeWhenProviderTypeIsWrong() {
+        // An Anthropic model reached through a custom gateway whose provider row
+        // is typed 'openai' (or has no cloud_provider_type). The orchestrator
+        // still parsed the native cache spelling and set usage_shape_disjoint;
+        // the flag alone must drive the disjoint decomposition, so the small
+        // cache-read-only turn is not undercharged.
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_input_uncached", "token", 0, "default", 20000, "2020-01-01");
+        seedPrice(model, provider, "billed_input_cache_read", "token", 0, "default", 2000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"prompt_tokens\":1000,\"prompt_cached_tokens\":100,\"usage_shape_disjoint\":1}");
+        assertThat(cost).isEqualTo(1000L * 20000 / 1000 + 100L * 2000 / 1000);
+    }
+
+    @Test
+    void priceUsage_ocrCreditsSuppressedWhenPagesArePriced() {
+        // OCR is derived as both billed_ocr_pages and billed_ocr_credits (one
+        // credit per page). A catalogue that prices pages must not also be
+        // charged the identical credit count.
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_ocr_pages", "page", 0, "default", 1000, "2020-01-01");
+        seedPrice(model, provider, "billed_ocr_credits", "credit", 0, "default", 1000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"billed_ocr_pages\":3,\"billed_ocr_credits\":3}");
+        assertThat(cost).isEqualTo(3L * 1000 / 1000);
+    }
+
+    @Test
+    void priceUsage_ocrCreditsChargedWhenOnlyCreditPriceExists() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_ocr_credits", "credit", 0, "default", 1000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"billed_ocr_pages\":3,\"billed_ocr_credits\":3}");
+        assertThat(cost).isEqualTo(3L * 1000 / 1000);
+    }
+
+    @Test
     void priceUsage_anthropicViaOpenAiCompatibleSurface_appliesCacheDiscountOnce() {
         // cloud_provider_type is 'anthropic', but the model is reached through an
         // OpenAI-compatible gateway: prompt_tokens is inclusive (contains the
@@ -314,6 +374,69 @@ class TokenCostFunctionTest {
             "{\"prompt_tokens\":10,\"completion_tokens\":10}")).isNull();
     }
 
+    @Test
+    void priceUsage_citationTokensAreAnIndependentDimension() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_citation_tokens", "token", 0, "default", 7000, "2020-01-01");
+        assertThat(price(model, provider, "2026-01-01", null,
+            "{\"citation_tokens\":300}")).isEqualTo(2100L);
+    }
+
+    @Test
+    void priceUsage_usesOnlyHighestApplicableVideoDurationTier() {
+        int model = seedModel();
+        int provider = seedCloudProvider("gemini");
+        seedPrice(model, provider, "billed_input_video_milliseconds", "millisecond", 0, "default", 100, "2020-01-01");
+        seedPrice(model, provider, "billed_input_video_milliseconds_above_8s", "millisecond", 0, "default", 200, "2020-01-01");
+        seedPrice(model, provider, "billed_input_video_milliseconds_above_15s", "millisecond", 0, "default", 300, "2020-01-01");
+        assertThat(price(model, provider, "2026-01-01", null,
+            "{\"billed_input_video_milliseconds\":16000,"
+            + "\"billed_input_video_milliseconds_above_8s\":16000,"
+            + "\"billed_input_video_milliseconds_above_15s\":16000}"))
+            .isEqualTo(16000L * 300 / 1000);
+    }
+
+    @Test
+    void priceUsage_perPromptSearchDoesNotAlsoChargeQueries() {
+        int model = seedModel();
+        int provider = seedCloudProvider("gemini");
+        seedPrice(model, provider, "billed_search_prompts", "request", 0, "default", 5000, "2020-01-01");
+        assertThat(price(model, provider, "2026-01-01", null,
+            "{\"billed_search_queries\":3,\"billed_search_prompts\":1}"))
+            .isEqualTo(5L);
+    }
+
+    @Test
+    void priceUsage_highContextSearchFallsBackToScalarSearchPrice() {
+        // The catalogue carries only the scalar search-query price; a request that
+        // asked for a high context size still bills at that rate rather than free.
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_search_queries", "query", 0, "default", 1_000_000, "2020-01-01");
+        assertThat(price(model, provider, "2026-01-01", null, "{\"billed_search_queries_high\":3}"))
+            .isEqualTo(3L * 1_000_000 / 1000);
+    }
+
+    @Test
+    void priceUsage_sizeSpecificSearchPriceStillWinsWhenPresent() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_search_queries", "query", 0, "default", 1_000_000, "2020-01-01");
+        seedPrice(model, provider, "billed_search_queries_high", "query", 0, "default", 3_000_000, "2020-01-01");
+        assertThat(price(model, provider, "2026-01-01", null, "{\"billed_search_queries_high\":2}"))
+            .isEqualTo(2L * 3_000_000 / 1000);
+    }
+
+    @Test
+    void priceUsage_highContextSearchPromptFallsBackToScalarPromptPrice() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_search_prompts", "request", 0, "default", 25_000_000, "2020-01-01");
+        assertThat(price(model, provider, "2026-01-01", null, "{\"billed_search_prompts_high\":1}"))
+            .isEqualTo(25_000_000L / 1000);
+    }
+
     // --------------------------------------------------------------- views
 
     @Test
@@ -336,6 +459,74 @@ class TokenCostFunctionTest {
             Long.class, apiKey);
         assertThat(viaLec).isEqualTo(1000L * 20000 / 1000 + 200L * 120000 / 1000);
         assertThat(viaBudget).isEqualTo(viaLec);
+    }
+
+    @Test
+    void logEntryCost_failedRequest_billsDeliveredOutputButNotTheRequestFee() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        // The provider still billed Logos for the 40 output tokens the stream
+        // produced before it dropped; the flat per-request fee is not owed.
+        seedPrice(model, provider, "billed_requests", "request", 0, "default", 5000, "2020-01-01");
+        seedPrice(model, provider, "billed_output_text", "token", 0, "default", 120000, "2020-01-01");
+        int apiKey = seedApiKey(seedTeam());
+        int le = seedLogEntry(apiKey, model, provider, "2026-05-10T12:00:00Z", "error");
+        seedUsageToken(le, "billed_requests", 1);
+        seedUsageToken(le, "completion_tokens", 40);
+
+        Long viaLec = jdbc.queryForObject(
+            "SELECT cost_micro_cents FROM log_entry_cost WHERE log_entry_id = ?", Long.class, le);
+        assertThat(viaLec).isEqualTo(40L * 120000 / 1000);
+    }
+
+    @Test
+    void logEntryCost_failedRequest_doesNotBillRequestDerivedInputEstimates() {
+        int model = seedModel();
+        int provider = seedCloudProvider("gemini");
+        // A character-priced model whose request text was measured but rejected:
+        // billed_input_characters describes what the caller sent, not consumption.
+        seedPrice(model, provider, "billed_input_characters", "character", 0, "default", 100, "2020-01-01");
+        int apiKey = seedApiKey(seedTeam());
+        int le = seedLogEntry(apiKey, model, provider, "2026-05-10T12:00:00Z", "error");
+        seedUsageToken(le, "billed_input_characters", 4000);
+
+        Long viaLec = jdbc.queryForObject(
+            "SELECT cost_micro_cents FROM log_entry_cost WHERE log_entry_id = ?", Long.class, le);
+        assertThat(viaLec).isNull();
+    }
+
+    @Test
+    void logEntryCost_failedGeneration_doesNotBillTheRequestedImageOrDurationCount() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        // derive_billable_quantities falls back to the requested n / duration when
+        // the response has no data; a rejected generation delivered none of it.
+        seedPrice(model, provider, "billed_output_images", "image", 0, "default", 40_000_000, "2020-01-01");
+        seedPrice(model, provider, "billed_output_pixels", "pixel", 0, "default", 1, "2020-01-01");
+        seedPrice(model, provider, "billed_output_milliseconds", "millisecond", 0, "default", 200, "2020-01-01");
+        int apiKey = seedApiKey(seedTeam());
+        int le = seedLogEntry(apiKey, model, provider, "2026-05-10T12:00:00Z", "error");
+        seedUsageToken(le, "billed_output_images", 4);
+        seedUsageToken(le, "billed_output_pixels", 4 * 1024 * 1024);
+        seedUsageToken(le, "billed_output_milliseconds", 8000);
+
+        Long viaLec = jdbc.queryForObject(
+            "SELECT cost_micro_cents FROM log_entry_cost WHERE log_entry_id = ?", Long.class, le);
+        assertThat(viaLec).isNull();
+    }
+
+    @Test
+    void logEntryCost_inFlightRequestIsNotPricedUntilItFinishes() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_output_text", "token", 0, "default", 120000, "2020-01-01");
+        int apiKey = seedApiKey(seedTeam());
+        int le = seedLogEntry(apiKey, model, provider, "2026-05-10T12:00:00Z", (String) null);
+        seedUsageToken(le, "completion_tokens", 40);
+
+        Long viaLec = jdbc.queryForObject(
+            "SELECT cost_micro_cents FROM log_entry_cost WHERE log_entry_id = ?", Long.class, le);
+        assertThat(viaLec).isNull();
     }
 
     @Test
@@ -441,10 +632,14 @@ class TokenCostFunctionTest {
     }
 
     private int seedLogEntry(int apiKeyId, int modelId, int providerId, String tsRequest) {
+        return seedLogEntry(apiKeyId, modelId, providerId, tsRequest, "success");
+    }
+
+    private int seedLogEntry(int apiKeyId, int modelId, int providerId, String tsRequest, String resultStatus) {
         return jdbc.queryForObject(
-            "INSERT INTO log_entry (timestamp_request, api_key_id, model_id, provider_id) "
-            + "VALUES (?::timestamptz, ?, ?, ?) RETURNING id",
-            Integer.class, tsRequest, apiKeyId, modelId, providerId);
+            "INSERT INTO log_entry (timestamp_request, api_key_id, model_id, provider_id, result_status) "
+            + "VALUES (?::timestamptz, ?, ?, ?, ?::result_status_enum) RETURNING id",
+            Integer.class, tsRequest, apiKeyId, modelId, providerId, resultStatus);
     }
 
     private void seedUsageToken(int logEntryId, String typeName, long count) {

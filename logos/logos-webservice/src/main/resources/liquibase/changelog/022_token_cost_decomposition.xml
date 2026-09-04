@@ -20,6 +20,7 @@
             ALTER TABLE token_prices RENAME COLUMN price_per_k_token TO price_per_k_unit;
 
             ALTER TABLE log_entry ADD COLUMN service_tier TEXT;
+            ALTER TABLE log_entry ADD COLUMN settled_cost_micro_cents BIGINT;
 
             -- Response finalisation is retryable. Keep the most recently written
             -- value for legacy duplicates, then make subsequent writes idempotent.
@@ -48,6 +49,8 @@
                 ('billed_output_reasoning'),
                 ('billed_output_audio'),
                 ('billed_output_image_tokens'),
+                ('billed_output_video_tokens'),
+                ('billed_citation_tokens'),
                 ('billed_input_characters'),
                 ('billed_output_characters'),
                 ('billed_requests'),
@@ -58,7 +61,28 @@
                 ('billed_ocr_pages'),
                 ('billed_ocr_credits'),
                 ('billed_annotation_pages'),
-                ('billed_search_queries')
+                ('billed_search_queries'),
+                ('billed_search_queries_low'),
+                ('billed_search_queries_high'),
+                ('billed_search_prompts'),
+                ('billed_search_prompts_low'),
+                ('billed_search_prompts_high'),
+                ('billed_output_milliseconds')
+                ,('billed_output_milliseconds_1080p')
+                ,('billed_output_milliseconds_4k')
+                ,('billed_input_video_milliseconds')
+                ,('billed_input_video_milliseconds_above_8s')
+                ,('billed_input_video_milliseconds_above_15s')
+                ,('billed_google_maps_queries')
+                ,('billed_code_interpreter_sessions')
+                ,('billed_guardrail_automatedReasoningPolicyUnits')
+                ,('billed_guardrail_contentPolicyImageUnits')
+                ,('billed_guardrail_contentPolicyUnits')
+                ,('billed_guardrail_contextualGroundingPolicyUnits')
+                ,('billed_guardrail_sensitiveInformationPolicyFreeUnits')
+                ,('billed_guardrail_sensitiveInformationPolicyUnits')
+                ,('billed_guardrail_topicPolicyUnits')
+                ,('billed_guardrail_wordPolicyUnits')
             ) AS x(n)
             WHERE NOT EXISTS (SELECT 1 FROM token_types t WHERE t.name = x.n);
 
@@ -71,7 +95,15 @@
             FROM (VALUES
                 ('prompt_cached_tokens'),
                 ('prompt_cache_write_tokens'),
-                ('prompt_cache_write_1h_tokens')
+                ('prompt_cache_write_1h_tokens'),
+                ('completion_video_tokens'),
+                ('citation_tokens'),
+                -- Not a token count: a 1/absent flag the orchestrator sets when
+                -- the response arrived in the native Anthropic/Bedrock shape
+                -- (input_tokens is the uncached remainder, cache reads/writes are
+                -- disjoint siblings). logos_price_usage reads it to pick the
+                -- decomposition; it is priced by nothing.
+                ('usage_shape_disjoint')
             ) AS x(n)
             WHERE NOT EXISTS (SELECT 1 FROM token_types t WHERE t.name = x.n);
 
@@ -162,6 +194,16 @@
                         ('billed_output_reasoning',     'billed_output_text',       1),
                         ('billed_output_audio',         'billed_output_text',       1),
                         ('billed_output_image_tokens',  'billed_output_text',       1)
+                        ,('billed_output_video_tokens', 'billed_output_text',       1)
+                        -- Most catalogues carry only the scalar search price
+                        -- (search_context_cost_per_query / input_cost_per_query).
+                        -- A request that asks for a low/high context size derives
+                        -- the size-suffixed quantity, so fall those back to the
+                        -- scalar price when no size-specific row exists.
+                        ,('billed_search_queries_low',  'billed_search_queries',    1)
+                        ,('billed_search_queries_high', 'billed_search_queries',    1)
+                        ,('billed_search_prompts_low',  'billed_search_prompts',    1)
+                        ,('billed_search_prompts_high', 'billed_search_prompts',    1)
                     ) AS x(orig, fb, d)
                     WHERE x.orig = p_quantity
                 )
@@ -172,6 +214,20 @@
                     SELECT tp.price_per_k_unit
                     FROM token_prices tp
                     WHERE tp.type_id = tt.id
+                      AND tp.unit = CASE
+                          WHEN c.name LIKE '%characters' THEN 'character'
+                          WHEN c.name LIKE '%images' THEN 'image'
+                          WHEN c.name LIKE '%pixels' THEN 'pixel'
+                          WHEN c.name LIKE '%milliseconds%' OR c.name = 'audio_milliseconds' THEN 'millisecond'
+                          WHEN c.name LIKE '%pages' THEN 'page'
+                          WHEN c.name LIKE '%credits' THEN 'credit'
+                          WHEN c.name LIKE '%queries%' THEN 'query'
+                          WHEN c.name LIKE '%prompts%' THEN 'request'
+                          WHEN c.name = 'billed_requests' THEN 'request'
+                          WHEN c.name LIKE '%sessions' THEN 'session'
+                          WHEN c.name LIKE 'billed_guardrail_%' THEN 'unit'
+                          ELSE 'token'
+                      END
                       AND (tp.model_id = p_model_id OR tp.model_id IS NULL)
                       AND (tp.provider_id = p_provider_id OR tp.provider_id IS NULL)
                       AND tp.valid_from <= p_valid_at
@@ -182,7 +238,8 @@
                              (tp.provider_id = p_provider_id) DESC NULLS LAST,
                              (tp.service_tier = COALESCE(p_service_tier, 'default')) DESC,
                              tp.min_context_tokens DESC,
-                             tp.valid_from DESC
+                             tp.valid_from DESC,
+                             tp.id DESC
                     LIMIT 1
                 ) price ON true
                 ORDER BY c.depth
@@ -209,15 +266,19 @@
                 cached bigint;    cwrite bigint;    cwrite1h bigint;   pmiss bigint;
                 paudio bigint;    caudio bigint;    reasoning bigint;
                 iaudio_read bigint; iaudio_write bigint;
-                pimage bigint; cimage bigint;
+                pimage bigint; cimage bigint; cvideo bigint;
                 b_in_uncached bigint; b_in_read bigint; b_in_write bigint;
                 b_in_write1h bigint;  b_in_audio bigint;
                 b_in_audio_read bigint; b_in_audio_write bigint; b_in_image bigint;
                 b_out_text bigint;    b_out_reason bigint; b_out_audio bigint; b_out_image bigint;
+                b_out_video bigint;
                 disjoint boolean; hitmiss boolean;
                 ctx bigint;
                 has_input_token_price boolean;
                 has_output_token_price boolean;
+                has_ocr_page_price boolean;
+                has_video_8s_price boolean;
+                has_video_15s_price boolean;
                 total numeric := 0;
                 any_priced boolean := false;
                 unit_price bigint;
@@ -246,6 +307,7 @@
                 iaudio_write := COALESCE((u->>'prompt_cache_write_audio_tokens')::bigint, 0);
                 pimage       := COALESCE((u->>'prompt_image_tokens')::bigint, 0);
                 cimage       := COALESCE((u->>'completion_image_tokens')::bigint, 0);
+                cvideo       := COALESCE((u->>'completion_video_tokens')::bigint, 0);
 
                 b_in_audio_read  := iaudio_read;
                 b_in_audio_write := iaudio_write;
@@ -257,21 +319,30 @@
                 -- subsets; Anthropic and Bedrock Converse report input_tokens as
                 -- the uncached remainder with cache reads/writes as disjoint
                 -- siblings. An Anthropic/Bedrock model reached through an
-                -- OpenAI-compatible surface reports the *inclusive* shape, so
-                -- cloud_provider_type only narrows the candidates -- the payload
-                -- must still prove it is disjoint:
-                --   * a cache-write count is present (only the native
-                --     Anthropic/Bedrock family emits one), or
-                --   * prompt_cached_tokens exceeds prompt_tokens, which is
-                --     impossible when cached is a subset of the prompt.
-                -- Native cache-read-only turns whose cached count happens not to
-                -- exceed the (small) uncached input fall to the inclusive branch:
-                -- a bounded undercharge (cached priced once, at the read rate),
-                -- never the cache-read double-charge of issue #892.
-                disjoint := v_disjoint_cache_provider
-                         AND ((u ? 'prompt_cache_write_tokens')
-                              OR (u ? 'prompt_cache_write_1h_tokens')
-                              OR cached > prompt);
+                -- OpenAI-compatible surface reports the *inclusive* shape, so the
+                -- payload must prove it is disjoint:
+                --   * usage_shape_disjoint is set: the orchestrator normalized a
+                --     native Anthropic/Bedrock cache spelling
+                --     (cache_read_input_tokens / cache_creation*), a spelling no
+                --     OpenAI-compatible surface emits. This is authoritative on
+                --     its own -- it holds even when the provider row's
+                --     cloud_provider_type is missing or wrong (a custom gateway).
+                --   * otherwise, for an anthropic/bedrock-typed provider: a
+                --     cache-write count is present (only the native family emits
+                --     one), or prompt_cached_tokens exceeds prompt_tokens, which
+                --     is impossible when cached is a subset of the prompt.
+                -- The flag covers native cache-read-only turns, whose cached
+                -- count need not exceed the uncached input and which carry no
+                -- cache-write count -- previously a bounded undercharge (cached
+                -- priced once at the read rate), now decomposed correctly, and
+                -- still never the double-charge of issue #892. Rows persisted
+                -- before the orchestrator emitted the flag fall back to the
+                -- count-based proofs.
+                disjoint := (u ? 'usage_shape_disjoint')
+                         OR (v_disjoint_cache_provider
+                             AND ((u ? 'prompt_cache_write_tokens')
+                                  OR (u ? 'prompt_cache_write_1h_tokens')
+                                  OR cached > prompt));
                 hitmiss  := (u ? 'prompt_cache_miss_tokens');
 
                 IF disjoint THEN
@@ -299,7 +370,8 @@
                 b_out_audio  := caudio;
                 b_out_reason := reasoning;
                 b_out_image  := cimage;
-                b_out_text   := GREATEST(completion - reasoning - caudio - cimage, 0);
+                b_out_video  := cvideo;
+                b_out_text   := GREATEST(completion - reasoning - caudio - cimage - cvideo, 0);
 
                 ctx := b_in_uncached + b_in_read + b_in_write + b_in_write1h
                        + b_in_audio + b_in_audio_read + b_in_audio_write + b_in_image;
@@ -309,6 +381,20 @@
                                              p_valid_at, ctx, p_service_tier) IS NOT NULL;
                 has_output_token_price :=
                     logos_resolve_unit_price('billed_output_text', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                -- OCR is derived as both billed_ocr_pages and billed_ocr_credits
+                -- (one credit per result page) so a catalogue can price it in
+                -- either vocabulary. If it prices pages, the credits count is the
+                -- same quantity again -- suppress it so the page isn't billed
+                -- twice.
+                has_ocr_page_price :=
+                    logos_resolve_unit_price('billed_ocr_pages', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                has_video_8s_price := (u ? 'billed_input_video_milliseconds_above_8s') AND
+                    logos_resolve_unit_price('billed_input_video_milliseconds_above_8s', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                has_video_15s_price := (u ? 'billed_input_video_milliseconds_above_15s') AND
+                    logos_resolve_unit_price('billed_input_video_milliseconds_above_15s', p_model_id, p_provider_id,
                                              p_valid_at, ctx, p_service_tier) IS NOT NULL;
 
                 FOR q IN
@@ -326,6 +412,9 @@
                         ('billed_output_reasoning',     b_out_reason),
                         ('billed_output_audio',         b_out_audio),
                         ('billed_output_image_tokens',  b_out_image),
+                        ('billed_output_video_tokens',  b_out_video),
+                        ('billed_citation_tokens',
+                             COALESCE((u->>'citation_tokens')::bigint, 0)),
                         ('billed_requests',
                              COALESCE((u->>'billed_requests')::bigint, 0)),
                         ('billed_input_characters',
@@ -344,14 +433,51 @@
                              COALESCE((u->>'billed_output_pixels')::bigint, 0)),
                         ('audio_milliseconds',
                              COALESCE((u->>'audio_milliseconds')::bigint, 0)),
+                        ('billed_output_milliseconds',
+                             COALESCE((u->>'billed_output_milliseconds')::bigint, 0)),
+                        ('billed_output_milliseconds_1080p',
+                             COALESCE((u->>'billed_output_milliseconds_1080p')::bigint, 0)),
+                        ('billed_output_milliseconds_4k',
+                             COALESCE((u->>'billed_output_milliseconds_4k')::bigint, 0)),
+                        ('billed_input_video_milliseconds',
+                             CASE WHEN has_video_8s_price OR has_video_15s_price THEN 0
+                                  ELSE COALESCE((u->>'billed_input_video_milliseconds')::bigint, 0) END),
+                        ('billed_input_video_milliseconds_above_8s',
+                             CASE WHEN has_video_15s_price THEN 0
+                                  ELSE COALESCE((u->>'billed_input_video_milliseconds_above_8s')::bigint, 0) END),
+                        ('billed_input_video_milliseconds_above_15s',
+                             COALESCE((u->>'billed_input_video_milliseconds_above_15s')::bigint, 0)),
                         ('billed_ocr_pages',
                              COALESCE((u->>'billed_ocr_pages')::bigint, 0)),
                         ('billed_ocr_credits',
-                             COALESCE((u->>'billed_ocr_credits')::bigint, 0)),
+                             CASE WHEN has_ocr_page_price THEN 0
+                                  ELSE COALESCE((u->>'billed_ocr_credits')::bigint, 0) END),
                         ('billed_annotation_pages',
                              COALESCE((u->>'billed_annotation_pages')::bigint, 0)),
                         ('billed_search_queries',
-                             COALESCE((u->>'billed_search_queries')::bigint, 0))
+                             COALESCE((u->>'billed_search_queries')::bigint, 0)),
+                        ('billed_search_queries_low',
+                             COALESCE((u->>'billed_search_queries_low')::bigint, 0)),
+                        ('billed_search_queries_high',
+                             COALESCE((u->>'billed_search_queries_high')::bigint, 0)),
+                        ('billed_search_prompts',
+                             COALESCE((u->>'billed_search_prompts')::bigint, 0)),
+                        ('billed_search_prompts_low',
+                             COALESCE((u->>'billed_search_prompts_low')::bigint, 0)),
+                        ('billed_search_prompts_high',
+                             COALESCE((u->>'billed_search_prompts_high')::bigint, 0)),
+                        ('billed_google_maps_queries',
+                             COALESCE((u->>'billed_google_maps_queries')::bigint, 0)),
+                        ('billed_code_interpreter_sessions',
+                             COALESCE((u->>'billed_code_interpreter_sessions')::bigint, 0)),
+                        ('billed_guardrail_automatedReasoningPolicyUnits', COALESCE((u->>'billed_guardrail_automatedReasoningPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_contentPolicyImageUnits', COALESCE((u->>'billed_guardrail_contentPolicyImageUnits')::bigint, 0)),
+                        ('billed_guardrail_contentPolicyUnits', COALESCE((u->>'billed_guardrail_contentPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_contextualGroundingPolicyUnits', COALESCE((u->>'billed_guardrail_contextualGroundingPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_sensitiveInformationPolicyFreeUnits', COALESCE((u->>'billed_guardrail_sensitiveInformationPolicyFreeUnits')::bigint, 0)),
+                        ('billed_guardrail_sensitiveInformationPolicyUnits', COALESCE((u->>'billed_guardrail_sensitiveInformationPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_topicPolicyUnits', COALESCE((u->>'billed_guardrail_topicPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_wordPolicyUnits', COALESCE((u->>'billed_guardrail_wordPolicyUnits')::bigint, 0))
                     ) AS x(name, qty)
                     WHERE x.qty > 0
                 LOOP
@@ -384,11 +510,44 @@
             SELECT le.id            AS log_entry_id,
                    le.api_key_id    AS api_key_id,
                    le.timestamp_request AS timestamp_request,
-                   -- NULL when Logos has no pricing knowledge for the response
-                   -- (local provider, or a cloud model with no catalog price):
-                   -- the logs UI omits the cost line, budget SUM()s ignore it.
-                   logos_price_usage(le.model_id, le.provider_id, le.timestamp_request,
-                                     le.service_tier, pe.usage_json) AS cost_micro_cents
+                   -- A completed request prices its full usage (from the frozen
+                   -- snapshot when present, else live). A failed or timed-out
+                   -- request still prices what it measurably delivered -- the
+                   -- provider bills Logos for a stream that produced tokens or
+                   -- characters and then dropped -- but never the flat per-request
+                   -- fee, nor any quantity that is only an estimate from the
+                   -- request when the response is absent: the input estimates
+                   -- (characters / pixels / images / video ms) and the output
+                   -- generation quantities that fall back to the requested count
+                   -- or duration (images, pixels, milliseconds). In-flight rows
+                   -- (result_status NULL) are not priced until they finish. NULL
+                   -- is also returned when Logos has no pricing knowledge (local
+                   -- provider, or a cloud model with no catalog price): the logs
+                   -- UI omits the cost line, budget SUM()s ignore it.
+                   CASE
+                       WHEN le.result_status = 'success' THEN COALESCE(
+                           le.settled_cost_micro_cents,
+                           logos_price_usage(le.model_id, le.provider_id,
+                                             COALESCE(le.timestamp_response, le.timestamp_request),
+                                             le.service_tier, pe.usage_json)
+                       )
+                       WHEN le.result_status IN ('error', 'timeout') THEN
+                           logos_price_usage(le.model_id, le.provider_id,
+                                             COALESCE(le.timestamp_response, le.timestamp_request),
+                                             le.service_tier,
+                                             pe.usage_json - ARRAY[
+                                                 'billed_requests',
+                                                 'billed_input_characters',
+                                                 'billed_input_pixels',
+                                                 'billed_input_images',
+                                                 'billed_input_video_milliseconds',
+                                                 'billed_output_images',
+                                                 'billed_output_pixels',
+                                                 'billed_output_milliseconds',
+                                                 'billed_output_milliseconds_1080p',
+                                                 'billed_output_milliseconds_4k'
+                                             ])
+                   END AS cost_micro_cents
             FROM log_entry le
             LEFT JOIN LATERAL (
                 SELECT jsonb_object_agg(tt.name, ut.token_count) AS usage_json
@@ -434,8 +593,12 @@
                            WHEN 'prompt_cache_write_tokens' THEN 'billed_input_cache_write'
                            WHEN 'prompt_cache_write_1h_tokens' THEN 'billed_input_cache_write_1h'
                            WHEN 'prompt_audio_tokens' THEN 'billed_input_audio'
+                           WHEN 'prompt_image_tokens' THEN 'billed_input_image_tokens'
+                           WHEN 'prompt_cache_read_audio_tokens' THEN 'billed_input_audio_cache_read'
+                           WHEN 'prompt_cache_write_audio_tokens' THEN 'billed_input_audio_cache_write'
                            WHEN 'completion_reasoning_tokens' THEN 'billed_output_reasoning'
                            WHEN 'completion_audio_tokens' THEN 'billed_output_audio'
+                           WHEN 'completion_image_tokens' THEN 'billed_output_image_tokens'
                            ELSE tt.name
                        END AS quantity,
                        ut.token_count
@@ -446,7 +609,10 @@
                        OR tt.name IN ('prompt_tokens', 'completion_tokens',
                            'prompt_cached_tokens', 'prompt_cache_write_tokens',
                            'prompt_cache_write_1h_tokens', 'prompt_audio_tokens',
+                           'prompt_image_tokens', 'prompt_cache_read_audio_tokens',
+                           'prompt_cache_write_audio_tokens',
                            'completion_reasoning_tokens', 'completion_audio_tokens',
+                           'completion_image_tokens',
                            'audio_milliseconds'))
             )
             SELECT le.model_id,
@@ -464,7 +630,7 @@
                   WHERE tp.type_id = priced_type.id
                     AND (tp.model_id = le.model_id OR tp.model_id IS NULL)
                     AND (tp.provider_id = le.provider_id OR tp.provider_id IS NULL)
-                    AND tp.valid_from <= le.timestamp_request
+                    AND tp.valid_from <= COALESCE(le.timestamp_response, le.timestamp_request)
               )
               -- Character counts are deliberately ignored when that direction
               -- has token pricing; do not report those suppressed dimensions as
@@ -481,7 +647,7 @@
                       END
                         AND (directional_tp.model_id = le.model_id OR directional_tp.model_id IS NULL)
                         AND (directional_tp.provider_id = le.provider_id OR directional_tp.provider_id IS NULL)
-                        AND directional_tp.valid_from <= le.timestamp_request
+                        AND directional_tp.valid_from <= COALESCE(le.timestamp_response, le.timestamp_request)
                   )
               )
             GROUP BY le.model_id, le.provider_id, o.quantity;
@@ -535,6 +701,21 @@
             $fn$;
 
             SELECT logos_collapse_price_sentinels();
+
+            -- Snapshot historical successful requests after repairing legacy
+            -- price generations. Future catalogue refreshes can no longer
+            -- rewrite completed budget history.
+            UPDATE log_entry le
+            SET settled_cost_micro_cents = logos_price_usage(
+                le.model_id, le.provider_id,
+                COALESCE(le.timestamp_response, le.timestamp_request),
+                le.service_tier,
+                (SELECT jsonb_object_agg(tt.name, ut.token_count)
+                 FROM usage_tokens ut
+                 JOIN token_types tt ON tt.id = ut.type_id
+                 WHERE ut.log_entry_id = le.id))
+            WHERE le.result_status = 'success'
+              AND le.settled_cost_micro_cents IS NULL;
         ]]></sql>
     </changeSet>
 
