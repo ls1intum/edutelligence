@@ -132,6 +132,20 @@ async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+class Unchanged:
+    """ "Leave this alone", as a value.
+
+    Null already means something here — "clear the override" — so a half
+    nobody touched cannot be expressed as null, and a default of null would
+    quietly reset it.
+    """
+
+    __slots__ = ()
+
+
+UNCHANGED = Unchanged()
+
+
 async def get_instructions() -> dict[str, Any] | None:
     """The standing instructions, or None when the row is missing."""
     async with sessionmaker()() as db:
@@ -152,12 +166,19 @@ async def get_instructions() -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-async def set_instructions(*, house_rules: str | None, environment_notes: str | None, updated_by: str) -> None:
-    """Store the standing instructions. Null clears an override.
+async def set_instructions(
+    *,
+    house_rules: str | None | Unchanged = UNCHANGED,
+    environment_notes: str | None | Unchanged = UNCHANGED,
+    updated_by: str,
+) -> None:
+    """Store the standing instructions.
 
-    Both halves are written together, because the page edits them together
-    and a partial write would make "cleared" and "unchanged" the same
-    request.
+    Three things can be meant about a half, and they are all different:
+    text replaces it, null clears the override back to what the code ships
+    with, and `UNCHANGED` leaves what is stored alone. The last one is why
+    the write is per-half — resetting the house rules must not save
+    whatever happens to be sitting in the other box on somebody's screen.
     """
     async with sessionmaker()() as db:
         await db.execute(
@@ -166,15 +187,21 @@ async def set_instructions(*, house_rules: str | None, environment_notes: str | 
                 INSERT INTO agent_instructions (id, house_rules, environment_notes, updated_by, updated_at)
                 VALUES (1, :house_rules, :environment_notes, :updated_by, :now)
                 ON CONFLICT (id) DO UPDATE SET
-                    house_rules = :house_rules,
-                    environment_notes = :environment_notes,
+                    house_rules = CASE WHEN :write_house
+                        THEN :house_rules ELSE agent_instructions.house_rules END,
+                    environment_notes = CASE WHEN :write_notes
+                        THEN :environment_notes ELSE agent_instructions.environment_notes END,
                     updated_by = :updated_by,
                     updated_at = :now
                 """
             ),
             {
-                "house_rules": house_rules,
-                "environment_notes": environment_notes,
+                # There is no row to keep on the insert path, so an untouched
+                # half starts out as no override at all.
+                "house_rules": None if isinstance(house_rules, Unchanged) else house_rules,
+                "environment_notes": None if isinstance(environment_notes, Unchanged) else environment_notes,
+                "write_house": not isinstance(house_rules, Unchanged),
+                "write_notes": not isinstance(environment_notes, Unchanged),
                 "updated_by": updated_by,
                 "now": _now(),
             },
@@ -844,7 +871,7 @@ _SESSION_SELECT = """
            s.container_id, s.open_pull_request, s.deploy_to_dev,
            s.screenshot_paths, s.trigger_kind, s.trigger_ref, s.reply_target,
            s.reaction_target,
-           s.priority, s.priority_reason,
+           s.priority, s.priority_reason, s.environment_notes,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_usd, 0) AS cost_usd,
@@ -1210,6 +1237,32 @@ async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -
     return [dict(r) for r in rows]
 
 
+async def sessions_awaiting_checks() -> list[dict[str, Any]]:
+    """Finished sessions whose pushed commit nobody has judged yet.
+
+    The follow-up on a red build outlives the process that started it: a
+    redeploy in the couple of minutes between pushing and CI concluding
+    used to drop it silently. Asked on startup and on every scheduler pass,
+    and almost always empty.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT id, workspace_id, task, model, branch_name, checks_sha,
+                           trigger_kind, trigger_ref, reply_target, reaction_target,
+                           priority, priority_reason, open_pull_request, finished_at
+                      FROM agent_sessions
+                     WHERE checks_watch = 'pending'
+                     ORDER BY id
+                    """
+                )
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
 async def update_session(session_id: int, **fields: Any) -> None:
     """Patch a session row. Callers pass only the columns they mean to change."""
     if not fields:
@@ -1227,6 +1280,13 @@ async def update_session(session_id: int, **fields: Any) -> None:
         "tokens_out",
         "cost_usd",
         "deployed_at",
+        # The text this session was handed, as opposed to the text sessions
+        # are handed now — the instructions are editable.
+        "environment_notes",
+        # The commit whose checks somebody still has to look at, and whether
+        # anybody still owes that.
+        "checks_sha",
+        "checks_watch",
     }
     unknown = set(fields) - allowed
     if unknown:

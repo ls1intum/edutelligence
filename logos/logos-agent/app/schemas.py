@@ -161,6 +161,11 @@ class SessionSummary(BaseModel):
     # How urgent this work is, and the sentence explaining it.
     priority: int = 50
     priority_reason: str | None = None
+    # The environment notes this session was handed, as they stood when it
+    # started. Null for a session that never started, and for the ones that
+    # ran before the runner kept a copy — the page says so rather than
+    # showing today's text as if it were theirs.
+    environment_notes: str | None = None
 
 
 class InstructionState(BaseModel):
@@ -175,11 +180,16 @@ class InstructionState(BaseModel):
 
 
 class InstructionUpdate(BaseModel):
-    """New standing text. A null half goes back to the shipped default."""
+    """New standing text.
+
+    Each half is optional and left as it is stored when it is absent, so a
+    page can save or reset one box without also submitting whatever is
+    typed in the other. `reset_*` is the third state: back to the text the
+    code ships with, which an empty string does not mean.
+    """
 
     house_rules: str | None = Field(default=None, max_length=20000)
     environment_notes: str | None = Field(default=None, max_length=20000)
-    # Told apart from "leave it alone": the page always sends both halves.
     reset_house_rules: bool = False
     reset_environment_notes: bool = False
 

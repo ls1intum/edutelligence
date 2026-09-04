@@ -152,10 +152,11 @@ def test_the_agent_home_is_replaced_not_reused(tmp_path, monkeypatch):
 
     _reset_agent_home()
 
-    # A fresh, empty home: the global hooksPath, the CLI settings, and any
-    # poisoned tool caches a previous session wrote are all gone.
+    # A fresh home: the global hooksPath, the CLI settings, and any poisoned
+    # tool caches a previous session wrote are all gone. What the harness
+    # puts there itself is the only thing in it.
     assert home.is_dir()
-    assert list(home.iterdir()) == []
+    assert [entry.name for entry in home.iterdir()] == ["pre-commit"]
 
 
 def test_a_home_left_as_a_symlink_is_replaced_too(tmp_path, monkeypatch):
@@ -175,7 +176,7 @@ def test_a_home_left_as_a_symlink_is_replaced_too(tmp_path, monkeypatch):
     _reset_agent_home()
 
     assert home.is_dir() and not home.is_symlink()
-    assert list(home.iterdir()) == []
+    assert [entry.name for entry in home.iterdir()] == ["pre-commit"]
     # Whatever the symlink pointed at is untouched: we never followed it.
     assert (outside / ".gitconfig").exists()
 
@@ -196,7 +197,7 @@ def test_a_dangling_home_symlink_is_removed_not_kept(tmp_path, monkeypatch):
     _reset_agent_home()
 
     assert home.is_dir() and not home.is_symlink()
-    assert list(home.iterdir()) == []
+    assert [entry.name for entry in home.iterdir()] == ["pre-commit"]
 
 
 def test_a_dangling_checkout_symlink_is_removed_before_the_clone(tmp_path, monkeypatch):
@@ -297,7 +298,7 @@ class TestFinalizer:
         # The home and the repository metadata are trusted again: nothing
         # planted survives to run or be read. (--local: the machine's system
         # git config is out of scope for the rebuild.)
-        assert list(home.iterdir()) == []
+        assert [entry.name for entry in home.iterdir()] == ["pre-commit"]
         for key in ("core.hooksPath", "credential.helper"):
             result = subprocess.run(
                 ["git", "config", "--local", "--get", key], cwd=checkout, text=True, capture_output=True
@@ -907,3 +908,88 @@ class TestHowAPullRequestIsOpened:
 
         title = calls[0][calls[0].index("--title") + 1]
         assert title == "`Logos`: Fit the KPI card sparkline to its slot"
+
+
+class TestWhatTheAgentIsTold:
+    """The environment notes an operator can edit, and the fallback.
+
+    The runner passes its own text in; the block written here is only for a
+    session started by a runner too old to send one. Which of the two the
+    agent gets is a question about whether the runner said anything at all
+    — not about whether what it said was empty.
+    """
+
+    def test_the_runner_s_text_is_used_when_it_sends_one(self, monkeypatch):
+        monkeypatch.setenv("LOGOS_SESSION_ENVIRONMENT_NOTES", "--- Notes ---\nBe careful.")
+        monkeypatch.delenv("LOGOS_SESSION_IMAGES", raising=False)
+
+        prompt = run_session.build_prompt("Fix the alignment.")
+
+        assert prompt == "Fix the alignment.\n\n--- Notes ---\nBe careful.\n"
+
+    def test_an_operator_who_empties_the_notes_is_obeyed(self, monkeypatch):
+        # "Say nothing here" is a decision. Answering it with a page of
+        # defaults ignores it.
+        monkeypatch.setenv("LOGOS_SESSION_ENVIRONMENT_NOTES", "   ")
+        monkeypatch.delenv("LOGOS_SESSION_IMAGES", raising=False)
+
+        prompt = run_session.build_prompt("Fix the alignment.")
+
+        assert prompt == "Fix the alignment.\n"
+
+    def test_an_older_runner_that_sends_nothing_gets_the_fallback(self, monkeypatch):
+        monkeypatch.delenv("LOGOS_SESSION_ENVIRONMENT_NOTES", raising=False)
+        monkeypatch.delenv("LOGOS_SESSION_IMAGES", raising=False)
+
+        prompt = run_session.build_prompt("Fix the alignment.")
+
+        assert "Environment notes" in prompt
+        assert "pre-commit run --files" in prompt
+
+    def test_the_images_are_named_either_way(self, monkeypatch):
+        monkeypatch.setenv("LOGOS_SESSION_ENVIRONMENT_NOTES", "")
+        monkeypatch.setenv("LOGOS_SESSION_IMAGES", "/artifacts/attachments/01.png")
+
+        prompt = run_session.build_prompt("The page looks wrong.")
+
+        # An issue whose description is a screenshot is unreadable without
+        # this, whatever the notes say.
+        assert "/artifacts/attachments/01.png" in prompt
+
+
+class TestTheHookStore:
+    """pre-commit needs somewhere to write, and the image is read-only.
+
+    The hook environments are baked into the image — that is what lets a
+    session with no network run the linters CI runs. The store itself
+    cannot be: pre-commit takes a lock and records what it ran in a small
+    database, and the first thing the advertised command did was fail on a
+    read-only filesystem.
+    """
+
+    def test_the_seeded_database_is_copied_into_the_session_home(self, tmp_path, monkeypatch):
+        seeded = tmp_path / "opt" / "pre-commit"
+        seeded.mkdir(parents=True)
+        (seeded / "db.db").write_bytes(b"sqlite")
+        home = tmp_path / "ws" / ".home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("PRE_COMMIT_HOME", str(home / "pre-commit"))
+        monkeypatch.setenv("PRE_COMMIT_STORE", str(seeded))
+        (tmp_path / "ws").mkdir(parents=True, exist_ok=True)
+
+        _reset_agent_home()
+
+        assert (home / "pre-commit" / "db.db").read_bytes() == b"sqlite"
+
+    def test_a_store_that_cannot_be_prepared_does_not_stop_the_session(self, tmp_path, monkeypatch):
+        home = tmp_path / "ws" / ".home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("PRE_COMMIT_HOME", str(home / "pre-commit"))
+        monkeypatch.setenv("PRE_COMMIT_STORE", str(tmp_path / "nothing-here"))
+        (tmp_path / "ws").mkdir(parents=True, exist_ok=True)
+
+        _reset_agent_home()
+
+        # Better a linter the agent is told is unavailable than a session
+        # that never starts.
+        assert home.is_dir()

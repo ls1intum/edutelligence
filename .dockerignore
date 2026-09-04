@@ -26,8 +26,14 @@
 !logos/logos-agent/workspace/run_session.py
 !logos/logos-agent/workspace/screenshot.js
 # The session image installs the repository's own hook environments at build
-# time, because a session has no network to install them with.
+# time, because a session has no network to install them with. Every config,
+# not only Logos's: the root one delegates to the services through
+# sub-pre-commit, and they pin their own versions of the same tools.
+!.pre-commit-config.yaml
 !logos/.pre-commit-config.yaml
+!iris/.pre-commit-config.yaml
+!athena/.pre-commit-config.yaml
+!memiris/.pre-commit-config.yaml
 # The model gateway's nginx configuration, shipped in its image rather than
 # bind-mounted: a deployment copies only the compose file to its VM.
 !logos/agent-gateway/nginx.conf

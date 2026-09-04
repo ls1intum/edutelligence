@@ -453,3 +453,52 @@ class TestWhatEverySessionIsTold:
         # Null, not the text the page happened to have on screen: null is
         # what means "use what the code ships with".
         assert written == [(None, "A container.")]
+
+    async def test_a_half_nobody_mentioned_is_left_alone(self, monkeypatch):
+        from app import conventions, db
+        from app.schemas import InstructionUpdate
+
+        written: list = []
+
+        async def set_instructions(*, house_rules, environment_notes, updated_by):
+            written.append((house_rules, environment_notes))
+
+        async def stored():
+            return {"house_rules": None, "environment_notes": "A container.", "updated_by": "tobias"}
+
+        monkeypatch.setattr(conventions.db, "set_instructions", set_instructions)
+        monkeypatch.setattr(conventions.db, "get_instructions", stored)
+        conventions.forget()
+
+        # What the page sends when somebody resets one box: a statement
+        # about that box and nothing else. The other one may hold an edit
+        # nobody has saved, and saving it here would be saving it behind
+        # their back.
+        await main.put_instructions(
+            InstructionUpdate(reset_house_rules=True),
+            principal=_principal(),
+        )
+
+        assert written == [(None, db.UNCHANGED)]
+
+    async def test_an_empty_half_that_was_sent_is_stored_as_empty(self, monkeypatch):
+        from app import conventions
+        from app.schemas import InstructionUpdate
+
+        written: list = []
+
+        async def set_instructions(*, house_rules, environment_notes, updated_by):
+            written.append((house_rules, environment_notes))
+
+        async def stored():
+            return {"house_rules": "", "environment_notes": None, "updated_by": "tobias"}
+
+        monkeypatch.setattr(conventions.db, "set_instructions", set_instructions)
+        monkeypatch.setattr(conventions.db, "get_instructions", stored)
+        conventions.forget()
+
+        # Emptying a box is a decision — "say nothing here" — and it is not
+        # the same as leaving it alone or resetting it.
+        await main.put_instructions(InstructionUpdate(house_rules=""), principal=_principal())
+
+        assert written[0][0] == ""

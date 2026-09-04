@@ -140,7 +140,7 @@ class FakeRepo:
         async def pull_request_conversation(number, limit=40):
             return list(self.conversation), list(self.conversation_missing)
 
-        async def issue_conversation(number, limit=40):
+        async def issue_conversation(number):
             return list(self.issue_comments_thread), list(self.conversation_missing)
 
         for name, fn in [
@@ -1322,3 +1322,60 @@ class TestItDoesNotTakeOverItsOwnWork:
         await triggers.TriggerPoller().poll_once()
 
         assert fake_db.created[0]["trigger_kind"] == "review"
+
+
+class TestWhatFitsInATask:
+    """A long thread is cut, but not before it is filtered.
+
+    Cutting first is how the one comment the whole feature is for gets
+    pushed out by forty comments from passers-by — comments the runner does
+    not take direction from anyway, so they cost the task nothing but the
+    room they take.
+    """
+
+    @staticmethod
+    def _thread(strangers: int, maintainer_says: str):
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        entries = [{"author": "a-passer-by", "at": now, "state": "", "body": f"Comment {n}"} for n in range(strangers)]
+        entries.append({"author": "tobias", "at": now, "state": "", "body": maintainer_says})
+        return entries
+
+    async def test_a_maintainer_at_the_end_of_a_long_thread_survives(self, monkeypatch):
+        repo = FakeRepo(assigned_issues=[issue(797, "A bug", "See the thread.")])
+        repo.issue_comments_thread = self._thread(60, "The fix belongs in app/capacity.py.")
+        repo.writers = {"tobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        task = fake_db.created[0]["task"]
+        assert "app/capacity.py" in task
+
+    async def test_what_did_not_fit_is_said_rather_than_dropped(self, monkeypatch):
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        entries = [
+            {"author": "tobias", "at": now, "state": "", "body": f"Comment {n}"}
+            for n in range(triggers.MAX_CONVERSATION + 5)
+        ]
+        repo = FakeRepo(assigned_issues=[issue(797, "A bug", "See the thread.")])
+        repo.issue_comments_thread = entries
+        repo.writers = {"tobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        task = fake_db.created[0]["task"]
+        # The task claims to carry the issue. A silent cut makes that a lie
+        # — and the oldest comment is often the report itself.
+        assert "5 older comment(s)" in task
+        assert "incomplete" in task

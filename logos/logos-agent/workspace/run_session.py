@@ -248,6 +248,35 @@ def _reset_agent_home() -> None:
     elif home.exists():
         home.unlink()
     home.mkdir(parents=True, exist_ok=True)
+    _seed_hook_store(home)
+
+
+def _seed_hook_store(home: Path) -> None:
+    """Give this session a writable pre-commit store of its own.
+
+    The hook environments are baked into the image, which is exactly what
+    lets a session with no network run the linters CI runs. What cannot be
+    baked in is the store itself: pre-commit takes a lock file and records
+    the config it just ran in a small sqlite database, and the image's root
+    filesystem is read-only — so the advertised offline command failed on
+    the first thing it tried to write.
+
+    Only the database is copied. Its rows hold the paths of the installed
+    environments, which stay where they are: pre-commit reads and executes
+    them, and writes to neither.
+    """
+    store = Path(os.environ.get("PRE_COMMIT_HOME") or (home / "pre-commit"))
+    seeded = Path(os.environ.get("PRE_COMMIT_STORE") or "/opt/pre-commit")
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+        database = seeded / "db.db"
+        if database.is_file():
+            shutil.copy2(database, store / "db.db")
+    except OSError as exc:
+        # Not fatal: pre-commit falls back to installing the hooks itself,
+        # fails without a network, and says so. Better a linter the agent
+        # is told is unavailable than a session that never starts.
+        print(f"[setup] could not prepare the pre-commit store: {exc}", flush=True)
 
 
 def _clear_checkout() -> None:
@@ -488,10 +517,13 @@ def build_prompt(task: str) -> str:
         )
     # What this container is, as the runner describes it — an operator can
     # adjust that text, and the page shows exactly what was handed over. The
-    # text below is the fallback for a session started by an older runner.
-    notes = os.environ.get("LOGOS_SESSION_ENVIRONMENT_NOTES", "").strip()
-    if notes:
-        return f"{task}{pictures}\n\n{notes}\n"
+    # text below is the fallback for a session started by an older runner,
+    # which is why the test is whether the runner said anything at all: an
+    # operator who empties the notes has decided nothing should be said
+    # here, and answering that decision with a page of defaults ignores it.
+    if "LOGOS_SESSION_ENVIRONMENT_NOTES" in os.environ:
+        notes = os.environ["LOGOS_SESSION_ENVIRONMENT_NOTES"].strip()
+        return f"{task}{pictures}\n\n{notes}\n" if notes else f"{task}{pictures}\n"
     return (
         f"{task}"
         f"{pictures}\n\n"
@@ -509,10 +541,15 @@ def build_prompt(task: str) -> str:
         "body, no bullet points, no issue numbers.\n"
         "- Run the project's tests for the code you touch, and fix what you "
         "break.\n"
-        "- Run `pre-commit run --files <the files you changed>` before you "
-        "finish and fix what it reports. The hooks are installed in this "
-        "image, so it works without a network; CI runs the same ones, and a "
-        "session that skips this hands somebody a red pull request.\n"
+        "- Lint what you changed: from the top of the checkout, `pre-commit "
+        "run --files <the files you changed>`. Same command and same pinned "
+        "hooks as CI, installed in this image, no network needed. Several of "
+        "them reformat in place, so a hook that says it modified your files "
+        "has already fixed them — run it once more and it passes. To chase one "
+        "hook, name it: `pre-commit run flake8 --files <files>`. "
+        "The `pylint` and `mypy` hooks under iris/ and memiris/ go through "
+        "poetry and cannot run in here; say so if one of those is what "
+        "failed.\n"
         "- If the task turns out to be impossible or already done, say so "
         "plainly instead of inventing changes.\n"
         f"- Changing nothing is a legitimate outcome, but it is never a silent "

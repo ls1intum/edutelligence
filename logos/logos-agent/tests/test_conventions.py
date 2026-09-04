@@ -84,3 +84,49 @@ class TestBuildingATask:
         stored(monkeypatch, house_rules="   ")
 
         assert await conventions.for_task("Fix the alignment.") == "Fix the alignment."
+
+
+class TestAReadThatWasOvertaken:
+    """A save while a read is in flight must win.
+
+    The cache holds for five seconds. A read that started before the save
+    returns the old row, and putting that back in the cache means the page
+    shows the new text while the next five seconds of sessions are built
+    from the old one — with nothing anywhere saying so.
+    """
+
+    async def test_a_save_during_a_read_is_not_undone_by_it(self, monkeypatch):
+        import asyncio
+
+        released = asyncio.Event()
+
+        async def slow_get_instructions():
+            await released.wait()
+            return {"house_rules": "the old text", "environment_notes": None, "updated_by": ""}
+
+        async def set_instructions(**_kwargs):
+            return None
+
+        monkeypatch.setattr(conventions.db, "get_instructions", slow_get_instructions)
+        monkeypatch.setattr(conventions.db, "set_instructions", set_instructions)
+
+        reader = asyncio.create_task(conventions.current())
+        await asyncio.sleep(0)
+
+        # The save lands while the read above is still waiting.
+        monkeypatch.setattr(
+            conventions.db,
+            "get_instructions",
+            lambda: _answer({"house_rules": "the new text", "environment_notes": None, "updated_by": "tobias"}),
+        )
+        saved = await conventions.set_instructions(house_rules="the new text", by="tobias")
+        released.set()
+        await reader
+
+        assert saved.house_rules == "the new text"
+        # The overtaken read must not have put the old row back.
+        assert (await conventions.current()).house_rules == "the new text"
+
+
+async def _answer(row):
+    return row

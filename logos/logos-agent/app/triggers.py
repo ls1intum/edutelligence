@@ -79,6 +79,9 @@ MAX_COMMENT_LOOKBACK = timedelta(days=7)
 
 # At most this many comments are carried into one task, and this much of each.
 MAX_THREAD_COMMENTS = 20
+# How many comments of a conversation fit in one task.
+MAX_CONVERSATION = 40
+
 MAX_COMMENT_CHARS = 3000
 
 # The account sessions are attributed to when the runner queued them itself.
@@ -526,6 +529,11 @@ class TriggerPoller:
                 outsiders += 1
         if outsiders:
             missing = [*missing, f"{outsiders} comment(s) from accounts the runner does not take direction from"]
+        if len(allowed) > MAX_CONVERSATION:
+            # Said, not silently dropped: the task claims to carry the whole
+            # issue, and the oldest comment is often the report itself.
+            missing = [*missing, f"{len(allowed) - MAX_CONVERSATION} older comment(s), beyond what fits in a task"]
+            allowed = allowed[-MAX_CONVERSATION:]
         return allowed, missing
 
     async def _conversation(self, number: int) -> tuple[list[dict[str, Any]], list[str]]:

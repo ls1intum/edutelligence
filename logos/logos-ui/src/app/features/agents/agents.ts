@@ -430,20 +430,26 @@ export class Agents implements OnInit {
     }
   }
 
-  /** Put one half back to the text the code ships with. */
+  /**
+   * Put one half back to the text the code ships with.
+   *
+   * Only that half is sent, and only that half's box is refilled. Reset is
+   * a statement about one box: the other one may hold an edit nobody has
+   * saved yet, and neither the database nor the screen may lose it here.
+   */
   async resetInstructions(half: 'house_rules' | 'environment_notes'): Promise<void> {
     if (this.savingInstructions()) return;
     this.savingInstructions.set(true);
     try {
-      const fresh = await this.agentService.setInstructions({
-        house_rules: half === 'house_rules' ? undefined : this.houseRulesDraft(),
-        environment_notes: half === 'environment_notes' ? undefined : this.environmentNotesDraft(),
-        reset_house_rules: half === 'house_rules',
-        reset_environment_notes: half === 'environment_notes',
-      });
+      const fresh = await this.agentService.setInstructions(
+        half === 'house_rules' ? { reset_house_rules: true } : { reset_environment_notes: true },
+      );
       this.instructions.set(fresh);
-      this.houseRulesDraft.set(fresh.house_rules);
-      this.environmentNotesDraft.set(fresh.environment_notes);
+      if (half === 'house_rules') {
+        this.houseRulesDraft.set(fresh.house_rules);
+      } else {
+        this.environmentNotesDraft.set(fresh.environment_notes);
+      }
     } catch (err: unknown) {
       this.error.set(this.messageOf(err, 'Could not restore the default text.'));
     } finally {

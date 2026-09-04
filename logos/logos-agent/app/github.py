@@ -291,6 +291,65 @@ async def wait_for_pr_builds(
         return "failed", f"could not observe the image build run: {exc}"
 
 
+# Conclusions that mean the change is broken, as opposed to merely not
+# green. `cancelled` and `stale` are somebody else's doing, `skipped` and
+# `neutral` are a check saying it had nothing to judge, and
+# `action_required` is a deployment waiting for a human to approve it —
+# none of those is something an agent can fix, and taking the work up again
+# over one would put a session on the queue for nothing.
+_BROKEN = frozenset({"failure", "timed_out", "startup_failure"})
+
+
+async def wait_for_checks(
+    head_sha: str,
+    *,
+    timeout_s: float = 20 * 60,
+    poll_s: float = 20.0,
+) -> tuple[str, str]:
+    """Wait for every check on ``head_sha`` to conclude, and say how it went.
+
+    All of them, deliberately. The build workflow has its own waiter because
+    a dev deploy needs that specific image, but "did this change pass CI" is
+    a question about the lint and test workflows just as much — and those
+    are the ones an unattended agent actually breaks. Watching the build
+    alone reported success on a commit whose linter was red.
+
+    A failing check ends the wait immediately: the rest of CI has nothing to
+    add once there is something to fix.
+
+    Returns ``(status, detail)`` where status is ``"success"``, ``"failed"``
+    or ``"timeout"``. Timeout means "not known yet" — the checks may still
+    be running, or may not have been queued at all — and it is not the same
+    as failure, which is why the caller may not treat it as one.
+    """
+    path = f"/repos/{settings.repo_slug}/commits/{head_sha}/check-runs"
+    deadline = asyncio.get_running_loop().time() + timeout_s
+
+    try:
+        while True:
+            runs = (await _get(path, {"per_page": 100})).get("check_runs", [])
+            broken = [run for run in runs if (run.get("conclusion") or "") in _BROKEN]
+            if broken:
+                named = ", ".join(f"{run.get('name')} ({run.get('conclusion')})" for run in broken[:5])
+                first = broken[0].get("html_url") or ""
+                return "failed", f"{named}\n{first}".strip()
+            # No checks at all is not success: GitHub takes a moment to
+            # queue them, and a commit pushed seconds ago has none yet.
+            if runs and all(run.get("status") == "completed" for run in runs):
+                return "success", f"all {len(runs)} check(s) on {head_sha[:7]} passed"
+            if asyncio.get_running_loop().time() >= deadline:
+                waiting = [run.get("name") for run in runs if run.get("status") != "completed"]
+                still = ", ".join(str(name) for name in waiting[:5]) if waiting else "none reported yet"
+                return "timeout", f"checks on {head_sha[:7]} had not concluded after {timeout_s:.0f}s: {still}"
+            await asyncio.sleep(poll_s)
+    except Exception as exc:
+        # Unknown, not red. The caller keeps the follow-up owed and asks
+        # again rather than queueing a session to fix a failure that may
+        # never have happened.
+        logger.warning("could not read the checks of %s: %s", head_sha[:7], exc)
+        return "timeout", f"could not read the checks of {head_sha[:7]}: {exc}"
+
+
 async def _get(path: str, params: dict[str, Any] | None = None, *, timeout_s: float = 30.0) -> Any:
     """One authenticated read of the repository. Raises on anything but 200."""
     async with httpx.AsyncClient(timeout=timeout_s) as client:
@@ -543,17 +602,22 @@ async def open_pull_request_for(branch: str) -> dict[str, Any] | None:
     return None
 
 
-async def issue_conversation(number: int, *, limit: int = 40) -> tuple[list[dict[str, Any]], list[str]]:
+async def issue_conversation(number: int) -> tuple[list[dict[str, Any]], list[str]]:
     """What has been said under an issue, oldest last, and what is missing.
 
     An issue's description is not always in its body. A title and an empty
     body with the whole report in the first comment is an ordinary way to
     file one — and a session handed the title alone can only say that it
     was handed the title alone.
+
+    Everything that was read is returned. Cutting it to what fits in a task
+    is the caller's business, and it has to happen *after* the caller has
+    decided whose comments count: forty comments from passers-by would
+    otherwise push out the one from a maintainer that the whole feature is
+    for.
     """
     answer = await _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments")
-    entries, missing = _as_conversation({"comments": answer}, number)
-    return entries[-limit:], missing
+    return _as_conversation({"comments": answer}, number)
 
 
 async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[list[dict[str, Any]], list[str]]:

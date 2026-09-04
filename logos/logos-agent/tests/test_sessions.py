@@ -4466,3 +4466,257 @@ class TestNoClockUnlessSomebodyAsksForOne:
         # It ended because the agent ended it, with its own exit code —
         # nothing was stopped on a clock.
         assert stopped == [("settled", 0, None)]
+
+
+class TestFollowingTheChecks:
+    """What happens to a pushed commit after the session that pushed it ends.
+
+    A session settles minutes before CI concludes, so this is the only way
+    it ever learns that its change was red. Three answers have to stay
+    distinct: green (nothing owed), red (take the work up again), and not
+    known yet (ask again — never a retry, and never a comment about a pull
+    request that is fine).
+    """
+
+    ROW = {
+        "id": 12,
+        "workspace_id": 3,
+        "task": "Fix the alignment.",
+        "model": "qwen",
+        "branch_name": "logos/agent/issue-797",
+        "checks_sha": "d" * 40,
+        "trigger_kind": "issue",
+        "trigger_ref": "issue-797",
+        "reply_target": "issue:797",
+        "reaction_target": "/repos/x/y/issues/797",
+        "priority": 50,
+        "priority_reason": None,
+        "open_pull_request": True,
+        "finished_at": None,
+    }
+
+    @staticmethod
+    def install(monkeypatch, *, checks, attempts=0):
+        from app import sessions
+
+        taken: list = []
+        updates: list = []
+
+        async def wait_for_checks(_sha, **_kwargs):
+            return checks
+
+        async def take_up_again(_self, session, *, by="the runner", note=""):
+            taken.append(note)
+            return 77
+
+        async def update_session(session_id, **fields):
+            updates.append((session_id, fields))
+
+        async def attempts_for_trigger(_ref):
+            return attempts
+
+        monkeypatch.setattr(sessions.github, "wait_for_checks", wait_for_checks)
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+        monkeypatch.setattr(sessions.db, "update_session", update_session)
+        monkeypatch.setattr(sessions.db, "attempts_for_trigger", attempts_for_trigger)
+        return taken, updates
+
+    async def test_a_red_build_comes_back_as_another_attempt(self, monkeypatch):
+        from app import sessions
+
+        taken, updates = self.install(monkeypatch, checks=("failed", "Logos Lint (failure)"))
+
+        await sessions.manager._take_up_a_red_build(dict(self.ROW), "logos/agent/issue-797", "d" * 40)
+
+        assert taken and "Logos Lint" in taken[0]
+        assert (12, {"checks_watch": "done"}) in updates
+
+    async def test_checks_that_have_not_concluded_are_not_a_failure(self, monkeypatch):
+        from app import sessions
+
+        taken, updates = self.install(monkeypatch, checks=("timeout", "still running"))
+
+        await sessions.manager._take_up_a_red_build(dict(self.ROW), "logos/agent/issue-797", "d" * 40)
+
+        # Nothing to fix, so nothing is queued — and the follow-up stays
+        # owed, because "not known yet" is not an answer.
+        assert taken == []
+        assert updates == []
+
+    async def test_green_checks_settle_the_follow_up(self, monkeypatch):
+        from app import sessions
+
+        taken, updates = self.install(monkeypatch, checks=("success", "all 4 check(s) passed"))
+
+        await sessions.manager._take_up_a_red_build(dict(self.ROW), "logos/agent/issue-797", "d" * 40)
+
+        assert taken == []
+        assert (12, {"checks_watch": "done"}) in updates
+
+    async def test_a_request_out_of_attempts_stops_being_watched(self, monkeypatch):
+        from app import sessions
+
+        taken, updates = self.install(
+            monkeypatch,
+            checks=("failed", "red"),
+            attempts=sessions._MAX_ATTEMPTS_PER_REQUEST,
+        )
+
+        async def take_up_again(_self, session, *, by="the runner", note=""):
+            taken.append(note)
+            return None  # bounded: this request has had its three goes
+
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+
+        await sessions.manager._take_up_a_red_build(dict(self.ROW), "logos/agent/issue-797", "d" * 40)
+
+        assert (12, {"checks_watch": "done"}) in updates
+
+    async def test_a_follow_up_that_could_not_be_queued_stays_owed(self, monkeypatch):
+        from app import sessions
+
+        taken, updates = self.install(monkeypatch, checks=("failed", "red"), attempts=0)
+
+        async def take_up_again(_self, session, *, by="the runner", note=""):
+            return None  # the database blinked
+
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+
+        await sessions.manager._take_up_a_red_build(dict(self.ROW), "logos/agent/issue-797", "d" * 40)
+
+        # Still pending: a transient failure must leave a way back, which
+        # is the whole reason the intent is on the row.
+        assert updates == []
+
+    async def test_the_intent_is_written_down_before_anybody_watches(self, monkeypatch):
+        from app import sessions
+
+        _, updates = self.install(monkeypatch, checks=("timeout", "waiting"))
+        started: list = []
+        monkeypatch.setattr(
+            sessions.SessionManager,
+            "_start_watching",
+            lambda _self, session, branch, sha: started.append((branch, sha)),
+        )
+
+        await sessions.manager._watch_the_checks(dict(self.ROW), "e" * 40)
+
+        assert (12, {"checks_sha": "e" * 40, "checks_watch": "pending"}) in updates
+        assert started == [("logos/agent/issue-797", "e" * 40)]
+
+    async def test_a_session_a_person_queued_is_that_person_s_to_follow(self, monkeypatch):
+        from app import sessions
+
+        _, updates = self.install(monkeypatch, checks=("failed", "red"))
+        row = {**self.ROW, "trigger_ref": None}
+
+        await sessions.manager._watch_the_checks(row, "e" * 40)
+
+        assert updates == []
+
+
+class TestTakingUpAWatchAgain:
+    """The follow-up outlives the process that started it.
+
+    A redeploy in the couple of minutes between pushing and CI concluding
+    used to lose it silently: the watcher was a background task and nothing
+    else, and the red build waited for a person to notice.
+    """
+
+    ROW = {
+        "id": 21,
+        "workspace_id": 3,
+        "task": "Fix it.",
+        "branch_name": "logos/agent/issue-800",
+        "checks_sha": "f" * 40,
+        "trigger_ref": "issue-800",
+        "finished_at": None,
+    }
+
+    @staticmethod
+    def install(monkeypatch, rows):
+        from app import sessions
+
+        started: list = []
+        updates: list = []
+
+        async def sessions_awaiting_checks():
+            return [dict(row) for row in rows]
+
+        async def update_session(session_id, **fields):
+            updates.append((session_id, fields))
+
+        monkeypatch.setattr(sessions.db, "sessions_awaiting_checks", sessions_awaiting_checks)
+        monkeypatch.setattr(sessions.db, "update_session", update_session)
+        monkeypatch.setattr(
+            sessions.SessionManager,
+            "_start_watching",
+            lambda _self, session, branch, sha: started.append((session["id"], branch, sha)),
+        )
+        return started, updates
+
+    async def test_a_pending_row_is_picked_up(self, monkeypatch):
+        from app import sessions
+
+        started, _ = self.install(monkeypatch, [self.ROW])
+
+        await sessions.manager.resume_check_watches()
+
+        assert started == [(21, "logos/agent/issue-800", "f" * 40)]
+
+    async def test_a_row_with_nothing_to_watch_is_closed(self, monkeypatch):
+        from app import sessions
+
+        started, updates = self.install(monkeypatch, [{**self.ROW, "checks_sha": None}])
+
+        await sessions.manager.resume_check_watches()
+
+        assert started == []
+        assert updates == [(21, {"checks_watch": "done"})]
+
+    async def test_checks_that_never_concluded_stop_being_asked_about(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        from app import sessions
+
+        old = datetime.now(timezone.utc) - timedelta(seconds=sessions.CHECK_WATCH_HORIZON_S + 60)
+        started, updates = self.install(monkeypatch, [{**self.ROW, "finished_at": old}])
+
+        await sessions.manager.resume_check_watches()
+
+        # Otherwise every scheduler pass forever asks GitHub about a pull
+        # request whose checks were never queued.
+        assert started == []
+        assert updates == [(21, {"checks_watch": "done"})]
+
+    async def test_a_database_that_will_not_answer_costs_nothing(self, monkeypatch):
+        from app import sessions
+
+        async def sessions_awaiting_checks():
+            raise RuntimeError("no database")
+
+        monkeypatch.setattr(sessions.db, "sessions_awaiting_checks", sessions_awaiting_checks)
+
+        await sessions.manager.resume_check_watches()  # the pass goes on
+
+    async def test_one_session_is_not_polled_twice_at_once(self, monkeypatch):
+        from app import sessions
+
+        polls: list = []
+
+        async def wait_for_checks(_sha, **_kwargs):
+            polls.append(_sha)
+            await asyncio.sleep(0.05)
+            return "timeout", "still running"
+
+        async def update_session(session_id, **fields):
+            return None
+
+        monkeypatch.setattr(sessions.github, "wait_for_checks", wait_for_checks)
+        monkeypatch.setattr(sessions.db, "update_session", update_session)
+
+        sessions.manager._start_watching(dict(self.ROW), "logos/agent/issue-800", "f" * 40)
+        sessions.manager._start_watching(dict(self.ROW), "logos/agent/issue-800", "f" * 40)
+        await asyncio.sleep(0.1)
+
+        assert len(polls) == 1

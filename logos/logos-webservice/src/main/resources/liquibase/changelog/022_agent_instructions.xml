@@ -36,4 +36,63 @@
         </rollback>
     </changeSet>
 
+    <!-- What one session was told, as opposed to what sessions are told now.
+
+         The instructions above are editable, so the text in force today is
+         not the text a session ran on last week. "Here is the exact prompt
+         this agent was handed" is the reason the page shows it at all, and
+         it stops being true the moment somebody edits the box. So the notes
+         handed to a session are kept on its own row. The task half needs no
+         column: the house rules are composed into the task before it is
+         stored, so a session's task already is the task of its time. -->
+    <changeSet id="022-agent-session-environment-notes" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="environment_notes"/></not>
+        </preConditions>
+        <sql>ALTER TABLE agent_sessions ADD COLUMN environment_notes TEXT;</sql>
+        <rollback>
+            <sql>ALTER TABLE agent_sessions DROP COLUMN IF EXISTS environment_notes;</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- The checks a finished session still owes an answer for.
+
+         A session ends minutes before the checks of what it pushed
+         conclude, so following them up outlives the session that caused
+         them. That follow-up used to be a background task and nothing else:
+         a runner restarted during those minutes — a deployment, a crash —
+         forgot the pull request it was watching, and the red build it would
+         have taken up again waited for a person instead.
+
+         So the intent is on the row. `pending` means somebody still has to
+         find out how those checks ended, and it survives whatever happens
+         to the process that was going to. -->
+    <changeSet id="022-agent-session-check-watch" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="checks_watch"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_sessions ADD COLUMN checks_sha TEXT;
+            ALTER TABLE agent_sessions ADD COLUMN checks_watch TEXT;
+
+            ALTER TABLE agent_sessions ADD CONSTRAINT agent_sessions_checks_watch_known
+                CHECK (checks_watch IS NULL OR checks_watch IN ('pending', 'done'));
+
+            -- Asked on every startup and every scheduler pass, and almost
+            -- always empty: partial, so it stays the size of the work
+            -- outstanding rather than of the history.
+            CREATE INDEX idx_agent_sessions_checks_pending
+                ON agent_sessions(id)
+             WHERE checks_watch = 'pending';
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+                DROP INDEX IF EXISTS idx_agent_sessions_checks_pending;
+                ALTER TABLE agent_sessions DROP CONSTRAINT IF EXISTS agent_sessions_checks_watch_known;
+                ALTER TABLE agent_sessions DROP COLUMN IF EXISTS checks_watch;
+                ALTER TABLE agent_sessions DROP COLUMN IF EXISTS checks_sha;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>

@@ -98,10 +98,23 @@ your assumptions in the final summary.
 - Do not run git commit, git push, or gh: the harness commits and opens the
   pull request for you after you finish.
 - Run the project's tests for the code you touch, and fix what you break.
-- Run `pre-commit run --files <the files you changed>` before you finish and
-  fix what it reports. The hooks are installed in this image, so it works
-  without a network; CI runs the same ones, and a session that skips this
-  hands somebody a red pull request.
+- Linting is on you, and you can run it: from the top of the checkout,
+  `pre-commit run --files <the files you changed>`. That is the same command
+  CI runs and the same pinned hook versions — for every service, not only
+  Logos. They are installed in this image, so it works with no network.
+  Some of it reformats in place (black, isort, autoflake, end-of-file-fixer):
+  a hook that reports "files were modified by this hook" has already fixed
+  it, so run the command again and expect it to pass the second time. What
+  flake8 reports you fix yourself.
+  To chase one hook rather than all of them, name it:
+  `pre-commit run flake8 --files <files>`. To see every hook a file goes
+  through, `pre-commit run --files <file> --verbose`.
+  Two hooks cannot work in here and are not your fault: `pylint` and `mypy`
+  under iris/ and memiris/ run through `poetry`, and there is no network to
+  install those environments with. If one of those is what failed, say so in
+  your summary and move on.
+  A session that skips linting hands somebody a red pull request over a
+  blank line, so do not skip it.
 - If the task turns out to be impossible or already done, say so plainly
   instead of inventing changes.
 """.strip()
@@ -125,6 +138,11 @@ DEFAULTS = Instructions()
 
 _cached: Instructions = DEFAULTS
 _read_at: float = 0.0
+# Bumped whenever the stored text changes. A read that was already in
+# flight when somebody saved has read the old row, and must not put it back
+# in the cache: without this the page shows the new text, the next five
+# seconds of sessions are built from the old one, and nothing looks wrong.
+_generation: int = 0
 # Long enough that building a task costs no query, short enough that an
 # edit reaches the next session rather than the next restart.
 _CACHE_S = 5.0
@@ -136,13 +154,20 @@ async def current() -> Instructions:
     now = time.monotonic()
     if now - _read_at < _CACHE_S:
         return _cached
+    started_at = _generation
     try:
         row = await db.get_instructions()
     except Exception as exc:
         logger.warning("could not read the agent instructions; using the last known text: %s", exc)
         return _cached
+    fresh = _from_row(row)
+    if started_at != _generation:
+        # Overtaken while we were reading. What we have is the text as it
+        # was before the save, so it is returned to this caller and thrown
+        # away rather than cached.
+        return fresh
     _read_at = now
-    _cached = _from_row(row)
+    _cached = fresh
     return _cached
 
 
@@ -166,10 +191,16 @@ def _from_row(row: dict[str, Any] | None) -> Instructions:
     )
 
 
-async def set_instructions(*, house_rules: str | None, environment_notes: str | None, by: str) -> Instructions:
-    """Store an override, or clear one by passing None."""
-    global _read_at
+async def set_instructions(
+    *,
+    house_rules: str | None | db.Unchanged = db.UNCHANGED,
+    environment_notes: str | None | db.Unchanged = db.UNCHANGED,
+    by: str,
+) -> Instructions:
+    """Store an override, clear one by passing None, keep one by leaving it out."""
+    global _generation, _read_at
     await db.set_instructions(house_rules=house_rules, environment_notes=environment_notes, updated_by=by)
+    _generation += 1
     _read_at = 0.0
     return await current()
 

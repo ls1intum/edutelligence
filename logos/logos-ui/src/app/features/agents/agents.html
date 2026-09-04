@@ -550,11 +550,17 @@
           <details class="prompt">
             <summary class="prompt__summary">The exact task this session was given</summary>
             <pre class="prompt__text">{{ session.task }}</pre>
-            @if (instructions(); as text) {
+            @if (session.environment_notes !== null) {
+              <pre class="prompt__text">{{ session.environment_notes }}</pre>
+              <p class="field__hint">
+                The second block is what the sandbox added when it started this agent, kept as it
+                was on the day — editing the instructions does not rewrite it.
+              </p>
+            } @else if (instructions(); as text) {
               <pre class="prompt__text">{{ text.environment_notes }}</pre>
               <p class="field__hint">
-                The second block is what the sandbox adds when it starts the agent. It is shown as
-                it stands now; a session started before a change was given the text of its time.
+                This session did not record what it was told, so the second block is the text in
+                force now. It is what a session starting today would be handed.
               </p>
             }
           </details>

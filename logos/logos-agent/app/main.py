@@ -139,10 +139,21 @@ async def put_instructions(
     to adjust. A half that is reset goes back to what the code ships with,
     which is not the same as an empty one — empty is somebody deciding that
     nothing should be said there.
+
+    A half nobody mentioned stays as it is stored. Resetting the house
+    rules is a statement about the house rules, and it must not carry an
+    untouched draft of the environment notes into the database with it.
     """
+    sent = body.model_fields_set
+
+    def half(name: str, value: str | None, reset: bool) -> str | None | db.Unchanged:
+        if reset:
+            return None
+        return value if name in sent else db.UNCHANGED
+
     state = await conventions.set_instructions(
-        house_rules=None if body.reset_house_rules else body.house_rules,
-        environment_notes=None if body.reset_environment_notes else body.environment_notes,
+        house_rules=half("house_rules", body.house_rules, body.reset_house_rules),
+        environment_notes=half("environment_notes", body.environment_notes, body.reset_environment_notes),
         by=principal.username or "an operator",
     )
     logger.info("agent instructions changed by %s", principal.username)
