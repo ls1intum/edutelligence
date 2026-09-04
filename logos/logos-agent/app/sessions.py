@@ -1346,6 +1346,9 @@ class SessionManager:
             deadline = loop.time() + settings.session_timeout_s
             paused_since: float | None = None
             exit_code: int | None = None
+            # Why this session ended, when it ended for a reason of ours.
+            # An empty one means the agent decided its own ending.
+            stopped_because = ""
             while True:
                 now = loop.time()
                 if paused_since is not None:
@@ -1360,6 +1363,11 @@ class SessionManager:
                     )
                     await docker_engine.stop_container(container_id)
                     exit_code = -1
+                    # Carried to the settlement, not only into an event: the
+                    # row is what the page shows and what the thread is
+                    # answered from, and "failed" with nothing beside it is
+                    # the least useful thing a session can end as.
+                    stopped_because = f"the session ran past its {settings.session_timeout_s}s budget and was stopped"
                     break
                 state, code = await docker_engine.container_state(container_id)
                 if state == "paused" and paused_since is None:
@@ -1381,7 +1389,7 @@ class SessionManager:
         finally:
             log_task.cancel()
 
-        await self._settle(session_id, exit_code=exit_code, error=None)
+        await self._settle(session_id, exit_code=exit_code, error=stopped_because or None)
 
     async def _collect_logs(self, session_id: int, container_id: str) -> None:
         """Persist the container's output as events so the UI can follow it.

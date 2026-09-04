@@ -4301,3 +4301,44 @@ class TestWhoseContainerIsIt:
         # Everything behind this session — resuming the rest, admitting,
         # sweeping — would otherwise stop with it.
         assert await sessions.manager._resume({"id": 34, "container_id": "cid-34"}, "load 0%") is False
+
+
+class TestASessionThatRanOutOfTime:
+    """A session stopped by its own budget has a reason, and it is not "failed".
+
+    Production ended one at exactly that: `failed`, exit code -1, and an
+    empty error column — so the page, the thread and anybody reading the
+    row learned nothing about why. The event log had it; the row is what
+    everything else reads.
+    """
+
+    async def test_the_row_says_it_ran_out_of_time(self, monkeypatch):
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, session_timeout_s=0))
+        settled: list = []
+
+        async def state(_container_id):
+            return "running", None
+
+        async def stop(_container_id, **_kwargs):
+            return None
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        async def settle(_self, session_id, *, exit_code, error):
+            settled.append((session_id, exit_code, error))
+
+        monkeypatch.setattr(sessions.docker_engine, "container_state", state)
+        monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
+        monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
+
+        await sessions.manager._supervise_session(7, "cid-7")
+
+        assert len(settled) == 1
+        session_id, exit_code, error = settled[0]
+        assert session_id == 7 and exit_code == -1
+        assert "ran past its" in error and "budget" in error
