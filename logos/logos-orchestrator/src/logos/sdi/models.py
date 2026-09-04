@@ -400,6 +400,19 @@ class ModelProfile:
     # weight-transfer size and is more predictive.
     sleep_l1_transient_host_ram_mb: Optional[float] = None
     sleep_l2_transient_host_ram_mb: Optional[float] = None
+    # Wall-clock seconds the worker's calibration measured from the final
+    # probe spawn to the first request it served (the warmup 1-token
+    # completion) — the cold start a client pays when a lane has to load for
+    # its request (vLLM startup + weight load + first-request CUDA-graph/JIT
+    # overhead). None from a worker that predates the field, or when the
+    # calibrating run's warmup request did not serve.
+    cold_load_time_s: Optional[float] = None
+    # Wall-clock seconds from the calibrated /wake_up trigger to the
+    # post-wake test request being served — the wait a request queued on a
+    # sleeping lane pays for the wake. None when the sleep phases were
+    # skipped, the post-wake request did not serve, or the worker predates
+    # the field.
+    wake_from_sleep_time_s: Optional[float] = None
     # Host RAM the lane keeps for the whole time it sleeps, as opposed to the
     # peak during the call above. sleep_l1 relocates the weights to the host
     # rather than dropping them, so a sleeping lane holds roughly its weight
@@ -476,6 +489,8 @@ class ModelProfile:
             "residency_source": self.residency_source,
             "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
             "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "cold_load_time_s": self.cold_load_time_s,
+            "wake_from_sleep_time_s": self.wake_from_sleep_time_s,
             "host_ram_residual_mb": self.host_ram_residual_mb,
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,
