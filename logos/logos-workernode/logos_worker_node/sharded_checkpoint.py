@@ -151,6 +151,33 @@ def current_vllm_version() -> str:
         return ""
 
 
+def vllm_version_for_python(python: str) -> str:
+    """The vLLM version as seen by ``python``'s interpreter, ``""`` when unknown.
+
+    ``resolve_vllm_python`` deliberately supports a vLLM installed in a
+    *different* virtualenv from this worker, and it is that vLLM — not this
+    process's — that loads (or refuses) a sharded checkpoint. So the version a
+    rejection is scoped to must be the one the *configured* interpreter
+    reports. A foreign interpreter is asked with a small subprocess; when the
+    interpreter is this process's own (or not given) the version is read
+    in-process via :func:`current_vllm_version` — the same answer, without a fork.
+    """
+    if not python or python == sys.executable:
+        return current_vllm_version()
+    try:
+        proc = subprocess.run(
+            [python, "-c", "import importlib.metadata as m; print(m.version('vllm') or '')"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:  # noqa: BLE001
+        # A missing or broken foreign interpreter reads as "unknown" (→ skip),
+        # never as a reason to keep re-converting.
+        return ""
+    return (proc.stdout or "").strip()
+
+
 def record_rejection(directory: Path, vllm_version: str = "", reason: str = "") -> bool:
     """Persist that ``directory``'s conversion was rejected by the loader.
 
@@ -189,7 +216,7 @@ def read_rejection(directory: Path) -> dict | None:
     return data
 
 
-def rejection_state(directory: Path, current_version: str | None = None) -> str:
+def rejection_state(directory: Path, current_version: str | None = None, vllm_binary: str | None = None) -> str:
     """Whether a previously-recorded rejection of ``directory`` should stand.
 
     Returns one of:
@@ -203,7 +230,10 @@ def rejection_state(directory: Path, current_version: str | None = None) -> str:
         may have landed since the rejection).
 
     ``current_version`` overrides the detected version when given (tests); pass
-    ``""`` for an explicitly-unknown current version, ``None`` to detect it.
+    ``""`` for an explicitly-unknown current version, ``None`` to detect it. When
+    detecting, ``vllm_binary`` (the configured vLLM) names the interpreter to read
+    the version from — the one that loads the checkpoint — else this worker's own
+    version is used.
 
     The comparison is deliberately conservative: it retries only when *both*
     the recorded and current versions are known and differ. When either is
@@ -215,7 +245,10 @@ def rejection_state(directory: Path, current_version: str | None = None) -> str:
         return "none"
     recorded = str(rec.get("vllm_version") or "").strip()
     if current_version is None:
-        current_version = current_vllm_version()
+        # When the caller names the configured binary, scope to the version of the
+        # interpreter that actually loads the checkpoint, not this worker's (a
+        # separate-venv deployment runs a different vLLM under the hood).
+        current_version = resolve_vllm_version(vllm_binary) if vllm_binary is not None else current_vllm_version()
     current = (current_version or "").strip()
     if recorded and current and recorded != current:
         # The vLLM that recorded the rejection is no longer the one serving —
@@ -270,6 +303,19 @@ def resolve_vllm_python(vllm_binary: str) -> str:
     # Last resort: the current interpreter — correct when vLLM is installed in
     # the worker's own venv (the ``sys.executable -m vllm`` resolution path).
     return sys.executable
+
+
+def resolve_vllm_version(vllm_binary: str) -> str:
+    """The vLLM version of the interpreter that serves the configured binary.
+
+    The single source of truth for the version a sharded-checkpoint rejection
+    is scoped to: whatever loads the checkpoint runs under
+    ``resolve_vllm_python(vllm_binary)``, so that is whose version we record and
+    compare. In the common case (the configured vLLM is this worker's own) this
+    is exactly :func:`current_vllm_version`; in a separate-venv deployment it is
+    that other venv's version instead.
+    """
+    return vllm_version_for_python(resolve_vllm_python(vllm_binary))
 
 
 def _build_convert_env(
@@ -425,7 +471,7 @@ def ensure_sharded_checkpoint(
     target = sharded_checkpoint_dir(cache_root, model, tp)
     if is_sharded_checkpoint_ready(target):
         return target
-    if rejection_state(target) == "skip":
+    if rejection_state(target, vllm_binary=vllm_binary) == "skip":
         # A conversion for this (model, tp) was built and the loader rejected
         # it, for the vLLM that is installed now. Rebuilding it would only
         # reproduce the same bad shards after minutes of GPU time, so go

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -364,7 +365,7 @@ def test_ensure_does_not_reconvert_a_rejected_checkpoint(tmp_path: Path, monkeyp
     """The regression: a rejection recorded for the current vLLM must make the
     next ensure() skip the conversion entirely, not rebuild and re-reject it."""
     _recorded(tmp_path, "0.8.0")
-    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.8.0")
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.8.0")
 
     def _boom(*_a, **_k):  # the converter must never be launched
         raise AssertionError("a rejected checkpoint must not be re-converted")
@@ -378,7 +379,7 @@ def test_ensure_reconverts_when_the_vllm_version_changed(tmp_path: Path, monkeyp
     """A newer vLLM gets exactly one retry: the stale rejection is cleared and
     the conversion runs again (an upstream fix may have landed)."""
     _recorded(tmp_path, "0.8.0")
-    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.9.0")
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.9.0")
 
     def _convert(cmd, env, log_path, timeout_s, cancel_event):
         out = Path(cmd[cmd.index("--output") + 1])
@@ -395,7 +396,7 @@ def test_rejection_survives_a_worker_restart(tmp_path: Path, monkeypatch) -> Non
     in-memory state) still honours a rejection written by a prior run."""
     d = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
     sc.record_rejection(d, vllm_version="")  # version-unknown → skips regardless
-    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.8.0")
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.8.0")
 
     def _boom(*_a, **_k):
         raise AssertionError("restart must not re-convert a previously-rejected checkpoint")
@@ -423,3 +424,48 @@ def test_current_vllm_version_is_empty_when_vllm_is_absent(monkeypatch) -> None:
 
     monkeypatch.setattr(md, "version", _missing)
     assert sc.current_vllm_version() == ""
+
+
+def test_vllm_version_for_python_reads_the_configured_interpreter(tmp_path: Path, monkeypatch) -> None:
+    """The version is read from the *configured* interpreter, not this worker's —
+    the separate-venv case where vllm lives in a different venv. A foreign
+    interpreter is asked with a subprocess, so this drives it for real."""
+    other = tmp_path / "other_python"
+    other.write_text("#!/bin/sh\necho 3.14.0\n")
+    other.chmod(0o755)
+    # If this worker's own version leaked in, the answer below would be wrong.
+    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.0.0-worker")
+    assert sc.vllm_version_for_python(str(other)) == "3.14.0"
+
+
+def test_vllm_version_for_python_reads_this_process_in_place(monkeypatch) -> None:
+    """When the configured interpreter is this process, the version is read
+    in-process (no fork) — the common same-venv deployment."""
+    monkeypatch.setattr(sc, "current_vllm_version", lambda: "2.0.0")
+    assert sc.vllm_version_for_python(sys.executable) == "2.0.0"
+
+
+def test_resolve_vllm_version_uses_the_configured_binary(monkeypatch) -> None:
+    """The version a rejection is scoped to is the configured binary's
+    interpreter, so a separate-venv vLLM is keyed to its own version."""
+    monkeypatch.setattr(sc, "resolve_vllm_python", lambda _b: "/other/venv/bin/python")
+    monkeypatch.setattr(sc, "vllm_version_for_python", lambda _py: "5.5.5")
+    assert sc.resolve_vllm_version("vllm") == "5.5.5"
+
+
+def test_ensure_scopes_rejection_to_the_configured_interpreter(tmp_path: Path, monkeypatch) -> None:
+    """The separate-venv regression: the skip/retry decision must key off the
+    serving interpreter's version, not the worker's. The worker here runs a
+    different vLLM than the one serving; a rejection recorded for the serving
+    version must still be honoured (skipped) — which only holds when the serving
+    version, not the worker's, is the one compared."""
+    _recorded(tmp_path, "0.8.0")
+    monkeypatch.setattr(sc, "current_vllm_version", lambda: "9.9.9")  # the worker's — must be ignored
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.8.0")  # the serving version — matches the record
+
+    def _boom(*_a, **_k):
+        raise AssertionError("the rejection must be scoped to the serving version, not the worker's")
+
+    monkeypatch.setattr(sc, "_run_conversion_subprocess", _boom)
+    result = sc.ensure_sharded_checkpoint(model="org/Model-A", tensor_parallel_size=2, cache_root=str(tmp_path))
+    assert result is None

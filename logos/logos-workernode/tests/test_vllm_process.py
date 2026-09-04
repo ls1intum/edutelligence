@@ -2692,7 +2692,7 @@ async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeyp
     )
     monkeypatch.setattr(handle, "_resolve_persistent_cache_root", lambda _cfg: str(tmp_path))
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "vllm")
-    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.8.0")
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.8.0")
 
     lane = LaneConfig(
         model="Qwen/Qwen3.8-27B",
@@ -2750,7 +2750,7 @@ def test_invalidate_sharded_checkpoint_records_the_version(monkeypatch, tmp_path
     handle._sharded_model_dir = str(target)
     handle._recent_logs.extend(['File ".../sharded_state_loader.py", line 154, in load_weights'])
 
-    monkeypatch.setattr(sc, "current_vllm_version", lambda: "0.8.0")
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.8.0")
     assert handle._invalidate_sharded_checkpoint(lane) is True
 
     rec = sc.read_rejection(target)

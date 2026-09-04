@@ -763,9 +763,11 @@ class VllmProcessHandle:
         try:
             from logos_worker_node import sharded_checkpoint as sc  # noqa: PLC0415
 
+            vllm_config = lane_config.vllm_config
+            binary = vllm_config.vllm_binary if vllm_config is not None else "vllm"
             removed = sc.invalidate_sharded_checkpoint(
                 Path(directory),
-                vllm_version=sc.current_vllm_version(),
+                vllm_version=sc.resolve_vllm_version(binary),
                 reason=self._sharded_rejection_reason(),
             )
         except Exception:  # noqa: BLE001
@@ -1683,7 +1685,7 @@ class VllmProcessHandle:
             )
             return
 
-        if sc.rejection_state(target) == "skip":
+        if sc.rejection_state(target, vllm_binary=vc.vllm_binary) == "skip":
             # A conversion for this (model, tp) was already built and the loader
             # rejected it for the vLLM that is installed now (recorded on the
             # earlier failure). Rebuilding it here would burn minutes of GPU
