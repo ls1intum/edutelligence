@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 
 from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers
-from .config import REPLY_FILE, settings
+from .config import INTERRUPTION_FILE, REPLY_FILE, settings
 from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
@@ -786,9 +786,38 @@ class SessionManager:
         # error on resume and retries, which is the cheapest possible way to
         # lose an in-flight answer.
         await self._detach_from_model_gateway(sid, container_id)
+        self._say_it_was_interrupted(sid)
         if await db.transition_session(sid, SessionStatus.PAUSED):
             await db.add_event(sid, EventKind.CAPACITY, {"decision": "pause", "reason": reason})
             logger.info("paused session %s: %s", sid, reason)
+
+    def _say_it_was_interrupted(self, session_id: int) -> None:
+        """Leave a mark the session can read when it thaws.
+
+        The session has to tell "the platform froze me and my answer died
+        with it" from "the model refused" — the first is picked up where it
+        left off, the second is a failure. It used to tell them apart by
+        matching the CLI's own prose, and the CLI changed it: production
+        printed "The response stopped arriving", which was in no list, so
+        two sessions were failed after an hour of work each and each burned
+        one of the three attempts its request had.
+
+        So the runner says so itself. It is the one that froze the session;
+        it does not need to recognise a sentence to know that. Best effort,
+        because a mark that cannot be written costs only the older, weaker
+        signal — and the pause itself must not fail over it.
+        """
+        marker = artifact_dir(session_id) / INTERRUPTION_FILE
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            with marker.open("a", encoding="utf-8") as handle:
+                handle.write("paused\n")
+            _give_to_session_user(marker)
+        except (OSError, ValueError) as exc:
+            # ValueError as well as OSError: an artefact root that is not a
+            # usable path at all fails before the filesystem is reached, and
+            # giving capacity back matters more than being able to explain it.
+            logger.info("could not mark session %s as interrupted: %s", session_id, exc)
 
     async def _detach_from_model_gateway(self, session_id: int, container_id: str) -> None:
         try:

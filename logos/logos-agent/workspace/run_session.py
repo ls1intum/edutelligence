@@ -575,16 +575,36 @@ _INTERRUPTIONS = (
     "connection lost mid-response",
     "connection error",
     "api error: request timed out",
+    # What it printed in production the day two sessions were failed after
+    # an hour each, because it was in no list.
+    "the response stopped arriving",
+    "response above may be incomplete",
     "fetch failed",
     "socket hang up",
     "econnreset",
 )
 
-# How many times a run may be picked up again after such an interruption.
-# The work itself is in the checkout, so continuing costs a prompt and the
-# conversation it resumes; three is enough for a busy afternoon of pauses
-# and few enough that a genuinely broken gateway stops being retried.
+# What the runner appends to whenever it freezes this session, in the
+# artefact directory it shares with us. The authoritative signal, and the
+# reason the list above is no longer load-bearing: matching an upstream
+# tool's prose means a session dies quietly the next time somebody rewrites
+# a sentence. The runner froze us; it knows, and it says so.
+INTERRUPTION_FILE = "interruptions"
+
+# How many times a run may be picked up again after an interruption nobody
+# claimed. The work itself is in the checkout, so continuing costs a prompt
+# and the conversation it resumes; three is few enough that a genuinely
+# broken gateway stops being retried.
 _MAX_CONTINUATIONS = 3
+
+# And how many times after an interruption the runner *did* claim, by
+# freezing this session to give a user their slot. A different number
+# because it is a different situation: nothing is broken, the platform is
+# busy, and the only question is whether an afternoon of being useful ends
+# with the work or without it. Production froze one session twenty-one
+# times in eighty minutes — against a bound of three, every session on a
+# busy afternoon would be thrown away just short of finishing.
+_MAX_PAUSED_CONTINUATIONS = 60
 
 
 def _agent_command(prompt: str, *, resuming: bool) -> list[str]:
@@ -610,10 +630,30 @@ def _agent_command(prompt: str, *, resuming: bool) -> list[str]:
     return cmd
 
 
-def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool]:
-    """Run one invocation. Returns its exit code, usage, and whether it was cut off."""
+def _pauses_so_far() -> int:
+    """How many times the runner has frozen this session.
+
+    Counted rather than flagged: a run has to know whether it was frozen
+    during *itself*, and a flag set by an earlier pause would make every
+    later failure look like an interruption.
+    """
+    path = Path(os.environ.get("LOGOS_ARTIFACT_DIR", "/artifacts")) / INTERRUPTION_FILE
+    try:
+        return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    except (OSError, UnicodeDecodeError):
+        return 0
+
+
+def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool, bool]:
+    """Run one invocation.
+
+    Returns its exit code, its usage, whether it was cut off, and whether
+    the runner is the one that cut it off — the last two are separate
+    because they are allowed different numbers of second chances.
+    """
     usage: dict[str, object] = {}
     interrupted = False
+    pauses_before = _pauses_so_far()
     process = subprocess.Popen(cmd, cwd=CHECKOUT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert process.stdout is not None
     for line in process.stdout:
@@ -633,7 +673,13 @@ def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool]:
         if event.get("type") == "result":
             usage = event
             _account_for(event)
-    return process.wait(), usage, interrupted
+    code = process.wait()
+    # The platform froze this session while the run was in flight and cut it
+    # off the model network. Whatever the CLI made of that, the answer died
+    # because we took the capacity back — which is a thing to continue from,
+    # not a thing to fail on.
+    frozen = _pauses_so_far() > pauses_before
+    return code, usage, interrupted or frozen, frozen
 
 
 def run_agent(task: str) -> dict[str, object]:
@@ -671,15 +717,21 @@ def run_agent(task: str) -> dict[str, object]:
     # event of the invocation that finished only describes that one.
     spent_in = spent_out = 0
     spent_cost = 0.0
-    for attempt in range(_MAX_CONTINUATIONS + 1):
+    attempt = 0
+    # Counted apart, because they mean different things. One says the
+    # platform is busy and took its capacity back; the other says something
+    # is wrong that nobody has explained.
+    after_a_pause = 0
+    unexplained = 0
+    while True:
         resuming = attempt > 0 or carry_on
         if attempt > 0:
-            log(f"the agent's connection was cut; continuing where it left off ({attempt}/{_MAX_CONTINUATIONS})")
+            log(f"the agent's connection was cut; continuing where it left off (attempt {attempt + 1})")
         # The first run of a continued session carries the new work — the
         # review that just came in — into the conversation that did the
         # earlier rounds. A later run carries only "you were cut off".
         text = CONTINUE_PROMPT if attempt > 0 else prompt
-        code, run_usage, interrupted = _drive_agent(_agent_command(text, resuming=resuming))
+        code, run_usage, interrupted, frozen = _drive_agent(_agent_command(text, resuming=resuming))
         run_in, run_out, run_cost = usage_totals(run_usage)
         if not run_usage:
             # Cut off before it could report: what the assistant events
@@ -692,10 +744,23 @@ def run_agent(task: str) -> dict[str, object]:
         if code == 0:
             log(f"agent finished in {elapsed:.0f}s with exit code {code}")
             return _totalled(spent_in, spent_out, spent_cost)
-        if not interrupted or attempt == _MAX_CONTINUATIONS:
+        if not interrupted:
             log(f"agent finished in {elapsed:.0f}s with exit code {code}")
             raise RuntimeError(f"agent exited with code {code}")
-    raise RuntimeError("agent exited without a result")
+        if frozen:
+            after_a_pause += 1
+            spent, ceiling, why = after_a_pause, _MAX_PAUSED_CONTINUATIONS, "pauses"
+        else:
+            unexplained += 1
+            spent, ceiling, why = unexplained, _MAX_CONTINUATIONS, "unexplained interruptions"
+        if spent > ceiling:
+            # Said rather than left to be inferred from a bare exit code:
+            # "this session was interrupted more times than it is allowed to
+            # come back from" and "the agent failed" are different endings,
+            # and only one of them is about the agent.
+            log(f"agent finished in {elapsed:.0f}s after {spent} {why}, which is past the {ceiling} allowed")
+            raise RuntimeError(f"the session was cut off {spent} times ({why}) and could not be continued")
+        attempt += 1
 
 
 def _totalled(tokens_in: int, tokens_out: int, cost: float) -> dict[str, object]:

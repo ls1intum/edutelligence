@@ -47,6 +47,13 @@ def _csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 # runner reads it and posts what it finds. It lives here rather than in
 # either of those modules so neither has to import the other.
 REPLY_FILE = "reply.md"
+
+# The file the runner appends to whenever it freezes a session, relative to
+# the same directory. The other half of the same contract, in the other
+# direction: the runner is the one that cuts a session off the model, and
+# this is how it says so to the session that has to survive it. Read by the
+# session on the way out of an invocation, never by the agent.
+INTERRUPTION_FILE = "interruptions"
 # The one line the agent writes about what it changed. The runner commits
 # with it, because the agent is the only one that knows what the change is —
 # and because a commit subject derived from the task reads like the task.

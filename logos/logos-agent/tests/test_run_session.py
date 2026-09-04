@@ -605,7 +605,9 @@ class TestSurvivingAPause:
                 if any(marker in line.lower() for marker in run_session._INTERRUPTIONS):
                     interrupted = True
             reported = (usage or [])[len(seen) - 1] if usage else {"usage": {"output_tokens": 1}}
-            return code, reported, interrupted
+            # Interrupted, but not by us: these are the CLI's own words,
+            # which is the case with the smaller allowance.
+            return code, reported, interrupted, False
 
         monkeypatch.setattr(run_session, "_drive_agent", fake_drive)
         return seen
@@ -1042,3 +1044,150 @@ class TestWhatASessionReportsSpending:
         run_session._account_for({"usage": {"input_tokens": 10, "output_tokens": 10}})
 
         assert capsys.readouterr().out.strip() == "[usage] in=9000 out=5000"
+
+
+class TestKnowingItWasFrozen:
+    """Being frozen by the platform is not a failed session.
+
+    A pause cuts the container off the model network on purpose, so the
+    answer the agent was reading ends under it. That has to be picked up
+    where it left off — and telling it apart from a real failure used to
+    mean matching the CLI's own prose. The CLI changed the sentence:
+    production printed "The response stopped arriving", which was in no
+    list, and two sessions were failed after an hour of work each, each
+    burning one of the three attempts its request had.
+    """
+
+    def test_the_wording_production_actually_printed_is_recognised(self):
+        line = "API Error: The response stopped arriving. The response above may be incomplete."
+
+        assert any(marker in line.lower() for marker in run_session._INTERRUPTIONS)
+
+    def test_a_pause_during_the_run_is_an_interruption_whatever_was_printed(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        marker = tmp_path / run_session.INTERRUPTION_FILE
+
+        class FakeProcess:
+            stdout = iter([])
+
+            def wait(self):
+                # The runner froze the session while this run was in flight.
+                marker.write_text("paused\n")
+                return 1
+
+        monkeypatch.setattr(run_session.subprocess, "Popen", lambda *a, **k: FakeProcess())
+
+        code, _usage, interrupted, frozen = run_session._drive_agent(["claude"])
+
+        assert code == 1
+        assert interrupted and frozen
+
+    def test_a_pause_from_an_earlier_run_is_not_this_run_s(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        (tmp_path / run_session.INTERRUPTION_FILE).write_text("paused\n")
+
+        class FakeProcess:
+            stdout = iter([])
+
+            def wait(self):
+                return 1
+
+        monkeypatch.setattr(run_session.subprocess, "Popen", lambda *a, **k: FakeProcess())
+
+        _code, _usage, interrupted, frozen = run_session._drive_agent(["claude"])
+
+        # Otherwise every later failure in a session that was ever paused
+        # would read as an interruption and be retried three times over.
+        assert not interrupted and not frozen
+
+    def test_an_ordinary_failure_is_still_a_failure(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+
+        class FakeProcess:
+            stdout = iter([])
+
+            def wait(self):
+                return 1
+
+        monkeypatch.setattr(run_session.subprocess, "Popen", lambda *a, **k: FakeProcess())
+
+        _code, _usage, interrupted, frozen = run_session._drive_agent(["claude"])
+
+        assert not interrupted and not frozen
+
+    def test_no_artefact_directory_costs_only_the_stronger_signal(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path / "not-there"))
+
+        assert run_session._pauses_so_far() == 0
+
+
+class TestHowOftenASessionMayComeBack:
+    """Two kinds of interruption, two numbers.
+
+    Production froze one session twenty-one times in eighty minutes, and
+    every one of those was the platform working as designed: a user wanted a
+    slot and got it. Against a single bound of three, a busy afternoon threw
+    the work away just short of finishing. An interruption nobody claimed is
+    a different thing — that one is a gateway that may be broken, and it
+    stops being retried quickly.
+    """
+
+    @staticmethod
+    def install(monkeypatch, tmp_path, *, frozen: bool):
+        """An agent that is cut off on every invocation."""
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        monkeypatch.setenv("LOGOS_SESSION_ENVIRONMENT_NOTES", "notes")
+        runs: list = []
+        marker = tmp_path / run_session.INTERRUPTION_FILE
+
+        class FakeProcess:
+            def __init__(self):
+                # A fresh iterator per invocation: a class-level one is
+                # exhausted after the first run and every later run would
+                # read nothing.
+                self.stdout = iter([] if frozen else ["API Error: Connection error."])
+
+            def wait(self):
+                runs.append(1)
+                if frozen:
+                    with marker.open("a") as handle:
+                        handle.write("paused\n")
+                return 1
+
+        monkeypatch.setattr(run_session.subprocess, "Popen", lambda *a, **k: FakeProcess())
+        monkeypatch.setattr(run_session, "log", lambda *a, **k: None)
+        return runs
+
+    def test_a_session_the_runner_froze_keeps_coming_back(self, tmp_path, monkeypatch):
+        runs = self.install(monkeypatch, tmp_path, frozen=True)
+
+        with pytest.raises(RuntimeError) as failure:
+            run_session.run_agent("Fix the alignment.")
+
+        assert len(runs) == run_session._MAX_PAUSED_CONTINUATIONS + 1
+        # The ending says which of the two it was, so nobody reads it as
+        # "the agent failed".
+        assert "cut off" in str(failure.value) and "pauses" in str(failure.value)
+
+    def test_an_unexplained_interruption_stops_quickly(self, tmp_path, monkeypatch):
+        runs = self.install(monkeypatch, tmp_path, frozen=False)
+
+        with pytest.raises(RuntimeError) as failure:
+            run_session.run_agent("Fix the alignment.")
+
+        assert len(runs) == run_session._MAX_CONTINUATIONS + 1
+        assert "unexplained" in str(failure.value)
+
+    def test_a_plain_failure_is_not_retried_at_all(self, tmp_path, monkeypatch):
+        runs = self.install(monkeypatch, tmp_path, frozen=False)
+        monkeypatch.setattr(run_session, "_INTERRUPTIONS", ("nothing that appears",))
+
+        with pytest.raises(RuntimeError, match="agent exited with code 1"):
+            run_session.run_agent("Fix the alignment.")
+
+        assert len(runs) == 1
+
+    def test_the_bound_for_pauses_is_the_larger_of_the_two(self):
+        # The whole point: being useful on a busy afternoon must not be
+        # rarer than a gateway being broken.
+        assert run_session._MAX_PAUSED_CONTINUATIONS > run_session._MAX_CONTINUATIONS

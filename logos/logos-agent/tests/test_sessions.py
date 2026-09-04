@@ -4862,3 +4862,86 @@ class TestARequestThatLostItsReplacement:
         await sessions.manager.resume_retries()
 
         assert attempts == [31, 31]
+
+
+class TestSayingThatItFroze:
+    """The runner tells the session it was frozen, rather than the other way
+    round.
+
+    A paused session is cut off the model network on purpose, so the answer
+    it was reading dies. Whether that counts as a failure was decided inside
+    the container by matching the CLI's own prose — and when the CLI changed
+    the sentence, two production sessions were failed after an hour of work
+    each. The runner is the one that froze them; it does not need to
+    recognise a sentence to know that.
+    """
+
+    @staticmethod
+    def install(monkeypatch, tmp_path, *, paused=True):
+        from app import sessions
+
+        async def pause_container(_cid):
+            return paused
+
+        async def detach(*_args, **_kwargs):
+            return None
+
+        async def transition_session(*_args, **_kwargs):
+            return True
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", pause_container)
+        monkeypatch.setattr(sessions.SessionManager, "_detach_from_model_gateway", detach)
+        monkeypatch.setattr(sessions.db, "transition_session", transition_session)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+
+    async def test_a_pause_leaves_a_mark_the_session_can_read(self, monkeypatch, tmp_path):
+        from app import sessions
+        from app.config import INTERRUPTION_FILE
+
+        self.install(monkeypatch, tmp_path)
+
+        await sessions.manager._pause({"id": 7, "container_id": "cid-7"}, "users are queueing")
+
+        marker = tmp_path / "7" / INTERRUPTION_FILE
+        assert marker.read_text().strip() == "paused"
+
+    async def test_every_pause_adds_one(self, monkeypatch, tmp_path):
+        from app import sessions
+        from app.config import INTERRUPTION_FILE
+
+        self.install(monkeypatch, tmp_path)
+
+        await sessions.manager._pause({"id": 7, "container_id": "cid-7"}, "first")
+        await sessions.manager._pause({"id": 7, "container_id": "cid-7"}, "second")
+
+        # Counted, not flagged: a run has to know whether it was frozen
+        # during itself, not whether it ever was.
+        marker = tmp_path / "7" / INTERRUPTION_FILE
+        assert len(marker.read_text().strip().splitlines()) == 2
+
+    async def test_a_container_that_could_not_be_frozen_leaves_nothing(self, monkeypatch, tmp_path):
+        from app import sessions
+        from app.config import INTERRUPTION_FILE
+
+        self.install(monkeypatch, tmp_path, paused=False)
+
+        await sessions.manager._pause({"id": 7, "container_id": "cid-7"}, "users are queueing")
+
+        # The agent exited between the reading and the call: nothing was
+        # frozen, so nothing was interrupted.
+        assert not (tmp_path / "7" / INTERRUPTION_FILE).exists()
+
+    async def test_a_mark_that_cannot_be_written_does_not_stop_the_pause(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        self.install(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path / "nope" / "\0bad"))
+        )
+
+        # Giving capacity back matters more than being able to explain it.
+        await sessions.manager._pause({"id": 7, "container_id": "cid-7"}, "users are queueing")
