@@ -492,8 +492,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                             pass
                         except Exception:  # noqa: BLE001
                             logger.warning(
-                                "Unexpected error reading model profile for no-lane estimate"
-                                " model=%s provider=%s",
+                                "Unexpected error reading model profile for no-lane estimate" " model=%s provider=%s",
                                 model_id,
                                 provider_id,
                                 exc_info=True,
@@ -505,9 +504,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                             model_vram_mb=_nl_vram_mb,
                             tp_size=_nl_tp_size,
                         )
-                        _nl_learned_ttft = self._latency_store.get_ttft_s(
-                            _no_lane_model_name, provider_id
-                        )
+                        _nl_learned_ttft = self._latency_store.get_ttft_s(_no_lane_model_name, provider_id)
                         if input_tokens > 0:
                             _nl_prefill_s = self._latency_store.get_prefill_s(
                                 _no_lane_model_name, provider_id, input_tokens

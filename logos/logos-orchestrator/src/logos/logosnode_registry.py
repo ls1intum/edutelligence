@@ -419,18 +419,14 @@ class LogosNodeRuntimeRegistry:
             cold_s = lane.get("last_cold_load_s")
             if isinstance(cold_s, (int, float)) and cold_s > 0:
                 if self._prev_lane_cold_s.get(_lane_key) != cold_s:
-                    self._latency_store.record_overhead(
-                        model_name, provider_id, ReadinessTier.COLD, float(cold_s)
-                    )
+                    self._latency_store.record_overhead(model_name, provider_id, ReadinessTier.COLD, float(cold_s))
                     self._prev_lane_cold_s[_lane_key] = cold_s
 
             # Wake-from-sleep timing — same retention pattern as cold_s.
             wake_s = lane.get("last_wake_from_sleep_s")
             if isinstance(wake_s, (int, float)) and wake_s > 0:
                 if self._prev_lane_wake_s.get(_lane_key) != wake_s:
-                    self._latency_store.record_overhead(
-                        model_name, provider_id, ReadinessTier.SLEEPING, float(wake_s)
-                    )
+                    self._latency_store.record_overhead(model_name, provider_id, ReadinessTier.SLEEPING, float(wake_s))
                     self._prev_lane_wake_s[_lane_key] = wake_s
 
             # TPOT and e2e latency from vLLM Prometheus histograms.
@@ -465,9 +461,7 @@ class LogosNodeRuntimeRegistry:
                     and math.isfinite(prefill_tokens)
                     and prefill_tokens > 0
                 ):
-                    self._latency_store.record_prefill(
-                        model_name, provider_id, float(prefill_s), float(prefill_tokens)
-                    )
+                    self._latency_store.record_prefill(model_name, provider_id, float(prefill_s), float(prefill_tokens))
 
     def set_on_runtime_updated(self, callback: Callable[[int], None] | None) -> None:
         """Register the post-status hook. See ``_on_runtime_updated``."""
