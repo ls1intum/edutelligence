@@ -44,6 +44,21 @@ def test_resolve_vllm_python_picks_sibling(monkeypatch, tmp_path: Path) -> None:
     assert sc.resolve_vllm_python(str(vllm)) == str(py)
 
 
+def test_resolve_vllm_python_module_fallback_uses_the_active_interpreter(monkeypatch, tmp_path: Path) -> None:
+    """When no ``vllm`` script resolves — nothing on PATH and a well-known root
+    that has a python but no vllm script — the serve falls back to
+    ``sys.executable -m vllm``, so the version check must follow it to the active
+    interpreter, not to a python that happens to sit in a root without a vllm.
+    That is the interpreter the loader actually runs under."""
+    root = tmp_path / "fakevenv"
+    root.mkdir()
+    (root / "python").write_text("#!/bin/sh\nexit 0\n")
+    (root / "python").chmod(0o755)  # an interpreter, but deliberately no vllm script
+    monkeypatch.setattr("logos_worker_node.sharded_checkpoint.shutil.which", lambda _c: None)
+    monkeypatch.setattr(sc, "_WELL_KNOWN_VLLM_ROOTS", (str(root),))
+    assert sc.resolve_vllm_python("vllm") == sys.executable
+
+
 def test_ensure_returns_none_for_tp1(tmp_path: Path) -> None:
     assert sc.ensure_sharded_checkpoint(model="org/m", tensor_parallel_size=1, cache_root=str(tmp_path)) is None
 
@@ -443,6 +458,29 @@ def test_vllm_version_for_python_reads_this_process_in_place(monkeypatch) -> Non
     in-process (no fork) — the common same-venv deployment."""
     monkeypatch.setattr(sc, "current_vllm_version", lambda: "2.0.0")
     assert sc.vllm_version_for_python(sys.executable) == "2.0.0"
+
+
+def test_vllm_version_for_python_probes_with_a_bounded_timeout(tmp_path: Path, monkeypatch) -> None:
+    """A foreign-interpreter probe must not stall the lane lifecycle: the
+    subprocess it spawns carries a short timeout, so a hung interpreter reads as
+    unknown (→ skip) after a few seconds instead of blocking the awaiting spawn
+    for a half-minute."""
+    other = tmp_path / "other_python"
+    other.write_text("#!/bin/sh\nexit 0\n")
+    other.chmod(0o755)
+    seen: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+
+        class _Proc:
+            stdout = "1.0.0\n"
+
+        return _Proc()
+
+    monkeypatch.setattr(sc.subprocess, "run", _fake_run)
+    assert sc.vllm_version_for_python(str(other)) == "1.0.0"
+    assert seen["timeout"] is not None and seen["timeout"] <= 10
 
 
 def test_resolve_vllm_version_uses_the_configured_binary(monkeypatch) -> None:

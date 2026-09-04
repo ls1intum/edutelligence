@@ -48,6 +48,11 @@ _COMPLETION_MARKER = ".logos_sharded_complete"
 _REJECTION_SUFFIX = ".rejected"
 DEFAULT_MAX_FILE_SIZE_BYTES = 5 * 1024**3
 
+# Well-known venv/install roots, consulted last when no ``vllm`` script resolves
+# via PATH. Must stay in sync with ``VllmProcessHandle._resolve_vllm_binary``
+# (step 4) — see ``resolve_vllm_python``.
+_WELL_KNOWN_VLLM_ROOTS = ("/opt/venv/bin", "/usr/local/bin")
+
 _CONVERT_ENTRYPOINT = Path(__file__).with_name("_sharded_convert.py")
 
 # In-process locks keyed by target dir so the calibration trigger and the
@@ -169,7 +174,9 @@ def vllm_version_for_python(python: str) -> str:
             [python, "-c", "import importlib.metadata as m; print(m.version('vllm') or '')"],
             capture_output=True,
             text=True,
-            timeout=30,
+            # Bounded so a hung interpreter reads as unknown (→ skip) instead of
+            # stalling the spawn that awaits this probe.
+            timeout=10,
         )
     except Exception:  # noqa: BLE001
         # A missing or broken foreign interpreter reads as "unknown" (→ skip),
@@ -273,35 +280,59 @@ def _lock_for(directory: Path) -> threading.Lock:
 
 
 def resolve_vllm_python(vllm_binary: str) -> str:
-    """Find a Python interpreter that has vLLM importable.
+    """The Python interpreter that serves the configured vLLM binary.
 
-    The converter runs as ``<python> _sharded_convert.py …`` so it only needs
-    vLLM on its path, not ``logos_worker_node``. vLLM may live in a different
-    venv than the worker process, so the interpreter is derived from the
-    resolved ``vllm`` executable rather than assuming ``sys.executable``.
+    Mirrors ``VllmProcessHandle._resolve_vllm_binary`` step-for-step, returning
+    the interpreter behind whichever ``vllm`` script that method would serve
+    with. The two must stay in lockstep: a sharded rejection is scoped to the
+    version of the interpreter that *loads* the checkpoint, so a divergence here
+    (for instance at the module fallback, which serves with the active
+    interpreter) would scope the record to a venv that is not actually serving.
+    The converter runs as ``<python> _sharded_convert.py …`` and needs vLLM on
+    its path, so it is pointed at this same interpreter too.
     """
     raw = (vllm_binary or "vllm").strip() or "vllm"
-    candidates: list[str] = []
 
-    # Explicit path to the vllm executable → sibling python in the same venv.
-    if os.path.sep in raw:
-        exe = Path(os.path.expanduser(raw))
-        candidates += [str(exe.with_name("python")), str(exe.with_name("python3"))]
+    def _sibling_python(script: str) -> str | None:
+        base = Path(script)
+        for name in ("python", "python3"):
+            p = base.with_name(name)
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p)
+        return None
 
-    found = shutil.which(raw) or shutil.which("vllm")
-    if found:
-        p = Path(found)
-        candidates += [str(p.with_name("python")), str(p.with_name("python3"))]
+    # 1) Configured path (absolute or relative path-like value).
+    if os.path.sep in raw or (os.path.altsep and os.path.altsep in raw):
+        candidate = os.path.abspath(os.path.expanduser(raw))
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            sibling = _sibling_python(candidate)
+            if sibling:
+                return sibling
 
-    for root in ("/opt/venv/bin", "/usr/local/bin"):
-        candidates += [os.path.join(root, "python"), os.path.join(root, "python3")]
+    # 2) PATH lookup (configured name first, then plain 'vllm').
+    for cmd_name in dict.fromkeys((raw, "vllm")):
+        found = shutil.which(cmd_name)
+        if found:
+            sibling = _sibling_python(found)
+            if sibling:
+                return sibling
 
-    for cand in candidates:
-        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return cand
+    # 3) Sibling to the active interpreter (correct for activated venvs).
+    venv_sibling = Path(sys.executable).resolve().with_name("vllm")
+    if venv_sibling.is_file() and os.access(venv_sibling, os.X_OK):
+        return sys.executable
 
-    # Last resort: the current interpreter — correct when vLLM is installed in
-    # the worker's own venv (the ``sys.executable -m vllm`` resolution path).
+    # 4) Well-known venv/install roots — only where a vllm script actually lives,
+    #    so a root that merely has a python is not mistaken for the serving venv.
+    for root in _WELL_KNOWN_VLLM_ROOTS:
+        script = os.path.join(root, "vllm")
+        if os.path.isfile(script) and os.access(script, os.X_OK):
+            sibling = _sibling_python(script)
+            if sibling:
+                return sibling
+
+    # 5) Module fallback: the serve command is ``sys.executable -m vllm``, so the
+    #    interpreter is the active one — not whatever python happens to be on disk.
     return sys.executable
 
 

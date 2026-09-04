@@ -479,6 +479,7 @@ class VllmProcessHandle:
         purged_once = False
         unsharded_once = False
         self._skip_sharded_checkpoint = False
+        spawn_loop = asyncio.get_running_loop()
         while True:
             try:
                 status = await self._spawn_once(lane_config)
@@ -491,7 +492,10 @@ class VllmProcessHandle:
                 # that leaves the actual cause in place for the retry.
                 if not unsharded_once and self.has_broken_sharded_checkpoint:
                     unsharded_once = True
-                    self._invalidate_sharded_checkpoint(lane_config)
+                    # Discarding records the rejection against the serving vLLM's
+                    # version, which can probe a separate-venv interpreter; run it
+                    # off the event loop so that probe never stalls this loop.
+                    await spawn_loop.run_in_executor(None, lambda: self._invalidate_sharded_checkpoint(lane_config))
                     # Hold off the conversion for this lane's retry as well:
                     # rebuilding it would only reproduce the same bad output.
                     self._skip_sharded_checkpoint = True
@@ -1685,7 +1689,12 @@ class VllmProcessHandle:
             )
             return
 
-        if sc.rejection_state(target, vllm_binary=vc.vllm_binary) == "skip":
+        loop = asyncio.get_running_loop()
+        # The rejection check can probe a separate-venv vLLM interpreter for its
+        # version; run it off the event loop so a slow probe (bounded by the
+        # probe timeout) never stalls every other coroutine on this loop.
+        rejection = await loop.run_in_executor(None, lambda: sc.rejection_state(target, vllm_binary=vc.vllm_binary))
+        if rejection == "skip":
             # A conversion for this (model, tp) was already built and the loader
             # rejected it for the vLLM that is installed now (recorded on the
             # earlier failure). Rebuilding it here would burn minutes of GPU
@@ -1714,7 +1723,6 @@ class VllmProcessHandle:
             lane_config.model,
             tp,
         )
-        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
             lambda: sc.ensure_sharded_checkpoint(

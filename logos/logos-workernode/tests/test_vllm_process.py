@@ -2716,6 +2716,41 @@ async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeyp
     assert sc.rejection_state(target, current_version="0.8.0") == "skip"
 
 
+async def test_maybe_prepare_runs_the_rejection_probe_off_the_event_loop(monkeypatch, tmp_path) -> None:
+    """The rejection probe can ask a separate-venv interpreter for its version;
+    it must run in a worker thread, not on the loop, so a slow probe cannot stall
+    every other coroutine on this lane's loop."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(),
+        vllm_engine_config=VllmEngineConfig(sharded_checkpoint_enabled=True),
+    )
+    monkeypatch.setattr(handle, "_resolve_persistent_cache_root", lambda _cfg: str(tmp_path))
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "vllm")
+    lane = LaneConfig(model="org/Model-A", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    sc.record_rejection(target, vllm_version="0.8.0")
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.8.0")  # recorded == current → skip
+
+    routed: list = []
+    real_loop = asyncio.get_running_loop()
+    real_run_in_executor = real_loop.run_in_executor
+
+    def _spy_run_in_executor(executor, func, *args, **kwargs):
+        routed.append(func)
+        return real_run_in_executor(executor, func, *args, **kwargs)
+
+    monkeypatch.setattr(real_loop, "run_in_executor", _spy_run_in_executor)
+
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None, "a rejected checkpoint must serve the full checkpoint"
+    assert len(routed) == 1, "the rejection probe must be routed through run_in_executor"
+
+
 def test_sharded_rejection_reason_uses_the_loader_line() -> None:
     """The recorded reason is the log line that identified the checkpoint as
     the problem, so a later reader of the sidecar sees why it was rejected."""
