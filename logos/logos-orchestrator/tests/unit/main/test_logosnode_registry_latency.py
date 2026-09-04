@@ -213,6 +213,51 @@ class TestPrefillIngestion:
 
 
 # ---------------------------------------------------------------------------
+# Idempotency — repeated identical observations must not inflate EWMA counts
+# ---------------------------------------------------------------------------
+
+
+class TestIngestionIdempotency:
+    def test_repeated_cold_load_recorded_once(self):
+        # The worker retains last_cold_load_s across heartbeats; the registry
+        # must deduplicate so the EWMA count does not inflate.
+        store = MagicMock()
+        reg = _make_registry(store)
+        for _ in range(3):
+            reg._absorb_latency_observations(1, _runtime([_lane(last_cold_load_s=30.0)]))
+        assert store.record_overhead.call_count == 1
+
+    def test_changed_cold_load_recorded_again(self):
+        store = MagicMock()
+        reg = _make_registry(store)
+        reg._absorb_latency_observations(1, _runtime([_lane(last_cold_load_s=30.0)]))
+        reg._absorb_latency_observations(1, _runtime([_lane(last_cold_load_s=25.0)]))
+        assert store.record_overhead.call_count == 2
+
+    def test_repeated_tpot_histogram_recorded_once(self):
+        # Same +Inf count across two polls → no new samples → record_ttft called once.
+        store = MagicMock()
+        reg = _make_registry(store)
+        tpot_hist = {"0.05": 5, "0.1": 9, "+Inf": 10}
+        lane = {"model": "test-model", "backend_metrics": {"tpot_histogram": tpot_hist}}
+        reg._absorb_latency_observations(1, _runtime([lane]))
+        reg._absorb_latency_observations(1, _runtime([lane]))
+        assert store.record_ttft.call_count == 1
+
+    def test_growing_tpot_histogram_recorded_again(self):
+        # +Inf count increases → new samples → record_ttft called each time.
+        store = MagicMock()
+        reg = _make_registry(store)
+        hist_v1 = {"0.05": 5, "0.1": 9, "+Inf": 10}
+        hist_v2 = {"0.05": 7, "0.1": 13, "+Inf": 15}
+        lane_v1 = {"model": "test-model", "backend_metrics": {"tpot_histogram": hist_v1}}
+        lane_v2 = {"model": "test-model", "backend_metrics": {"tpot_histogram": hist_v2}}
+        reg._absorb_latency_observations(1, _runtime([lane_v1]))
+        reg._absorb_latency_observations(1, _runtime([lane_v2]))
+        assert store.record_ttft.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # Integration: real LatencyStore — sub-100 ms TPOT must reach the store
 # ---------------------------------------------------------------------------
 
