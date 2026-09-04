@@ -1,3 +1,4 @@
+import time
 from threading import Thread
 from typing import List
 
@@ -352,8 +353,9 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
         return
 
     try:
+        started = time.perf_counter()
         intent = classify_intent(dto.query)
-        logger.debug(
+        logger.info(
             "[global-search] query=%r  intent=%s  → %s",
             dto.query[:120],
             intent,
@@ -370,8 +372,9 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             )
             sources = retriever.search(query=dto.query, limit=dto.limit)
             logger.info(
-                "[global-search] answer=null  sources=%d  (LLM skipped)",
+                "[global-search] answer=null  sources=%d  total_ms=%.0f  (LLM skipped)",
                 len(sources),
+                (time.perf_counter() - started) * 1000,
             )
             callback.finish(answer=None, sources=sources, tokens=[])
             return
@@ -383,16 +386,20 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             limit=dto.limit,
             intent=intent,
         )
+        total_ms = (time.perf_counter() - started) * 1000
         if result.answer:
             logger.info(
-                "[global-search] LLM produced an answer (%d chars, %d sources)",
+                "[global-search] LLM produced an answer (%d chars, %d sources) total_ms=%.0f",
                 len(result.answer),
                 len(result.sources),
+                total_ms,
             )
         else:
             logger.info(
-                "[global-search] answer=null  sources=%d  (LLM returned null or was skipped)",
+                "[global-search] answer=null  sources=%d  total_ms=%.0f  "
+                "(LLM returned null or was skipped)",
                 len(result.sources),
+                total_ms,
             )
         callback.finish(
             answer=result.answer, sources=result.sources, tokens=pipeline.tokens

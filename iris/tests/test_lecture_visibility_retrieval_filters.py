@@ -11,6 +11,7 @@ import pytest
 from iris.pipeline.chat import mcq_chat_mixin
 from iris.pipeline.chat.mcq_chat_mixin import retrieve_lecture_content_for_mcq
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
+    _LANE_DEPTH,
     LectureGlobalSearchRetrieval,
 )
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
@@ -101,14 +102,13 @@ def test_global_search_filters_hidden_slide_aggregate():
         ),
     }
 
-    assert (
-        LectureGlobalSearchRetrieval._segment_to_dto(
-            props,
-            {("https://artemis.example", 10): lecture_unit()},
-            {},
-        )
-        is None
+    dto, drop_reason = LectureGlobalSearchRetrieval._segment_to_dto(
+        props,
+        {10: lecture_unit()},
+        {},
     )
+    assert dto is None
+    assert drop_reason == "segment_hidden"
 
 
 def test_global_search_filters_unreleased_transcription_but_not_released_one():
@@ -123,20 +123,19 @@ def test_global_search_filters_unreleased_transcription_but_not_released_one():
     }
     future = datetime(2099, 1, 1, tzinfo=timezone.utc)
 
-    assert (
-        LectureGlobalSearchRetrieval._transcription_to_dto(
-            props,
-            {("https://artemis.example", 10): lecture_unit(future)},
-        )
-        is None
+    hidden_dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
+        props,
+        {10: lecture_unit(future)},
     )
-    assert (
-        LectureGlobalSearchRetrieval._transcription_to_dto(
-            props,
-            {("https://artemis.example", 10): lecture_unit()},
-        )
-        is not None
+    assert hidden_dto is None
+    assert drop_reason == "transcription_hidden"
+
+    visible_dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
+        props,
+        {10: lecture_unit()},
     )
+    assert visible_dto is not None
+    assert drop_reason is None
 
 
 def test_hidden_slide_transcription_is_filtered_across_retrieval_paths():
@@ -165,14 +164,13 @@ def test_hidden_slide_transcription_is_filtered_across_retrieval_paths():
     associated_slides = [associated_hidden_slide, associated_visible_overlay]
 
     assert not is_transcription_visible(props, unit, associated_slides)
-    assert (
-        LectureGlobalSearchRetrieval._transcription_to_dto(
-            props,
-            {("https://artemis.example", 10): unit},
-            {("https://artemis.example", 10, 8): associated_slides},
-        )
-        is None
+    dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
+        props,
+        {10: unit},
+        {(10, 8): associated_slides},
     )
+    assert dto is None
+    assert drop_reason == "transcription_hidden"
 
     retrieval = LectureTranscriptionRetrieval.__new__(LectureTranscriptionRetrieval)
     retrieval._lecture_unit_cache = {(30, 20, 10, "https://artemis.example"): unit}
@@ -598,59 +596,61 @@ def test_segment_search_accumulates_scope_filters_and_stops_at_candidate_ceiling
     }
 
 
-def test_global_search_expands_candidates_until_visible_result_is_found():
+def _search_result_dto(snippet: str, source_type: str):
+    """Minimal stand-in carrying only the fields the search path reads."""
+    return SimpleNamespace(
+        snippet=snippet,
+        course=SimpleNamespace(name="Course"),
+        lecture_unit=SimpleNamespace(
+            source_type=source_type, name="Unit", page_number=1
+        ),
+    )
+
+
+def test_global_search_fetches_lane_depth_candidates_regardless_of_limit():
+    """Hidden hits must not starve the result list.
+
+    The pipeline no longer re-queries with a growing limit; instead both
+    lanes always fetch _LANE_DEPTH candidates, so hidden hits in the leading
+    positions still leave visible ones in the pool.
+    """
     retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
-    hidden = SimpleNamespace()
-    visible = SimpleNamespace()
-    retrieval._search_segments = Mock(side_effect=[[hidden], [hidden, visible]])
-    retrieval._search_video_transcriptions = Mock(side_effect=[[], []])
-    visible_dto = SimpleNamespace(
-        lecture_unit=SimpleNamespace(source_type="lecture_unit_slide")
-    )
-    retrieval._map_search_objects = Mock(side_effect=[[], [(1.0, visible_dto)]])
+    retrieval._search_segments = Mock(return_value=[])
+    retrieval._search_video_transcriptions = Mock(return_value=[])
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    retrieval._map_candidates = Mock(return_value=[])
+    retrieval._safe_rerank = Mock(return_value=None)
 
-    result = retrieval._run_hybrid_search(
-        query="query", vector=[0.1], alpha=0.5, limit=1
-    )
+    retrieval._run_hybrid_search(query="query", vector=[0.1], alpha=0.5, limit=1)
 
-    assert result == [visible_dto]
-    candidate_limits = [
-        call.args[3] for call in retrieval._search_segments.call_args_list
-    ]
-    assert candidate_limits == [1, 2]
+    assert retrieval._search_segments.call_args.args[3] == _LANE_DEPTH
+    assert retrieval._search_video_transcriptions.call_args.args[3] == _LANE_DEPTH
 
 
-def test_global_search_expands_each_saturated_source_before_merging_scores():
+def test_global_search_merges_both_lanes_into_one_ranked_pool():
+    """A high-scoring transcription must outrank a low-scoring segment.
+
+    Both lanes feed a single candidate pool, so the better hit wins even when
+    the other lane returned a result first.
+    """
     retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
     segment_hit = SimpleNamespace()
-    hidden_transcription = SimpleNamespace()
-    visible_transcription = SimpleNamespace()
-    retrieval._search_segments = Mock(side_effect=[[segment_hit], [segment_hit]])
-    retrieval._search_video_transcriptions = Mock(
-        side_effect=[
-            [hidden_transcription],
-            [hidden_transcription, visible_transcription],
-        ]
+    transcription_hit = SimpleNamespace()
+    retrieval._search_segments = Mock(return_value=[segment_hit])
+    retrieval._search_video_transcriptions = Mock(return_value=[transcription_hit])
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    low_score_segment = _search_result_dto("slide text", "lecture_unit_slide")
+    high_score_transcription = _search_result_dto("video text", "lecture_unit_video")
+    retrieval._map_candidates = Mock(
+        return_value=[(0.9, high_score_transcription), (0.2, low_score_segment)]
     )
-    low_score_segment = SimpleNamespace(
-        lecture_unit=SimpleNamespace(source_type="lecture_unit_slide")
-    )
-    high_score_transcription = SimpleNamespace(
-        lecture_unit=SimpleNamespace(source_type="lecture_unit_video")
-    )
-    retrieval._map_search_objects = Mock(
-        side_effect=[
-            [(0.2, low_score_segment)],
-            [(0.2, low_score_segment), (0.9, high_score_transcription)],
-        ]
-    )
+    retrieval._safe_rerank = Mock(return_value=None)
 
     result = retrieval._run_hybrid_search(
         query="query", vector=[0.1], alpha=0.5, limit=1
     )
 
     assert result == [high_score_transcription]
-    transcription_candidate_limits = [
-        call.args[3] for call in retrieval._search_video_transcriptions.call_args_list
-    ]
-    assert transcription_candidate_limits == [1, 2]
+    seg_objects, trans_objects = retrieval._map_candidates.call_args.args[:2]
+    assert seg_objects == [segment_hit]
+    assert trans_objects == [transcription_hit]
