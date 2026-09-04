@@ -144,3 +144,41 @@ class TestPropagateCachePathToEnv:
         cfg = SimpleNamespace(worker=SimpleNamespace(cache_path="~/ignored"))
         worker_config._propagate_cache_path_to_env(cfg)
         assert environ["LOGOS_WORKER_CACHE_ROOT"] == str(tmp_path / "custom")
+
+
+@pytest.mark.asyncio
+async def test_auto_calibrate_if_needed_skips_on_metal_backend(tmp_path, monkeypatch) -> None:
+    """Calibration measures against nvidia-smi and samples /proc/meminfo,
+    neither of which exists on macOS. On the Metal backend the function must
+    return before touching the calibration machinery — no operator flag
+    required."""
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    monkeypatch.delenv("LOGOS_SKIP_AUTO_CALIBRATION", raising=False)
+    cfg = MagicMock()
+    with patch.object(worker_main, "auto_calibrate_models") as mock_calibrate:
+        await worker_main._auto_calibrate_if_needed(  # noqa: SLF001
+            cfg,
+            MagicMock(),
+            tmp_path,
+        )
+    mock_calibrate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_calibrate_if_needed_runs_on_cuda_backend(tmp_path, monkeypatch) -> None:
+    """On the CUDA backend the platform must not skip calibration: an
+    uncalibrated capability model still reaches the (mocked) measurement."""
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
+    monkeypatch.delenv("LOGOS_SKIP_AUTO_CALIBRATION", raising=False)
+    cfg = MagicMock()
+    cfg.logos.capabilities_models = ["Org/Model"]
+    cfg.engines = None
+    profiles = MagicMock()
+    profiles.get_profile.return_value = None  # no profile → uncalibrated
+    with patch.object(worker_main, "auto_calibrate_models", return_value={}) as mock_calibrate:
+        await worker_main._auto_calibrate_if_needed(  # noqa: SLF001
+            cfg,
+            profiles,
+            tmp_path,
+        )
+    mock_calibrate.assert_called_once()

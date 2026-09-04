@@ -11,6 +11,16 @@ from logos_worker_node.logos_bridge import LogosBridgeClient, _CalibrationSessio
 from logos_worker_node.models import LaneStatus, LogosConfig, ProcessState, ProcessStatus
 
 
+@pytest.fixture(autouse=True)
+def _pin_backend_to_cuda(monkeypatch):
+    """These tests exercise the bridge mechanism on the calibration-capable
+    (CUDA) path. is_metal_backend() auto-detects the host platform, which
+    would refuse calibration sessions whenever the suite runs on a Mac; the
+    Metal refusal itself is covered by
+    test_start_calibration_session_refuses_on_metal_backend."""
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
+
+
 class _DummyState:
     pass
 
@@ -767,6 +777,27 @@ async def test_start_calibration_session_refuses_when_node_unhealthy(tmp_path, m
     assert response.get("node_unhealthy") is True
     assert response.get("reason_code") == "filesystem-eio"
     assert client._active_calibration_session is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_start_calibration_session_refuses_on_metal_backend(tmp_path, monkeypatch):
+    """Calibration measures against nvidia-smi and samples /proc/meminfo —
+    neither exists on macOS, so the Metal backend must refuse the session up
+    front, by construction and without any operator flag. The refusal must
+    start no session and name model_profile_overrides as the alternative."""
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
+    assert response["ok"] is False
+    assert response.get("calibration_unavailable") is True
+    assert response.get("reason_code") == "metal-backend"
+    assert "model_profile_overrides" in response["error"]
+    assert client._active_calibration_session is None  # noqa: SLF001
+    events = [e.event for e in app.state.lane_manager._event_log]
+    assert "calibration_session_started" not in events
 
 
 @pytest.mark.asyncio

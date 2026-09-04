@@ -94,6 +94,16 @@ async def _auto_calibrate_if_needed(
         logger.info("Auto-calibration disabled via LOGOS_SKIP_AUTO_CALIBRATION")
         return
 
+    # The Metal backend has no nvidia-smi and no /proc/meminfo to measure
+    # against, so calibration is impossible there by construction. Profiles
+    # come from model_profile_overrides instead — no flag required.
+    if is_metal_backend():
+        logger.info(
+            "Auto-calibration unavailable on the Metal backend — skipping "
+            "(use model_profile_overrides for capacity profiles)"
+        )
+        return
+
     caps = cfg.logos.capabilities_models if cfg.logos else []
     if not caps:
         return

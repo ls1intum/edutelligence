@@ -27,6 +27,7 @@ except Exception:  # noqa: BLE001
 
 
 from logos_worker_node import prometheus_metrics as prom
+from logos_worker_node.metal import is_metal_backend
 from logos_worker_node.models import LaneConfig, LaneEvent, LogosConfig, WorkerTransportStatus, model_can_sleep
 from logos_worker_node.request_content import MULTIPART_PAYLOAD_KEY, httpx_request_parts
 from logos_worker_node.runtime import build_runtime_status
@@ -765,6 +766,31 @@ class LogosBridgeClient:
         back to the server. The server does not poll status and does not
         choose models; it only sends start/stop session RPCs.
         """
+        # Refuse up front on the Metal backend: calibration.py measures
+        # against nvidia-smi and samples /proc/meminfo, neither of which
+        # exists on macOS, so no probe here can ever succeed. Capacity
+        # profiles on this backend come from model_profile_overrides
+        # (config.example.mlx.yml) — no flag is needed to keep the worker
+        # away from a dead measurement path.
+        if is_metal_backend():
+            logger.info(
+                "[Calibration] refusing start_calibration_session: calibration is "
+                "unavailable on the Metal backend (nvidia-smi / /proc/meminfo "
+                "do not exist on macOS) — profiles must come from "
+                "model_profile_overrides"
+            )
+            return {
+                "ok": False,
+                "error": (
+                    "calibration is unavailable on the Metal backend: it measures "
+                    "against nvidia-smi and /proc/meminfo, which do not exist on "
+                    "macOS. Supply capacity profiles via model_profile_overrides "
+                    "instead."
+                ),
+                "calibration_unavailable": True,
+                "reason_code": "metal-backend",
+            }
+
         sleep_level = int(params.get("sleep_level", 1))
 
         # Refuse start when a session is already running — caller should

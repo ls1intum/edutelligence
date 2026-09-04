@@ -85,13 +85,10 @@ cat > .env <<'ENV'
 LOGOS_URL=https://logos.example.tum.de
 LOGOS_API_KEY=<worker key>
 HF_TOKEN=<hf token>
-LOGOS_SKIP_AUTO_CALIBRATION=1
 ENV
 $EDITOR config.yml          # seeded from config.example.mlx.yml
 launchctl kickstart -k "gui/$(id -u)/de.tum.logos.workernode"
 ```
-
-`LOGOS_SKIP_AUTO_CALIBRATION=1` is required — see *Calibration* below.
 
 ### Overrides
 
@@ -285,8 +282,11 @@ and restarting them instead. No capability is lost, only the mechanism differs.
 ### Calibration
 
 `calibration.py` measures against `nvidia-smi` and samples `/proc/meminfo`,
-neither of which exists on macOS. Run with `LOGOS_SKIP_AUTO_CALIBRATION=1` and
-provide `model_profile_overrides` by hand; a profile with
+neither of which exists on macOS. Calibration is therefore unavailable on the
+Metal backend *by construction* — no flag to set: the worker refuses
+server-driven calibration sessions automatically (the refusal carries
+`reason_code=metal-backend`), and its startup calibration path skips itself.
+Provide `model_profile_overrides` by hand instead; a profile with
 `residency_source="override"` counts as valid, so the model is advertised
 normally. `config.example.mlx.yml` has worked examples.
 
