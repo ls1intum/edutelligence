@@ -322,3 +322,41 @@ def test_chat_completions_stream_is_untouched_by_the_messages_path():
 
     assert acc.usage() == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
     assert acc.full_text == "Hi"
+
+
+def test_chat_completions_stream_ignores_non_dict_choice_elements():
+    """A non-dict element in "choices" carries no delta — it must not raise.
+
+    Every other blob field in the parser is type-checked before use; an
+    upstream sending {"choices": ["text"]} or {"choices": [null]} would
+    otherwise abort the streamed request with AttributeError mid-feed.
+    """
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"id": "c1", "choices": [{"delta": {"content": "He"}}]},
+        {"id": "c1", "choices": ["text"]},
+        {"id": "c1", "choices": [None]},
+        {"id": "c1", "choices": [{"delta": {"content": "llo"}}]},
+    )
+
+    assert acc.full_text == "Hello"
+
+
+def test_response_payload_survives_a_malformed_first_chunk():
+    """The first chunk is what response_payload() rebuilds from.
+
+    A malformed choices element in the FIRST chunk survives the feed guard
+    (which only reads deltas) inside first_chunk; the reconstruction must
+    apply the same shape check before writing the rebuilt delta, or the
+    completion logging that runs in the stream's finally path raises.
+    """
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"id": "c1", "choices": [None]},
+        {"id": "c1", "choices": [{"delta": {"content": "Hi"}}]},
+    )
+
+    # The unassignable first entry is kept as received and carries no delta.
+    assert acc.response_payload() == {"id": "c1", "choices": [None]}

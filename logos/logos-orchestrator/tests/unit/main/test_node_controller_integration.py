@@ -8,14 +8,11 @@ import pytest
 from fastapi import HTTPException, Request
 
 import logos as main_mod
-from logos import (
-    ContextResolver,
-    ExecutionContext,
-    LogosNodeOfflineError,
-    LogosNodeRuntimeRegistry,
-    LogosNodeSessionConflictError,
-)
+from logos import ContextResolver, ExecutionContext, LogosNodeOfflineError, LogosNodeRuntimeRegistry
 from logos.dbutils.dbrequest import ConnectModelProviderRequest, LogosNodeAuthRequest, LogosNodeRegisterRequest
+from logos.logosnode_registry import LogosNodeSessionConflictError
+from logos.routers import admin as admin_mod
+from logos.routers import logosnode as logosnode_mod
 
 
 class _FakeWebSocket:
@@ -315,7 +312,7 @@ async def test_registry_rejects_different_worker_for_active_provider():
 
 @pytest.mark.asyncio
 async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
-    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.setattr(logosnode_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
 
     class _FakeDB:
         def __enter__(self):
@@ -334,7 +331,7 @@ async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
                 "api_key": "shared-secret",
             }
 
-    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
 
     req = LogosNodeAuthRequest(shared_key="shared-secret")
     request = Request(
@@ -346,13 +343,13 @@ async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
             "headers": [(b"host", b"logos.local:8080")],
         }
     )
-    response = await main_mod.logosnode_auth(req, request)
+    response = await logosnode_mod.logosnode_auth(req, request)
     assert "session_token" in response
     assert response["ws_url"].startswith("wss://logos.local:8080/")
 
     bad_req = LogosNodeAuthRequest(shared_key="wrong")
     with pytest.raises(HTTPException):
-        await main_mod.logosnode_auth(bad_req, request)
+        await logosnode_mod.logosnode_auth(bad_req, request)
 
 
 @pytest.mark.asyncio
@@ -361,7 +358,7 @@ async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
     ticket = await registry.consume_ticket(await registry.issue_ticket(3, "worker-a", []))
     assert ticket is not None
     await registry.attach_session(ticket, _FakeWebSocket())
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(logosnode_mod, "_logosnode_registry", registry)
 
     class _FakeDB:
         def __enter__(self):
@@ -381,7 +378,7 @@ async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
                 "api_key": "shared-secret",
             }
 
-    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
 
     req = LogosNodeAuthRequest(shared_key="shared-secret")
     request = Request(
@@ -395,14 +392,14 @@ async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
     )
 
     with pytest.raises(HTTPException) as exc:
-        await main_mod.logosnode_auth(req, request)
+        await logosnode_mod.logosnode_auth(req, request)
     assert exc.value.status_code == 409
     assert "worker-a" in exc.value.detail
 
 
 @pytest.mark.asyncio
 async def test_logosnode_auth_requires_tls(monkeypatch):
-    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.setattr(logosnode_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
     req = LogosNodeAuthRequest(shared_key="secret")
     request = Request(
         {
@@ -414,13 +411,13 @@ async def test_logosnode_auth_requires_tls(monkeypatch):
         }
     )
     with pytest.raises(HTTPException) as exc:
-        await main_mod.logosnode_auth(req, request)
+        await logosnode_mod.logosnode_auth(req, request)
     assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_logosnode_auth_allows_http_in_dev_mode(monkeypatch):
-    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.setattr(logosnode_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
     monkeypatch.setenv("LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP", "true")
 
     class _FakeDB:
@@ -440,7 +437,7 @@ async def test_logosnode_auth_allows_http_in_dev_mode(monkeypatch):
                 "api_key": "shared-secret",
             }
 
-    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
 
     req = LogosNodeAuthRequest(shared_key="shared-secret")
     request = Request(
@@ -452,7 +449,7 @@ async def test_logosnode_auth_allows_http_in_dev_mode(monkeypatch):
             "headers": [(b"host", b"logos.local:8080")],
         }
     )
-    response = await main_mod.logosnode_auth(req, request)
+    response = await logosnode_mod.logosnode_auth(req, request)
     assert response["ws_url"].startswith("ws://logos.local:8080/")
 
 
@@ -478,13 +475,13 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
             assert kwargs["api_key"]
             return {"provider-id": 41}, 200
 
-    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
 
     req = LogosNodeRegisterRequest(
         logos_key="root-key",
         provider_name="gpu-node-1",
     )
-    response = await main_mod.logosnode_register(req)
+    response = await logosnode_mod.logosnode_register(req)
     assert response["provider_id"] == 41
     assert response["provider_type"] == "logosnode"
     assert response["shared_key"]
@@ -628,11 +625,11 @@ async def test_connect_model_provider_refreshes_pipeline_runtime_state(monkeypat
             assert kwargs["model_id"] == 30
             return {"result": "ok"}, 200
 
-    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
-    monkeypatch.setattr(main_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
+    monkeypatch.setattr(admin_mod, "DBManager", _FakeDB)
+    monkeypatch.setattr(admin_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
 
     req = ConnectModelProviderRequest(logos_key="root-key", model_id=30, provider_id=13)
-    response = await main_mod.connect_model_provider(req)
+    response = await admin_mod.connect_model_provider(req)
 
     assert response == ({"result": "ok"}, 200)
     assert refresh_calls == [False]
@@ -658,15 +655,15 @@ async def test_update_provider_sdi_config_refreshes_pipeline_runtime_state(monke
             assert kwargs["parallel_capacity"] == 16
             return {"result": "ok"}, 200
 
-    monkeypatch.setattr(main_mod, "DBManager", _FakeDB)
-    monkeypatch.setattr(main_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
+    monkeypatch.setattr(admin_mod, "DBManager", _FakeDB)
+    monkeypatch.setattr(admin_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
 
     req = main_mod.UpdateProviderSdiConfigRequest(
         logos_key="root-key",
         provider_id=13,
         parallel_capacity=16,
     )
-    response = await main_mod.update_provider_sdi_config(req)
+    response = await admin_mod.update_provider_sdi_config(req)
 
     assert response == ({"result": "ok"}, 200)
     assert refresh_calls == [False]

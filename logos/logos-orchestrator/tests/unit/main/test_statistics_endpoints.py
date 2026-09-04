@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import logos as main
+from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
+from logos.routers import admin as admin_mod
 
 
 def _make_request(body: dict | None = None, headers: dict | None = None):
@@ -72,7 +74,7 @@ def mock_auth(monkeypatch):
     def fake_authenticate(headers):
         return mock_auth_ctx
 
-    monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate)
+    monkeypatch.setattr(admin_mod, "authenticate_api_key", fake_authenticate)
 
 
 @pytest.mark.asyncio
@@ -172,7 +174,7 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -271,7 +273,7 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -365,7 +367,7 @@ async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -469,7 +471,7 @@ async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -511,7 +513,7 @@ def test_scheduler_signals_mtp_acceptance_is_token_weighted_across_lanes() -> No
         ],
     }
 
-    signals = main._build_logosnode_scheduler_signals(runtime)
+    signals = _build_logosnode_scheduler_signals(runtime)
     model = signals["models"]["mtp-model"]
 
     # Token-weighted: 1 accepted / 10,001 draft. The unweighted lane-rate
@@ -543,7 +545,7 @@ def test_scheduler_signals_mtp_acceptance_none_without_spec_decode() -> None:
         ],
     }
 
-    signals = main._build_logosnode_scheduler_signals(runtime)
+    signals = _build_logosnode_scheduler_signals(runtime)
     assert signals["models"]["plain-model"]["mtp_acceptance_rate_avg"] is None
     assert signals["models"]["plain-model"]["prefix_cache_hit_rate_avg"] == pytest.approx(0.3)
 
@@ -566,7 +568,7 @@ def _ctx_runtime(lane: dict, profiles: dict | None = None) -> dict:
 
 
 def test_lane_signal_reports_the_window_vllm_is_running_at() -> None:
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
@@ -606,7 +608,7 @@ def test_two_lanes_of_one_model_report_their_own_windows() -> None:
         },
     ]
 
-    signals = main._build_logosnode_scheduler_signals(runtime)
+    signals = _build_logosnode_scheduler_signals(runtime)
 
     assert signals["lanes"]["roomy"]["max_model_len"] == 262144
     assert signals["lanes"]["cramped"]["max_model_len"] == 32768
@@ -615,7 +617,7 @@ def test_two_lanes_of_one_model_report_their_own_windows() -> None:
 def test_lane_signal_falls_back_to_the_calibrated_profile() -> None:
     """A vLLM lane started without --max-model-len takes the calibrated value,
     so the number is not on the lane itself."""
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
@@ -633,7 +635,7 @@ def test_lane_signal_falls_back_to_the_calibrated_profile() -> None:
 
 
 def test_lane_signal_reports_an_ollama_lanes_configured_window() -> None:
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
@@ -652,7 +654,7 @@ def test_lane_signal_reports_an_ollama_lanes_configured_window() -> None:
 def test_lane_signal_omits_a_window_it_cannot_derive() -> None:
     """None rather than 0: the row leaves the badge off instead of claiming a
     size vLLM picked for itself and never reported."""
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",

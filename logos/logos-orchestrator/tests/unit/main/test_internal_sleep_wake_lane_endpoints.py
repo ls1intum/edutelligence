@@ -8,6 +8,14 @@ from fastapi import HTTPException
 
 import logos as main_mod
 from logos.logosnode_registry import LogosNodeOfflineError
+from logos.routers import internal as internal_mod
+
+
+def _patch_registry(monkeypatch, registry) -> None:
+    # The endpoint reads the registry itself, and the dispatch helper it
+    # delegates to reads it from main's globals — both need the fake.
+    for module in (main_mod, internal_mod):
+        monkeypatch.setattr(module, "_logosnode_registry", registry)
 
 
 def _make_request(authorization: str = "") -> MagicMock:
@@ -40,11 +48,11 @@ def _registry(snap: dict | None = None, command_result: dict | None = None) -> M
 
 
 def _sleep_payload(provider_id: int = 1, lane_id: str = "lane-1"):
-    return main_mod._InternalSleepLaneRequest(provider_id=provider_id, lane_id=lane_id)
+    return main_mod.InternalSleepLaneRequest(provider_id=provider_id, lane_id=lane_id)
 
 
 def _wake_payload(provider_id: int = 1, lane_id: str = "lane-1"):
-    return main_mod._InternalWakeLaneRequest(provider_id=provider_id, lane_id=lane_id)
+    return main_mod.InternalWakeLaneRequest(provider_id=provider_id, lane_id=lane_id)
 
 
 # ── sleep ────────────────────────────────────────────────────────────────────
@@ -52,26 +60,28 @@ def _wake_payload(provider_id: int = 1, lane_id: str = "lane-1"):
 
 @pytest.mark.asyncio
 async def test_sleep_returns_403_when_secret_not_configured(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", None)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", None)
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer secret"))
+        await internal_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer secret"))
     assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_sleep_returns_401_when_secret_is_wrong(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer wrong-secret"))
+        await internal_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer wrong-secret"))
     assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_sleep_returns_503_when_worker_not_connected(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
-    monkeypatch.setattr(main_mod, "_logosnode_registry", _registry(snap=None))
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+    _patch_registry(monkeypatch, _registry(snap=None))
 
-    response = await main_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer correct-secret"))
+    response = await internal_mod.internal_logosnode_sleep_lane(
+        _sleep_payload(), _make_request("Bearer correct-secret")
+    )
 
     assert response.status_code == 503
     assert json.loads(response.body) == {"error": "Worker not connected"}
@@ -84,21 +94,23 @@ async def test_sleep_returns_503_before_the_worker_sent_its_first_status(monkeyp
     Dispatching anyway would burn the 120 s command timeout only to fail on
     the worker — say so up front, the same way calibrate_uncalibrated does.
     """
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
-    monkeypatch.setattr(main_mod, "_logosnode_registry", _registry(snap=_snapshot(first_status=False)))
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+    _patch_registry(monkeypatch, _registry(snap=_snapshot(first_status=False)))
 
-    response = await main_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer correct-secret"))
+    response = await internal_mod.internal_logosnode_sleep_lane(
+        _sleep_payload(), _make_request("Bearer correct-secret")
+    )
 
     assert response.status_code == 503
 
 
 @pytest.mark.asyncio
 async def test_sleep_returns_404_for_a_lane_the_worker_does_not_report(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = _registry(snap=_snapshot(lanes=[_lane(lane_id="lane-2")]))
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    _patch_registry(monkeypatch, registry)
 
-    response = await main_mod.internal_logosnode_sleep_lane(
+    response = await internal_mod.internal_logosnode_sleep_lane(
         _sleep_payload(lane_id="lane-1"), _make_request("Bearer correct-secret")
     )
 
@@ -111,14 +123,16 @@ async def test_sleep_does_not_refuse_a_lane_that_is_serving(monkeypatch):
     """A busy lane is not refused: mode="wait" drains in-flight requests
     first and sleeps once the lane is idle, so the dispatch must go through
     even with active traffic — the response just takes longer."""
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = _registry(
         snap=_snapshot(lanes=[_lane(active_requests=2, sleep_state="awake")]),
         command_result={"lane_id": "lane-1"},
     )
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    _patch_registry(monkeypatch, registry)
 
-    response = await main_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer correct-secret"))
+    response = await internal_mod.internal_logosnode_sleep_lane(
+        _sleep_payload(), _make_request("Bearer correct-secret")
+    )
 
     assert response == {"lane_id": "lane-1"}
     registry.send_command.assert_called_once()
@@ -129,12 +143,12 @@ async def test_sleep_refuses_a_lane_that_cannot_sleep(monkeypatch):
     """The worker reports sleep_state "unsupported" when its model is
     configured without enable_sleep_mode (or the lane is not a vLLM lane).
     Refuse synchronously instead of dispatching to fail on the worker."""
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = _registry(snap=_snapshot(lanes=[_lane(sleep_state="unsupported")]))
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    _patch_registry(monkeypatch, registry)
 
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer correct-secret"))
+        await internal_mod.internal_logosnode_sleep_lane(_sleep_payload(), _make_request("Bearer correct-secret"))
 
     assert exc_info.value.status_code == 409
     assert "enable_sleep_mode" in exc_info.value.detail
@@ -146,11 +160,11 @@ async def test_sleep_dispatches_level_1_wait(monkeypatch):
     """Level 1 keeps the weights resident so the wake is fast; the endpoint
     does not expose the level — see the endpoint docstring for why.
     """
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = _registry(snap=_snapshot(lanes=[_lane(active_requests=0)]), command_result={"lane_id": "lane-1"})
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    _patch_registry(monkeypatch, registry)
 
-    response = await main_mod.internal_logosnode_sleep_lane(
+    response = await internal_mod.internal_logosnode_sleep_lane(
         _sleep_payload(provider_id=7), _make_request("Bearer correct-secret")
     )
 
@@ -168,27 +182,27 @@ async def test_sleep_dispatches_level_1_wait(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_wake_returns_403_when_secret_not_configured(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", None)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", None)
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_wake_lane(_wake_payload(), _make_request("Bearer secret"))
+        await internal_mod.internal_logosnode_wake_lane(_wake_payload(), _make_request("Bearer secret"))
     assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_wake_returns_401_when_secret_is_wrong(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_wake_lane(_wake_payload(), _make_request("Bearer wrong-secret"))
+        await internal_mod.internal_logosnode_wake_lane(_wake_payload(), _make_request("Bearer wrong-secret"))
     assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_wake_dispatches_to_the_worker(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = _registry(command_result={"lane_id": "lane-1", "sleep_state": "awake"})
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    _patch_registry(monkeypatch, registry)
 
-    response = await main_mod.internal_logosnode_wake_lane(
+    response = await internal_mod.internal_logosnode_wake_lane(
         _wake_payload(provider_id=7), _make_request("Bearer correct-secret")
     )
 
@@ -205,12 +219,12 @@ async def test_wake_dispatches_to_the_worker(monkeypatch):
 async def test_wake_returns_503_when_the_worker_is_offline(monkeypatch):
     """No snapshot guard for wake: an offline worker is a transport failure,
     and _dispatch_logosnode_command already answers it with a 503."""
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = MagicMock()
     registry.send_command = AsyncMock(side_effect=LogosNodeOfflineError("No active logosnode worker session"))
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    _patch_registry(monkeypatch, registry)
 
-    response = await main_mod.internal_logosnode_wake_lane(_wake_payload(), _make_request("Bearer correct-secret"))
+    response = await internal_mod.internal_logosnode_wake_lane(_wake_payload(), _make_request("Bearer correct-secret"))
 
     assert response.status_code == 503
     assert json.loads(response.body) == {"error": "No active logosnode worker session"}

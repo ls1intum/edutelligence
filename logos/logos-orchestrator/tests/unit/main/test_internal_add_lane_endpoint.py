@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 import logos as main_mod
+from logos.routers import internal as internal_mod
 
 
 def _make_request(authorization: str = "") -> MagicMock:
@@ -17,7 +18,7 @@ def _make_request(authorization: str = "") -> MagicMock:
 
 
 def _payload(provider_id: int = 1, lane: dict | None = None):
-    return main_mod._InternalAddLaneRequest(
+    return main_mod.InternalAddLaneRequest(
         provider_id=provider_id,
         lane={"model": "org/model-a"} if lane is None else lane,
     )
@@ -36,26 +37,26 @@ def _planner(rejection: str | None = None) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_returns_403_when_secret_not_configured(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", None)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", None)
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_add_lane(_payload(), _make_request("Bearer secret"))
+        await internal_mod.internal_logosnode_add_lane(_payload(), _make_request("Bearer secret"))
     assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_returns_401_when_secret_is_wrong(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_add_lane(_payload(), _make_request("Bearer wrong-secret"))
+        await internal_mod.internal_logosnode_add_lane(_payload(), _make_request("Bearer wrong-secret"))
     assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_rejects_lane_without_model(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     monkeypatch.setattr(main_mod, "_capacity_planner", _planner())
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_add_lane(
+        await internal_mod.internal_logosnode_add_lane(
             _payload(lane={"model": "  "}), _make_request("Bearer correct-secret")
         )
     assert exc_info.value.status_code == 400
@@ -63,10 +64,10 @@ async def test_rejects_lane_without_model(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_returns_503_when_planner_is_not_ready(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     monkeypatch.setattr(main_mod, "_capacity_planner", None)
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_add_lane(_payload(), _make_request("Bearer correct-secret"))
+        await internal_mod.internal_logosnode_add_lane(_payload(), _make_request("Bearer correct-secret"))
     assert exc_info.value.status_code == 503
 
 
@@ -78,12 +79,12 @@ async def test_returns_409_while_the_provider_is_calibrating(monkeypatch):
     must be refused for the same reason, and refused synchronously so the
     operator sees why.
     """
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     planner = _planner(rejection="Provider is calibrating; its VRAM is reserved for the calibration probes.")
     monkeypatch.setattr(main_mod, "_capacity_planner", planner)
 
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_add_lane(_payload(provider_id=7), _make_request("Bearer correct-secret"))
+        await internal_mod.internal_logosnode_add_lane(_payload(provider_id=7), _make_request("Bearer correct-secret"))
 
     assert exc_info.value.status_code == 409
     assert "calibrating" in exc_info.value.detail
@@ -99,11 +100,11 @@ async def test_accepts_and_loads_through_the_planner(monkeypatch):
     those, the next apply_lanes reconcile removes the lane again. And a load
     takes minutes, so the request must not wait for it.
     """
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     planner = _planner()
     monkeypatch.setattr(main_mod, "_capacity_planner", planner)
 
-    response = await main_mod.internal_logosnode_add_lane(
+    response = await internal_mod.internal_logosnode_add_lane(
         _payload(provider_id=7), _make_request("Bearer correct-secret")
     )
 
@@ -122,12 +123,12 @@ async def test_returns_409_without_a_capacity_snapshot(monkeypatch):
     Its fallback is an unconditional VRAM reservation, so the load would be
     placed blind; request-time cold loads refuse for the same reason.
     """
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     planner = _planner(rejection="No capacity information for this provider yet; its free VRAM is unknown.")
     monkeypatch.setattr(main_mod, "_capacity_planner", planner)
 
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_logosnode_add_lane(_payload(provider_id=7), _make_request("Bearer correct-secret"))
+        await internal_mod.internal_logosnode_add_lane(_payload(provider_id=7), _make_request("Bearer correct-secret"))
 
     assert exc_info.value.status_code == 409
     planner.load_lane_manually.assert_not_called()

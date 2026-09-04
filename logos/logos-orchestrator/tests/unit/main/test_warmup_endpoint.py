@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException
 
 import logos as main
+from logos.routers import user_facing as user_facing_mod
 
 
 def _make_request():
@@ -55,6 +56,9 @@ def _registry_serving(model: str, window: int) -> MagicMock:
 def wired(monkeypatch):
     """A warmup-able orchestrator with the demand tracker and planner spied on."""
     monkeypatch.setattr(main, "DBManager", lambda: DummyDB([{"id": 1, "name": "qwen-27b", "description": None}]))
+    monkeypatch.setattr(
+        user_facing_mod, "DBManager", lambda: DummyDB([{"id": 1, "name": "qwen-27b", "description": None}])
+    )
     demand = MagicMock()
     planner = MagicMock()
     monkeypatch.setattr(main, "_demand_tracker", demand)
@@ -64,9 +68,9 @@ def wired(monkeypatch):
 
 
 async def _warmup(model_id: str):
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
-        return await main.warmup_model(model_id, _make_request())
+        return await user_facing_mod.warmup_model(model_id, _make_request())
 
 
 @pytest.mark.asyncio
@@ -145,7 +149,10 @@ async def test_accepts_a_planner_sanitized_alias(wired):
     """
     demand, _planner = wired
     monkeypatch_models = [{"id": 1, "name": "Qwen/Qwen2.5-0.5B", "description": None}]
-    with patch.object(main, "DBManager", lambda: DummyDB(monkeypatch_models)):
+    with (
+        patch.object(main, "DBManager", lambda: DummyDB(monkeypatch_models)),
+        patch.object(user_facing_mod, "DBManager", lambda: DummyDB(monkeypatch_models)),
+    ):
         body = json.loads((await _warmup("Qwen_Qwen2.5-0.5B")).body)
 
     assert body["model"] == "Qwen/Qwen2.5-0.5B"
@@ -157,7 +164,10 @@ async def test_accepts_a_stored_alias(wired):
     """Alt tags work the same as on the other model endpoints."""
     demand, _planner = wired
     monkeypatch_models = [{"id": 1, "name": "qwen-27b", "description": None, "aliases": ["local-flagship"]}]
-    with patch.object(main, "DBManager", lambda: DummyDB(monkeypatch_models)):
+    with (
+        patch.object(main, "DBManager", lambda: DummyDB(monkeypatch_models)),
+        patch.object(user_facing_mod, "DBManager", lambda: DummyDB(monkeypatch_models)),
+    ):
         body = json.loads((await _warmup("local-flagship")).body)
 
     assert body["model"] == "qwen-27b"
@@ -182,6 +192,9 @@ async def test_survives_a_planner_that_is_not_running(monkeypatch):
     collaborators can legitimately be absent.
     """
     monkeypatch.setattr(main, "DBManager", lambda: DummyDB([{"id": 1, "name": "qwen-27b", "description": None}]))
+    monkeypatch.setattr(
+        user_facing_mod, "DBManager", lambda: DummyDB([{"id": 1, "name": "qwen-27b", "description": None}])
+    )
     monkeypatch.setattr(main, "_demand_tracker", None)
     monkeypatch.setattr(main, "_capacity_planner", None)
     monkeypatch.setattr(main, "_logosnode_registry", MagicMock(active_provider_ids=lambda: []))
@@ -193,8 +206,8 @@ async def test_survives_a_planner_that_is_not_running(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_auth_failure_propagates():
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.side_effect = HTTPException(status_code=401, detail="Invalid logos key")
         with pytest.raises(HTTPException) as exc:
-            await main.warmup_model("qwen-27b", _make_request())
+            await user_facing_mod.warmup_model("qwen-27b", _make_request())
     assert exc.value.status_code == 401
