@@ -27,6 +27,12 @@ def pull(number: int, title: str = "A change", body: str = "What it does.") -> d
     return {"number": number, "title": title, "body": body, "pull_request": {}}
 
 
+def github_error(message: str) -> Exception:
+    from app.github import GitHubError
+
+    return GitHubError(message, status=404)
+
+
 def review(review_id: int, state: str = "CHANGES_REQUESTED", body: str = "Please fix X.") -> dict:
     return {
         "id": review_id,
@@ -80,6 +86,13 @@ class FakeRepo:
     ):
         self.conversation = conversation or []
         self.conversation_missing: list[str] = []
+        # Open pull requests that have asked the agent for a review, and
+        # who did the asking.
+        self.review_requests: list[dict] = []
+        self.review_requesters: dict[int, str] = {}
+        # Numbers that are plain issues rather than pull requests.
+        self.not_pulls: set[int] = set()
+        self.titles: dict[int, str] = {}
         self.issue_comments_thread: list[dict] = []
         self.assigned_issues = assigned_issues or []
         self.assigned_pulls = assigned_pulls or []
@@ -115,8 +128,21 @@ class FakeRepo:
             return self.review_comments.get((number, review_id), [])
 
         async def pull_request(number):
+            if number in self.not_pulls:
+                # What GitHub answers for a plain issue.
+                raise github_error(f"GET /pulls/{number} failed (404)")
             ref, repo = self.heads.get(number, (f"logos/agent/pr/session-{number}", REPO))
-            return {"number": number, "head": {"ref": ref, "repo": {"full_name": repo}}}
+            return {
+                "number": number,
+                "title": self.titles.get(number, ""),
+                "head": {"ref": ref, "repo": {"full_name": repo}},
+            }
+
+        async def review_requests(_login):
+            return list(self.review_requests)
+
+        async def who_asked_for_a_review(number, _login):
+            return self.review_requesters.get(number, "")
 
         async def recent_issue_comments(_since):
             return self.issue_comments
@@ -152,6 +178,8 @@ class FakeRepo:
             ("latest_changes_requested_review", latest_changes_requested_review),
             ("review_comments", review_comments),
             ("pull_request", pull_request),
+            ("review_requests", review_requests),
+            ("who_asked_for_a_review", who_asked_for_a_review),
             ("recent_issue_comments", recent_issue_comments),
             ("recent_review_comments", recent_review_comments),
             ("react", react),
@@ -407,10 +435,12 @@ class TestConversation:
         assert created["reply_target"] == "issue:772"
         assert repo.reactions == [(f"/repos/{REPO}/issues/comments/9001", "eyes")]
 
-    async def test_a_mention_elsewhere_is_answered_without_pushing(self, monkeypatch):
-        # Somebody else's pull request: the agent may answer, it may not
-        # write to their branch.
-        repo = FakeRepo(issue_comments=[comment(9002, 864, f"@{AGENT} short question about this")])
+    async def test_a_maintainer_asking_on_another_pull_request_gets_a_commit(self, monkeypatch):
+        # "@agent please fix the linting" is a request to change code.
+        # Answering it with a description of the change is not what was
+        # asked, and the branch is one this runner may write to.
+        repo = FakeRepo(issue_comments=[comment(9002, 864, f"@{AGENT} pls fix linting")])
+        repo.writers = {"wasnertobias"}
         repo.install(monkeypatch)
         fake_db = FakeDb()
         fake_db.install(monkeypatch)
@@ -420,9 +450,45 @@ class TestConversation:
 
         created = fake_db.created[0]
         assert created["trigger_ref"] == "thread-864-issue-9002"
+        assert created["branch"] == "logos/agent/pr/session-864"
+        # It updates their pull request; it does not open one of its own.
+        assert created["open_pull_request"] is False
+        assert "somebody else's" in created["task"]
+
+    async def test_a_stranger_asking_the_same_thing_gets_words(self, monkeypatch):
+        repo = FakeRepo(issue_comments=[comment(9002, 864, f"@{AGENT} pls fix linting", author="a-passer-by")])
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        created = fake_db.created[0]
         assert created["branch"] is None
         assert created["open_pull_request"] is False
-        assert "Answer in words" in created["task"] or "answer in words" in created["task"].lower()
+        # And it reads the pull request rather than the default branch, so
+        # the words are at least about the right diff.
+        assert fake_db.workspaces[-1]["base_branch"] == "refs/pull/864/head"
+
+    async def test_a_question_on_a_fork_is_answered_from_the_fork_s_code(self, monkeypatch):
+        repo = FakeRepo(
+            issue_comments=[comment(9002, 864, f"@{AGENT} pls fix linting")],
+            heads={864: ("their-branch", "someone/edutelligence")},
+        )
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        created = fake_db.created[0]
+        # A fork's branch is not ours to push, whoever asks.
+        assert created["branch"] is None
+        assert fake_db.workspaces[-1]["base_branch"] == "refs/pull/864/head"
 
     async def test_an_inline_question_is_answered_inline(self, monkeypatch):
         repo = FakeRepo(
@@ -1525,3 +1591,123 @@ class TestTheReviewTheWorkIsAbout:
         await triggers.TriggerPoller().poll_once()
 
         assert "cache pressure gate is inverted" in fake_db.created[0]["task"]
+
+
+class TestBeingAskedForAReview:
+    """Adding somebody as a reviewer is the ordinary way to ask.
+
+    It was the one gesture the runner did not answer: an operator added the
+    agent as a reviewer on several pull requests and nothing happened at
+    all. A review is words — the session reads the pull request's own code
+    and gets no branch, so nothing it concludes can reach somebody else's
+    work by itself.
+    """
+
+    @staticmethod
+    def asked(number: int, title: str = "A change", body: str = "What it does."):
+        return {"number": number, "title": title, "body": body, "labels": []}
+
+    async def test_a_review_request_from_a_maintainer_is_answered(self, monkeypatch):
+        repo = FakeRepo()
+        repo.review_requests = [self.asked(882, "Add dynamic Scheduler")]
+        repo.review_requesters = {882: "wasnertobias"}
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert len(fake_db.created) == 1
+        queued = fake_db.created[0]
+        assert queued["trigger_kind"] == "review-request"
+        assert queued["trigger_ref"] == "pr-882-review-requested-wasnertobias"
+        # It arrives able to do something about what it finds: the head is
+        # in this repository, so it is the session's branch.
+        assert queued["branch"] == "logos/agent/pr/session-882"
+        # It updates that pull request; it does not open one of its own.
+        assert queued["open_pull_request"] is False
+        assert queued["reply_target"] == "issue:882"
+        assert "Add dynamic Scheduler" in queued["task"]
+        assert "you can fix what you find" in queued["task"]
+
+    async def test_a_fork_is_reviewed_from_its_own_code_without_a_branch(self, monkeypatch):
+        repo = FakeRepo(heads={882: ("their-branch", "someone/edutelligence")})
+        repo.review_requests = [self.asked(882)]
+        repo.review_requesters = {882: "wasnertobias"}
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        # Nothing to push to, but the review is still about the right diff:
+        # answering from the default branch is how the agent ended up
+        # saying it had no diff to look at.
+        assert fake_db.created[0]["branch"] is None
+        assert fake_db.workspaces[-1]["base_branch"] == "refs/pull/882/head"
+        assert "must not try" in fake_db.created[0]["task"]
+
+    async def test_a_request_from_outside_is_left_alone(self, monkeypatch):
+        repo = FakeRepo()
+        repo.review_requests = [self.asked(882)]
+        repo.review_requesters = {882: "a-passer-by"}
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created == []
+
+    async def test_a_request_the_timeline_cannot_explain_is_left_alone(self, monkeypatch):
+        repo = FakeRepo()
+        repo.review_requests = [self.asked(882)]
+        repo.review_requesters = {}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created == []
+
+    async def test_work_comes_before_reviewing_its_own_pull_request(self, monkeypatch):
+        # Assigned *and* asked to review: the handover is the real request,
+        # and two sessions on one pull request is what the branch guard
+        # exists to prevent.
+        repo = FakeRepo(assigned_pulls=[pull(864, "A change")], heads={864: ("logos/agent/x/session-3", REPO)})
+        repo.review_requests = [self.asked(864)]
+        repo.review_requesters = {864: "wasnertobias"}
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert [s["trigger_kind"] for s in fake_db.created] == ["takeover"]
+
+    async def test_the_same_request_is_answered_once(self, monkeypatch):
+        repo = FakeRepo()
+        repo.review_requests = [self.asked(882)]
+        repo.review_requesters = {882: "wasnertobias"}
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        poller = triggers.TriggerPoller()
+        await poller.poll_once()
+        fake_db.handled.add("pr-882-review-requested-wasnertobias")
+        await poller.poll_once()
+
+        assert len(fake_db.created) == 1

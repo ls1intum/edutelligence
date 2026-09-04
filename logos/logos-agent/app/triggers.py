@@ -271,6 +271,47 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
     return "Inline comments:\n\n" + "\n\n".join(rendered[:30]) + "\n\n"
 
 
+async def review_request_task(number: int, title: str, body: str, requester: str, *, branch: str | None = None) -> str:
+    """The task text for a pull request that asked to be reviewed.
+
+    A review first: what came back has to be an opinion about this diff,
+    whether or not anything is changed. Where the head is ours to push, the
+    agent may also fix what it found — somebody who may direct this runner
+    asked it onto the pull request, and answering "here is what I would
+    change" to a request to change it is not much of an answer.
+    """
+    description = (body or "").strip()
+    if len(description) > 4000:
+        description = description[:4000] + "\n\n[description truncated]"
+    return await for_task(
+        f"{requester} asked you to review #{number} ('{title}').\n\n"
+        f"{description or '(the pull request has no description)'}\n\n"
+        f"You are working in a checkout of that pull request's own code, so read the diff "
+        f"against the default branch — `git diff origin/main...HEAD` — and then read the "
+        f"files it touches, in full, before you say anything about them.\n\n"
+        f"Write your review to `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}`; the runner posts it on the "
+        f"pull request. Write it as the review itself: English, specific, and about this "
+        f"diff. Name the file and line for anything you raise, say why it matters, and "
+        f"prefer a small number of things that are actually wrong over a list of "
+        f"observations. If the change looks right, say that plainly and say what you "
+        f"checked — a review that finds nothing is a useful review when it says what it "
+        f"looked at.\n\n"
+        + (
+            f"You are on that pull request's own branch `{branch}`, so you can fix what you "
+            f"find. Do: formatting, lint failures, a clear bug, a missing test for the code "
+            f"in the diff. Do not: rewrite the approach, rename things to your taste, or "
+            f"change files the pull request does not touch — it is somebody else's work and "
+            f"they will read every commit you add to it. Whatever you change, say so in the "
+            f"review and say why; leave anything you are unsure about as a remark rather "
+            f"than a commit."
+            if branch
+            else "You cannot push here and must not try: this pull request's branch is not "
+            "one this runner may write to. Where you would change something, quote the code "
+            "and show what you would put there instead."
+        )
+    )
+
+
 async def review_task(
     number: int, title: str, review: dict[str, Any], comments: list[dict[str, Any]] | None = None
 ) -> str:
@@ -297,7 +338,14 @@ async def review_task(
     )
 
 
-async def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, branch: str | None) -> str:
+async def thread_task(
+    number: int,
+    title: str,
+    comments: list[dict[str, Any]],
+    *,
+    branch: str | None,
+    reading: bool = False,
+) -> str:
     """The task text for comments addressed to the agent.
 
     The answer is the deliverable. Whether code changes at all is the
@@ -318,12 +366,21 @@ async def thread_task(number: int, title: str, comments: list[dict[str, Any]], *
         place = (
             f"You are working in a checkout of that pull request's own branch `{branch}`. "
             f"If — and only if — answering means changing code, commit it there; it updates "
-            f"the existing pull request rather than opening a new one."
+            f"the existing pull request rather than opening a new one. Change what was "
+            f"asked for and nothing else: the pull request may be somebody else's, and they "
+            f"will read every commit you add to it."
+        )
+    elif reading:
+        place = (
+            "You are working in a checkout of that pull request's own code, so read the diff "
+            "— `git diff origin/main...HEAD` — and the files it touches before you answer. "
+            "You cannot push here and must not try: this pull request's branch is not one "
+            "this runner may write to. Answer in words, and where you would change "
+            "something, quote the code and show what you would put there instead."
         )
     else:
         place = (
-            "You are working in a checkout of the default branch, and you have no business "
-            "pushing to this pull request — it is somebody else's. Answer in words. If the "
+            "You are working in a checkout of the default branch. Answer in words. If the "
             "answer needs a code change, say what you would change and why, and leave it to "
             "the people on the thread."
         )
@@ -349,6 +406,8 @@ class TriggerPoller:
         self._queued_total = 0
         # login -> may push, for the duration of one pass.
         self._writers: dict[str, bool] = {}
+        # Which numbers are pull requests, for the length of one pass.
+        self._pulls: dict[int, dict[str, Any] | None] = {}
         # Called after a pass queued something, so the work starts on the
         # next admission rather than at the scheduler's own tick. Set by the
         # service on startup; the poller does not import the session manager
@@ -434,6 +493,7 @@ class TriggerPoller:
         # Permission answers are cached per pass: they can change, and a
         # pass is short enough that reading them once is honest.
         self._writers = {}
+        self._pulls = {}
         candidates = await self._candidates(now)
         self._last_pass = now
         self._last_error = ""
@@ -690,7 +750,72 @@ class TriggerPoller:
                     }
                 )
 
+        found.extend(await self._review_requests(login, responsible))
         found.extend(await self._comment_candidates(now, responsible, consumed))
+        return found
+
+    async def _review_requests(self, login: str, responsible: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+        """Pull requests that have asked this account to review them.
+
+        The ordinary gesture — adding somebody as a reviewer — and until now
+        the one the runner did not answer at all: an operator added the
+        agent and nothing happened.
+
+        A review is words, not commits. The session reads the pull
+        request's own code (`refs/pull/<n>/head`, which exists for forks
+        too) and writes what it found; it gets no branch, so nothing it
+        thinks can reach somebody else's work by itself.
+        """
+        found: list[dict[str, Any]] = []
+        try:
+            asked = await github.review_requests(login)
+        except Exception as exc:
+            logger.info("could not read who wants a review: %s", exc)
+            return found
+        for pull in asked:
+            number = pull.get("number")
+            if not isinstance(number, int):
+                continue
+            if number in responsible:
+                # Its own pull request, or one handed to it. Reviewing that
+                # is a different thing from working on it, and the work
+                # comes first.
+                continue
+            requester = await github.who_asked_for_a_review(number, login)
+            if not requester or not await self._writer(requester):
+                logger.info(
+                    "the review request on #%s comes from %s, who does not direct this runner",
+                    number,
+                    requester or "an account the timeline does not name",
+                )
+                continue
+            title = str(pull.get("title") or f"#{number}")
+            # Somebody who may direct this runner asked it onto this pull
+            # request, so it arrives able to do something about what it
+            # finds: the head is its branch when the head is ours to push
+            # — in this repository and not protected. A fork's head is not,
+            # and there the review is words and only words.
+            branch = await self._writable_head(number)
+            found.append(
+                {
+                    # One request per reviewer per pull request: asking
+                    # again after the agent has answered means removing and
+                    # re-adding it, which is a new request and reads as one.
+                    "ref": f"pr-{number}-review-requested-{requester.lower()}",
+                    "kind": "review-request",
+                    "task": await review_request_task(
+                        number, title, str(pull.get("body") or ""), requester, branch=branch
+                    ),
+                    "branch": branch,
+                    # Nothing to push to: read the pull request's own code
+                    # so the review is at least about the right diff.
+                    "read_ref": None if branch else f"refs/pull/{number}/head",
+                    "workspace": workspace_name("pr", number, title),
+                    "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
+                    "reply_target": f"issue:{number}",
+                    "urgency": priority.of("review", pull.get("labels")),
+                }
+            )
         return found
 
     async def _responsible_pulls(self, login: str) -> dict[int, dict[str, Any]]:
@@ -773,6 +898,22 @@ class TriggerPoller:
             if author and await self._writer(author):
                 return True
         return False
+
+    async def _pull_request(self, number: int) -> dict[str, Any] | None:
+        """That number as a pull request, or None when it is an issue.
+
+        Cached for the pass: one thread asks about one number, and a poll
+        that answered three questions about the same pull request would
+        otherwise ask GitHub three times.
+        """
+        if number not in self._pulls:
+            try:
+                self._pulls[number] = await github.pull_request(number) or None
+            except Exception:
+                # A plain issue answers 404 here, which is the ordinary
+                # case rather than a failure.
+                self._pulls[number] = None
+        return self._pulls[number]
 
     async def _writable_head(self, number: int) -> str | None:
         """The branch of a pull request the agent may push to, or None.
@@ -864,12 +1005,23 @@ class TriggerPoller:
         for (kind, key), thread in threads.items():
             number = thread["number"]
             pull = responsible.get(number)
-            title = pull["title"] if pull else f"#{number}"
+            # A thread the runner is not responsible for is still a thread
+            # about something: asked on a pull request, the answer is about
+            # that pull request's code, and it used to be written from a
+            # checkout of the default branch by an agent that had never
+            # seen the diff. Its title was `#882` for the same reason.
+            other = None if pull else await self._pull_request(number)
+            title = pull["title"] if pull else str((other or {}).get("title") or f"#{number}")
             # Anybody may comment on a public repository; not everybody may
             # direct a change to it. A conversation with no writer in it is
             # answered in words and gets no branch, so the credentialed
             # finalizer cannot be made to push on a stranger's say-so.
-            branch = pull["branch"] if pull else None
+            # Its own pull requests carry their branch. On somebody else's,
+            # the branch comes from the head when the head is ours to push:
+            # "@agent please fix the linting" is a request to change code,
+            # and answering it with a description of the change is not what
+            # was asked.
+            branch = pull["branch"] if pull else (await self._writable_head(number) if other else None)
             if branch is not None and not await self._may_direct_changes(thread["comments"]):
                 logger.info("comments on #%s come from outside the repository; answering without a branch", number)
                 branch = None
@@ -883,9 +1035,17 @@ class TriggerPoller:
                     # one pull request has many of them.
                     "ref": (f"thread-{number}-inline-{key}-{newest}" if inline else f"thread-{number}-issue-{newest}"),
                     "kind": "comment",
-                    "task": await thread_task(number, title, thread["comments"], branch=branch),
+                    "task": await thread_task(
+                        number,
+                        title,
+                        thread["comments"],
+                        branch=branch,
+                        reading=other is not None,
+                    ),
                     "branch": branch,
-                    "workspace": workspace_name("pr", number, title) if branch else None,
+                    # No branch to push to, but a pull request to read.
+                    "read_ref": f"refs/pull/{number}/head" if other is not None and not branch else None,
+                    "workspace": workspace_name("pr", number, title) if branch or other else None,
                     "urgency": priority.of("comment", pull["labels"] if pull else ()),
                     "reaction": (
                         f"/repos/{settings.repo_slug}/pulls/comments/{newest}"
@@ -916,8 +1076,13 @@ class TriggerPoller:
             logger.info("not queueing %s: %s", candidate["ref"], urgency.reason)
             return None
         branch = candidate.get("branch")
+        # What the checkout starts from. A branch the session may push to
+        # when it has one; otherwise the pull request it is about to talk
+        # about, so it can read the code in question instead of answering
+        # from the default branch — which is what it used to do, and it
+        # could only say that it had no diff to look at.
         workspace_id = await self._free_workspace(
-            base_branch=branch or "main",
+            base_branch=branch or candidate.get("read_ref") or "main",
             preferred_name=candidate.get("workspace"),
         )
         if workspace_id is None:

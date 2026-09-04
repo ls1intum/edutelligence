@@ -371,18 +371,36 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
         # is not a working copy of this workspace, so the path is unlinked
         # and the repository comes back as a fresh clone.
         CHECKOUT.unlink()
-    if not (CHECKOUT / ".git").is_dir():
+    # A base that names a ref rather than a branch is a pull request the
+    # session may read and may not push to — `refs/pull/<n>/head`, which
+    # exists for every pull request including the ones from forks. A
+    # question about somebody else's pull request used to be answered from
+    # a checkout of the default branch: the agent was asked about a diff it
+    # could not see, and could only say so.
+    #
+    # There is no remote-tracking branch for such a ref, which is the point:
+    # the checkout is the code under discussion and there is nothing here to
+    # push back to.
+    reading = base_branch.startswith("refs/")
+    cloned = not (CHECKOUT / ".git").is_dir()
+    if cloned:
         log(f"cloning {repo_url} at {base_branch}")
         CHECKOUT.parent.mkdir(parents=True, exist_ok=True)
         _clear_checkout()
-        run(["git", "clone", "--depth", "50", "--branch", base_branch, repo_url, str(CHECKOUT)])
+        clone = ["git", "clone", "--depth", "50"]
+        if not reading:
+            # A ref is not a branch name; the clone takes the default head
+            # and the fetch below moves it to what was asked for.
+            clone += ["--branch", base_branch]
+        run([*clone, repo_url, str(CHECKOUT)])
     else:
         log("reusing existing checkout; rebuilding trusted git metadata")
         _rebuild_git_metadata(repo_url)
+    if reading or not cloned:
         run(["git", "fetch", "--depth", "50", "origin", base_branch], cwd=CHECKOUT)
         # Discard whatever a previous session left behind: a session starts
-        # from the base branch, never from another session's leftovers.
-        run(["git", "reset", "--hard", f"origin/{base_branch}"], cwd=CHECKOUT)
+        # from the base it was given, never from another session's leftovers.
+        run(["git", "reset", "--hard", "FETCH_HEAD" if reading else f"origin/{base_branch}"], cwd=CHECKOUT)
         run(["git", "clean", "-fdx"], cwd=CHECKOUT, check=False)
 
     _configure_git_identity()
