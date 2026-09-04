@@ -260,6 +260,10 @@ class SessionManager:
         # intent itself is on the row; this only keeps a resumed follow-up
         # from starting a second poller for a session already being polled.
         self._watching_checks: set[int] = set()
+        # What a helper printed before it failed, kept from the moment its
+        # container is read to the moment the failure is raised — the
+        # container is removed in between.
+        self._last_helper_output: dict[int, str] = {}
         self._scheduler_task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
         # Serialises admission so two scheduler passes cannot both decide there
@@ -1295,6 +1299,14 @@ class SessionManager:
                 logger.warning("helper %s for session %s timed out; stopping it", phase, session_id)
                 await docker_engine.stop_container(container_id)
                 code = 124
+            if code != 0:
+                # The exit code used to be the whole protocol, and it says
+                # nothing: "checkout preparation failed (exit 1)" reached a
+                # thread and a page while the one thing that could explain
+                # it — what the helper printed — was removed with the
+                # container in the block below. Read before that happens,
+                # and only on the path where somebody will want it.
+                self._last_helper_output[session_id] = await self._what_it_printed(container_id)
             return code
         finally:
             self._helpers.pop(session_id, None)
@@ -1303,6 +1315,26 @@ class SessionManager:
                     await docker_engine.remove_container(helper.container_id)
                 except Exception:
                     logger.warning("could not remove %s helper container for session %s", phase, session_id)
+
+    @staticmethod
+    async def _what_it_printed(container_id: str, *, lines: int = 12) -> str:
+        """The last thing a helper said before it exited, for the error.
+
+        Bounded twice over — the last few lines, each one shortened —
+        because this ends up in a session row, on a page, and in a comment
+        on a thread. A git failure says what it was in one line; a stack
+        trace says it in its last.
+        """
+        kept: list[str] = []
+        try:
+            async for line in docker_engine.stream_logs(container_id, follow=False):
+                text = line.strip()
+                if text:
+                    kept.append(text[:200])
+                    del kept[:-lines]
+        except Exception as exc:
+            return f"(its output could not be read: {exc})"
+        return " / ".join(kept)
 
     @staticmethod
     async def _continues_earlier_work(session: dict[str, Any], branch: str) -> bool:
@@ -1362,7 +1394,8 @@ class SessionManager:
             artifact_host_path=artifact_host_path,
         )
         if code != 0:
-            raise RuntimeError(f"checkout preparation failed (exit {code})")
+            said = self._last_helper_output.pop(session["id"], "")
+            raise RuntimeError(f"checkout preparation failed (exit {code}){f': {said}' if said else ''}")
 
     async def _finalize(self, session_id: int) -> bool:
         """Phase three: commit, push, and open the pull request, if asked.
@@ -1864,7 +1897,13 @@ class SessionManager:
             # A finalizer that fails fails the session — nothing landed, and
             # a deploy must not be dispatched behind it.
             if not await self._finalize(session_id):
+                said = self._last_helper_output.pop(session_id, "")
                 error = "finalization failed: the agent's work did not reach the repository"
+                if said:
+                    # The same reason the preparation failure carries one: a
+                    # push that was refused says why, and the sentence above
+                    # says only that something was.
+                    error = f"{error}: {said}"
         result = self._read_result(session_id)
         succeeded = exit_code == 0 and not error
 

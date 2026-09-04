@@ -1216,7 +1216,15 @@ def run_finalize(result: Result) -> None:
     # fresh ref: a retried session force-pushes a new commit onto it, and a
     # completed run of the earlier commit would otherwise still be "the
     # build of this branch".
-    result.data["pushed_sha"] = _ref_sha("HEAD") if count else _ref_sha(f"refs/remotes/origin/{branch}", "HEAD")
+    #
+    # And nothing at all when this session's branch has never been pushed.
+    # It used to fall back to HEAD, which on a session that only answered a
+    # question is the tip of the *default branch*: the runner then watched
+    # main's checks, found them red for reasons that had nothing to do with
+    # this session, and took the work up again — twice, until the request
+    # ran out of attempts. A commit this session did not make is not a
+    # commit it can be answerable for.
+    result.data["pushed_sha"] = _ref_sha("HEAD") if count else _ref_sha(f"refs/remotes/origin/{branch}")
 
 
 def main() -> int:

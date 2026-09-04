@@ -1191,3 +1191,47 @@ class TestHowOftenASessionMayComeBack:
         # The whole point: being useful on a busy afternoon must not be
         # rarer than a gateway being broken.
         assert run_session._MAX_PAUSED_CONTINUATIONS > run_session._MAX_CONTINUATIONS
+
+
+class TestWhatCommitThisSessionIsAnswerableFor:
+    """A session is answerable for the commit it made, and for no other.
+
+    A session that only answered a question pushes nothing, and its branch
+    has no remote tip. The finalizer used to fall back to `HEAD` there —
+    which in a checkout of the default branch is *main's* tip. The runner
+    then watched main's checks, found them red for reasons that had nothing
+    to do with the session, and took the work up again; the follow-up failed
+    at checkout, took the work up again, and the request ran out of
+    attempts. All from a commit the session never made.
+    """
+
+    @staticmethod
+    def repo(tmp_path):
+        """A checkout on a branch that was never pushed."""
+        checkout = tmp_path / "repo"
+        checkout.mkdir()
+        _git("init", "--quiet", "--initial-branch", "main", cwd=checkout)
+        _git("config", "user.email", "a@b.c", cwd=checkout)
+        _git("config", "user.name", "a", cwd=checkout)
+        (checkout / "file.txt").write_text("hello\n")
+        _git("add", "-A", cwd=checkout)
+        _git("commit", "--quiet", "-m", "main's tip", cwd=checkout)
+        _git("checkout", "--quiet", "-B", "logos/agent/x/session-9", cwd=checkout)
+        return checkout
+
+    def test_a_branch_with_no_remote_tip_names_no_commit(self, tmp_path, monkeypatch):
+        checkout = self.repo(tmp_path)
+        monkeypatch.setattr(run_session, "CHECKOUT", checkout)
+
+        assert run_session._ref_sha("refs/remotes/origin/logos/agent/x/session-9") is None
+        # And HEAD does resolve — which is exactly the value that must not
+        # be reported as this session's commit.
+        assert run_session._ref_sha("HEAD") is not None
+
+    def test_the_branch_s_own_tip_is_reported_when_it_has_one(self, tmp_path, monkeypatch):
+        checkout = self.repo(tmp_path)
+        monkeypatch.setattr(run_session, "CHECKOUT", checkout)
+        # As a fetch would leave it: the branch exists on the remote.
+        _git("update-ref", "refs/remotes/origin/logos/agent/x/session-9", "HEAD", cwd=checkout)
+
+        assert run_session._ref_sha("refs/remotes/origin/logos/agent/x/session-9") == run_session._ref_sha("HEAD")

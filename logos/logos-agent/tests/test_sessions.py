@@ -4945,3 +4945,96 @@ class TestSayingThatItFroze:
 
         # Giving capacity back matters more than being able to explain it.
         await sessions.manager._pause({"id": 7, "container_id": "cid-7"}, "users are queueing")
+
+
+class TestAFailureThatSaysWhy:
+    """A helper's exit code is not a reason.
+
+    "checkout preparation failed (exit 1)" reached a session row, the page
+    and a thread while the one thing that could explain it — what the helper
+    printed — was removed along with its container. Three sessions failed
+    that way in one minute on production and left nothing to work from.
+    """
+
+    @staticmethod
+    def install(monkeypatch, *, code: int, lines: list[str]):
+        from app import sessions
+
+        async def create_session_container(**_kwargs):
+            return "cid-1"
+
+        async def start_container(_cid):
+            return None
+
+        async def wait_container(_cid, timeout_s=0):
+            return code
+
+        async def remove_container(_cid):
+            return None
+
+        async def stream_logs(_cid, since=0, follow=True):
+            for line in lines:
+                yield line
+
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", create_session_container)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", start_container)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", wait_container)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", remove_container)
+        monkeypatch.setattr(sessions.docker_engine, "stream_logs", stream_logs)
+
+    async def test_the_reason_travels_with_the_failure(self, monkeypatch):
+        from app import sessions
+
+        self.install(
+            monkeypatch,
+            code=1,
+            lines=["[session] $ git fetch --depth 50 origin main", "fatal: couldn't find remote ref main"],
+        )
+
+        with pytest.raises(RuntimeError, match="couldn't find remote ref main"):
+            await sessions.manager._prepare_checkout(
+                {"id": 7}, {"base_branch": "main", "volume_name": "vol"}, "logos/agent/x", "/artifacts/7"
+            )
+
+    async def test_a_helper_that_worked_leaves_nothing_behind(self, monkeypatch):
+        from app import sessions
+
+        self.install(monkeypatch, code=0, lines=["[session] phase complete"])
+
+        await sessions.manager._prepare_checkout(
+            {"id": 7}, {"base_branch": "main", "volume_name": "vol"}, "logos/agent/x", "/artifacts/7"
+        )
+
+        # Only read on the path where somebody will want it.
+        assert 7 not in sessions.manager._last_helper_output
+
+    async def test_output_that_cannot_be_read_is_not_a_second_failure(self, monkeypatch):
+        from app import sessions
+
+        self.install(monkeypatch, code=1, lines=[])
+
+        async def broken(_cid, since=0, follow=True):
+            raise RuntimeError("the container is gone")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(sessions.docker_engine, "stream_logs", broken)
+
+        with pytest.raises(RuntimeError, match="exit 1"):
+            await sessions.manager._prepare_checkout(
+                {"id": 7}, {"base_branch": "main", "volume_name": "vol"}, "logos/agent/x", "/artifacts/7"
+            )
+
+    async def test_only_the_last_lines_are_kept(self, monkeypatch):
+        from app import sessions
+
+        self.install(monkeypatch, code=1, lines=[f"line {n}" for n in range(40)])
+
+        with pytest.raises(RuntimeError) as failure:
+            await sessions.manager._prepare_checkout(
+                {"id": 7}, {"base_branch": "main", "volume_name": "vol"}, "logos/agent/x", "/artifacts/7"
+            )
+
+        # It ends up in a row, on a page and in a comment: the tail is where
+        # the reason is, and the rest is noise.
+        assert "line 39" in str(failure.value)
+        assert "line 0" not in str(failure.value)
