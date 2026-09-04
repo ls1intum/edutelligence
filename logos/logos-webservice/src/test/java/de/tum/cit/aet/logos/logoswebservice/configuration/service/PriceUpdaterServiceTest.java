@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -183,6 +184,17 @@ class PriceUpdaterServiceTest {
 
         assertThat(rows).containsExactly(
             new SavedPrice("billed_input_characters", "character", 0, "default", Math.round(1.0e-5 * 1e11)));
+    }
+
+    @Test
+    void audioSpeechInputCharacterPriceWinsOverOutputAliasRegardlessOfCatalogOrder() {
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("mode", "audio_speech");
+        catalog.put("output_cost_per_character", 1.0e-5);
+        catalog.put("input_cost_per_character", 2.0e-5);
+
+        assertThat(ingest(catalog)).containsExactly(
+            new SavedPrice("billed_input_characters", "character", 0, "default", Math.round(2.0e-5 * 1e11)));
     }
 
     @Test

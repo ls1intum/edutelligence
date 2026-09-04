@@ -109,6 +109,8 @@ public class PriceUpdaterService {
         "ocr_cost_per_credit",            1,
         "input_dbu_cost_per_token",       1,
         "output_dbu_cost_per_token",      1,
+        // Audio-speech output character pricing aliases the request characters.
+        "output_cost_per_character",       1,
         // Legacy image-generation spelling; an explicit output price wins.
         "input_cost_per_image",           1
     );
