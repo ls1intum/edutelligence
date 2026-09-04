@@ -1895,3 +1895,106 @@ async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
 
     assert state["closed"] is True, "the relay connection to the lane stayed open"
     lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+# ---------------------------------------------------------------------------
+# Post-calibration sharded-checkpoint conversion
+#
+# The calibration trigger pre-shards a model while the GPUs are free. It must
+# honor the same gates as the spawn-time path: a per-model opt-out and a
+# recorded loader rejection (re-converting either way would only build a cache
+# the lane never reads — or reproduce shards the loader already refused).
+# ---------------------------------------------------------------------------
+
+
+def _app_config_for_sharded(vllm_engine: dict):
+    from logos_worker_node.models import AppConfig
+
+    return AppConfig(engines={"vllm": vllm_engine})
+
+
+def _sharded_conversion_client() -> LogosBridgeClient:
+    return LogosBridgeClient(
+        _DummyApp(),
+        LogosConfig(enabled=True, logos_url="http://logos.example:8080", shared_key="secret"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_calibration_sharded_conversion_honors_per_model_opt_out(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from logos_worker_node import sharded_checkpoint as sc
+
+    cfg = _app_config_for_sharded(
+        {"model_overrides": {"org/Model-A": {"sharded_checkpoint_enabled": False}}}
+    )
+    client = _sharded_conversion_client()
+    monkeypatch.setattr(sc, "resolve_cache_root", lambda _models_path: str(tmp_path))
+
+    def _boom(**_kw):
+        raise AssertionError("the lane spawner honors the per-model opt-out — no cache to build")
+
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", _boom)
+    result = SimpleNamespace(tensor_parallel_size=2, gpu_devices="")
+    session = _CalibrationSession(sleep_level=1)
+
+    await client._maybe_convert_sharded_checkpoint(  # noqa: SLF001
+        "org/Model-A", result, {"dtype": "auto"}, session, cfg, tmp_path
+    )
+
+
+@pytest.mark.asyncio
+async def test_calibration_sharded_conversion_still_runs_without_opt_out(tmp_path, monkeypatch) -> None:
+    """Control: without the opt-out the conversion is attempted as before."""
+    from types import SimpleNamespace
+
+    from logos_worker_node import sharded_checkpoint as sc
+
+    cfg = _app_config_for_sharded({})
+    client = _sharded_conversion_client()
+    monkeypatch.setattr(sc, "resolve_cache_root", lambda _models_path: str(tmp_path))
+    calls: list[dict] = []
+
+    def _no_convert(**kw):
+        calls.append(kw)
+        return None
+
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", _no_convert)
+    result = SimpleNamespace(tensor_parallel_size=2, gpu_devices="")
+    session = _CalibrationSession(sleep_level=1)
+
+    await client._maybe_convert_sharded_checkpoint(  # noqa: SLF001
+        "org/Model-A", result, {"dtype": "auto"}, session, cfg, tmp_path
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["model"] == "org/Model-A"
+
+
+@pytest.mark.asyncio
+async def test_calibration_sharded_conversion_skips_a_rejected_build(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from logos_worker_node import sharded_checkpoint as sc
+
+    monkeypatch.setattr(sc, "_current_engine_versions", lambda: {"vllm": "0.27.1"})
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+    sc.invalidate_sharded_checkpoint(target)
+
+    cfg = _app_config_for_sharded({})
+    client = _sharded_conversion_client()
+    monkeypatch.setattr(sc, "resolve_cache_root", lambda _models_path: str(tmp_path))
+
+    def _boom(**_kw):
+        raise AssertionError("a rejected conversion must not be re-run at calibration either")
+
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", _boom)
+    result = SimpleNamespace(tensor_parallel_size=2, gpu_devices="")
+    session = _CalibrationSession(sleep_level=1)
+
+    await client._maybe_convert_sharded_checkpoint(  # noqa: SLF001
+        "org/Model-A", result, {"dtype": "auto"}, session, cfg, tmp_path
+    )

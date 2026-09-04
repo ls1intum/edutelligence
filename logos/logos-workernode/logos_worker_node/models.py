@@ -75,6 +75,17 @@ class VllmConfig(BaseModel):
     )
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
+    sharded_checkpoint_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Per-model switch for the pre-sharded checkpoint used by TP>1 lanes. "
+            "None (default) follows the worker-wide engines.vllm.sharded_checkpoint_enabled. "
+            "Set false to force this model to always load the full checkpoint — e.g. a "
+            "quantization whose weight layout does not survive the sharded_state round "
+            "trip — without disabling the optimization for every other model on the node. "
+            "Settable per model under engines.vllm.model_overrides."
+        ),
+    )
     gpu_memory_utilization: float | None = Field(
         default=None,
         ge=0.1,
