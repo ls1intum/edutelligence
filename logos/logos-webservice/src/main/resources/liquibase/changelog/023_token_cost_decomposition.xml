@@ -159,6 +159,13 @@
         ]]></sql>
     </changeSet>
 
+    <changeSet id="022-1b-cost-finalization-marker" author="logos">
+        <sql>
+            ALTER TABLE log_entry
+                ADD COLUMN IF NOT EXISTS cost_finalized BOOLEAN NOT NULL DEFAULT FALSE;
+        </sql>
+    </changeSet>
+
     <changeSet id="022-2-resolve-unit-price" author="logos">
         <sql splitStatements="false"><![CDATA[
             CREATE OR REPLACE FUNCTION logos_resolve_unit_price(
@@ -535,14 +542,14 @@
                    -- pricing knowledge: logs UI omits the cost line, budget SUM()s
                    -- ignore it.
                    CASE
-                       WHEN le.result_status = 'success' THEN COALESCE(
-                           le.settled_cost_micro_cents,
-                           logos_price_usage(le.model_id, le.provider_id,
+                       WHEN le.result_status = 'success' THEN
+                           CASE WHEN le.cost_finalized THEN le.settled_cost_micro_cents
+                           ELSE logos_price_usage(le.model_id, le.provider_id,
                                              COALESCE(le.timestamp_response, le.timestamp_request),
-                                             le.service_tier, pe.usage_json)
-                       )
+                                             le.service_tier, pe.usage_json) END
                        WHEN le.result_status IN ('error', 'timeout') THEN
-                           logos_price_usage(le.model_id, le.provider_id,
+                           CASE WHEN le.cost_finalized THEN le.settled_cost_micro_cents
+                           ELSE logos_price_usage(le.model_id, le.provider_id,
                                              COALESCE(le.timestamp_response, le.timestamp_request),
                                              le.service_tier,
                                              pe.usage_json - ARRAY[
@@ -558,7 +565,7 @@
                                                  'billed_output_milliseconds',
                                                  'billed_output_milliseconds_1080p',
                                                  'billed_output_milliseconds_4k'
-                                             ])
+                                             ]) END
                    END AS cost_micro_cents
             FROM log_entry le
             LEFT JOIN LATERAL (
@@ -566,7 +573,8 @@
                 FROM usage_tokens ut
                 JOIN token_types tt ON tt.id = ut.type_id
                 WHERE ut.log_entry_id = le.id
-            ) pe ON true;
+            ) pe ON NOT le.cost_finalized
+                 AND le.result_status IN ('success', 'error', 'timeout');
         ]]></sql>
     </changeSet>
 
@@ -724,6 +732,172 @@
                  WHERE ut.log_entry_id = le.id))
             WHERE le.result_status = 'success'
               AND le.settled_cost_micro_cents IS NULL;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-8-normalize-remaining-legacy-token-spellings" author="logos">
+        <sql splitStatements="false"><![CDATA[
+            -- 022-1 folded the native cache-name aliases onto the canonical
+            -- vocabulary but left three pre-canonical spellings that the earliest
+            -- extraction code and hand-entered price rows used:
+            --   * a bare 'prompt' / 'completion' for the prompt and completion
+            --     token totals (later 'prompt_tokens' / 'completion_tokens');
+            --   * 'cached_tokens' for OpenAI's prompt_tokens_details.cached_tokens
+            --     stored without its 'prompt_' prefix (later 'prompt_cached_tokens').
+            -- logos_price_usage reads none of these, so a historical row carrying
+            -- them prices as if the quantity were zero: a 'prompt'/'completion'
+            -- response costs to NULL (no pricing knowledge -> free), and a
+            -- 'cached_tokens' turn, once finalized, would bill its whole prompt at
+            -- the uncached input rate with no cache-read discount. Fold them the
+            -- same way 022-1 did, GREATEST-merging into any canonical row that
+            -- already exists so a row holding both an alias and its canonical is
+            -- never double-counted.
+            CREATE OR REPLACE FUNCTION logos_normalize_legacy_token_spellings()
+            RETURNS integer
+            LANGUAGE plpgsql AS $fn$
+            DECLARE
+                changed integer;
+            BEGIN
+                -- The canonical target types are created by runtime extraction
+                -- (and 022-1 for prompt_cached_tokens); a database old enough to
+                -- carry these legacy spellings already has them. Migrate only
+                -- where the target exists and delete only what was migrated, so
+                -- a database that never saw the legacy names is left untouched
+                -- (and keeps ownership of any fixed token_types ids it seeds).
+                WITH aliases(old_name, new_name) AS (
+                    VALUES
+                        ('prompt',        'prompt_tokens'),
+                        ('completion',    'completion_tokens'),
+                        ('cached_tokens', 'prompt_cached_tokens')
+                ), normalized AS (
+                    SELECT ut.log_entry_id, target.id AS type_id,
+                           MAX(ut.token_count) AS token_count
+                    FROM usage_tokens ut
+                    JOIN token_types source ON source.id = ut.type_id
+                    JOIN aliases a ON a.old_name = source.name
+                    JOIN token_types target ON target.name = a.new_name
+                    GROUP BY ut.log_entry_id, target.id
+                ), upserted AS (
+                    INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
+                    SELECT log_entry_id, type_id, token_count FROM normalized
+                    ON CONFLICT (log_entry_id, type_id) DO UPDATE
+                        SET token_count = GREATEST(usage_tokens.token_count,
+                                                   EXCLUDED.token_count)
+                    RETURNING 1
+                )
+                SELECT COUNT(*) INTO changed FROM upserted;
+
+                DELETE FROM usage_tokens ut
+                USING token_types tt, (VALUES
+                        ('prompt',        'prompt_tokens'),
+                        ('completion',    'completion_tokens'),
+                        ('cached_tokens', 'prompt_cached_tokens')
+                    ) AS a(old_name, new_name)
+                WHERE tt.id = ut.type_id
+                  AND tt.name = a.old_name
+                  AND EXISTS (SELECT 1 FROM token_types canon WHERE canon.name = a.new_name);
+
+                -- Repoint hand-entered price rows (bare 'prompt' / 'completion')
+                -- onto the billable-quantity names, but only where the
+                -- model/provider does not already carry a canonical row for the
+                -- same tuple. token_prices has no uniqueness on that tuple, so a
+                -- blind repoint could leave two resolvable rows and
+                -- logos_resolve_unit_price would silently pick one.
+                WITH remap(old_name, new_name) AS (
+                    VALUES ('prompt',     'billed_input_uncached'),
+                           ('completion', 'billed_output_text')
+                )
+                UPDATE token_prices tp
+                SET type_id = nt.id, unit = 'token'
+                FROM remap r
+                JOIN token_types ot ON ot.name = r.old_name
+                JOIN token_types nt ON nt.name = r.new_name
+                WHERE tp.type_id = ot.id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM token_prices existing
+                      WHERE existing.type_id = nt.id
+                        AND existing.model_id IS NOT DISTINCT FROM tp.model_id
+                        AND existing.provider_id IS NOT DISTINCT FROM tp.provider_id
+                        AND existing.unit = 'token'
+                        AND existing.min_context_tokens = tp.min_context_tokens
+                        AND existing.service_tier = tp.service_tier
+                        AND existing.valid_from = tp.valid_from
+                  );
+
+                -- A price row still on a legacy type is a duplicate of a
+                -- canonical row (the repoint above skipped it); drop it.
+                DELETE FROM token_prices tp
+                USING token_types tt
+                WHERE tt.id = tp.type_id AND tt.name IN ('prompt', 'completion');
+
+                -- Drop the legacy types only once nothing references them, so a
+                -- row that could not be migrated (canonical target absent) keeps
+                -- its type instead of being cascade-deleted.
+                DELETE FROM token_types tt
+                WHERE tt.name IN ('prompt', 'completion', 'cached_tokens')
+                  AND NOT EXISTS (SELECT 1 FROM usage_tokens ut WHERE ut.type_id = tt.id)
+                  AND NOT EXISTS (SELECT 1 FROM token_prices tp WHERE tp.type_id = tt.id);
+
+                RETURN changed;
+            END;
+            $fn$;
+
+            SELECT logos_normalize_legacy_token_spellings();
+
+            -- Snapshot the successful requests that now price to a real value
+            -- instead of NULL. Mirrors 022-7: only rows without a frozen cost, so
+            -- already-settled budget history is untouched.
+            UPDATE log_entry le
+            SET settled_cost_micro_cents = logos_price_usage(
+                le.model_id, le.provider_id,
+                COALESCE(le.timestamp_response, le.timestamp_request),
+                le.service_tier,
+                (SELECT jsonb_object_agg(tt.name, ut.token_count)
+                 FROM usage_tokens ut
+                 JOIN token_types tt ON tt.id = ut.type_id
+                 WHERE ut.log_entry_id = le.id))
+            WHERE le.result_status = 'success'
+              AND le.settled_cost_micro_cents IS NULL;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-9-snapshot-finalized-error-costs" author="logos">
+        <sql splitStatements="false"><![CDATA[
+            -- Budget admission runs for every cloud request. Freeze the measurable
+            -- delivered cost of historical errors/timeouts too, so the hot path
+            -- normally sums stored integers instead of rebuilding usage JSON and
+            -- resolving catalogue prices for every prior failed request.
+            UPDATE log_entry le
+            SET settled_cost_micro_cents = logos_price_usage(
+                le.model_id, le.provider_id,
+                COALESCE(le.timestamp_response, le.timestamp_request),
+                le.service_tier,
+                (SELECT jsonb_object_agg(tt.name, ut.token_count)
+                 FROM usage_tokens ut
+                 JOIN token_types tt ON tt.id = ut.type_id
+                 WHERE ut.log_entry_id = le.id) - ARRAY[
+                    'billed_requests',
+                    'billed_input_characters',
+                    'billed_input_pixels',
+                    'billed_input_images',
+                    'billed_input_video_milliseconds',
+                    'billed_input_video_milliseconds_above_8s',
+                    'billed_input_video_milliseconds_above_15s',
+                    'billed_output_images',
+                    'billed_output_pixels',
+                    'billed_output_milliseconds',
+                    'billed_output_milliseconds_1080p',
+                    'billed_output_milliseconds_4k'
+                ])
+            WHERE le.result_status IN ('error', 'timeout')
+              AND le.settled_cost_micro_cents IS NULL;
+
+            -- NULL is a valid finalized value: it means the catalogue has no
+            -- pricing knowledge for that response. Keep that distinct from a
+            -- snapshot failure so unknown-cost rows are not repriced forever.
+            UPDATE log_entry
+            SET cost_finalized = TRUE
+            WHERE result_status IN ('success', 'error', 'timeout');
         ]]></sql>
     </changeSet>
 

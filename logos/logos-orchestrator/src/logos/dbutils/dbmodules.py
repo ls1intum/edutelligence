@@ -216,6 +216,7 @@ class LogEntry(Base):
     result_status = Column(Enum(ResultStatus, name="result_status_enum"))
     error_message = Column(Text)
     settled_cost_micro_cents = Column(BigInteger)
+    cost_finalized = Column(Boolean, nullable=False, default=False)
 
     usage_tokens = relationship("UsageTokens")
     api_key = relationship("ApiKey")

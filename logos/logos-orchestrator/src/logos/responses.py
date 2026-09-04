@@ -472,7 +472,7 @@ def extract_token_usage(usage: dict) -> dict:
                 found = True
             else:
                 unknown += count
-        if found:
+        if found or unknown:
             aggregate = usage.get("cacheWriteInputTokens")
             if isinstance(aggregate, bool) or not isinstance(aggregate, int) or aggregate < 0:
                 aggregate = five_min + one_hour + unknown

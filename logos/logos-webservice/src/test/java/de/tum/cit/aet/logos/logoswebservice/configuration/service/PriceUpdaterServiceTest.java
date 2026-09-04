@@ -176,6 +176,26 @@ class PriceUpdaterServiceTest {
     }
 
     @Test
+    void routesAudioSpeechOutputCharacterPriceToRequestCharacters() {
+        List<SavedPrice> rows = ingest(Map.of(
+            "mode", "audio_speech",
+            "output_cost_per_character", 1.0e-5));
+
+        assertThat(rows).containsExactly(
+            new SavedPrice("billed_input_characters", "character", 0, "default", Math.round(1.0e-5 * 1e11)));
+    }
+
+    @Test
+    void preservesOutputCharacterPriceOutsideAudioSpeechMode() {
+        List<SavedPrice> rows = ingest(Map.of(
+            "mode", "chat",
+            "output_cost_per_character", 1.0e-5));
+
+        assertThat(rows).containsExactly(
+            new SavedPrice("billed_output_characters", "character", 0, "default", Math.round(1.0e-5 * 1e11)));
+    }
+
+    @Test
     void expandsStructuredGuardrailUnitPrices() {
         assertThat(ingest(Map.of("guardrail_cost_per_unit", Map.of(
             "contentPolicyUnits", 1.5e-4,
@@ -188,7 +208,10 @@ class PriceUpdaterServiceTest {
     @Test
     void collapsesEqualStructuredSearchContextPrices() {
         List<SavedPrice> rows = ingest(Map.of(
-            "search_context_cost_per_query", Map.of("low", 0.01, "medium", 0.01, "high", 0.01)));
+            "search_context_cost_per_query", Map.of(
+                "search_context_size_low", 0.01,
+                "search_context_size_medium", 0.01,
+                "search_context_size_high", 0.01)));
         assertThat(rows).containsExactlyInAnyOrder(
             new SavedPrice("billed_search_queries_low", "query", 0, "default", Math.round(0.01 * 1e11)),
             new SavedPrice("billed_search_queries", "query", 0, "default", Math.round(0.01 * 1e11)),
@@ -198,7 +221,9 @@ class PriceUpdaterServiceTest {
     @Test
     void preservesDifferentStructuredSearchContextPrices() {
         assertThat(ingest(Map.of(
-            "search_context_cost_per_query", Map.of("low", 0.01, "high", 0.02))))
+            "search_context_cost_per_query", Map.of(
+                "search_context_size_low", 0.01,
+                "search_context_size_high", 0.02))))
             .containsExactlyInAnyOrder(
                 new SavedPrice("billed_search_queries_low", "query", 0, "default", Math.round(0.01 * 1e11)),
                 new SavedPrice("billed_search_queries_high", "query", 0, "default", Math.round(0.02 * 1e11)));

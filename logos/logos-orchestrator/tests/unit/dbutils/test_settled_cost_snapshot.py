@@ -51,13 +51,15 @@ def test_status_write_is_committed_before_the_snapshot_is_attempted():
     assert names.index("commit") < second_execute
 
 
-def test_no_snapshot_for_a_non_success_finalization():
+def test_error_finalization_snapshots_its_measurable_delivered_cost():
     db = _db()
-    db.session.execute.side_effect = [MagicMock()]
+    db.session.execute.side_effect = [MagicMock(), MagicMock()]
 
     db.update_log_entry_metrics(log_id=7, result_status="error")
 
-    assert _call_names(db).count("execute") == 1
+    assert _call_names(db).count("execute") == 2
+    assert "le.result_status IN ('error', 'timeout')" in dbmanager._SETTLED_COST_SNAPSHOT_SQL
+    assert "'billed_requests'" in dbmanager._SETTLED_COST_SNAPSHOT_SQL
 
 
 def test_snapshot_sql_recomputes_and_carries_no_null_guard():

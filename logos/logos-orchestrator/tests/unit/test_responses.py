@@ -173,6 +173,24 @@ def test_extract_token_usage_preserves_unknown_bedrock_cache_write_ttls():
     assert out["prompt_cache_write_1h_tokens"] == 10
 
 
+def test_extract_token_usage_bills_cache_details_with_only_unknown_ttls():
+    # cacheDetails is skipped by the generic key mapping, so when every entry
+    # carries an unrecognised TTL and no cacheWriteInputTokens aggregate is
+    # present, the cache write would otherwise never reach billing.
+    out = extract_token_usage(
+        {
+            "inputTokens": 20,
+            "outputTokens": 7,
+            "cacheDetails": [
+                {"cacheTtl": "PT30M", "inputTokens": 4},
+                {"cacheTtl": "PT30M", "inputTokens": 6},
+            ],
+        }
+    )
+    assert out["prompt_cache_write_tokens"] == 10
+    assert out["prompt_cache_write_1h_tokens"] == 0
+
+
 def test_usage_extraction_normalizes_native_gemini_usage_metadata():
     assert main._usage_tokens_from_payload(
         {

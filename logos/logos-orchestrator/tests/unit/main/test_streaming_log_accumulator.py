@@ -190,6 +190,61 @@ def test_responses_stream_cut_off_falls_back_to_accumulated_text():
     assert acc.response_payload() == {"content": "partial"}
 
 
+def test_responses_stream_failed_event_marks_the_request_failed():
+    # response.failed is a terminal event on an HTTP 200 stream: generation
+    # began, then the provider gave up. The bytes reach the client but the
+    # request is not a success and must not be billed.
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress"}},
+        {"type": "response.output_text.delta", "delta": "partial"},
+        {
+            "type": "response.failed",
+            "response": {
+                "id": "resp_1",
+                "status": "failed",
+                "error": {"code": "server_error", "message": "the model is overloaded"},
+            },
+        },
+    )
+
+    assert acc.upstream_error == {"code": "server_error", "message": "the model is overloaded"}
+
+
+def test_responses_stream_failed_event_without_error_body_still_fails():
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"type": "response.output_text.delta", "delta": "partial"},
+        {"type": "response.failed", "response": {"id": "resp_1", "status": "failed", "error": None}},
+    )
+
+    assert acc.upstream_error is not None
+    assert isinstance(acc.upstream_error.get("message"), str)
+
+
+def test_responses_stream_incomplete_event_is_not_a_failure():
+    # response.incomplete means the generation stopped at max_output_tokens or a
+    # content filter. The partial output is returned and the provider charges
+    # for it, so it must NOT be treated as an upstream error.
+    acc = _StreamingLogAccumulator()
+    final_response = {
+        "id": "resp_1",
+        "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "usage": {"input_tokens": 5, "output_tokens": 10, "total_tokens": 15},
+    }
+    _feed_sse(
+        acc,
+        {"type": "response.output_text.delta", "delta": "partial"},
+        {"type": "response.incomplete", "response": final_response},
+    )
+
+    assert acc.upstream_error is None
+    assert acc.usage() == final_response["usage"]
+
+
 def test_responses_terminal_event_returns_eur_cost(monkeypatch):
     class DummyDB:
         def __enter__(self):

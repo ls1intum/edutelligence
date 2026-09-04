@@ -240,10 +240,31 @@ _SETTLED_COST_SNAPSHOT_SQL = """
         le.model_id, le.provider_id,
         COALESCE(le.timestamp_response, le.timestamp_request),
         le.service_tier,
-        (SELECT jsonb_object_agg(tt.name, ut.token_count)
-         FROM usage_tokens ut
-         JOIN token_types tt ON tt.id = ut.type_id
-         WHERE ut.log_entry_id = le.id))
+        CASE WHEN le.result_status IN ('error', 'timeout') THEN
+            (SELECT jsonb_object_agg(tt.name, ut.token_count)
+             FROM usage_tokens ut
+             JOIN token_types tt ON tt.id = ut.type_id
+             WHERE ut.log_entry_id = le.id) - ARRAY[
+                'billed_requests',
+                'billed_input_characters',
+                'billed_input_pixels',
+                'billed_input_images',
+                'billed_input_video_milliseconds',
+                'billed_input_video_milliseconds_above_8s',
+                'billed_input_video_milliseconds_above_15s',
+                'billed_output_images',
+                'billed_output_pixels',
+                'billed_output_milliseconds',
+                'billed_output_milliseconds_1080p',
+                'billed_output_milliseconds_4k'
+            ]
+        ELSE
+            (SELECT jsonb_object_agg(tt.name, ut.token_count)
+             FROM usage_tokens ut
+             JOIN token_types tt ON tt.id = ut.type_id
+             WHERE ut.log_entry_id = le.id)
+        END),
+        cost_finalized = TRUE
     WHERE {where_clause}
 """
 
@@ -428,7 +449,7 @@ class DBManager:
         # statement timeout). Run it only after the status write is durably
         # committed and never let its failure surface, so a request cannot be
         # left stuck at result_status NULL because the snapshot blew up.
-        if update_data.get("result_status") == "success":
+        if update_data.get("result_status") in {"success", "error", "timeout"}:
             try:
                 self.session.execute(
                     text(_SETTLED_COST_SNAPSHOT_SQL.format(where_clause=settled_where_clause)),
@@ -2819,12 +2840,13 @@ class DBManager:
         row = self.session.execute(
             text(
                 """
-                 SELECT COALESCE(SUM(bu.cost_micro_cents), 0) AS total
-                 FROM budget_usage bu
-                 WHERE bu.api_key_id = ANY(
+                 SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
+                 FROM log_entry_cost lec
+                 WHERE lec.api_key_id = ANY(
                          ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
                        )
-                   AND bu.month = :month
+                   AND lec.timestamp_request >= CAST(:month AS DATE)
+                   AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                  """
             ),
             {"tid": team_id, "month": month_start},
@@ -2957,9 +2979,11 @@ class DBManager:
         row = self.session.execute(
             text(
                 """
-                 SELECT cost_micro_cents
-                 FROM budget_usage
-                 WHERE api_key_id = :aki AND month = :month
+                 SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
+                 FROM log_entry_cost lec
+                 WHERE lec.api_key_id = :aki
+                   AND lec.timestamp_request >= CAST(:month AS DATE)
+                   AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                  """
             ),
             {"aki": api_key_id, "month": month_start},

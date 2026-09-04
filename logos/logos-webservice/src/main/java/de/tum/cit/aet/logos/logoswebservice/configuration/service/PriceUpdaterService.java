@@ -260,12 +260,18 @@ public class PriceUpdaterService {
             String rawKey = entry.getKey();
             Object costObj = entry.getValue();
             // LiteLLM represents search-context pricing as
-            // {low: x, medium: x, high: x}. Preserve low/high as distinct
+            // {search_context_size_low: x, search_context_size_medium: x,
+            // search_context_size_high: x}. Preserve low/high as distinct
             // quantities and use the ordinary search quantity for medium, the
             // provider default when the request does not specify a size.
             if ("search_context_cost_per_query".equals(rawKey) && costObj instanceof Map<?, ?> contextPrices) {
                 for (String context : List.of("low", "medium", "high")) {
-                    Object value = contextPrices.get(context);
+                    // Current catalogue keys the sizes as search_context_size_<x>;
+                    // fall back to a bare <x> in case that schema is simplified.
+                    Object value = contextPrices.get("search_context_size_" + context);
+                    if (value == null) {
+                        value = contextPrices.get(context);
+                    }
                     if (!(value instanceof Number number) || number.doubleValue() < 0) continue;
                     long pricePerK = Math.round(number.doubleValue() * 1e11);
                     PriceDimension dim = new PriceDimension(
@@ -343,6 +349,16 @@ public class PriceUpdaterService {
             if ("input_cost_per_image".equals(key)
                     && "image_generation".equals(data.get("mode"))) {
                 tu = new TypeUnit("billed_output_images", "image");
+            }
+            // Text-to-speech models (litellm mode "audio_speech", e.g. Voxtral,
+            // tts-1) price per character and their only rate is
+            // output_cost_per_character. The audio response carries no output
+            // text, while quantity derivation counts the request's input text as
+            // billed_input_characters, so route this spelling to the request
+            // characters or every TTS request would be unpriced.
+            if ("output_cost_per_character".equals(key)
+                    && "audio_speech".equals(data.get("mode"))) {
+                tu = new TypeUnit("billed_input_characters", "character");
             }
 
             double cost = ((Number) costObj).doubleValue();

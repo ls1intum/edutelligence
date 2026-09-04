@@ -385,6 +385,22 @@ class TokenCostFunctionTest {
     }
 
     @Test
+    void priceUsage_audioSpeechModel_billedOnRequestCharacters() {
+        // Voxtral TTS: catalogue carries only output_cost_per_character, which
+        // PriceUpdaterService routes to billed_input_characters for audio_speech
+        // models. The audio response has no text, so without that routing the
+        // request would be entirely unpriced.
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_input_characters", "character", 0, "default", 1000, "2020-01-01");
+
+        Long cost = price(model, provider, "2026-01-01", null,
+            "{\"billed_requests\":1,\"billed_input_characters\":5000,"
+            + "\"billed_output_milliseconds\":3000}");
+        assertThat(cost).isEqualTo(5000L * 1000 / 1000);
+    }
+
+    @Test
     void priceUsage_outputImageTokensSuppressPixelAndFlatRepresentations() {
         int model = seedModel();
         int provider = seedCloudProvider("azure");
@@ -702,6 +718,120 @@ class TokenCostFunctionTest {
 
         assertThat(jdbc.queryForObject(
             "SELECT logos_collapse_price_sentinels()", Integer.class)).isZero();
+    }
+
+    // ------------------------------------------- legacy spelling normalization
+    //
+    // The 022-8 changelog runs on a fresh Testcontainer before any legacy-spelling
+    // row exists, so these seed the pre-canonical rows and invoke the same
+    // normalization function the changelog calls, then assert on the result.
+
+    @Test
+    void normalizeLegacyTokenSpellings_foldsBareAndUnprefixedNamesOntoCanonical() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        seedPrice(model, provider, "billed_input_uncached", "token", 0, "default", 20000, "2020-01-01");
+        seedPrice(model, provider, "billed_input_cache_read", "token", 0, "default", 2000, "2020-01-01");
+        seedPrice(model, provider, "billed_output_text", "token", 0, "default", 120000, "2020-01-01");
+        // A database old enough to carry the legacy spellings has since moved to
+        // the canonical names for newer traffic, so those types already exist.
+        int newer = seedLogEntry(seedApiKey(seedTeam()), model, provider, "2026-08-01T12:00:00Z");
+        seedUsageToken(newer, "prompt_tokens", 10);
+        seedUsageToken(newer, "completion_tokens", 10);
+
+        int le = seedLogEntry(seedApiKey(seedTeam()), model, provider, "2026-05-10T12:00:00Z");
+        seedUsageToken(le, "prompt", 1000);
+        seedUsageToken(le, "completion", 200);
+        seedUsageToken(le, "cached_tokens", 800);
+
+        // Before: logos_price_usage reads none of these -> no pricing knowledge.
+        assertThat(jdbc.queryForObject(
+            "SELECT cost_micro_cents FROM log_entry_cost WHERE log_entry_id = ?", Long.class, le))
+            .isNull();
+
+        jdbc.queryForObject("SELECT logos_normalize_legacy_token_spellings()", Integer.class);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM usage_tokens ut JOIN token_types tt ON tt.id = ut.type_id "
+            + "WHERE tt.name IN ('prompt','completion','cached_tokens')", Integer.class)).isZero();
+
+        // After: priced as an inclusive OpenAI response --
+        // 200 uncached + 800 cache-read + 200 output.
+        Long cost = jdbc.queryForObject(
+            "SELECT logos_price_usage(?, ?, ?::timestamptz, NULL, "
+            + "(SELECT jsonb_object_agg(tt.name, ut.token_count) FROM usage_tokens ut "
+            + " JOIN token_types tt ON tt.id = ut.type_id WHERE ut.log_entry_id = ?))",
+            Long.class, model, provider, "2026-05-10T12:00:00Z", le);
+        assertThat(cost).isEqualTo(200L * 20000 / 1000 + 800L * 2000 / 1000 + 200L * 120000 / 1000);
+    }
+
+    @Test
+    void normalizeLegacyTokenSpellings_mergesIntoExistingCanonicalRowByGreatest() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        int le = seedLogEntry(seedApiKey(seedTeam()), model, provider, "2026-05-10T12:00:00Z");
+        seedUsageToken(le, "prompt_tokens", 900);
+        seedUsageToken(le, "prompt", 1000);
+
+        jdbc.queryForObject("SELECT logos_normalize_legacy_token_spellings()", Integer.class);
+
+        Long merged = jdbc.queryForObject(
+            "SELECT ut.token_count FROM usage_tokens ut JOIN token_types tt ON tt.id = ut.type_id "
+            + "WHERE ut.log_entry_id = ? AND tt.name = 'prompt_tokens'", Long.class, le);
+        assertThat(merged).isEqualTo(1000L);
+    }
+
+    @Test
+    @org.springframework.transaction.annotation.Transactional
+    void normalizeLegacyTokenSpellings_preservesRowsWhoseCanonicalTargetIsAbsent() {
+        // Data-loss guard: if the canonical type does not exist anywhere, the
+        // legacy row cannot be migrated and must be left intact rather than
+        // cascade-deleted with its type. The static container is shared and other
+        // tests seed the canonical types, so this runs in a rolled-back
+        // transaction where those types and their referencing rows are removed to
+        // establish the precondition.
+        jdbc.update("DELETE FROM usage_tokens ut USING token_types tt WHERE tt.id = ut.type_id "
+            + "AND tt.name IN ('prompt_tokens','completion_tokens')");
+        jdbc.update("DELETE FROM token_prices tp USING token_types tt WHERE tt.id = tp.type_id "
+            + "AND tt.name IN ('prompt_tokens','completion_tokens')");
+        jdbc.update("DELETE FROM token_types WHERE name IN ('prompt_tokens','completion_tokens')");
+
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        int le = seedLogEntry(seedApiKey(seedTeam()), model, provider, "2026-05-10T12:00:00Z");
+        seedUsageToken(le, "prompt", 1000);
+        seedUsageToken(le, "completion", 200);
+
+        jdbc.queryForObject("SELECT logos_normalize_legacy_token_spellings()", Integer.class);
+
+        // Both the rows and their types survive, untouched.
+        assertThat(jdbc.queryForObject(
+            "SELECT ut.token_count FROM usage_tokens ut JOIN token_types tt ON tt.id = ut.type_id "
+            + "WHERE ut.log_entry_id = ? AND tt.name = 'prompt'", Long.class, le)).isEqualTo(1000L);
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM token_types WHERE name IN ('prompt','completion')", Integer.class))
+            .isEqualTo(2);
+    }
+
+    @Test
+    void normalizeLegacyTokenSpellings_repointsLegacyPriceRowUnlessCanonicalExists() {
+        int model = seedModel();
+        int provider = seedCloudProvider("openai");
+        // Legacy 'prompt' price row, no canonical row for this model/tuple -> repointed.
+        seedPrice(model, provider, "prompt", "token", 0, "default", 30000, "2020-01-01");
+        // Legacy 'completion' collides with an existing canonical row for the tuple -> discarded.
+        seedPrice(model, provider, "completion", "token", 0, "default", 99999, "2020-01-01");
+        seedPrice(model, provider, "billed_output_text", "token", 0, "default", 120000, "2020-01-01");
+
+        jdbc.queryForObject("SELECT logos_normalize_legacy_token_spellings()", Integer.class);
+
+        assertThat(resolve("billed_input_uncached", model, provider, "2026-01-01", 1L, null))
+            .isEqualTo(30000L);
+        assertThat(resolve("billed_output_text", model, provider, "2026-01-01", 1L, null))
+            .isEqualTo(120000L);
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id "
+            + "WHERE tt.name IN ('prompt','completion')", Integer.class)).isZero();
     }
 
     // --------------------------------------------------------------- helpers

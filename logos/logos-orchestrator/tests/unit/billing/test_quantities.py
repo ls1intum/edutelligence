@@ -106,6 +106,18 @@ def test_image_generation_empty_response_has_no_image_keys():
     assert "billed_output_pixels" not in q
 
 
+def test_image_variations_are_billed_as_output_images():
+    # DALL-E 2 /v1/images/variations: no prompt, an input image, and its sole
+    # catalogue rate (input_cost_per_image) is stored as billed_output_images
+    # for image-generation models. Without variations in the path check the
+    # returned images would be entirely unbilled.
+    req = {"size": "1024x1024", "n": 2}
+    q = derive_billable_quantities(req, {"data": [{}, {}]}, "v1/images/variations")
+    assert q["billed_output_images"] == 2
+    assert q["billed_output_pixels"] == 1024 * 1024 * 2
+    assert "billed_input_characters" not in q
+
+
 def test_ocr_pages():
     q = derive_billable_quantities({}, {"pages": [{}, {}, {}]}, "v1/ocr")
     assert q["billed_ocr_pages"] == 3
