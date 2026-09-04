@@ -55,6 +55,25 @@ def resolve_queue_priority(default_priority: Optional[int], policy_priority: Opt
     return 0
 
 
+def is_background_app(headers: Dict[str, str]) -> bool:
+    """True when the caller marked the request as background app traffic.
+
+    Claude Code sends ``x-app: cli`` for interactive sessions and
+    ``x-app: cli-bg`` for its background agents; only the latter is
+    flagged. Those background calls (e.g. the auto-permission classifier)
+    are latency-sensitive — they block the agent's next step — so the queue
+    gives them bounded precedence at the same priority level
+    (``SchedulingRequest.background_app``): the dispatch interleave keeps a
+    fast lane for them without letting a steady flagged stream starve
+    ordinary same-priority traffic. The comparison is
+    case-insensitive in both name and value, as HTTP headers are.
+    """
+    for name, value in headers.items():
+        if name.lower() == "x-app" and value.strip().lower() == "cli-bg":
+            return True
+    return False
+
+
 @dataclass
 class PipelineRequest:
     """Input to the pipeline."""
@@ -83,6 +102,12 @@ class PipelineRequest:
     # Calling API key. Seeds the prefix-affinity hash so two keys never share
     # a stream identity, and so one key's parallel agent loops stay separate.
     api_key_id: Optional[int] = None
+    # time.monotonic() stamp of request ingress (sync path only). Forwarded to
+    # the scheduler, which recomputes the queue-wait cap from it at wait time
+    # (``remaining_queue_wait_s``) — so auth, the worker reconnect wait,
+    # classification and the synchronous scheduling phase all count against
+    # the client window, and the queue-timeout 429 still beats its watchdog.
+    ingress_at: Optional[float] = None
 
 
 @dataclass
@@ -96,6 +121,11 @@ class PipelineResult:
     classification_stats: Dict[str, Any]
     scheduling_stats: Dict[str, Any]
     error: Optional[str] = None
+    # Set when the failure was a queue-wait timeout (``QueueTimeoutError``),
+    # carrying the window the request was held. Lets the caller answer with
+    # overload semantics (429 + Retry-After) instead of a generic 503 — the
+    # client's wait budget was spent, not the service's availability.
+    queue_timeout_s: Optional[float] = None
 
 
 class RequestPipeline:
@@ -209,6 +239,12 @@ class RequestPipeline:
             timeout_s=request.payload.get("timeout_s"),
             required_provider_id=request.required_provider_id,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
+            background_app=is_background_app(request.headers),
+            # Absolute ingress stamp, not a precomputed remainder: the
+            # scheduler recomputes what is left of the client window at wait
+            # time, so the synchronous scheduling phase in between (which can
+            # block on per-candidate SDI refreshes) counts against it too.
+            ingress_at=request.ingress_at,
         )
 
         # Record enqueue
@@ -244,6 +280,7 @@ class RequestPipeline:
                     "error": "Queue wait timeout",
                 },
                 error=str(exc),
+                queue_timeout_s=exc.timeout_s,
             )
 
         if not scheduling_result:

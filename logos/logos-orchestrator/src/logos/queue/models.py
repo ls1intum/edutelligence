@@ -102,6 +102,15 @@ class QueueEntry:
     schedules the request, the lane is loaded — `status.is_loaded` no
     longer reflects whether the request actually triggered a cold load."""
 
+    background_app: bool = False
+    """True when the request arrived with the ``x-app: cli-bg`` header:
+    background app traffic (e.g. an agent's auto-permission classifier call)
+    that is latency-sensitive and must not wait out a full queue of
+    interactive traffic. Within one priority level such entries dispatch in
+    a bounded interleave with the rest — one flagged entry per two regular
+    (see PriorityQueueManager) — so the flag buys a fast lane, not a
+    monopoly."""
+
     provider_affinity: int | None = None
     """When set, only this provider may dispatch the entry. Normal requests
     leave this unset and retain the model-wide, cross-provider queue behavior."""

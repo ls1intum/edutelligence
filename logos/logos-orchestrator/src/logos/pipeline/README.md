@@ -56,12 +56,12 @@ Response, logging, completion recording, and scheduler.release()
 
 1.  **Scheduling**: If eligible local candidates are busy, cold, sleeping, or otherwise unavailable:
     *   The scheduler creates an `asyncio.Future`.
-    *   It enqueues the future into `PriorityQueueManager` (HIGH/NORMAL/LOW).
-    *   It `await`s the future, pausing the request execution.
-2.  **Waiting**: The request remains suspended until a slot opens up. Queues use strict HIGH, then NORMAL, then LOW priority ordering; priorities are not automatically promoted.
+    *   It enqueues the future into `PriorityQueueManager` (HIGH/NORMAL/LOW), flagging the entry when the request carried the `x-app: cli-bg` header (background app traffic; `is_background_app()` in `pipeline.py`).
+    *   It `await`s the future, pausing the request execution. The wait is bounded to `DEFAULT_QUEUE_WAIT_TIMEOUT_S` (or `LOGOS_TIMEOUT_S` / the request's `timeout_s`): the window is chosen so the queue-timeout 429 + `Retry-After` reaches a caller that is still connected, instead of holding a slot for minutes after the client gave up.
+2.  **Waiting**: The request remains suspended until a slot opens up. Queues use strict HIGH, then NORMAL, then LOW priority ordering; priorities are not automatically promoted. **Within one priority level, background-app entries (the `x-app: cli-bg` header) dispatch in a bounded interleave with the regular entries — one flagged, then two regular, repeating (F R R | F R R | ...) — each class in arrival order (FIFO).** The cycle starts with the flagged slot, so a flagged entry that arrives while the level is fresh jumps the queue of regular entries ahead of it; but after a flagged dispatch the next two dispatches are owed to regular traffic again. The flag buys a fast lane, not a monopoly: a steady flagged stream can take at most one of every three dispatch slots and cannot starve same-priority interactive traffic. This is what keeps latency-sensitive background calls — e.g. Claude Code's auto-permission classifier requests — from waiting for every interactive request that arrived before them when the queue fills under load. Only traffic that explicitly identifies itself as background app traffic is re-ordered; everything else sorts exactly as before.
 3.  **Wake Up**: When another request finishes:
     *   `scheduler.release()` calls `queue_mgr.dequeue_with_entry()`.
-    *   It finds the highest priority waiting future.
+    *   It finds the highest priority waiting future (within the level, the F R R flagged:regular interleave picks the next entry).
     *   It calls `future.set_result()`, waking up the suspended request.
 4.  **Resumption**: The `await` returns, and the request proceeds to **Execution**.
 
@@ -122,7 +122,7 @@ pipeline/
 - Manages SDI facades (`LogosNodeSchedulingDataFacade`, `AzureSchedulingDataFacade`)
 - Tracks per-model provider and deployment types (LogosNode/cloud)
 - Provides helper methods for queue management and metrics collection
-- Uses strict HIGH → NORMAL → LOW dequeue ordering for queued requests
+- Uses strict HIGH → NORMAL → LOW dequeue ordering for queued requests (within a level: the bounded F R R flagged:regular interleave)
 - Uses the model-only `PriorityQueueManager`; its compatibility `provider_id` arguments are ignored
 
 ### `fcfs_scheduler.py` - FcfScheduler
@@ -176,7 +176,7 @@ The pipeline integrates several modules together
 ### Priority Queue (`../queue/`)
 - `PriorityQueueManager`: Per-model priority queues
 - `Priority` enum: LOW, NORMAL, HIGH
-- Strict HIGH → NORMAL → LOW dequeue ordering (no automatic promotion)
+- Strict HIGH → NORMAL → LOW dequeue ordering (no automatic promotion); within a level, a bounded interleave — one background-app (`x-app: cli-bg`) entry, then two regular, repeating (F R R | F R R | ...) — each class in arrival order (FIFO)
 
 ### Monitoring (`../monitoring/`)
 - `MonitoringRecorder`: Logs request lifecycle events and performance metrics
