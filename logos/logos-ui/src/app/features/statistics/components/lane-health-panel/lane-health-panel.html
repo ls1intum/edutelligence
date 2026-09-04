@@ -149,7 +149,12 @@
               >
                 <option value="" disabled>Select a model…</option>
                 @for (m of loadableModels; track m.model_name) {
-                  <option [value]="m.model_name">{{ m.model_name }}</option>
+                  <option [value]="m.model_name">
+                    {{ m.model_name }}
+                    @if (laneCountLabel(m.model_name); as label) {
+                      {{ label }}
+                    }
+                  </option>
                 }
               </select>
               <button

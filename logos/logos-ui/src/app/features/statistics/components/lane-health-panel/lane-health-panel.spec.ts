@@ -1,5 +1,16 @@
-import { formatContextWindow, laneSleepAction, messageIn } from './lane-health-panel';
+import { SimpleChange } from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import {
+  LaneHealthPanel,
+  acceptedModelIsResolved,
+  countLiveLanesByModel,
+  filterLoadableModels,
+  formatContextWindow,
+  laneSleepAction,
+  messageIn,
+} from './lane-health-panel';
 import { LaneSignalData } from '../../statistics.models';
+import { ProviderModel, StatisticsService } from '../../services/statistics.service';
 
 /**
  * Pulling the reason out of a failed lane action.
@@ -158,5 +169,227 @@ describe('laneSleepAction', () => {
     expect(laneSleepAction(lane({ sleep_state: 'unsupported' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: 'unknown' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: null }))).toBeNull();
+  });
+});
+
+/**
+ * Which models the "Load lane" picker still offers.
+ *
+ * Every provider model is offered, loaded or not: a model that already runs
+ * lanes on the node may take one more (multiple deployments of one model per
+ * node are supported), and the worker's own VRAM is the final word on
+ * whether the copy fits. The only model withheld is one whose load was just
+ * accepted — its lane takes minutes to show up in the status stream, and
+ * offering it again would invite a second click on the very lane being
+ * brought up.
+ */
+describe('lane picker loadability', () => {
+  it('counts every lane except stopped and error as live', () => {
+    const lanes = {
+      'planner-foo': lane({ model: 'foo', runtime_state: 'running' }),
+      'planner-foo-2': lane({ model: 'foo', runtime_state: 'loaded' }),
+      'planner-foo-3': lane({ model: 'foo', runtime_state: 'error' }),
+      'planner-bar': lane({ model: 'bar', runtime_state: 'stopped' }),
+    };
+    // bar's only lane is stopped: no live lanes at all, so no entry — a
+    // lookup misses and the model reads as 0.
+    expect(countLiveLanesByModel(lanes)).toEqual(new Map([['foo', 2]]));
+  });
+
+  it('offers every provider model with a name', () => {
+    const models = [
+      { model_id: 1, model_name: 'foo' },
+      { model_id: 2, model_name: 'bar' },
+      { model_id: 3, model_name: '' },
+    ];
+    expect(filterLoadableModels(models, null).map((m) => m.model_name)).toEqual(['foo', 'bar']);
+  });
+
+  it('keeps a model that already runs lanes offered — loading it adds another deployment', () => {
+    // bar runs one healthy and one broken lane: the broken one holds the
+    // historical id, so the planner allocates a fresh one for the next load —
+    // from the picker's side the model is simply offered, like any other.
+    const models = [
+      { model_id: 1, model_name: 'foo' },
+      { model_id: 2, model_name: 'bar' },
+    ];
+    const live = countLiveLanesByModel({
+      'planner-bar': lane({ model: 'bar', runtime_state: 'running' }),
+      'planner-bar-2': lane({ model: 'bar', runtime_state: 'error' }),
+    });
+    expect(live).toEqual(new Map([['bar', 1]]));
+    expect(filterLoadableModels(models, null).map((m) => m.model_name)).toEqual(['foo', 'bar']);
+  });
+
+  it('withholds a model whose load was just accepted', () => {
+    // The accepted lane is not in the status stream yet; offering it again
+    // would double-click the very lane being brought up.
+    const models = [
+      { model_id: 1, model_name: 'foo' },
+      { model_id: 2, model_name: 'bar' },
+    ];
+    expect(filterLoadableModels(models, 'bar').map((m) => m.model_name)).toEqual(['foo']);
+  });
+
+  it('matches model names case-insensitively', () => {
+    const models = [
+      { model_id: 1, model_name: 'Foo/Baz' },
+      { model_id: 2, model_name: 'qux' },
+    ];
+    expect(filterLoadableModels(models, ' foo/baz ').map((m) => m.model_name)).toEqual(['qux']);
+  });
+});
+
+/**
+ * When the "load accepted" note goes away.
+ *
+ * The note is keyed to the lane ids the provider reported when the load was
+ * accepted. The regression it guards: an accepted *additional* replica was
+ * released the moment the picker re-read the stream, because a *sibling*
+ * lane of the model satisfied "the lane has arrived" — re-offering the model
+ * while the accepted copy was still minutes from showing up.
+ */
+describe('acceptedModelIsResolved', () => {
+  const sibling = lane({ model: 'foo', runtime_state: 'running' });
+
+  it('stays up while only sibling lanes of the model are in the stream', () => {
+    // The accepted additional replica has not shown up; the pre-existing
+    // lane reporting the same model does not end the note.
+    const lanes = { 'planner-foo': sibling };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(false);
+  });
+
+  it('is resolved when the accepted replica shows up under a fresh id', () => {
+    const lanes = {
+      'planner-foo': sibling,
+      'planner-foo-2': lane({ model: 'foo', runtime_state: 'starting' }),
+    };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(true);
+  });
+
+  it('is resolved when the accepted replica failed into an error row', () => {
+    // The replica arrived in the stream but is not serving: the note is done,
+    // the row shows why, and the model may be offered for a retry.
+    const lanes = {
+      'planner-foo': sibling,
+      'planner-foo-2': lane({ model: 'foo', runtime_state: 'error' }),
+    };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(true);
+  });
+
+  it('is resolved for a first lane on an empty provider', () => {
+    const lanes = { 'planner-foo': lane({ model: 'foo', runtime_state: 'starting' }) };
+    expect(acceptedModelIsResolved('foo', [], lanes)).toBe(true);
+  });
+
+  it('ignores a new lane of another model', () => {
+    const lanes = {
+      'planner-foo': sibling,
+      'planner-bar': lane({ model: 'bar', runtime_state: 'loaded' }),
+    };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(false);
+  });
+
+  it('ignores a state change of a pre-existing lane', () => {
+    // Same id the baseline knew, new state: the sibling woke up or dropped,
+    // the accepted replica still has not shown up.
+    const lanes = { 'planner-foo': lane({ model: 'foo', runtime_state: 'loaded' }) };
+    expect(acceptedModelIsResolved('foo', ['planner-foo'], lanes)).toBe(false);
+  });
+
+  it('matches model names case-insensitively', () => {
+    const lanes = { 'planner-foo-2': lane({ model: 'Foo', runtime_state: 'loaded' }) };
+    expect(acceptedModelIsResolved(' foo ', ['planner-foo'], lanes)).toBe(true);
+  });
+});
+
+/**
+ * The pending note's baseline and the in-flight request.
+ *
+ * The orchestrator starts the background load before it answers 202, so the
+ * status stream can report the new starting lane while the HTTP promise is
+ * still in flight. The baseline the note checks the stream against must be
+ * the lanes as they stood before the request went out: captured after the
+ * answer arrives, a fast stream already contains the accepted lane, no
+ * update can ever see it as fresh, and the note (and the withheld model)
+ * stay up indefinitely.
+ */
+describe('LaneHealthPanel pending-note baseline', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let resolveAdd: (() => void) | undefined;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [
+        {
+          provide: StatisticsService,
+          useValue: {
+            addLane: () =>
+              new Promise<void>((resolve) => {
+                resolveAdd = resolve;
+              }),
+          },
+        },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-foo': lane({ model: 'foo', runtime_state: 'running' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    panel.loadModels.set([{ model_id: 1, model_name: 'foo' }] satisfies ProviderModel[]);
+    (panel as unknown as { pickerProviderId: number | null }).pickerProviderId = 1;
+    panel.selectedModel.set('foo');
+    fixture.detectChanges();
+  });
+
+  /** One status-stream push: swap the input and deliver ngOnChanges, as the
+   *  framework does — the test reads the signals afterwards, no re-render. */
+  function pushLanes(next: Record<string, LaneSignalData>): void {
+    const prev = panel.lanesByProvider;
+    panel.lanesByProvider = { ...prev, 'gpu-01': next };
+    panel.ngOnChanges({ lanesByProvider: new SimpleChange(prev, panel.lanesByProvider, false) });
+  }
+
+  it('resolves the note when the accepted lane arrived while the request was in flight', async () => {
+    const inFlight = panel.handleAddLane();
+
+    // A fast status update reports the new starting lane before the HTTP
+    // promise settles — the stream already contains the accepted replica,
+    // and ngOnChanges cannot act on it yet: acceptedModel is still null.
+    pushLanes({
+      'planner-foo': lane({ model: 'foo', runtime_state: 'running' }),
+      'planner-foo-2': lane({ model: 'foo', runtime_state: 'starting' }),
+    });
+
+    resolveAdd?.();
+    await inFlight;
+
+    // The replica the stream has been reporting all along counts as fresh:
+    // the note never needs to stay up, and the model is offered again
+    // immediately — not on the next update.
+    expect(panel.acceptedModel()).toBeNull();
+    expect(filterLoadableModels(panel.loadModels(), panel.acceptedModel())).toEqual([
+      { model_id: 1, model_name: 'foo' },
+    ]);
+  });
+
+  it('keeps the note up while only sibling lanes report in flight', async () => {
+    // The in-flight update touches a pre-existing lane (a sibling woke up):
+    // the accepted replica is not among them, so the note must survive the
+    // pre-request snapshot being the only baseline.
+    const inFlight = panel.handleAddLane();
+    pushLanes({ 'planner-foo': lane({ model: 'foo', runtime_state: 'loaded' }) });
+
+    resolveAdd?.();
+    await inFlight;
+    expect(panel.acceptedModel()).toBe('foo');
+
+    pushLanes({ 'planner-foo': lane({ model: 'foo', runtime_state: 'loaded' }) });
+    expect(panel.acceptedModel()).toBe('foo');
   });
 });

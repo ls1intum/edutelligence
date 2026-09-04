@@ -260,6 +260,36 @@ Falls back to aggregate (non-per-GPU) accounting when no per-device VRAM info is
 
 When `lanes = []` (worker connected but no models loaded), the main ranked-model loop already handles cold loads via the placement algorithm — `eviction_set` will always be empty on a worker with nothing loaded. The dedicated capability seeding block at `capacity_planner.py:1450` provides a fallback for the edge case where `_pick_cold_load_placement` returns `None` despite no contention (e.g. missing per-GPU device info). Any model with `eff ≥ DEMAND_LOAD_FLOOR` and capabilities declared by the worker is loaded immediately.
 
+### 7.6 Multiple lanes of one model on a node (dynamic intra-node scale-out)
+
+A model may legitimately want **more than one lane on the same worker** — e.g. two 8B instances sharing a node's VRAM for extra parallelism. How many lanes a model runs is **not configured anywhere** (no per-model count in the DB, no worker entry): the planner decides per cycle from the live signals, the same principle that dropped `models.parallel` in favour of live lane signals. The size of the fleet is a property of a node's free resources, not of the model.
+
+Lane ids are no longer a strict 1:1 function of the model name:
+
+```python
+planner-<sanitized>        # replica 1 — the historical id, unchanged
+planner-<sanitized>-2      # replica 2
+planner-<sanitized>-3      # replica 3
+...
+```
+
+`_next_lane_id_for_model()` picks the lowest replica id no lane on the worker already reports (in any runtime state, **in any model** — the worker keys lanes by id alone and refuses `add_lane` for an existing id), so replica 1's id is always reused when it is free. The reservation must be worker-wide because the suffix scheme is not unique across models: `planner-foo-2` is both replica 2 of `foo` and replica 1 of `foo-2`, so a worker hosting one of those forms must not be handed a load for the other under the id it already holds. Every planner-owned emission (demand path, capability seeding, cross-provider replication, request-time cold load, manual "Load lane") allocates through that worker-wide reservation.
+
+In the cold-load branch of `_compute_demand_actions`, the first lane of a model on a worker keeps the full load semantics (demand floor, queued requests, announced use, eviction allowed). An **additional** lane on a worker that already runs the model awake is speculative scale-out and gets the same deal as the cross-provider replication pass (`_compute_replication_actions`):
+
+- behind `LOGOS_REPLICATE_ON_FREE_VRAM` (default off),
+- sustained demand: `eff ≥ DEMAND_REPLICATION_FLOOR` (2.0),
+- free VRAM **without eviction** — an extra copy must never push out another model's lane,
+- the cluster-wide copy cap `MAX_REPLICAS_PER_MODEL` not reached.
+
+So a hot model on a roomy node grows by one lane per cycle while the demand stays sustained and VRAM stays free, and stops at whichever of those runs out; a model that cools down stops growing and its surplus lanes follow the regular idle-reclaim/drain behaviour. Waking the model's own sleeping lane stays exactly as before (wake floor / queued demand) — that is not an additional copy. Request routing already balances across replicas: `select_lane_for_model` ranks all lanes of the model by queue depth / running count / TTFT, and the admission gate sums per-lane headroom ("a busy lane must not mask an idle sibling").
+
+A replica load can also fail after the worker accepted it — the lane lands in `error`, or its confirmation times out. It then keeps holding its lane id, and `_next_lane_id_for_model()` would answer with the next free suffix: under sustained demand that is a fresh errored lane every cycle. So while any lane of the model on a worker is in error state or in load-failure cooldown, a new cold load of the model on that worker is skipped (`_model_cold_load_blocked_reason`), and the best-first ranker treats the worker as infeasible for the model — demand moves to a healthy worker, or waits for the broken lane to go away.
+
+The cooldown alone is not enough: it expires on a timer (120s), but a confirmation timeout can leave the lane stuck in `starting` — and holding its id — long after that. The failure therefore also sets a persistent per-lane marker that follows the lane, not the clock: the lane does not count as an active copy of the model, the cold-load gate keeps skipping the model, and the cycle reconciliation (`_reconcile_load_failures`) re-arms the cooldown every cycle while the lane sits in `starting` with a marker. The marker drops only when the lane reaches a serving state (the load finished after all) or leaves the worker, so the backoff ends exactly when the model is servable again.
+
+The operator "Load lane" path (`load_lane_manually`) adds one lane of the next free replica id with no count to enforce — the plannability/capacity checks and the worker's own VRAM are the gate — so a second click for an already-loaded model is no longer rejected as "lane already exists".
+
 ---
 
 ## 8. Demand-preemptive drain
