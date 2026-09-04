@@ -77,13 +77,21 @@ def _host_ram_safety_margin_mb(total_host_ram_mb: float | None) -> float:
 # metadata walk of the source model trees.
 RAM_CACHE_REPLAN_INTERVAL_S = 60.0
 
-# A model must be admitted by the plan for this many consecutive ticks before
-# the re-plan (re-)queues it for a background copy. Without it, a model
-# sitting near the budget line with MemAvailable jittering is evicted on one
-# tick and re-queued on the next while its multi-minute copy runs — evict/
-# recopy thrash of tens of GB. Three ticks (≈3 min) rides out the jitter
+# A model must stay admitted by the plan for this long, in elapsed time,
+# before the re-plan (re-)queues it for a background copy. Without it, a
+# model sitting near the budget line with MemAvailable jittering is evicted
+# on one pass and re-queued on the next while its multi-minute copy runs —
+# evict/recopy thrash of tens of GB. Three minutes rides out the jitter
 # while still reusing RAM freed by stopped lanes promptly.
-RAM_CACHE_RECACHE_HOLD_TICKS = 3
+#
+# The deadline is a monotonic elapsed-time window, NOT a count of re-plan
+# passes: the re-plan also runs reactively after every lane add, sleep, and
+# restart (apply_lanes can fire those hooks several times in one pass), and a
+# pass counter would let that churn satisfy the hold-down within seconds —
+# re-copying during the exact churn it exists to dampen. The stamp is set on
+# the FIRST admitting pass and never moved by later ones (tick or reactive
+# hook); a model that leaves the plan starts a fresh clock when it returns.
+RAM_CACHE_RECACHE_HOLD_SECONDS = 180.0
 
 
 def _download_one_model(model_name: str, hf_home: str) -> None:
@@ -405,7 +413,17 @@ def _sleepable_lane_replicas(cfg: AppConfig, lane_manager: LaneManager | None = 
             handle = lane_manager.get_handle(lane_id)
             if handle is None or handle.lane_config is None:
                 continue
+            # A present handle is authoritative for its lane in EVERY state,
+            # so the id is marked accounted however the lane stands — a
+            # stopped static lane must not fall through to the static config
+            # below and be counted there instead. But only RUNNING/STARTING
+            # lanes hold (or are about to hold) sleeping weights in host RAM:
+            # a STOPPED/ERROR/NOT_STARTED handle has already freed them, so
+            # counting it would pin the freed footprint in the reserve until
+            # the pass that finally drops the lane.
             accounted_lane_ids.add(lane_id)
+            if handle.status().state not in (ProcessState.RUNNING, ProcessState.STARTING):
+                continue
             lane = handle.lane_config
             if _lane_can_sleep(cfg, lane):
                 replicas[lane.model] = replicas.get(lane.model, 0) + 1
@@ -434,6 +452,7 @@ def _cache_candidate(
     model_profiles: ModelProfileRegistry,
     name: str,
     sleeping_replicas: int = 1,
+    can_sleep: bool | None = None,
 ) -> CacheCandidate:
     """A single cache-plan candidate.
 
@@ -447,6 +466,15 @@ def _cache_candidate(
     ``sleeping_replicas`` is how many sleep-capable lane replicas of this model
     exist. The per-process sleeping residency is multiplied by it, while
     ``size_bytes`` (the shared tmpfs cache copy) stays one copy per model.
+
+    ``can_sleep`` is the sleep decision for RESERVE-BACKED candidates — the
+    lane-derived one (``_sleepable_lane_replicas`` counts the lane because its
+    post-override configuration spawns it sleep-enabled). ``model_can_sleep``
+    — the model-level default used otherwise — can disagree: it also reads
+    ``logos.capabilities_overrides``, which lane spawn does not apply, so a
+    conflicting ``enable_sleep_mode=false`` entry there must not evict the
+    actually sleep-enabled lane's footprint from the sleep reserve.
+    ``None`` falls back to ``model_can_sleep``.
     """
     profile = model_profiles.get_profile(name)
     # The on-disk size is read once and reused both as the conservative
@@ -462,7 +490,7 @@ def _cache_candidate(
         sleeping_host_ram_mb = size_bytes / (1024 * 1024)
     return CacheCandidate(
         name=name,
-        can_sleep=model_can_sleep(cfg, name),
+        can_sleep=model_can_sleep(cfg, name) if can_sleep is None else can_sleep,
         sleeping_host_ram_mb=sleeping_host_ram_mb,
         size_bytes=size_bytes,
         sleeping_replicas=max(1, int(sleeping_replicas)),
@@ -519,6 +547,11 @@ def _build_ram_cache_candidates(
                 model_profiles,
                 m,
                 sleeping_replicas=reserve_replicas.get(m, 1),
+                # A reserve-backed model is counted because a LANE can sleep
+                # (post-override lane configuration); a conflicting
+                # capabilities_overrides.enable_sleep_mode=false must not
+                # evict the lane's footprint via the model-level default.
+                can_sleep=model_can_sleep(cfg, m) or m in reserve_replicas,
             )
         )
     for m in sorted(reserve_replicas):
@@ -532,6 +565,11 @@ def _build_ram_cache_candidates(
                 model_profiles,
                 m,
                 sleeping_replicas=reserve_replicas[m],
+                # These models are here BECAUSE a lane can sleep (they may
+                # have no profile at all), so the lane-derived decision —
+                # sleepable — is the only correct one; model_can_sleep can
+                # disagree via capabilities_overrides.
+                can_sleep=True,
             )
         )
     return candidates, uncalibrated
@@ -655,9 +693,9 @@ def _init_ram_cache_replan_state(
     # Serialises the two re-plan triggers (tick + post-sleep hook) — see
     # _replan_ram_cache_once.
     app.state.ram_cache_replan_lock = asyncio.Lock()
-    # model -> consecutive ticks it has been admitted by the plan; drives the
-    # re-cache hold-down (see _run_ram_cache_replan).
-    app.state.ram_cache_in_plan_ticks: dict[str, int] = {}
+    # model -> monotonic time of the FIRST pass that admitted it to the plan;
+    # drives the re-cache hold-down (see _run_ram_cache_replan).
+    app.state.ram_cache_in_plan_since: dict[str, float] = {}
 
 
 async def _replan_ram_cache_once(app: FastAPI) -> None:
@@ -721,11 +759,11 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
         # candidate, and an obsolete floor would launch an otherwise-fitting
         # model from disk for its lifetime. Zero the floor (no sleepable lane
         # means nothing to reserve; _would_starve_host fails open at zero, as
-        # before the floor existed), drop every hold-down counter (no model
+        # before the floor existed), drop every hold-down deadline (no model
         # is in the plan anymore), and keep what the cache holds — a no-op
         # for cached entries, so wakes and on-demand lanes still find them.
         model_cache.set_host_ram_floor_mb(0.0)
-        app.state.ram_cache_in_plan_ticks.clear()
+        app.state.ram_cache_in_plan_since.clear()
         return
 
     host_memory = _build_host_memory_summary()
@@ -784,23 +822,25 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     # queue them so a later wake or cold load finds them in RAM again.
     # start_background_caching extends the queue; it does not replace it.
     # Two dampers keep this honest:
-    #  * hold-down — a model must be in the plan for
-    #    RAM_CACHE_RECACHE_HOLD_TICKS consecutive ticks, so a model near the
-    #    budget line with MemAvailable jittering is not evicted on one tick
-    #    and re-queued on the next while its copy takes minutes;
+    #  * hold-down — a model must have been admitted by the plan for
+    #    RAM_CACHE_RECACHE_HOLD_SECONDS in elapsed time. The stamp is taken
+    #    on the FIRST admitting pass and never moved again, so the reactive
+    #    add/sleep/restart re-plans that also run this function cannot
+    #    accelerate the deadline into an immediate re-copy;
     #  * no re-queue of what the worker already owns (queued or in flight) —
     #    the enqueue would be a no-op, but the log line would not.
-    in_plan_ticks: dict[str, int] = app.state.ram_cache_in_plan_ticks
+    in_plan_since: dict[str, float] = app.state.ram_cache_in_plan_since
     order = set(plan.order)
+    now = time.monotonic()
     for m in order:
-        in_plan_ticks[m] = in_plan_ticks.get(m, 0) + 1
-    for m in [m for m in in_plan_ticks if m not in order]:
-        del in_plan_ticks[m]
+        in_plan_since.setdefault(m, now)
+    for m in [m for m in in_plan_since if m not in order]:
+        del in_plan_since[m]
     busy = model_cache.pending_or_caching()
     recache = [
         m
         for m in plan.order
-        if not model_cache.is_cached(m) and m not in busy and in_plan_ticks[m] >= RAM_CACHE_RECACHE_HOLD_TICKS
+        if not model_cache.is_cached(m) and m not in busy and now - in_plan_since[m] >= RAM_CACHE_RECACHE_HOLD_SECONDS
     ]
     if recache:
         logger.info(

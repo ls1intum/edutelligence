@@ -41,6 +41,7 @@ from logos_worker_node.calibration import (
     _remove_unsupported_model,
     auto_calibrate_models,
     calibrate_model,
+    calibrate_with_tp_escalation,
     calibration_gpu_slice,
     is_model_unsupported,
     load_existing_profiles,
@@ -2797,3 +2798,127 @@ def test_timing_fields_survive_profile_store_roundtrip(tmp_path):
     loaded = load_existing_profiles(profiles_path)
     assert loaded["org/m"]["cold_load_time_s"] == 123.4
     assert loaded["org/m"]["wake_from_sleep_time_s"] == 12.3
+
+
+# ── RAM-cache entry reservation during calibration ──────────────────────────
+
+
+class _FakeCalibrationCache:
+    """Just enough of ModelRamCache for the calibration reservation tests.
+
+    ``select`` is the HF_HOME ``ensure_cached_sync`` returns: "tmpfs" (the
+    cache root's parent — the probe loads the model from the RAM cache) or
+    "source" (the entry is below the raised floor and the probe loads from
+    disk instead). Reservations are refcounted like ModelRamCache's.
+    """
+
+    def __init__(self, root: Path, select: str) -> None:
+        self.enabled = True
+        self._cache_hub = root / "hub"
+        self._source = root / "source"
+        self._select = select
+        self._refs: dict[str, int] = {}
+
+    def ensure_cached_sync(self, model: str) -> str:
+        # Mirror ModelRamCache: the tmpfs parent when the entry is (still)
+        # admitted, the source path when the floor rejects it.
+        if self._select == "tmpfs":
+            return str(self._cache_hub.parent)
+        return str(self._source)
+
+    def reserve_cache_use(self, model: str) -> None:
+        self._refs[model] = self._refs.get(model, 0) + 1
+
+    def release_cache_use(self, model: str) -> None:
+        refs = self._refs.get(model, 0)
+        if refs <= 1:
+            self._refs.pop(model, None)
+        else:
+            self._refs[model] = refs - 1
+
+    def cache_use_reservations(self) -> set[str]:
+        return set(self._refs)
+
+
+def _patch_probe_with_reservation_capture(cache: _FakeCalibrationCache):
+    """Patches for a failing single-probe run, with a spawn spy that records
+    the outstanding cache-use reservations at the moment vLLM is spawned —
+    i.e. while the probe is about to read the model from the HF_HOME that
+    ensure_cached_sync just chose."""
+    patches = _patch_calibration_infra(wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")])
+    seen_at_spawn: list[set[str]] = []
+
+    def _spying_spawn(*_args, **_kwargs):
+        seen_at_spawn.append(cache.cache_use_reservations())
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.poll.return_value = None
+        return proc, ["vllm", "serve"]
+
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=_spying_spawn)
+    return patches, seen_at_spawn
+
+
+def test_calibration_pins_the_tmpfs_entry_only_while_the_probe_reads_it(tmp_path) -> None:
+    """Regression [high]: the probe that reads the model from the tmpfs entry
+    must run while that entry is reserved against the re-plan: the reservation
+    is taken when ensure_cached_sync selects the tmpfs HF_HOME (only then does
+    the probe read the entry) and released when the run ends, on every exit."""
+    cache = _FakeCalibrationCache(tmp_path, "tmpfs")
+    patches, seen_at_spawn = _patch_probe_with_reservation_capture(cache)
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_model(
+            _make_plan(),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            model_cache=cache,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success is False
+    # While the probe spawns vLLM — i.e. while it reads the tmpfs entry —
+    # the entry is reserved ...
+    assert seen_at_spawn == [{"org/test-model"}]
+    # ... and the run releases it on the way out.
+    assert cache.cache_use_reservations() == set()
+
+
+def test_calibration_source_fallback_takes_no_cache_use_reservation(tmp_path) -> None:
+    """Regression [high]: when the entry is now below the raised floor,
+    ensure_cached_sync deliberately returns the source path — the probe reads
+    no tmpfs bytes at all. The run must not reserve the unused entry: while
+    host RAM is below its floor, the reference would protect the copy for the
+    whole calibration and block the re-plan from reclaiming exactly those
+    bytes."""
+    cache = _FakeCalibrationCache(tmp_path, "source")
+    patches, seen_at_spawn = _patch_probe_with_reservation_capture(cache)
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_with_tp_escalation(
+            _make_plan(),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=1,
+            model_cache=cache,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success is False
+    # The probe spawned from the source path: no tmpfs bytes were read, so
+    # nothing was reserved ...
+    assert seen_at_spawn == [set()]
+    # ... and the run left the reservation table empty.
+    assert cache.cache_use_reservations() == set()
