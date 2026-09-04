@@ -38,7 +38,11 @@ def resolve_queue_priority(default_priority: Optional[int], policy_priority: Opt
     to the policy's priority, preserving the historical policy-only behaviour.
 
     Both values use the same 1/5/10 scale consumed by ``Priority.from_int``
-    (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL).
+    (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL). The
+    normalisation happens here, at the boundary where caller values enter the
+    queue: ``RESUME`` (20) is an internal level reached only through
+    ``PipelineRequest.priority_override``, never through a key or policy
+    priority.
 
     Args:
         default_priority: The requesting API key's default_priority, or 0/None
@@ -49,9 +53,9 @@ def resolve_queue_priority(default_priority: Optional[int], policy_priority: Opt
         The effective integer priority for the request's queue entry.
     """
     if default_priority:
-        return int(default_priority)
+        return Priority.from_int(int(default_priority)).value
     if policy_priority:
-        return int(policy_priority)
+        return Priority.from_int(int(policy_priority)).value
     return 0
 
 
@@ -83,6 +87,30 @@ class PipelineRequest:
     # Calling API key. Seeds the prefix-affinity hash so two keys never share
     # a stream identity, and so one key's parallel agent loops stay separate.
     api_key_id: Optional[int] = None
+    # Internal retry / stream resume (#815): when set, classification is
+    # skipped and this exact model is the only candidate — a retry keeps the
+    # model the request already had (or the caller already named) and only
+    # the placement may change, to another node serving the same model.
+    pinned_model_id: Optional[int] = None
+    # Overrides the resolved queue priority for this request. Used by the
+    # stream-resume path, which queues at ``Priority.RESUME`` — the absolute
+    # highest priority. Plain retries leave this unset and keep the original
+    # priority.
+    priority_override: Optional[int] = None
+    # Provider ids to keep out of this request's candidate set (nodes that
+    # already failed it). When the exclusion would leave no deployment of the
+    # pinned model, it is lifted and the same node is retried.
+    exclude_provider_ids: Optional[frozenset[int]] = None
+    # Bounds the execution-context (lane readiness) resolution for this
+    # request, tighter than the pipeline default when the retry deadline is
+    # running out.
+    context_resolve_timeout_s: Optional[float] = None
+    # The retry budget's ABSOLUTE (monotonic) deadline, when this request
+    # belongs to an internal retry or a stream resume. It propagates through
+    # scheduling: the queue wait consumes from the same budget, so the
+    # resolution bound is recomputed as the time left after scheduling —
+    # never re-anchored as a fresh relative timeout.
+    context_resolve_deadline: Optional[float] = None
 
 
 @dataclass
@@ -164,8 +192,14 @@ class RequestPipeline:
 
         # 1. Classification. PROXY mode still runs the policy + token stages
         # (so policy thresholds remain enforced) but skips Laura's heavy ML
-        # ranking — the caller already named the model.
-        classification_result = self._classify(request)
+        # ranking — the caller already named the model. A pinned request
+        # (internal retry / stream resume, #815) skips classification
+        # entirely: the model is already fixed, only the placement may
+        # change, to another node serving the same model.
+        if request.pinned_model_id is not None:
+            classification_result = self._pinned_candidates(request)
+        else:
+            classification_result = self._classify(request)
         if not classification_result.candidates:
             self.record_completion(
                 request_id=request_id,
@@ -184,8 +218,32 @@ class RequestPipeline:
 
         sorted_candidates = sorted(classification_result.candidates, key=lambda x: x[1], reverse=True)
         target_model_id, _, priority_int = sorted_candidates[0]
+
+        # Deployments eligible for this request. A pinned request is limited
+        # to its model, and nodes that already failed it are excluded — the
+        # retry may land on another node serving the same model. When the
+        # exclusion would leave no node at all (single-node model), it is
+        # lifted and the same node is retried: that is the redeploy case,
+        # where the answer comes back from the very node that dropped.
+        deployments = request.deployments
+        eligible_provider_ids: frozenset[int] | None = None
+        if request.pinned_model_id is not None:
+            deployments = [d for d in deployments if d["model_id"] == request.pinned_model_id]
+            if request.exclude_provider_ids:
+                without_failed = [d for d in deployments if d["provider_id"] not in request.exclude_provider_ids]
+                if without_failed:
+                    deployments = without_failed
+            # The queue is model-wide, so the exclusion above would be lost
+            # the moment the request queues: with only the affinity hint (a
+            # single trusted provider, unset here) the failed node could
+            # dequeue and execute its own retry or resume. Carry the
+            # surviving deployments' providers so dequeue honours the same
+            # set — lifted exclusions included, which keeps the single-node
+            # redeploy case on its only node.
+            eligible_provider_ids = frozenset(d["provider_id"] for d in deployments)
+
         target_deployment = next(
-            (d for d in request.deployments if d["model_id"] == target_model_id),
+            (d for d in deployments if d["model_id"] == target_model_id),
             None,
         )
 
@@ -204,10 +262,11 @@ class RequestPipeline:
         scheduling_request = SchedulingRequest(
             request_id=request_id,
             classified_models=classification_result.candidates,
-            deployments=request.deployments,
+            deployments=deployments,
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
             required_provider_id=request.required_provider_id,
+            eligible_provider_ids=eligible_provider_ids,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
         )
 
@@ -216,7 +275,7 @@ class RequestPipeline:
             request_id=request_id,
             model_id=target_deployment["model_id"] if target_deployment else None,
             provider_id=target_deployment["provider_id"] if target_deployment else None,
-            initial_priority=Priority.from_int(priority_int).name.lower(),
+            initial_priority=Priority.from_resolved(priority_int).name.lower(),
             queue_depth=self._scheduler.get_total_queue_depth(),
             timeout_s=request.payload.get("timeout_s"),
         )
@@ -323,6 +382,10 @@ class RequestPipeline:
             classification_result=classification_result,
             request_path=request.request_path,
             request_id=request_id,
+            context_resolve_timeout_s=request.context_resolve_timeout_s,
+            # The budget's absolute deadline, so the scheduling wait above
+            # consumes from it instead of the resolver starting a fresh one.
+            context_resolve_deadline=request.context_resolve_deadline,
         )
         if not ctx_result.success:
             return ctx_result
@@ -366,17 +429,80 @@ class RequestPipeline:
         classification_result: "_ClassificationResult",
         request_id: str,
         request_path: Optional[str] = None,
+        context_resolve_timeout_s: Optional[float] = None,
+        context_resolve_deadline: Optional[float] = None,
     ) -> "PipelineResult":
-        """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
-        deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
+        """Resolve execution context, retrying for logosnode providers whose lane may still be starting.
+
+        ``context_resolve_deadline`` is the retry budget's absolute deadline:
+        the scheduling wait above already consumed part of it, so the bound
+        is the time left NOW, not a fresh relative timeout — otherwise a
+        retry that spent N seconds queueing would get N more seconds to
+        resolve on top. An exhausted budget is a hard stop (the pre-check
+        below) and never falls back to the default lane-readiness window.
+        ``context_resolve_timeout_s`` tightens the default bound for requests
+        that carry no such deadline: they must not spend the whole
+        lane-readiness window when the budget is nearly gone. The bound
+        covers each individual ``resolve_context`` call as well as the wait
+        loop around it — the call itself can sleep through many
+        lane-selection rounds before returning — and an expired bound fails
+        through the same context-failure path (reservation release included).
+        """
+        if context_resolve_deadline is not None:
+            deadline = context_resolve_deadline
+            timeout_s = max(0.0, deadline - time.monotonic())
+        else:
+            default_s = self._CONTEXT_RESOLVE_TIMEOUT_S
+            if context_resolve_timeout_s is None:
+                timeout_s = default_s
+            elif context_resolve_timeout_s > 0:
+                timeout_s = min(default_s, context_resolve_timeout_s)
+            else:
+                # Zero (or negative) bound = no resolution budget left: the
+                # pre-check below fails immediately instead of restoring the
+                # default window.
+                timeout_s = 0.0
+            deadline = time.monotonic() + timeout_s
         first_attempt = True
 
         while True:
+            # Bound the single call itself, not just the loop around it:
+            # resolve_context() can perform dozens of lane-selection sleeps
+            # (~120 s) before returning, so a retry rebuilt with a few
+            # seconds left must not sit inside that one call well past the
+            # overall deadline.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                return self._context_failure(
+                    scheduling_result,
+                    classification_result,
+                    request_id,
+                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
+                )
             try:
-                exec_context = await self._context_resolver.resolve_context(
-                    model_id=scheduling_result.model_id,
-                    provider_id=scheduling_result.provider_id,
-                    request_path=request_path,
+                exec_context = await asyncio.wait_for(
+                    self._context_resolver.resolve_context(
+                        model_id=scheduling_result.model_id,
+                        provider_id=scheduling_result.provider_id,
+                        request_path=request_path,
+                    ),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                logger.warning(
+                    "Execution context resolution timed out for request %s (model_id=%s, provider_id=%s): "
+                    "the resolve call outlived the remaining retry budget",
+                    request_id,
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
+                )
+                return self._context_failure(
+                    scheduling_result,
+                    classification_result,
+                    request_id,
+                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")
@@ -421,11 +547,14 @@ class RequestPipeline:
                     request_id,
                     scheduling_result.model_id,
                     scheduling_result.provider_id,
-                    self._CONTEXT_RESOLVE_TIMEOUT_S,
+                    timeout_s,
                 )
                 first_attempt = False
 
-            await asyncio.sleep(self._CONTEXT_RESOLVE_INTERVAL_S)
+            # The sleep itself must not outrun the budget: with less than one
+            # interval left, a full interval would cross the absolute
+            # deadline before the next pre-check can act on it.
+            await asyncio.sleep(min(self._CONTEXT_RESOLVE_INTERVAL_S, max(0.0, deadline - time.monotonic())))
 
     def _release_scheduler_safe(self, scheduling_result, request_id: str, reason: str) -> None:
         try:
@@ -476,6 +605,27 @@ class RequestPipeline:
             classification_stats=classification_result.stats,
             scheduling_stats=self._scheduling_stats(scheduling_result, request_id),
             error=error,
+        )
+
+    def _pinned_candidates(self, request: PipelineRequest) -> "_ClassificationResult":
+        """Candidate list for a pinned (retry/resume) request.
+
+        Classification — policy and token screening — already ran when the
+        request first arrived; re-running it on a retry could only swap the
+        model out from under a request that must keep the one it had. The
+        pinned model is the sole candidate. The effective priority is the
+        override (``Priority.RESUME`` for a stream resume) or the request's
+        original resolved priority — plain retries keep it.
+        """
+        policy = request.policy or {}
+        priority = request.priority_override or resolve_queue_priority(request.default_priority, policy.get("priority"))
+        return _ClassificationResult(
+            candidates=[(request.pinned_model_id, 1.0, int(priority))],
+            stats={
+                "pinned_model_id": request.pinned_model_id,
+                "candidate_count": 1,
+                "candidates": [{"model_id": request.pinned_model_id, "weight": 1.0, "priority": int(priority)}],
+            },
         )
 
     def _classify(self, request: PipelineRequest) -> "_ClassificationResult":

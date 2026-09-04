@@ -37,6 +37,31 @@ def test_chat_completions_stream_accumulates_text_and_usage():
     assert payload["usage"]["total_tokens"] == 5
 
 
+def test_settled_completion_tokens_is_none_until_the_usage_arrives():
+    """A failed stream never delivers the terminal usage event, so the exact
+    completion count is unknown. The resume path relies on being able to tell
+    that apart from a settled figure — it must refuse, not guess."""
+    acc = _StreamingLogAccumulator()
+    acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":"partial answer"}}]}\n\n')
+    acc.finish()
+
+    assert acc.usage() == {}
+    assert acc.settled_completion_tokens() is None
+
+
+def test_settled_completion_tokens_reads_the_terminal_usage():
+    """Once the terminal usage has arrived it carries the engine's own count —
+    the only figure that can hold an explicit completion limit exactly."""
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"id": "c1", "choices": [{"delta": {"content": "Hello, world"}}]},
+        {"id": "c1", "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 8, "total_tokens": 11}},
+    )
+
+    assert acc.settled_completion_tokens() == 8
+
+
 def test_stream_decodes_utf8_code_points_split_across_byte_chunks():
     event = {"id": "c1", "choices": [{"delta": {"content": "Grüße 👋"}}]}
     raw = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()

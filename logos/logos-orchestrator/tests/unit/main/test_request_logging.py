@@ -159,7 +159,7 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1"),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -238,7 +238,7 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1"),
         {"messages": [{"role": "user", "content": "hi"}]},
         43,
         12,

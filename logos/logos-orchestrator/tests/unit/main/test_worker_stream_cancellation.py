@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from logos.errors import UpstreamStreamError
 from logos.logosnode_registry import CANCEL_COMMAND_ACTION, LogosNodeRuntimeRegistry, ProviderSession
 
 PROVIDER_ID = 7
@@ -31,13 +32,25 @@ class _FakeWebSocket:
         self.sent: list[dict] = []
         self.auto_ack = True
         self._registry: LogosNodeRuntimeRegistry | None = None
+        # Set from send_json the moment the command frame is on the wire.
+        # Waiting on these instead of a bare asyncio.sleep(0) keeps the tests
+        # deterministic: a sleep(0) yields only once, and the dispatch task
+        # may not have reached send_json yet (it awaits the session lookup
+        # and the send lock first).
+        self.stream_command_sent = asyncio.Event()
+        self.infer_command_sent = asyncio.Event()
 
     def bind(self, registry: LogosNodeRuntimeRegistry) -> None:
         self._registry = registry
 
     async def send_json(self, message: dict) -> None:
         self.sent.append(message)
-        if self.auto_ack and self._registry is not None and message.get("action") == CANCEL_COMMAND_ACTION:
+        action = message.get("action")
+        if action == "infer_stream":
+            self.stream_command_sent.set()
+        elif action == "infer":
+            self.infer_command_sent.set()
+        if self.auto_ack and self._registry is not None and action == CANCEL_COMMAND_ACTION:
             # Answer the cancel RPC the way a worker would, so the
             # fire-and-forget task completes instead of timing out.
             await self._registry.on_command_result(
@@ -96,7 +109,7 @@ async def test_abandoned_stream_is_cancelled_on_the_worker():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     assert await consumer == b"tok"
@@ -116,7 +129,7 @@ async def test_a_stream_that_finished_normally_is_not_cancelled():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
@@ -135,7 +148,7 @@ async def test_a_worker_reported_stream_failure_is_not_cancelled():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
     with pytest.raises(Exception, match="lane died"):
@@ -153,7 +166,7 @@ async def test_a_worker_without_the_capability_is_left_alone():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
@@ -170,7 +183,7 @@ async def test_cancellation_clears_the_pending_stream_entry():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
@@ -178,6 +191,445 @@ async def test_cancellation_clears_the_pending_stream_entry():
     await stream.aclose()
     await _drain_pending_tasks()
     assert cmd_id not in registry._sessions[PROVIDER_ID].pending_streams
+
+
+# ---------------------------------------------------------------------------
+# A lane can answer with an error status instead of tokens
+#
+# The worker sends the status in stream_start, the error body as the following
+# chunk, then a failing stream_end. That status used to be discarded, so the
+# error body was yielded as a normal 200 stream and the transient status was
+# never retried. A non-2xx start must now surface as an UpstreamStreamError
+# before any body bytes are committed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_200_stream_start_passes_through_to_the_body():
+    """A 200 stream_start is not an error: the body is yielded as-is."""
+    registry, websocket = _registry_with_session()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
+    assert await consumer == b"tok"
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_429_stream_start_surfaces_as_upstream_error_not_a_200():
+    """A 429 answer raises before any body bytes are yielded, and keeps its
+    status and error body so the caller surfaces 429 (not a 200, not 502)."""
+    registry, websocket = _registry_with_session()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 429})
+    await _feed(
+        registry,
+        cmd_id,
+        {"type": "stream_chunk", "chunk": b'{"error": {"message": "rate limited", "type": "rate_limit_error"}}'},
+    )
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "HTTP 429"})
+    with pytest.raises(UpstreamStreamError) as excinfo:
+        await consumer
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.body == {"error": {"message": "rate limited", "type": "rate_limit_error"}}
+    await _drain_pending_tasks()
+
+
+@pytest.mark.asyncio
+async def test_a_5xx_stream_start_surfaces_as_upstream_error_not_a_200():
+    """A 5xx answer is an upstream failure, surfaced with its status; a
+    non-JSON error body is passed through as-is for the caller to coerce."""
+    registry, websocket = _registry_with_session()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 503})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"upstream unavailable"})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "HTTP 503"})
+    with pytest.raises(UpstreamStreamError) as excinfo:
+        await consumer
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.body == b"upstream unavailable"
+    await _drain_pending_tasks()
+
+
+@pytest.mark.asyncio
+async def test_a_3xx_stream_start_surfaces_as_upstream_error_not_a_200():
+    """A redirect the worker did not follow is not a token stream: the 3xx
+    answer must surface as an error before any body bytes are committed, not
+    be yielded as a successful 200 stream."""
+    registry, websocket = _registry_with_session()
+
+    stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 302})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"Found. Move to http://other-host"})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "HTTP 302"})
+    with pytest.raises(UpstreamStreamError) as excinfo:
+        await consumer
+    assert excinfo.value.status_code == 302
+    assert excinfo.value.body == b"Found. Move to http://other-host"
+    await _drain_pending_tasks()
+
+
+@pytest.mark.asyncio
+async def test_a_429_lane_answer_is_a_pre_stream_error_not_a_committed_200(monkeypatch):
+    """End to end: a lane that answers 429 before any token must come back as
+    a 429 JSON error — not a committed 200 StreamingResponse — so the internal
+    retry sees the transient status and re-dispatches instead of the client
+    eating an error body as a success."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-429",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 429})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b'{"error": {"message": "rate limited"}}'})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "HTTP 429"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    await _drain_pending_tasks()
+
+    assert not isinstance(response, StreamingResponse), "the 429 was committed as a 200 stream"
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_a_role_only_first_frame_is_not_a_committed_200_when_the_lane_then_fails(monkeypatch):
+    """End to end: a chat stream can open with a role-only delta (empty
+    content — what a mock provider emits). That frame carries no generated
+    output: if the lane then fails before its first content token, the
+    answer must still come back as a pre-stream JSON error the internal
+    retry can re-dispatch, not a committed 200 stream — there is no text
+    prefix to resume from once the 200 is out."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    # One pre-token attempt: the test pins the buffering, not the same-lane
+    # retry that exists for the just-woken race.
+    monkeypatch.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 0, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-roleonly",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # First frame: a role-only delta — no generated content yet.
+    await _feed(
+        registry,
+        cmd_id,
+        {
+            "type": "stream_chunk",
+            "chunk": (
+                b'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", '
+                b'"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]}\n\n'
+            ),
+        },
+    )
+    # Worker failure before the first content token.
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    await _drain_pending_tasks()
+
+    assert not isinstance(
+        response, StreamingResponse
+    ), "the failure after a role-only frame was committed as a 200 stream"
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_a_split_first_frame_is_not_a_committed_200_when_the_lane_then_fails(monkeypatch):
+    """End to end: the worker forwards each ``aiter_bytes()`` transport
+    chunk unchanged, so a role-only event can arrive split mid-JSON. The
+    first fragment is not a complete frame — it proves nothing and must be
+    buffered, not treated as output: if the lane then fails before its first
+    content token, the answer must still come back as a pre-stream JSON
+    error the internal retry can re-dispatch."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    # One pre-token attempt: the test pins the buffering, not the same-lane
+    # retry that exists for the just-woken race.
+    monkeypatch.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 0, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-splitfragment",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # First transport chunk: the role-only frame split mid-JSON — an
+    # incomplete line that is not yet a frame at all.
+    await _feed(
+        registry,
+        cmd_id,
+        {
+            "type": "stream_chunk",
+            "chunk": (
+                b'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", '
+                b'"choices": [{"index": 0, "delta": {"ro'
+            ),
+        },
+    )
+    # Worker failure before the first content token.
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    await _drain_pending_tasks()
+
+    assert not isinstance(
+        response, StreamingResponse
+    ), "the failure after an incomplete first fragment was committed as a 200 stream"
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_a_split_first_frame_is_held_until_it_completes_then_replayed(monkeypatch):
+    """End to end: a role-only frame split across two transport chunks is
+    held back as a fragment until the second chunk completes it; when the
+    content delta then arrives, the 200 is committed with the held frames
+    replayed ahead of it — in order, with nothing lost."""
+    from fastapi.responses import StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-splitcomplete",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+
+    role_only_head = (
+        b'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", ' b'"choices": [{"index": 0, "delta": {"ro'
+    )
+    role_only_tail = b'le": "assistant", "content": ""}}]}\n\n'
+    content_frame = (
+        b'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", '
+        b'"choices": [{"index": 0, "delta": {"content": "Hello"}}]}\n\n'
+    )
+    done_frame = b"data: [DONE]\n\n"
+
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # The role-only frame arrives split mid-JSON across two chunks.
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": role_only_head})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": role_only_tail})
+    # The first generated content, then a clean end.
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": content_frame})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": done_frame})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": True})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+    body = b"".join([part async for part in response.body_iterator])
+    await _drain_pending_tasks()
+
+    # The fragment's bytes come back first, in order: the held role-only
+    # frame is replayed ahead of the content that committed the 200.
+    assert body == role_only_head + role_only_tail + content_frame + done_frame
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_completion_text_chunk_starts_the_stream(monkeypatch):
+    """End to end: /v1/completions streams carry the generated output in
+    ``choices[].text``, not in a delta. Such a chunk is output — it must
+    commit the 200 the moment it arrives, not be buffered until [DONE]
+    (which would retain the whole answer in memory and destroy TTFT)."""
+    from fastapi.responses import StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"prompt": "Say hello"},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-legacy-completions",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+
+    first = (
+        b'data: {"id": "cmpl-1", "object": "text_completion", '
+        b'"choices": [{"text": "Hel", "index": 0, "logprobs": null, "finish_reason": null}]}\n\n'
+    )
+    second = (
+        b'data: {"id": "cmpl-1", "object": "text_completion", '
+        b'"choices": [{"text": "lo", "index": 0, "logprobs": null, "finish_reason": null}]}\n\n'
+    )
+    done_frame = b"data: [DONE]\n\n"
+
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": first})
+    # The response must be back before any further chunk arrives: the first
+    # text chunk already committed the stream.
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": second})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": done_frame})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": True})
+
+    body = b"".join([part async for part in response.body_iterator])
+    await _drain_pending_tasks()
+
+    assert body == first + second + done_frame
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +642,7 @@ async def test_abandoned_sync_infer_is_cancelled_on_the_worker():
     registry, websocket = _registry_with_session()
 
     call = asyncio.ensure_future(registry.send_command(PROVIDER_ID, "infer", {"lane_id": "lane-a"}))
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.infer_command_sent.wait(), timeout=1)
     cmd_id = next(m["cmd_id"] for m in websocket.sent if m.get("action") == "infer")
 
     call.cancel()
@@ -295,7 +747,7 @@ async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1"),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -343,29 +795,34 @@ async def test_an_abandoned_response_reaches_the_worker_as_a_cancellation(monkey
     pipeline, _completion_calls, _release_calls = _make_pipeline()
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
-    response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
-        {"messages": [{"role": "user", "content": "hi"}]},
-        42,
-        PROVIDER_ID,
-        27,
-        -1,
-        {"policy": "ok"},
-        {
-            "request_id": "req-abandoned",
-            "provider_type": "logosnode",
-            "queue_depth_at_arrival": 0,
-            "utilization_at_arrival": 1,
-            "is_cold_start": False,
-        },
+    # The first chunk is pulled before the response is committed (#815), so
+    # the stream command goes out as soon as the call starts — the worker
+    # frame has to be fed while the call is in flight, not after it returns.
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-abandoned",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
     )
-
-    body = response.body_iterator
-    first = asyncio.ensure_future(body.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"data: {}\n\n"})
-    await first
+    response = await response_task
+
+    body = response.body_iterator
+    await body.__anext__()  # the pre-pulled first chunk
 
     await body.aclose()
     await _drain_pending_tasks()
@@ -404,7 +861,7 @@ async def test_an_aborted_generation_is_counted():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
@@ -423,7 +880,7 @@ async def test_a_worker_that_cannot_cancel_is_counted_separately():
 
     stream = registry.send_stream_command(PROVIDER_ID, "infer_stream", {"lane_id": "lane-a"})
     consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"tok"})
     await consumer
@@ -479,7 +936,7 @@ async def _run_streamer(monkeypatch, *, abandon_after: int | None):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1"),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1"),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,

@@ -19,17 +19,43 @@ class Priority(IntEnum):
     LOW = 1
     NORMAL = 5
     HIGH = 10
+    # Absolute top of the queue: a stream that already delivered tokens and
+    # must be resumed after its worker failed (#815). It jumps every queued
+    # request, regardless of the caller's own priority; plain retries of a
+    # failed request deliberately keep the original priority instead.
+    RESUME = 20
 
     @classmethod
     def from_int(cls, value: int) -> "Priority":
         """
-        Convert integer priority to Priority enum.
+        Convert a caller-supplied integer priority to Priority enum.
 
-        Maps:
+        Maps the caller scale:
         - 1 → LOW
         - 5 → NORMAL
         - 10 → HIGH
-        - Other values → NORMAL (default)
+        - Other values (including 0 and 20) → NORMAL (default)
+
+        ``RESUME`` is deliberately not reachable here: it exists only for
+        the internal stream-resume path (``PipelineRequest.priority_override``)
+        and must never be expressible from caller input — an API key with a
+        crafted ``default_priority`` has to stay out of the resume level.
+        Internally resolved values convert via ``from_resolved``.
+        """
+        if value in (cls.LOW.value, cls.NORMAL.value, cls.HIGH.value):
+            return cls(value)
+        # Default to NORMAL for unrecognized values
+        return cls.NORMAL
+
+    @classmethod
+    def from_resolved(cls, value: int) -> "Priority":
+        """
+        Convert an internally resolved priority to Priority enum.
+
+        The full scale is in play — including ``RESUME`` (20), which is
+        legitimate here: the value already came out of the pipeline's
+        priority resolution (caller value normalised through ``from_int``,
+        or the internal ``priority_override``).
         """
         try:
             return cls(value)
@@ -106,6 +132,14 @@ class QueueEntry:
     """When set, only this provider may dispatch the entry. Normal requests
     leave this unset and retain the model-wide, cross-provider queue behavior."""
 
+    eligible_provider_ids: frozenset[int] | None = None
+    """When set, only these providers may dispatch the entry. Pinned internal
+    retries and stream resumes carry the pipeline's filtered deployment set
+    here, because ``provider_affinity`` is a single-provider hint that stays
+    unset for them — without this set the model-wide queue would lose the
+    failed-node exclusion the scheduling pass just made. Normal requests
+    leave it unset and stay model-wide."""
+
     @property
     def wait_time_seconds(self) -> float:
         """Calculate how long this entry has been waiting in queue."""
@@ -152,10 +186,16 @@ class QueueStatePerPriority:
     high: int = 0
     """Number of HIGH priority tasks queued."""
 
+    resume: int = 0
+    """Number of RESUME priority tasks queued (mid-flight stream resumes)."""
+
     @property
     def total(self) -> int:
         """Total number of tasks across all priority levels."""
-        return self.low + self.normal + self.high
+        return self.low + self.normal + self.high + self.resume
 
     def __repr__(self) -> str:
-        return f"QueueState(low={self.low}, normal={self.normal}, high={self.high}, total={self.total})"
+        return (
+            f"QueueState(low={self.low}, normal={self.normal}, high={self.high}, "
+            f"resume={self.resume}, total={self.total})"
+        )

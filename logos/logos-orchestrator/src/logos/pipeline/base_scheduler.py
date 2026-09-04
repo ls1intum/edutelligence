@@ -52,11 +52,11 @@ class BaseScheduler(SchedulerInterface):
         queue_depth = 0
         utilization = 0.0
 
-        priority_str = Priority.from_int(priority_int).name.lower()
+        priority_str = Priority.from_resolved(priority_int).name.lower()
         is_cold_start = False
 
         if provider_type == "logosnode":
-            priority = Priority.from_int(priority_int)
+            priority = Priority.from_resolved(priority_int)
             queue_state = self._queue_mgr.get_state(model_id, provider_id)
             queue_depth = queue_state.total
             tracking_started = False
