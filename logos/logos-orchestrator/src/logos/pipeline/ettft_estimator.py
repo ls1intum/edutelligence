@@ -302,8 +302,9 @@ def _estimate_reclaim_overhead_s(
         total_cost += cost
         freed_mb += vram
         if freed_mb >= vram_deficit_mb:
-            break
-    return total_cost
+            return total_cost
+    # All candidates exhausted without covering the deficit — provider infeasible.
+    return float("inf")
 
 
 # ── Local (logosnode) estimation ───────────────────────────────────────
@@ -423,6 +424,16 @@ def estimate_ettft_local(
                     view.model_name,
                     vram_deficit_mb=max(0.0, model_vram_mb - available_vram_mb),
                 )
+                if math.isinf(reclaim_s):
+                    return EttftEstimate(
+                        expected_wait_s=float("inf"),
+                        tier=ReadinessTier.UNAVAILABLE,
+                        reasoning=(
+                            f"Cold + reclaim: insufficient victim VRAM to free "
+                            f"{model_vram_mb - available_vram_mb:.0f}MB deficit"
+                        ),
+                        warmth_state=warmth_state,
+                    )
                 overhead = _overrides.get(ReadinessTier.COLD, OVERHEAD_COLD_S)
                 reason = (
                     f"Cold + reclaim: model needs {model_vram_mb:.0f}MB, "
@@ -467,6 +478,16 @@ def estimate_ettft_local(
                     view.model_name,
                     vram_deficit_mb=max(0.0, kv_budget_mb - available_vram_mb),
                 )
+                if math.isinf(reclaim_s):
+                    return EttftEstimate(
+                        expected_wait_s=float("inf"),
+                        tier=ReadinessTier.UNAVAILABLE,
+                        reasoning=(
+                            f"Sleeping + reclaim: insufficient victim VRAM to free "
+                            f"{kv_budget_mb - available_vram_mb:.0f}MB deficit"
+                        ),
+                        warmth_state=warmth_state,
+                    )
                 overhead = _overrides.get(ReadinessTier.SLEEPING, OVERHEAD_SLEEPING_S)
                 reason = (
                     f"Sleeping + reclaim: KV cache needs {kv_budget_mb:.0f}MB, "
