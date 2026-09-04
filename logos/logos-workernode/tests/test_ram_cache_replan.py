@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -260,7 +261,7 @@ def _app(
             model_profiles=registry,
             lane_manager=lane_manager,
             ram_cache_replan_lock=asyncio.Lock(),
-            ram_cache_in_plan_ticks={},
+            ram_cache_in_plan_since={},
         )
     )
 
@@ -479,6 +480,39 @@ def test_replan_reserves_a_lane_the_engine_override_makes_sleepable(monkeypatch)
 
     # The footprint entered the reserve from the post-override configuration.
     assert app.state.model_cache.floor_mb == pytest.approx(20_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
+def test_replan_reserves_a_lane_a_capabilities_override_marks_unsleepable(monkeypatch) -> None:
+    """Regression [high]: a lane's sleepability is derived from the
+    post-override LANE configuration (what _sleepable_lane_replicas counts),
+    while model_can_sleep reads the model-level defaults — including
+    logos.capabilities_overrides, which lane spawn does not apply. A
+    conflicting capabilities_overrides.enable_sleep_mode=false must not
+    remove the actually sleep-enabled lane's footprint from the reserve: the
+    candidate enters the plan BECAUSE the lane can sleep, so its can_sleep
+    must follow the lane-derived decision."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    model = "org/caps-override"
+    static = [LaneConfig(model=model, vllm=True, vllm_config=VllmConfig(enable_sleep_mode=True))]
+    app = _app(
+        _FakeCache(cached=[model], sizes={model: _mb(20_000)}),
+        _FakeRegistry({}),
+        _FakeLaneManager({}),
+        [],
+        static_lanes=static,
+    )
+    # The model-level default says the model cannot sleep, but the lane's own
+    # flag says the spawned process will: the lane decision wins for the
+    # reserve (precondition — the two decisions really do conflict).
+    app.state.config.logos.capabilities_overrides = {model: {"enable_sleep_mode": False}}
+    assert worker_main.model_can_sleep(app.state.config, model) is False
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # The footprint stayed in the reserve despite the model-level default.
+    assert app.state.model_cache.floor_mb == pytest.approx(20_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+    assert app.state.model_cache.is_cached(model) is True
 
 
 def test_replan_reaches_plan_when_lane_ids_is_property(monkeypatch) -> None:
@@ -786,7 +820,7 @@ def test_replan_triggered_on_lane_add_establishes_reserve_before_first_sleep(mon
             model_profiles=registry,
             lane_manager=manager,
             ram_cache_replan_lock=asyncio.Lock(),
-            ram_cache_in_plan_ticks={},
+            ram_cache_in_plan_since={},
         )
     )
 
@@ -905,7 +939,7 @@ def _restart_env(
             model_profiles=registry,
             lane_manager=manager,
             ram_cache_replan_lock=asyncio.Lock(),
-            ram_cache_in_plan_ticks={},
+            ram_cache_in_plan_since={},
         )
     )
 
@@ -1099,7 +1133,7 @@ def test_replan_reserves_pending_lane_before_its_cache_copy_is_admitted(monkeypa
             model_profiles=registry,
             lane_manager=manager,
             ram_cache_replan_lock=asyncio.Lock(),
-            ram_cache_in_plan_ticks={},
+            ram_cache_in_plan_since={},
         )
     )
     monkeypatch.setattr(lane_mod, "_create_handle", _fake_create_handle)
@@ -1134,8 +1168,8 @@ def test_replan_reserves_pending_lane_before_its_cache_copy_is_admitted(monkeypa
 def test_replan_clears_stale_floor_and_hold_down_when_last_sleepable_lane_goes(monkeypatch) -> None:
     """Regression [medium]: when the last sleep-capable lane disappears on an
     empty-capabilities worker, the re-plan must not early-return with the
-    previous pass's sleep reserve still in the host-RAM floor and stale
-    hold-down counters retained — a later on-demand lane calls ensure_cached
+    previous pass's sleep reserve still in the host-RAM floor and a stale
+    hold-down deadline retained — a later on-demand lane calls ensure_cached
     BEFORE it becomes a candidate, so an obsolete floor would force an
     otherwise-fitting model to launch from disk for its lifetime.
 
@@ -1156,9 +1190,9 @@ def test_replan_clears_stale_floor_and_hold_down_when_last_sleepable_lane_goes(m
     asyncio.run(worker_main._replan_ram_cache_once(app))
     assert cache.floor_mb == pytest.approx(20_000.0 + margin)
 
-    # Plant a hold-down counter for a model outside the plan, then kill the
+    # Plant a hold-down deadline for a model outside the plan, then kill the
     # last sleep-capable lane.
-    app.state.ram_cache_in_plan_ticks["org/stale"] = worker_main.RAM_CACHE_RECACHE_HOLD_TICKS
+    app.state.ram_cache_in_plan_since["org/stale"] = time.monotonic()
     lanes._handles.clear()  # noqa: SLF001
 
     reclaim_calls_before = len(cache.reclaimed)
@@ -1167,7 +1201,7 @@ def test_replan_clears_stale_floor_and_hold_down_when_last_sleepable_lane_goes(m
     # The stale reserve is gone, the hold-down state is reset, and the cached
     # contents are untouched.
     assert cache.floor_mb == 0.0
-    assert app.state.ram_cache_in_plan_ticks == {}
+    assert app.state.ram_cache_in_plan_since == {}
     assert cache.is_cached("org/m") is True
     # The no-op path must not run the planner's reclaim at all.
     assert len(cache.reclaimed) == reclaim_calls_before
@@ -1204,10 +1238,11 @@ def test_replan_reclaims_when_host_ram_becomes_tight(monkeypatch) -> None:
 
 
 def test_replan_recaches_when_ram_frees_up(monkeypatch) -> None:
-    """The previous tick evicted the big model. Lanes have since stopped, the
+    """The previous pass evicted the big model. Lanes have since stopped, the
     plan admits it again, and the cache should grow back in the background —
-    once it has been admitted for the hold-down number of consecutive ticks
-    (seeded here, since this test is about the re-cache, not the hold-down)."""
+    once it has stayed admitted for longer than the hold-down (deadline
+    back-dated here, since this test is about the re-cache, not the
+    hold-down)."""
     monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(300_000.0))
 
     registry = _FakeRegistry(
@@ -1220,7 +1255,9 @@ def test_replan_recaches_when_ram_frees_up(monkeypatch) -> None:
     cache = _FakeCache(cached=["org/small"], sizes=sizes)
     lanes = _FakeLaneManager({})
     app = _app(cache, registry, lanes, ["org/small", "org/big"])
-    app.state.ram_cache_in_plan_ticks["org/big"] = worker_main.RAM_CACHE_RECACHE_HOLD_TICKS
+    # The hold-down deadline was first stamped long ago (back-dated).
+    hold = worker_main.RAM_CACHE_RECACHE_HOLD_SECONDS
+    app.state.ram_cache_in_plan_since["org/big"] = time.monotonic() - hold - 1.0
 
     asyncio.run(worker_main._replan_ram_cache_once(app))
 
@@ -1581,11 +1618,11 @@ def test_replan_logs_warning_when_every_eviction_is_protected(monkeypatch, caplo
 # ── re-cache hold-down ────────────────────────────────────────────────────────
 
 
-def test_replan_recaches_only_after_hold_down_ticks(monkeypatch) -> None:
-    """A model the plan newly admits is not re-queued on the very first tick.
-    It must be admitted for RAM_CACHE_RECACHE_HOLD_TICKS consecutive ticks, so
-    a model sitting near the budget line with jittering MemAvailable is not
-    evicted on one tick and re-queued on the next while its copy takes
+def test_replan_recaches_only_after_the_hold_down_elapses(monkeypatch) -> None:
+    """A model the plan newly admits is not re-queued on the very first pass:
+    it must stay admitted for RAM_CACHE_RECACHE_HOLD_SECONDS in elapsed time,
+    so a model sitting near the budget line with jittering MemAvailable is
+    not evicted on one pass and re-queued on the next while its copy takes
     minutes."""
     monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(300_000.0))
 
@@ -1602,18 +1639,64 @@ def test_replan_recaches_only_after_hold_down_ticks(monkeypatch) -> None:
     app = _app(cache, registry, lanes, ["org/small", "org/big"])
 
     async def _run() -> None:
-        # All ticks in ONE event loop: the re-plan lock is bound to the loop
+        # All passes in ONE event loop: the re-plan lock is bound to the loop
         # that first uses it.
-        # Tick 1: big is admitted for the first time — below the hold-down,
-        # so it is NOT re-queued yet.
+        # Pass 1: big is admitted for the first time — its hold-down clock
+        # just started, so it is NOT re-queued yet.
         await worker_main._replan_ram_cache_once(app)
         assert cache.recache_calls == []
-        # Enough further ticks to reach the hold-down, then big is re-queued.
-        for _ in range(worker_main.RAM_CACHE_RECACHE_HOLD_TICKS - 1):
+        # Several further passes in the same instant: the deadline is an
+        # elapsed-time window, so however many passes fire, the window has
+        # not passed and big stays out of the re-cache set.
+        for _ in range(3):
             await worker_main._replan_ram_cache_once(app)
+        assert cache.recache_calls == []
+        # Back-date the first-admission stamp past the hold-down: the plan
+        # has now admitted big for longer than the window in wall-clock time.
+        hold = worker_main.RAM_CACHE_RECACHE_HOLD_SECONDS
+        app.state.ram_cache_in_plan_since["org/big"] = time.monotonic() - hold - 1.0
+        await worker_main._replan_ram_cache_once(app)
 
     asyncio.run(_run())
     assert cache.recache_calls == [["org/big"]]
+
+
+def test_replan_rapid_hook_triggered_passes_do_not_accelerate_the_hold_down(monkeypatch) -> None:
+    """Regression [medium]: the re-plan also runs reactively after every
+    lane add, sleep, and restart — apply_lanes can fire those hooks several
+    times in one pass. With the hold-down a pass counter, that churn
+    satisfied the three-minute hold-down within seconds and re-queued a
+    model for re-copy during the exact churn the hold-down exists to dampen.
+    The deadline is a monotonic elapsed-time window stamped on the FIRST
+    admitting pass: rapid hook-triggered passes neither start nor accelerate
+    it."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(300_000.0))
+
+    registry = _FakeRegistry(
+        {
+            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            "org/big": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
+        }
+    )
+    sizes = {"org/small": _mb(8_000), "org/big": _mb(48_000)}
+    # big was evicted earlier: the cache holds only small, the plan admits big.
+    cache = _FakeCache(cached=["org/small"], sizes=sizes)
+    lanes = _FakeLaneManager({})
+    app = _app(cache, registry, lanes, ["org/small", "org/big"])
+
+    async def _run() -> None:
+        await worker_main._replan_ram_cache_once(app)
+        first_admission = app.state.ram_cache_in_plan_since["org/big"]
+        # Several rapid hook-triggered passes: the first-admission stamp
+        # must not move.
+        for _ in range(4):
+            await worker_main._replan_ram_cache_once(app)
+        assert app.state.ram_cache_in_plan_since["org/big"] == first_admission
+        # ...and none of them re-queued big: the elapsed-time hold-down has
+        # not passed.
+        assert cache.recache_calls == []
+
+    asyncio.run(_run())
 
 
 def test_replan_does_not_requeue_a_model_the_worker_already_owns(monkeypatch) -> None:
@@ -1633,9 +1716,10 @@ def test_replan_does_not_requeue_a_model_the_worker_already_owns(monkeypatch) ->
     cache = _FakeCache(cached=["org/small"], sizes=sizes)
     lanes = _FakeLaneManager({})
     app = _app(cache, registry, lanes, ["org/small", "org/big"])
-    # Seed the hold-down so the only thing standing between big and a
-    # re-cache is the fact that the worker already has it in flight.
-    app.state.ram_cache_in_plan_ticks["org/big"] = worker_main.RAM_CACHE_RECACHE_HOLD_TICKS
+    # Back-date the hold-down deadline so the only thing standing between big
+    # and a re-cache is the fact that the worker already has it in flight.
+    hold = worker_main.RAM_CACHE_RECACHE_HOLD_SECONDS
+    app.state.ram_cache_in_plan_since["org/big"] = time.monotonic() - hold - 1.0
     cache.caching_now = "org/big"
 
     asyncio.run(worker_main._replan_ram_cache_once(app))
@@ -1643,6 +1727,51 @@ def test_replan_does_not_requeue_a_model_the_worker_already_owns(monkeypatch) ->
     # big is admitted and past the hold-down, but the worker already owns it
     # — no re-queue, no log.
     assert cache.recache_calls == []
+
+
+# ── reserve-vs-lane-state regressions ───────────────────────────────────────
+
+
+def test_replan_excludes_dead_lanes_from_the_sleep_reserve(monkeypatch) -> None:
+    """Regression [medium]: a STOPPED, ERROR, or NOT_STARTED handle has
+    already freed its sleeping weights, so its footprint must leave the
+    reserve on the next pass — counting it would keep the freed RAM pinned
+    in the floor until the pass that finally drops the lane. Only
+    RUNNING/STARTING handles hold (or are about to hold) sleeping weights.
+    Live lanes are still counted per replica (a dead twin of a live lane
+    must not inflate the replica count), and in-flight (pending) lanes are
+    still counted too: their cache copy is admitted while pending."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    live, dead_a, dead_b, pending_model = "org/live", "org/dead-a", "org/dead-b", "org/pending"
+    models = (live, dead_a, dead_b, pending_model)
+    profiles = {m: _FakeProfile(base_residency_mb=20_000.0, sleeping_mb=20_000.0) for m in models}
+    sizes = {m: _mb(8_000) for m in models}
+    cache = _FakeCache(cached=list(models), sizes=sizes)
+    handles = {
+        "live": _FakeHandle("live", live, ProcessState.RUNNING),
+        # A dead twin of the live lane: if dead handles are counted, this
+        # inflates the per-model replica count (two footprints instead of
+        # one) even though the freed twin holds no RAM.
+        "dead-stopped": _FakeHandle("dead-stopped", live, ProcessState.STOPPED),
+        "dead-error": _FakeHandle("dead-error", dead_a, ProcessState.ERROR),
+        "dead-not-started": _FakeHandle("dead-not-started", dead_b, ProcessState.NOT_STARTED),
+    }
+    pending = [
+        ("org_pending", LaneConfig(model=pending_model, vllm=True, vllm_config=VllmConfig(enable_sleep_mode=True)))
+    ]
+    lanes = _FakeLaneManager(handles, pending=pending)
+    app = _app(cache, _FakeRegistry(profiles), lanes, [live])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # Only the live replica and the pending lane's footprint are reserved:
+    # 2 x 20_000 + margin. The three dead handles freed their weights and no
+    # longer pin the floor (pre-fix: 5 x 20_000 + margin — the dead twin plus
+    # both dead-only models).
+    assert cache.floor_mb == pytest.approx(2 * 20_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+    # The live lane's own copy is untouched.
+    assert cache.is_cached(live) is True
 
 
 # ── host-size-scaled safety margin ────────────────────────────────────────────
