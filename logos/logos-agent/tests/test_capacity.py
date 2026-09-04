@@ -82,8 +82,8 @@ class TestParseSchedulerState:
         assert reading.detail == "no loaded models"
 
     def test_per_model_queue_depth_counts_towards_the_queue(self):
-        reading = capacity.parse_scheduler_state(scheduler_state([loaded(1, 8, queue_depth=3)], queue_total=1))
-        assert reading.queue_total == 4
+        reading = capacity.parse_scheduler_state(scheduler_state([loaded(1, 8, queue_depth=3)]))
+        assert reading.queue_total == 3
         assert reading.saturated
 
     def test_active_above_capacity_cannot_exceed_full_load(self):
@@ -101,7 +101,7 @@ class TestStartDecision:
         assert may_start
 
     def test_refuses_while_users_queue_even_if_slots_look_free(self):
-        reading = capacity.parse_scheduler_state(scheduler_state([loaded(0, 8)], queue_total=1))
+        reading = capacity.parse_scheduler_state(scheduler_state([loaded(0, 8, queue_depth=1)]))
         may_start, reason = capacity.start_decision(reading, running=0, paused=0)
         assert not may_start
         assert "queue" in reason
@@ -139,7 +139,7 @@ class TestStartDecision:
 
 class TestPauseAndResume:
     def test_pauses_when_users_queue(self):
-        reading = capacity.parse_scheduler_state(scheduler_state([loaded(1, 8)], queue_total=2))
+        reading = capacity.parse_scheduler_state(scheduler_state([loaded(1, 8, queue_depth=2)]))
         should_pause, _ = capacity.pause_decision(reading)
         assert should_pause
 
@@ -664,3 +664,81 @@ class TestAFailureThatSaysSomething:
             await capacity.read_load()
 
         assert "ValueError" in caplog.text and "no route to host" in caplog.text
+
+
+class TestTheCloudIsNotAGpu:
+    """A request bound for Azure is not a person waiting for a GPU.
+
+    The orchestrator's queue is keyed by model alone, so its fleet-wide
+    total counts a request on its way to a cloud provider exactly like one
+    waiting for a local lane. Read as "a user is waiting", the runner paused
+    its sessions and gave a GPU back to somebody who was never asking for
+    one — losing the turn each session was in the middle of, twice over,
+    since it resumed fifteen seconds later.
+    """
+
+    def test_a_cloud_queue_does_not_pause_the_runner(self):
+        # Three requests queued platform-wide, none of them for anything the
+        # local fleet serves: every local deployment is idle.
+        reading = capacity.parse_scheduler_state(scheduler_state([loaded(0, 8)], queue_total=3))
+
+        assert reading.queue_total == 0
+        assert not reading.saturated
+        assert not capacity.pause_decision(reading)[0]
+
+    def test_a_cloud_queue_does_not_stop_a_session_starting(self):
+        reading = capacity.parse_scheduler_state(scheduler_state([loaded(0, 8)], queue_total=3))
+
+        may_start, _ = capacity.start_decision(reading, running=0, paused=0)
+
+        assert may_start
+
+    def test_a_local_queue_still_pauses_it(self):
+        # The signal the whole mechanism exists for is untouched.
+        reading = capacity.parse_scheduler_state(scheduler_state([loaded(1, 8, queue_depth=2)], queue_total=0))
+
+        assert reading.queue_total == 2
+        assert capacity.pause_decision(reading)[0]
+
+    def test_a_queue_on_a_model_this_runner_does_not_use_still_counts(self):
+        # Local models share GPUs: somebody waiting on the reranker is
+        # somebody this runner should get out of the way of, even though it
+        # will never be served by it.
+        payload = scheduler_state([loaded(0, 8), loaded(0, 8, queue_depth=4)], queue_total=99)
+        payload["logosnode"]["providers"]["1"]["models"]["1"]["model_name"] = "reranker"
+
+        reading = capacity.parse_scheduler_state(payload, lane=frozenset({("1", "0")}))
+
+        assert reading.queue_total == 4
+
+    def test_a_queue_on_a_sleeping_local_model_counts_too(self):
+        # Waking a lane takes the VRAM the running sessions are sitting on,
+        # so a request waiting for a model that is asleep is a request
+        # waiting for a GPU.
+        payload = scheduler_state([loaded(0, 8)], queue_total=0)
+        payload["logosnode"]["providers"]["1"]["models"]["9"] = {
+            "model_name": "cold",
+            "active": 0,
+            "max_capacity": 32,
+            "queue_depth": 2,
+            "loaded": False,
+        }
+
+        reading = capacity.parse_scheduler_state(payload)
+
+        assert reading.queue_total == 2
+        # And it still holds no slots.
+        assert reading.total_slots == 8
+
+    def test_the_engine_s_own_figure_wins_over_the_ledger(self):
+        payload = scheduler_state([loaded(0, 8, queue_depth=7)], queue_total=0)
+        payload["logosnode"]["providers"]["1"]["models"]["0"]["scheduler_signals"] = {
+            "queue_waiting_current": 0.0,
+            "requests_running_current": 0.0,
+        }
+
+        reading = capacity.parse_scheduler_state(payload)
+
+        # The ledger said seven were waiting; vLLM says none are. The ledger
+        # is the one that cannot see inside the engine.
+        assert reading.queue_total == 0

@@ -130,6 +130,24 @@ def _describe(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
+def _waiting(model: dict) -> int:
+    """How many requests are queued for one local deployment.
+
+    The engine's own figure where it reports one, the orchestrator's ledger
+    otherwise — the same order of preference as :func:`_live`, and for the
+    same reason. Read separately from it because this is also asked of
+    deployments that hold no slots to measure: a model that is asleep has
+    no capacity and can still have somebody waiting for it.
+    """
+    signals = model.get("scheduler_signals") or {}
+    if not isinstance(signals, dict):
+        signals = {}
+    reported = signals.get("queue_waiting_current")
+    if isinstance(reported, (int, float)):
+        return max(0, int(reported))
+    return max(0, int(model.get("queue_depth") or 0))
+
+
 def _live(model: dict, capacity: int) -> tuple[int, int, float]:
     """What a model is really doing: in flight, waiting, and how full it is.
 
@@ -205,7 +223,18 @@ def parse_scheduler_state(
             reclaimable=False,
         )
     wanted = set(lane or ())
-    queue_total = int(payload.get("queue_total") or 0)
+    # Counted off the local deployments themselves, never from the payload's
+    # fleet-wide `queue_total`. That figure is every entry in the
+    # orchestrator's queue, and the queue is keyed by model alone — so a
+    # request on its way to Azure sits in it exactly like one waiting for a
+    # GPU. The runner read that as "a user is waiting", paused its sessions,
+    # gave a GPU back to somebody who was never asking for one, and lost the
+    # turn each session was in the middle of. Pausing frees a GPU; nothing
+    # about that helps a request bound for a cloud provider.
+    #
+    # The cloud never appears below: `logosnode.providers` is the local
+    # fleet, and that is the whole point of reading it here.
+    queue_total = 0
     # Counted per model as well as in total: a lane holding a saturated
     # model and an idle one is not half busy — a session bound for the
     # saturated one has nowhere to go, and the average would hide that.
@@ -226,10 +255,13 @@ def parse_scheduler_state(
             # nothing to either side of the ratio: its slots do not exist yet,
             # and counting them would make an idle-looking fleet out of a node
             # that simply has nothing resident.
-            if not model.get("loaded"):
-                continue
+            #
+            # Its queue still counts. A request waiting for a local model
+            # that is asleep is a request waiting for a lane to be woken,
+            # and waking it takes the VRAM our sessions are sitting on.
             capacity = int(model.get("max_capacity") or 0)
-            if capacity <= 0:
+            if not model.get("loaded") or capacity <= 0:
+                queue_total += _waiting(model)
                 continue
             # Normalised: the platform is case-insensitive about model
             # names, and "Qwen" and "qwen" reported by two providers must
