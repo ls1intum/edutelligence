@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from . import attachments, capacity, controls, db, docker_engine, github, model_policy, triggers
+from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers
 from .config import REPLY_FILE, settings
 from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
@@ -55,7 +55,10 @@ STAND_DOWN_S = 20.0
 # What the agent phase prints when it wants its spending known — the only
 # channel it has, holding no credential and reaching nothing but the model
 # gateway.
-_USAGE_LINE = re.compile(r"^\[usage\]\s+in=(?P<tin>\d+)\s+out=(?P<tout>\d+)")
+# `out=` is absent until the agent's invocation reports its total: the
+# usage on an assistant event is the count as the turn began, and the output
+# figure only exists at the end of a run.
+_USAGE_LINE = re.compile(r"^\[usage\]\s+in=(?P<tin>\d+)(?:\s+out=(?P<tout>\d+))?")
 
 # Container names must be unique and stable so a restarted service can find
 # the container belonging to a session again.
@@ -208,6 +211,39 @@ class _Launch:
         self.settled = asyncio.Event()
 
 
+# How long a pushed commit's checks are worth waiting for. Long enough for
+# a queue on a busy morning, short enough that a pull request whose checks
+# never ran stops being asked about.
+CHECK_WATCH_HORIZON_S = 6 * 60 * 60
+
+# How far back a failure is still worth another attempt. A request that
+# failed yesterday and was never taken up again has been overtaken by the
+# repository; picking it up now would answer a thread nobody is reading.
+RETRY_HORIZON_S = 6 * 60 * 60
+
+
+def _older_than(moment: Any, seconds: float) -> bool:
+    """Whether `moment` is further in the past than `seconds`.
+
+    A row with no timestamp is not old — it is unknown, and giving up on
+    the strength of a missing value is how a real follow-up gets dropped.
+    """
+    if not isinstance(moment, datetime):
+        return False
+    when = moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - when).total_seconds() > seconds
+
+
+def _another_attempt_at(session: dict[str, Any]) -> str:
+    """What a replacement session is told about the attempt before it."""
+    reason = str(session.get("error") or "").strip()[:400]
+    return (
+        "Your last attempt at this did not finish"
+        + (f": {reason}" if reason else ".")
+        + " This is the same piece of work, once more."
+    )
+
+
 class SessionManager:
     def __init__(self) -> None:
         self._supervisors: dict[int, asyncio.Task] = {}
@@ -220,6 +256,10 @@ class SessionManager:
         # The launch in flight per session, from before its first await. A
         # cancel that lands before any container exists is observed here.
         self._launches: dict[int, _Launch] = {}
+        # Sessions whose pushed commit is being watched for its checks. The
+        # intent itself is on the row; this only keeps a resumed follow-up
+        # from starting a second poller for a session already being polled.
+        self._watching_checks: set[int] = set()
         self._scheduler_task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
         # Serialises admission so two scheduler passes cannot both decide there
@@ -247,6 +287,8 @@ class SessionManager:
         await docker_engine.ensure_network(settings.session_egress_network)
         await docker_engine.ensure_volume(settings.artifact_volume, labels={"logos.agent": "artifacts"})
         await self._reconcile()
+        await self.resume_check_watches()
+        await self.resume_retries()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop(), name="agent-scheduler")
 
     async def stop(self) -> None:
@@ -522,6 +564,23 @@ class SessionManager:
                 raise
             except Exception:
                 logger.exception("removing finished workspaces failed")
+            try:
+                # Follow-ups on pushed commits whose checks nobody has read
+                # yet: the ones a restart interrupted, and the ones whose
+                # last look found CI still running.
+                await self.resume_check_watches()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("taking up check follow-ups failed")
+            try:
+                # Requests whose failed session never got a replacement,
+                # because the attempt to create one failed too.
+                await self.resume_retries()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("taking up failed requests again failed")
             try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=settings.scheduler_interval_s)
             except asyncio.TimeoutError:
@@ -932,10 +991,25 @@ class SessionManager:
                 logger.info("session %s was cancelled during checkout preparation; not starting the agent", sid)
                 return
 
+            # Kept on the row as well as handed over: these are editable,
+            # so "the exact prompt this session was given" stops being true
+            # the moment somebody edits them. The page reads it from here.
+            notes = (await conventions.current()).environment_notes
+            try:
+                await db.update_session(sid, environment_notes=notes)
+            except Exception as exc:
+                logger.info("could not record what session %s was told: %s", sid, exc)
+
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
                 image=settings.workspace_image,
-                env=self._session_env(session, branch, continuing=continuing, images=images),
+                env=self._session_env(
+                    session,
+                    branch,
+                    continuing=continuing,
+                    images=images,
+                    notes=notes,
+                ),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
                 session_id=sid,
@@ -1069,6 +1143,7 @@ class SessionManager:
         *,
         continuing: bool = False,
         images: list[str] | None = None,
+        notes: str = "",
     ) -> dict[str, str]:
         """The environment the untrusted agent phase runs with.
 
@@ -1090,6 +1165,11 @@ class SessionManager:
             # Where the pictures from the request are. The sandbox cannot
             # fetch them; it can read them.
             "LOGOS_SESSION_IMAGES": ",".join(images or []),
+            # The half of the prompt that describes this container. Passed
+            # in rather than baked into the session script so an operator
+            # can adjust it — and so the page can show exactly what was
+            # handed over.
+            "LOGOS_SESSION_ENVIRONMENT_NOTES": notes or "",
             # The agent's model traffic goes to Logos itself, so it is
             # authenticated, policy-checked, and billed like any other
             # caller. It is pointed at the gateway, not at the orchestrator:
@@ -1331,16 +1411,23 @@ class SessionManager:
         log_task = asyncio.create_task(self._collect_logs(session_id, container_id))
         try:
             loop = asyncio.get_running_loop()
-            deadline = loop.time() + settings.session_timeout_s
+            # No deadline unless one is configured: see `session_timeout_s`.
+            # A session is bounded by capacity, not by a clock.
+            budget = settings.session_timeout_s
+            deadline = loop.time() + budget if budget > 0 else None
             paused_since: float | None = None
             exit_code: int | None = None
+            # Why this session ended, when it ended for a reason of ours.
+            # An empty one means the agent decided its own ending.
+            stopped_because = ""
             while True:
                 now = loop.time()
                 if paused_since is not None:
-                    deadline += now - paused_since
+                    if deadline is not None:
+                        deadline += now - paused_since
                     paused_since = None
-                remaining = deadline - now
-                if remaining <= 0:
+                remaining = (deadline - now) if deadline is not None else None
+                if remaining is not None and remaining <= 0:
                     await db.add_event(
                         session_id,
                         EventKind.ERROR,
@@ -1348,6 +1435,11 @@ class SessionManager:
                     )
                     await docker_engine.stop_container(container_id)
                     exit_code = -1
+                    # Carried to the settlement, not only into an event: the
+                    # row is what the page shows and what the thread is
+                    # answered from, and "failed" with nothing beside it is
+                    # the least useful thing a session can end as.
+                    stopped_because = f"the session ran past its {settings.session_timeout_s}s budget and was stopped"
                     break
                 state, code = await docker_engine.container_state(container_id)
                 if state == "paused" and paused_since is None:
@@ -1359,7 +1451,7 @@ class SessionManager:
                     break
                 # A paused container never exits; poll rather than block on
                 # /wait so the pause/resume cycle stays observable.
-                await asyncio.sleep(min(5.0, max(1.0, remaining)))
+                await asyncio.sleep(5.0 if remaining is None else min(5.0, max(1.0, remaining)))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1369,7 +1461,7 @@ class SessionManager:
         finally:
             log_task.cancel()
 
-        await self._settle(session_id, exit_code=exit_code, error=None)
+        await self._settle(session_id, exit_code=exit_code, error=stopped_because or None)
 
     async def _collect_logs(self, session_id: int, container_id: str) -> None:
         """Persist the container's output as events so the UI can follow it.
@@ -1460,11 +1552,16 @@ class SessionManager:
             match = _USAGE_LINE.match(line)
             if match is None:
                 continue
+            written = match.group("tout")
             try:
                 await db.update_session_usage(
                     session_id,
                     tokens_in=int(match.group("tin")),
-                    tokens_out=int(match.group("tout")),
+                    # Absent until the invocation reports its total. Zero is
+                    # the right value to pass — the column only ever moves
+                    # upwards, so an unknown figure leaves the last known
+                    # one standing.
+                    tokens_out=int(written) if written else 0,
                 )
             except Exception as exc:
                 logger.debug("could not record the usage of session %s: %s", session_id, exc)
@@ -1493,7 +1590,140 @@ class SessionManager:
             logger.info("could not count the attempts on %s; keeping the answer owed: %s", ref, exc)
             return True
 
-    async def take_up_again(self, session: dict[str, Any], *, by: str = "the runner") -> int | None:
+    async def _watch_the_checks(self, session: dict[str, Any], pushed_sha: str) -> None:
+        """Follow the checks of what this session pushed, and act on red.
+
+        A session ends minutes before its pull request's checks conclude, so
+        it never learns that its change failed them — the linters it could
+        not run, a test it did not think to run, a build it broke. Nobody
+        told it, and the next thing that happened was a person finding a red
+        pull request.
+
+        Written down before it is watched. The watching itself takes minutes
+        of an in-memory task, and a runner that is redeployed inside those
+        minutes would otherwise forget the pull request entirely; the row
+        says the follow-up is owed, and any later pass can pick it up.
+        """
+        branch = str(session.get("branch_name") or "")
+        if not branch or not session.get("trigger_ref"):
+            # A session queued by a person is that person's to follow up.
+            return
+        try:
+            await db.update_session(int(session["id"]), checks_sha=pushed_sha, checks_watch="pending")
+        except Exception as exc:
+            # Worth trying anyway: an unrecorded watch is still a watch, and
+            # the only thing lost is surviving a restart.
+            logger.info("could not record the check watch of session %s: %s", session.get("id"), exc)
+        self._start_watching(session, branch, pushed_sha)
+
+    def _start_watching(self, session: dict[str, Any], branch: str, pushed_sha: str) -> None:
+        """Follow one commit's checks, once at a time per session."""
+        sid = int(session["id"])
+        if sid in self._watching_checks:
+            return
+        self._watching_checks.add(sid)
+        task = asyncio.create_task(self._take_up_a_red_build(session, branch, pushed_sha))
+        task.add_done_callback(lambda _: self._watching_checks.discard(sid))
+
+    async def resume_check_watches(self) -> None:
+        """Take up the check follow-ups a previous process was in the middle of.
+
+        The row outlives the task that was watching it, which is the point:
+        a redeploy in the wrong two minutes used to lose the follow-up for
+        good. Also the retry path for a follow-up whose database write
+        failed — the intent stays `pending` until it is actually done.
+        """
+        try:
+            owed = await db.sessions_awaiting_checks()
+        except Exception as exc:
+            logger.info("could not look for check follow-ups: %s", exc)
+            return
+        for session in owed:
+            branch = str(session.get("branch_name") or "")
+            sha = str(session.get("checks_sha") or "")
+            if not branch or not sha:
+                await self._checks_settled(int(session["id"]))
+                continue
+            if _older_than(session.get("finished_at"), CHECK_WATCH_HORIZON_S):
+                # Checks that have not concluded in hours are not going to,
+                # and asking about them forever is a poll with no end.
+                logger.info("giving up on the checks of session %s; they never concluded", session.get("id"))
+                await self._checks_settled(int(session["id"]))
+                continue
+            if int(session["id"]) not in self._watching_checks:
+                logger.info("taking up the check follow-up of session %s again", session.get("id"))
+            self._start_watching(session, branch, sha)
+
+    async def resume_retries(self) -> None:
+        """Take up the requests whose replacement was never created.
+
+        A settlement queues the next attempt itself. When that fails — a
+        database that blinked in the one second it was asked — the request
+        is gone for good: its reference counts as handled forever, so no
+        poll finds it again, and its reply has been abandoned. Nobody is
+        coming back to it.
+
+        So the failure is read off the rows on every pass. What this does is
+        the settlement's own retry, one pass later, and the attempt count
+        bounds it exactly as it bounds that one.
+        """
+        try:
+            owed = await db.sessions_owing_a_replacement(
+                max_attempts=_MAX_ATTEMPTS_PER_REQUEST,
+                since=datetime.now(timezone.utc) - timedelta(seconds=RETRY_HORIZON_S),
+            )
+        except Exception as exc:
+            logger.info("could not look for requests owing another attempt: %s", exc)
+            return
+        for session in owed:
+            logger.info(
+                "session %s failed without a replacement; taking %s up again",
+                session.get("id"),
+                session.get("trigger_ref"),
+            )
+            await self.take_up_again(session, note=_another_attempt_at(session))
+
+    async def _checks_settled(self, session_id: int) -> None:
+        """Say that nobody owes this session's checks anything further."""
+        try:
+            await db.update_session(session_id, checks_watch="done")
+        except Exception as exc:
+            # Left pending, which costs one more look at a commit whose
+            # checks are green by then — and never a second retry, because
+            # the attempt count bounds that.
+            logger.info("could not close the check watch of session %s: %s", session_id, exc)
+
+    async def _take_up_a_red_build(self, session: dict[str, Any], branch: str, pushed_sha: str) -> None:
+        status, detail = await github.wait_for_checks(pushed_sha)
+        if status == "timeout":
+            # Not an answer. The checks may still be running, or may never
+            # have been queued; either way there is no failure to fix, and
+            # queueing a session to fix nothing costs a slot and posts a
+            # comment about a pull request that is fine. Still owed, so the
+            # next pass asks again.
+            logger.info("the checks of session %s have not concluded: %s", session.get("id"), detail)
+            return
+        if status == "success":
+            logger.info("the checks of session %s passed", session.get("id"))
+            await self._checks_settled(int(session["id"]))
+            return
+        logger.info("the checks of session %s did not pass; taking the work up again", session.get("id"))
+        taken = await self.take_up_again(
+            session,
+            note=(
+                f"Your last change to `{branch}` is on the pull request, and its checks did not pass. "
+                f"This is that same piece of work, one round later:\n\n> {detail[:1500]}\n\n"
+                "Fix what the checks are complaining about. The linters CI runs are installed in "
+                "this image, so you can run them on what you changed before you finish."
+            ),
+        )
+        if taken is not None or not await self._may_try_again(session):
+            # Either the follow-up exists, or this request has had its
+            # attempts. What is left pending is the third case: a database
+            # that blinked, which the next pass tries again.
+            await self._checks_settled(int(session["id"]))
+
+    async def take_up_again(self, session: dict[str, Any], *, by: str = "the runner", note: str = "") -> int | None:
         """Queue this session's work once more, from where it came from.
 
         The same task, workspace, branch, thread and urgency; a new row, so
@@ -1516,7 +1746,7 @@ class SessionManager:
         try:
             new_id = await db.create_session(
                 workspace_id=int(session["workspace_id"]),
-                task=str(session["task"]),
+                task=f"{note.strip()}\n\n{session['task']}" if note.strip() else str(session["task"]),
                 model=session.get("model"),
                 created_by=by,
                 open_pull_request=bool(session.get("open_pull_request")),
@@ -1673,6 +1903,25 @@ class SessionManager:
             # up and started. Saying that it did not work out belongs there
             # too — an answer that never comes is the worst of the three.
             await self._react(session_row, github.REACTION_FAILED)
+            if session_row.get("trigger_ref"):
+                # A request the runner took on and could not finish is a
+                # request nobody is coming back to: the reference counts as
+                # handled forever, so no later pass finds it again, and the
+                # only way back was somebody noticing. Taken up again here,
+                # bounded by the same three attempts as everything else, so
+                # a task that cannot be done stops rather than loops.
+                #
+                # What comes of this is not checked here on purpose. A
+                # database that blinked during the attempt would otherwise
+                # lose the request for good, and the row it left behind is
+                # exactly what `resume_retries` looks for.
+                await self.take_up_again(session_row, note=_another_attempt_at(session_row))
+
+        # A session finds out what its own change did to the checks — the one
+        # thing it could never learn from inside the sandbox, and the thing
+        # a person would notice within a minute of pushing.
+        if succeeded and result.get("pushed_sha"):
+            await self._watch_the_checks(session_row, str(result["pushed_sha"]))
 
         # Somebody asked this session a question. The agent phase holds no
         # GitHub credential, so it wrote the answer into its artefact
@@ -1813,6 +2062,13 @@ class SessionManager:
             # means is that the request was not dealt with — so it is dealt
             # with again, quietly, and the thread hears from the attempt
             # that has something to report.
+            if str((session or {}).get("status") or "") != SessionStatus.SUCCEEDED.value:
+                # A failed session was already taken up again by its
+                # settlement; doing it here too would spend two of the three
+                # attempts on one failure.
+                logger.info("session %s failed and left no answer; the settlement has it", session_id)
+                await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
+                return
             logger.info("session %s left no answer; taking the work up again instead of saying so", session_id)
             replacement = await self.take_up_again(session or {})
             if replacement is None and await self._may_try_again(session or {}):

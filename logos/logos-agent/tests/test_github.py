@@ -713,15 +713,16 @@ class TestTheConversationHandedToASession:
 
         assert len(entries) == 2 and missing == []
 
-    async def test_older_comments_that_do_not_fit_are_declared(self, monkeypatch):
-        # An unanswered early review comment is exactly what falls off the
-        # end when a discussion runs long.
+    async def test_everything_read_is_returned_for_the_caller_to_cut(self, monkeypatch):
+        # The cut belongs to the caller, after it has decided whose entries
+        # count: a review that is fifteen comments long would otherwise
+        # spend the whole allowance on entries about to be dropped, and the
+        # unanswered early comment is exactly what falls off that end.
         self.install(monkeypatch, discussion=[self.comment(index) for index in range(10)])
 
-        entries, missing = await github.pull_request_conversation(772, limit=4)
+        entries, missing = await github.pull_request_conversation(772)
 
-        assert len(entries) == 4
-        assert missing and "6 older comment(s)" in missing[0]
+        assert len(entries) == 10 and missing == []
 
     async def test_a_listing_that_hit_its_page_ceiling_is_named(self, monkeypatch):
         # Two thousand entries read out of more is incomplete context, and
@@ -739,3 +740,214 @@ class TestTheConversationHandedToASession:
 
         assert len(entries) == 1
         assert "reviews" in missing
+
+
+class TestWatchingEveryCheck:
+    """ "Did this change pass CI" is not a question about one workflow.
+
+    The build workflow has its own waiter because a dev deploy needs that
+    specific image. What an unattended agent actually breaks is the lint
+    and test workflows — and watching only the build reported success on a
+    commit whose linter was red.
+    """
+
+    @staticmethod
+    def _answers(monkeypatch, pages):
+        """Serve one check-runs payload per poll, repeating the last."""
+        served = []
+
+        async def fake_get(path, params=None, **kwargs):
+            served.append(path)
+            return pages[min(len(served) - 1, len(pages) - 1)]
+
+        monkeypatch.setattr(github, "_get", fake_get)
+        return served
+
+    async def test_a_red_lint_run_is_a_failure_even_when_the_build_is_green(self, monkeypatch):
+        self._answers(
+            monkeypatch,
+            [
+                {
+                    "check_runs": [
+                        {"name": "Build", "status": "completed", "conclusion": "success"},
+                        {
+                            "name": "Logos Lint",
+                            "status": "completed",
+                            "conclusion": "failure",
+                            "html_url": "https://github.com/x/y/runs/1",
+                        },
+                    ]
+                }
+            ],
+        )
+
+        status, detail = await github.wait_for_checks("a" * 40)
+
+        assert status == "failed"
+        assert "Logos Lint" in detail
+
+    async def test_everything_green_is_success(self, monkeypatch):
+        self._answers(
+            monkeypatch,
+            [
+                {
+                    "check_runs": [
+                        {"name": "Build", "status": "completed", "conclusion": "success"},
+                        {"name": "Logos Test", "status": "completed", "conclusion": "skipped"},
+                    ]
+                }
+            ],
+        )
+
+        status, _ = await github.wait_for_checks("a" * 40)
+
+        assert status == "success"
+
+    async def test_a_deployment_waiting_for_approval_is_not_a_failure(self, monkeypatch):
+        # `action_required` is a human being asked to approve a deploy. An
+        # agent cannot fix that, and queueing a session to try is worse
+        # than doing nothing.
+        self._answers(
+            monkeypatch,
+            [
+                {
+                    "check_runs": [
+                        {"name": "Deploy", "status": "completed", "conclusion": "action_required"},
+                        {"name": "Logos Test", "status": "completed", "conclusion": "success"},
+                    ]
+                }
+            ],
+        )
+
+        status, _ = await github.wait_for_checks("a" * 40)
+
+        assert status == "success"
+
+    async def test_no_checks_yet_is_not_success(self, monkeypatch):
+        # The seconds after a push: GitHub has not queued anything. Calling
+        # that green would clear the follow-up before CI had an opinion.
+        self._answers(monkeypatch, [{"check_runs": []}])
+
+        status, detail = await github.wait_for_checks("a" * 40, timeout_s=0.02, poll_s=0.01)
+
+        assert status == "timeout"
+        assert "none reported yet" in detail
+
+    async def test_checks_still_running_time_out_rather_than_fail(self, monkeypatch):
+        self._answers(
+            monkeypatch,
+            [{"check_runs": [{"name": "Logos Test", "status": "in_progress", "conclusion": None}]}],
+        )
+
+        status, detail = await github.wait_for_checks("a" * 40, timeout_s=0.02, poll_s=0.01)
+
+        assert status == "timeout"
+        assert "Logos Test" in detail
+
+    async def test_a_failing_check_ends_the_wait_before_the_others_finish(self, monkeypatch):
+        served = self._answers(
+            monkeypatch,
+            [
+                {
+                    "check_runs": [
+                        {"name": "Logos Lint", "status": "completed", "conclusion": "failure"},
+                        {"name": "Build", "status": "in_progress", "conclusion": None},
+                    ]
+                }
+            ],
+        )
+
+        status, _ = await github.wait_for_checks("a" * 40, timeout_s=5.0, poll_s=0.01)
+
+        assert status == "failed"
+        # One look: the rest of CI has nothing to add once there is
+        # something to fix.
+        assert len(served) == 1
+
+    async def test_an_unreadable_answer_is_unknown_rather_than_red(self, monkeypatch):
+        async def fake_get(path, params=None, **kwargs):
+            raise github.GitHubError("500")
+
+        monkeypatch.setattr(github, "_get", fake_get)
+
+        status, _ = await github.wait_for_checks("a" * 40, timeout_s=0.02, poll_s=0.01)
+
+        # A GitHub that blinked is not a failed build. Reporting one would
+        # queue a session to fix a failure that never happened.
+        assert status == "timeout"
+
+
+class TestAskingWhoIsInATeam:
+    """Who may direct a session, asked of the organisation rather than of
+    the repository.
+
+    A write collaborator is not the same thing as a member of the teams
+    that own this runner, and the difference only holds if a non-member can
+    be told apart from a question the token cannot ask: GitHub answers both
+    with a 404.
+    """
+
+    @staticmethod
+    def _github(monkeypatch, answers):
+        """`answers` maps API path to a payload, an int status, or an error."""
+
+        asked: list = []
+
+        async def fake_get(path, params=None, **kwargs):
+            asked.append(path)
+            answer = answers.get(path, 404)
+            if isinstance(answer, int):
+                raise github.GitHubError(f"GET {path} failed ({answer})", status=answer)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(github, "_get", fake_get)
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(github.settings, repo_slug="ls1intum/edutelligence", trusted_teams=("logos-developers",)),
+        )
+        return asked
+
+    async def test_a_member_is_one(self, monkeypatch):
+        self._github(
+            monkeypatch,
+            {"/orgs/ls1intum/teams/logos-developers/memberships/tobias": {"state": "active"}},
+        )
+
+        assert await github.in_a_trusted_team("tobias") is True
+
+    async def test_a_non_member_of_a_visible_team_is_a_no(self, monkeypatch):
+        # The 404 that used to be indistinguishable from "cannot ask", and
+        # so let anybody with push access direct a session.
+        asked = self._github(monkeypatch, {"/orgs/ls1intum/teams/logos-developers": {"slug": "logos-developers"}})
+
+        assert await github.in_a_trusted_team("a-collaborator") is False
+        assert "/orgs/ls1intum/teams/logos-developers" in asked
+
+    async def test_a_token_that_cannot_see_the_team_leaves_it_unanswered(self, monkeypatch):
+        # No `read:org`: every team is a 404, and answering "no" would
+        # silence the whole repository the first time a token was reissued
+        # without the scope.
+        self._github(monkeypatch, {})
+
+        assert await github.in_a_trusted_team("tobias") is None
+
+    async def test_a_refused_request_is_unanswered_too(self, monkeypatch):
+        self._github(monkeypatch, {"/orgs/ls1intum/teams/logos-developers/memberships/tobias": 403})
+
+        assert await github.in_a_trusted_team("tobias") is None
+
+    async def test_a_pending_invitation_is_not_membership(self, monkeypatch):
+        self._github(
+            monkeypatch,
+            {"/orgs/ls1intum/teams/logos-developers/memberships/invited": {"state": "pending"}},
+        )
+
+        assert await github.in_a_trusted_team("invited") is False
+
+    async def test_no_configured_teams_is_not_a_refusal(self, monkeypatch):
+        monkeypatch.setattr(github, "settings", replace(github.settings, trusted_teams=()))
+
+        assert await github.in_a_trusted_team("tobias") is None

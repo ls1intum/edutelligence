@@ -4,7 +4,7 @@ Runs coding agents in isolated containers, on serving capacity Logos is not
 otherwise using, and gives that capacity back the moment a user needs it.
 
 A session is one agent run: it gets a working copy, a task, and a Logos key.
-It works unattended, and what it produces arrives as a draft pull request that
+It works unattended, and what it produces arrives as a pull request that
 a human reviews like any other. Sessions can be told to deploy their result to
 the **dev** environment and screenshot the pages they changed.
 
@@ -160,7 +160,7 @@ session's behaviour drift between builds.
 ## What a session may and may not do
 
 **May:** read and change the working copy, run tests and linters, push a branch
-under `logos/agent/`, open a draft pull request, and — if enabled — have its result
+under `logos/agent/`, open a pull request, and — if enabled — have its result
 deployed to dev and screenshotted.
 
 **May not:** reach the Docker daemon, run as root, push to `main` or any
@@ -186,6 +186,31 @@ survive a restart, and both are visible to whoever finds the runner stopped.
 | **Stop new sessions** (draining) | Nothing new starts. What is running finishes, and a paused session may still resume. |
 | **Pause everything** | Running sessions are paused on the next pass and the capacity goes back to the platform. Nothing is cancelled: resuming picks the work up mid-task. |
 | **Sessions at once** | A ceiling for now, overriding the configured one. Zero drains without pausing. |
+
+## What the agent is told, and changing it
+
+Every task carries two standing blocks: the **house rules** — the conventions
+the agent works to — and the **environment notes**, which describe the
+container it works in. Both ship as defaults in code and can be edited on the
+page, taking effect on the next session rather than the next deployment.
+They are prompts, and prompts are the part of an unattended agent most worth
+adjusting after watching a few sessions: every line in the defaults is there
+because a session went wrong without it.
+
+Each session shows the exact text it was handed, so a surprising session can
+be read rather than guessed at.
+
+**It can run the repository's own hooks.** `pre-commit`'s hook environments
+are installed into the session image at build time, where there is a network
+to install them with — a session has none, and without this the instruction
+to lint before finishing was one the agent could not follow. Sessions were
+pushing unformatted code and learning nothing about it.
+
+**And it finds out when its change turned the checks red.** A session ends
+minutes before its pull request's checks conclude, so it never saw the one
+verdict a person would notice immediately. The runner follows the checks of
+what the session pushed, and a red one becomes another attempt with the
+failure in its task.
 
 ## What gets worked on first
 
@@ -225,7 +250,7 @@ has a default that is right for this deployment.
 | `LOGOS_AGENT_PAUSE_ABOVE_LOAD` | `0.85` | Pause at or above this load |
 | `LOGOS_AGENT_SESSION_MEMORY_MB` | `4096` | Per-session memory ceiling |
 | `LOGOS_AGENT_SESSION_CPUS` | `2` | Per-session CPU ceiling |
-| `LOGOS_AGENT_SESSION_TIMEOUT_S` | `10800` | Wall-clock ceiling per session (paused time does not count) |
+| `LOGOS_AGENT_SESSION_TIMEOUT_S` | `0` | Wall-clock ceiling per session; `0` is none, which is the default |
 | `LOGOS_AGENT_SESSION_MODEL_URL` | `http://logos-agent-gateway` | Where sessions send model traffic — a gateway that exposes only the orchestrator's `/v1` model surface, so a session never reaches the rest of the internal network |
 | `LOGOS_AGENT_SESSION_GITHUB_TOKEN` | falls back to the token above | Given to containers; best without `workflow` scope |
 | `LOGOS_AGENT_DEPLOY_ENABLED` | `false` | Whether dev deploys may be dispatched at all |
@@ -299,11 +324,36 @@ use it the way you use a person's:
 
 | What you do | What it does |
 |---|---|
-| assign it an issue | works on it and opens a draft pull request |
+| assign it an issue | works on it and opens a pull request |
 | assign it a pull request | takes it over, on that pull request's own branch |
 | request changes on one of its pull requests | addresses that review on its branch |
 | comment on a pull request it is responsible for | reads the thread and answers (within a day of writing) |
 | mention it anywhere by name | answers there (within a day); changes code only if that is what was asked |
+
+**Whose word counts.** A session pushes branches and answers in this
+repository's name, so what may direct it is a question about people:
+membership of the `logos-developers` or `logos-maintainers` team
+(`LOGOS_AGENT_TRUSTED_TEAMS`). Where the runner cannot ask — a token without
+`read:org` — it falls back to the coarser rule of write permission on the
+repository. Comments from anybody else are left out of the task and the
+omission is disclosed, the reporter's own included: anybody can open an
+issue on a public repository, and a maintainer can repeat what matters in
+their own words.
+
+One narrow exception, and only to *reading*: the review apps this
+repository runs on its own pull requests (`LOGOS_AGENT_REVIEW_BOTS`,
+`coderabbitai[bot]` and `Claudia-Anthropica` by default). What they wrote
+travels with a task somebody trusted has already directed, because a
+handover exists to answer a review and dropping the review left the agent
+reconstructing one from the diff — on production, every handover was losing
+between six and seventeen comments that way. They direct nothing: no review
+of theirs starts a session and no comment of theirs steers one. Setting the
+variable to nothing removes the exception.
+
+**It does not take over its own work.** This repository assigns every pull
+request to its author, so one the agent opens comes back a moment later as
+one assigned to it. Reviews and questions on it still reach the agent; a
+handover of what it has just written does not.
 
 No labels and no separate vocabulary — the ordinary gestures. **Consent is
 per item:** nothing is picked up because it exists, only because somebody
@@ -340,6 +390,18 @@ wrote:
 that is not queued; and because the row is what the queue is, a restart
 changes nothing about it. GitHub's reaction palette is fixed and has no
 hourglass, so these three are the states it can show.
+
+**An issue is its thread, not its body.** A title, an empty body and the
+whole report in the first comment is an ordinary way to file one, and a
+session handed the title alone can only say so — which is exactly what
+happened on an issue whose description was a maintainer's comment. The
+comments travel with the task now — the ones from the trusted teams
+(`LOGOS_AGENT_TRUSTED_TEAMS`, `logos-developers` and `logos-maintainers` by
+default). Everybody else is left out and counted, the person who opened the
+issue included: anybody can open one, and the session that reads it will
+push a branch. Where the teams cannot be read at all — a token without
+`read:org` — the coarser rule stands in for them: whoever may write to the
+repository.
 
 **It can see what you attached.** An issue whose whole description is a
 screenshot is unreadable to a sandbox with no network — the agent met one of
@@ -456,8 +518,17 @@ an `Authorization` header, and the token is what authorises the read.
   scheduler resumes them mid-task. `stop_grace_period` is 30 s for this, and
   whatever cannot be frozen in time simply runs through the deploy as it did
   before.
-- **A stuck session is capped**, not left to burn capacity — `SESSION_TIMEOUT_S`
-  stops it and records the reason.
+- **A session ends when it is done, not when a clock says so.** There is no
+  wall-clock limit unless a deployment sets one. A clock is the wrong
+  instrument: a session that has read the repository for two hours and is
+  halfway through a change is not stuck, and stopping it throws away
+  everything it has done — uncommitted, in a checkout the next session
+  resets. One went that way: ninety minutes and thirty-eight million tokens,
+  killed at the deadline with nothing to show. What this runner protects is
+  capacity, and capacity is protected by the things that measure it — the
+  pause, the parallel ceiling, the trigger quota — none of which care how
+  long a session has been at it. A session that really is stuck is visible
+  on the page and can be cancelled there.
 - **Yielding does not cost the work.** Freezing a session and cutting it off
   the model network — which is how capacity is handed back — ends the answer
   it was reading, and the agent meets a dead connection when it thaws. That
@@ -481,12 +552,19 @@ an `Authorization` header, and the token is what authorises the read.
   shell profiles and build caches are executable configuration written by a
   session that held a push token, and the next session must not inherit
   them. Transcripts are data the same agent already authored.
+- **A request the runner could not finish comes back by itself.** A trigger
+  reference counts as handled the moment a session exists for it — that is
+  what keeps an assignment from producing a pull request a week — so a
+  failed session used to take its request with it, permanently invisible to
+  every later pass. A failure now takes the work up again with the reason
+  attached, bounded by the same three attempts as everything else, so a task
+  that cannot be done stops rather than loops.
 - **Work can be run again.** A failed session keeps its task, its workspace,
   its branch and the thread it came from, and *Run again* queues all of it as
   a new session. This is the only way back for work the runner took on
   itself: a trigger counts as handled the moment a session exists for it, so
   no later pass finds that issue, review or question again.
-- **Nothing merges itself.** Pull requests are opened as drafts, and a person
+- **Nothing merges itself.** A person
   approves and merges exactly as they do for human work.
 - **Screenshots follow the deploy.** A session that asks for dev screenshots
   gets them only after the runner has dispatched its dev deploy and watched

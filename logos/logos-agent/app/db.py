@@ -132,6 +132,83 @@ async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+class Unchanged:
+    """ "Leave this alone", as a value.
+
+    Null already means something here — "clear the override" — so a half
+    nobody touched cannot be expressed as null, and a default of null would
+    quietly reset it.
+    """
+
+    __slots__ = ()
+
+
+UNCHANGED = Unchanged()
+
+
+async def get_instructions() -> dict[str, Any] | None:
+    """The standing instructions, or None when the row is missing."""
+    async with sessionmaker()() as db:
+        row = (
+            (
+                await db.execute(
+                    text(
+                        """
+                        SELECT house_rules, environment_notes, updated_by, updated_at
+                          FROM agent_instructions WHERE id = 1
+                        """
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row else None
+
+
+async def set_instructions(
+    *,
+    house_rules: str | None | Unchanged = UNCHANGED,
+    environment_notes: str | None | Unchanged = UNCHANGED,
+    updated_by: str,
+) -> None:
+    """Store the standing instructions.
+
+    Three things can be meant about a half, and they are all different:
+    text replaces it, null clears the override back to what the code ships
+    with, and `UNCHANGED` leaves what is stored alone. The last one is why
+    the write is per-half — resetting the house rules must not save
+    whatever happens to be sitting in the other box on somebody's screen.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                INSERT INTO agent_instructions (id, house_rules, environment_notes, updated_by, updated_at)
+                VALUES (1, :house_rules, :environment_notes, :updated_by, :now)
+                ON CONFLICT (id) DO UPDATE SET
+                    house_rules = CASE WHEN :write_house
+                        THEN :house_rules ELSE agent_instructions.house_rules END,
+                    environment_notes = CASE WHEN :write_notes
+                        THEN :environment_notes ELSE agent_instructions.environment_notes END,
+                    updated_by = :updated_by,
+                    updated_at = :now
+                """
+            ),
+            {
+                # There is no row to keep on the insert path, so an untouched
+                # half starts out as no override at all.
+                "house_rules": None if isinstance(house_rules, Unchanged) else house_rules,
+                "environment_notes": None if isinstance(environment_notes, Unchanged) else environment_notes,
+                "write_house": not isinstance(house_rules, Unchanged),
+                "write_notes": not isinstance(environment_notes, Unchanged),
+                "updated_by": updated_by,
+                "now": _now(),
+            },
+        )
+        await db.commit()
+
+
 # --- what an operator changed while the runner was running ----------------
 
 
@@ -794,7 +871,7 @@ _SESSION_SELECT = """
            s.container_id, s.open_pull_request, s.deploy_to_dev,
            s.screenshot_paths, s.trigger_kind, s.trigger_ref, s.reply_target,
            s.reaction_target,
-           s.priority, s.priority_reason,
+           s.priority, s.priority_reason, s.environment_notes,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_usd, 0) AS cost_usd,
@@ -1160,6 +1237,81 @@ async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -
     return [dict(r) for r in rows]
 
 
+async def sessions_awaiting_checks() -> list[dict[str, Any]]:
+    """Finished sessions whose pushed commit nobody has judged yet.
+
+    The follow-up on a red build outlives the process that started it: a
+    redeploy in the couple of minutes between pushing and CI concluding
+    used to drop it silently. Asked on startup and on every scheduler pass,
+    and almost always empty.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT id, workspace_id, task, model, branch_name, checks_sha,
+                           trigger_kind, trigger_ref, reply_target, reaction_target,
+                           priority, priority_reason, open_pull_request, finished_at
+                      FROM agent_sessions
+                     WHERE checks_watch = 'pending'
+                     ORDER BY id
+                    """
+                )
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
+async def sessions_owing_a_replacement(*, max_attempts: int, since: datetime) -> list[dict[str, Any]]:
+    """Failed requests that were never taken up again, and still could be.
+
+    Derived rather than flagged, and deliberately so. A row already says
+    everything needed to know whether a replacement is owed — it failed, it
+    came from a request, nothing newer has been tried for that request, and
+    the request has attempts left — so there is no intent to write, nothing
+    to keep in step with the rows it describes, and no way for the intent
+    and the fact to disagree. It also covers the sessions that failed
+    before any of this existed, which a flag written at settlement never
+    could.
+
+    ``id > s.id`` is what makes "nothing newer" cheap and exact: a
+    replacement that is queued, running or itself failed is a later row
+    with the same reference, and any of the three means this row is no
+    longer the one that owes anything.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT s.id, s.workspace_id, s.task, s.model, s.branch_name,
+                           s.trigger_kind, s.trigger_ref, s.reply_target, s.reaction_target,
+                           s.priority, s.priority_reason, s.open_pull_request, s.error,
+                           s.finished_at
+                      FROM agent_sessions s
+                     WHERE s.status = 'failed'
+                       AND COALESCE(s.trigger_ref, '') <> ''
+                       AND s.finished_at IS NOT NULL
+                       AND s.finished_at > :since
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions newer
+                              WHERE newer.trigger_ref = s.trigger_ref
+                                AND newer.id > s.id
+                           )
+                       AND (
+                             SELECT COUNT(*) FROM agent_sessions tried
+                              WHERE tried.trigger_ref = s.trigger_ref
+                           ) < :max_attempts
+                     ORDER BY s.id
+                    """
+                ),
+                {"since": since, "max_attempts": max_attempts},
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
 async def update_session(session_id: int, **fields: Any) -> None:
     """Patch a session row. Callers pass only the columns they mean to change."""
     if not fields:
@@ -1177,6 +1329,13 @@ async def update_session(session_id: int, **fields: Any) -> None:
         "tokens_out",
         "cost_usd",
         "deployed_at",
+        # The text this session was handed, as opposed to the text sessions
+        # are handed now — the instructions are editable.
+        "environment_notes",
+        # The commit whose checks somebody still has to look at, and whether
+        # anybody still owes that.
+        "checks_sha",
+        "checks_watch",
     }
     unknown = set(fields) - allowed
     if unknown:
