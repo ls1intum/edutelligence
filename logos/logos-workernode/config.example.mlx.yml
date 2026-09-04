@@ -86,6 +86,15 @@ engines:
         # MLX quantization is declared in the checkpoint's config.json; do not
         # pass --quantization, vLLM infers it.
         quantization: ""
+        # vLLM reserves 4 GB for its multimodal processor cache by default.
+        # This family is served text-only on this backend (see
+        # engines.metal.multimodal_mode above), so that reservation buys
+        # nothing and costs 4 GB on a node where unified memory is the
+        # binding constraint — an over-subscribed Mac does not fail fast, it
+        # swaps. Zeroing it is safe here for a second reason: the field also
+        # gates the post-wake /reset_mm_cache POST, and sleep/wake does not
+        # exist on Metal.
+        mm_processor_cache_gb: 0
         # Leave gpu_memory_utilization unset: vllm-metal derives one from
         # VLLM_METAL_MEMORY_FRACTION=auto by measuring the real Metal working
         # set (0.92 observed on a 36 GB M3 Pro) and logs the breakdown at
@@ -94,6 +103,7 @@ engines:
         tensor_parallel_size: 1
         max_model_len: 32768
         quantization: ""
+        mm_processor_cache_gb: 0
 
 
 # ── Capacity profiles (hand-measured; replaces calibration) ──────────────────
