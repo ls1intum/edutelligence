@@ -12,7 +12,7 @@ import json
 from unittest.mock import MagicMock
 
 from logos import DBManager
-from logos.dbutils.dbmanager import _stringify_error_message
+from logos.dbutils.dbmanager import _SETTLED_COST_SNAPSHOT_SQL, _stringify_error_message
 
 
 def _db():
@@ -37,6 +37,13 @@ def test_openai_shaped_error_dict_is_stored_as_its_message():
     params = _captured_params(db)
     assert params["error_message"] == "Missing logos key"
     assert isinstance(params["error_message"], str)
+    assert db.session.execute.call_count == 2
+
+
+def test_error_cost_snapshot_excludes_request_only_quantities():
+    assert "le.result_status IN ('error', 'timeout')" in _SETTLED_COST_SNAPSHOT_SQL
+    assert "'billed_requests'" in _SETTLED_COST_SNAPSHOT_SQL
+    assert "'billed_input_characters'" in _SETTLED_COST_SNAPSHOT_SQL
 
 
 def test_dict_without_message_is_serialised():

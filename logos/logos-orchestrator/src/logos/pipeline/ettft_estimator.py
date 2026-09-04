@@ -14,13 +14,20 @@ This preserves same-state ordering (two models in the same infrastructure state
 get identical penalty → classification ordering preserved) while making the
 correction proportional to the weight span of the candidate set.
 
-ETTFT decomposes into three additive phases:
-  1. State overhead  — wake or cold-load latency
-  2. Reclaim overhead — VRAM eviction cost, context-aware:
-     idle/sleeping eviction is cheap, draining busy lanes is expensive
-  3. Queue wait — queued requests × observed per-request service time
+ETTFT decomposes into five additive phases (in temporal order):
+  1. Reclaim overhead — VRAM eviction cost before the model can be loaded,
+     victim-aware: idle/sleeping victim → RECLAIM_IDLE_EVICT_S;
+     busy victim → drain_time + RECLAIM_IDLE_EVICT_S,
+     where drain_time counts every active AND queued request on the victim
+     (minimum across all candidate victims on the provider)
+  2. State overhead  — wake or cold-load latency (GPU is now free)
+  3. Queue wait      — time for all earlier requests on this model to complete
+  4. Prefill         — context-length-dependent prompt-ingestion cost:
+     learned_prefill_s_per_token × input_tokens
+  5. TTFT            — decode-only first-token time once prefill is done
 """
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
@@ -75,6 +82,7 @@ class EttftEstimate:
     state_overhead_s: float = 0.0
     reclaim_overhead_s: float = 0.0
     queue_wait_s: float = 0.0
+    prefill_s: float = 0.0
     needs_reclaim: bool = False
     # Compact warmth encoding for benchmarking/telemetry:
     #   -1   = cold (model not resident in VRAM)
@@ -199,48 +207,104 @@ def _estimate_queue_wait_s(
     return queue_rounds * service_time_s
 
 
+# ── Reclaim (drain) time estimation ──────────────────────────────────
+
+
+def _estimate_drain_time_s(
+    total_running: int,
+    queue_waiting: int,
+    effective_parallel: int,
+    service_time_s: float,
+) -> float:
+    """Estimate time until all in-flight and queued work on a lane completes.
+
+    Unlike _estimate_queue_wait_s — which estimates the wait for a *new*
+    incoming request and excludes the current batch from the depth count —
+    eviction drain requires every active and waiting request to finish before
+    the lane can be unloaded.  We therefore count both.
+
+      total  = total_running + queue_waiting
+      rounds = ceil(total / effective_parallel)   # partial final batch counts as a full round
+      drain  = rounds × service_time_s
+    """
+    total = max(0, total_running) + max(0, queue_waiting)
+    if total <= 0:
+        return 0.0
+    rounds = math.ceil(total / max(effective_parallel, 1))
+    return rounds * service_time_s
+
+
 # ── Reclaim overhead estimation ───────────────────────────────────────
 
 
 def _estimate_reclaim_overhead_s(
     sibling_lanes: List[LaneSchedulerSignals],
     target_model_name: str,
+    vram_deficit_mb: float = 0.0,
 ) -> float:
     """Estimate VRAM reclaim cost based on what sibling lanes are doing.
 
-    Examines other lanes on the same provider to determine whether reclaim
-    would require evicting idle/sleeping lanes (fast) or draining busy
-    lanes (slow).
+    For each potential eviction victim (any lane not serving target_model_name)
+    the per-lane cost is:
+      - idle / sleeping lane  → RECLAIM_IDLE_EVICT_S  (just the unload operation)
+      - busy lane             → drain_time + RECLAIM_IDLE_EVICT_S
+        where drain_time = _estimate_drain_time_s using the lane's own queue
+        depth and observed e2e latency.
 
-    Returns:
-        Estimated reclaim overhead in seconds.
+    When vram_deficit_mb > 0, victims are selected greedily by cost (cheapest first)
+    until their combined effective_vram_mb covers the deficit.  The returned cost is
+    the SUM of the selected set — evictions are sequential so every chosen lane
+    contributes its full cost.
+
+    When vram_deficit_mb <= 0 (deficit unknown), the minimum cost across all
+    candidates is returned (single cheapest victim, legacy behaviour).
+
+    Cold / stopped / error lanes are not useful eviction targets and are skipped.
+    Returns RECLAIM_IDLE_EVICT_S when no candidate lanes are visible.
     """
-    if not sibling_lanes:
-        # No visibility into sibling state — use conservative idle estimate
-        return RECLAIM_IDLE_EVICT_S
-
-    # Look at siblings that are NOT the target model (potential eviction victims)
-    evictable_idle = False
-    must_drain_busy = True  # assume worst case, disprove below
+    candidates: list[tuple[float, float]] = []  # (cost_s, vram_freed_mb)
 
     for lane in sibling_lanes:
         if lane.model_name == target_model_name:
             continue
-        # A lane is cheaply evictable if it's sleeping or idle (no active requests)
-        if lane.runtime_state == "sleeping":
-            evictable_idle = True
-            must_drain_busy = False
-        elif lane.runtime_state in ("loaded", "running") and lane.active_requests == 0:
-            evictable_idle = True
-            must_drain_busy = False
 
-    if evictable_idle:
+        if lane.runtime_state == "sleeping" or (
+            lane.runtime_state in ("loaded", "running") and lane.active_requests == 0
+        ):
+            cost = RECLAIM_IDLE_EVICT_S
+        elif lane.runtime_state in ("loaded", "running"):
+            service_time = _effective_service_time_s(lane.e2e_latency_p50_seconds)
+            drain_s = _estimate_drain_time_s(
+                total_running=int(lane.requests_running),
+                queue_waiting=int(lane.queue_waiting),
+                effective_parallel=max(lane.num_parallel, 1),
+                service_time_s=service_time,
+            )
+            cost = drain_s + RECLAIM_IDLE_EVICT_S
+        else:
+            # cold / starting / stopped / error — not a useful eviction target
+            continue
+
+        candidates.append((cost, max(0.0, lane.effective_vram_mb)))
+
+    if not candidates:
         return RECLAIM_IDLE_EVICT_S
-    if must_drain_busy:
-        return RECLAIM_BUSY_DRAIN_S
 
-    # Fallback
-    return RECLAIM_IDLE_EVICT_S
+    if vram_deficit_mb <= 0:
+        # Deficit unknown: return the cheapest single candidate (legacy behaviour).
+        return min(cost for cost, _ in candidates)
+
+    # Greedy set cover: sort by cost ascending, accumulate until deficit is covered.
+    candidates.sort(key=lambda item: item[0])
+    total_cost = 0.0
+    freed_mb = 0.0
+    for cost, vram in candidates:
+        total_cost += cost
+        freed_mb += vram
+        if freed_mb >= vram_deficit_mb:
+            return total_cost
+    # All candidates exhausted without covering the deficit — provider infeasible.
+    return float("inf")
 
 
 # ── Local (logosnode) estimation ───────────────────────────────────────
@@ -271,6 +335,7 @@ def estimate_ettft_local(
     scheduler_queue_depth: int = 0,
     observed_e2e_p50_s: float = 0.0,
     all_provider_lanes: Optional[List[LaneSchedulerSignals]] = None,
+    overhead_overrides: Optional[dict] = None,
 ) -> EttftEstimate:
     """Estimate ETTFT for a local (logosnode) model from its scheduler view.
 
@@ -282,6 +347,12 @@ def estimate_ettft_local(
     whether eviction targets are idle (fast, ~3s) or busy (slow, ~30s).
     Queue wait uses the observed e2e latency p50 as service time when available,
     falling back to a configured constant.
+
+    ``overhead_overrides`` is an optional dict mapping ReadinessTier → float
+    (seconds) produced by a LatencyStore.  When provided, learned values
+    replace the static OVERHEAD_* constants for the matched tier.  For
+    *_RECLAIM tiers the override covers the full (load + reclaim) cost, so
+    the separate ``_estimate_reclaim_overhead_s`` call is skipped.
 
     Decision tree:
     1. No lanes or all stopped/error → UNAVAILABLE
@@ -332,26 +403,48 @@ def estimate_ettft_local(
         else ""
     )
 
+    _overrides: dict = overhead_overrides or {}
+
     # ── Cold: no loaded/running lanes ──────────────────────────────────
     if best_state in ("cold", "starting"):
         needs_reclaim = model_vram_mb > 0 and model_vram_mb > available_vram_mb
         if needs_reclaim:
-            reclaim_s = _estimate_reclaim_overhead_s(
-                all_provider_lanes or [],
-                view.model_name,
-            )
-            overhead = OVERHEAD_COLD_S
             tier = ReadinessTier.COLD_RECLAIM
-            reason = (
-                f"Cold + reclaim: model needs {model_vram_mb:.0f}MB, "
-                f"available {available_vram_mb:.0f}MB, "
-                f"reclaim ~{reclaim_s:.0f}s"
-            )
+            if tier in _overrides:
+                # Learned value covers full (load + reclaim) cost.
+                overhead = _overrides[tier]
+                reclaim_s = 0.0
+                reason = (
+                    f"Cold + reclaim (learned): {overhead:.1f}s "
+                    f"(model {model_vram_mb:.0f}MB, available {available_vram_mb:.0f}MB)"
+                )
+            else:
+                reclaim_s = _estimate_reclaim_overhead_s(
+                    all_provider_lanes or [],
+                    view.model_name,
+                    vram_deficit_mb=max(0.0, model_vram_mb - available_vram_mb),
+                )
+                if math.isinf(reclaim_s):
+                    return EttftEstimate(
+                        expected_wait_s=float("inf"),
+                        tier=ReadinessTier.UNAVAILABLE,
+                        reasoning=(
+                            f"Cold + reclaim: insufficient victim VRAM to free "
+                            f"{model_vram_mb - available_vram_mb:.0f}MB deficit"
+                        ),
+                        warmth_state=warmth_state,
+                    )
+                overhead = _overrides.get(ReadinessTier.COLD, OVERHEAD_COLD_S)
+                reason = (
+                    f"Cold + reclaim: model needs {model_vram_mb:.0f}MB, "
+                    f"available {available_vram_mb:.0f}MB, "
+                    f"reclaim ~{reclaim_s:.0f}s"
+                )
         else:
-            overhead = OVERHEAD_COLD_S
-            reclaim_s = 0.0
             tier = ReadinessTier.COLD
-            reason = f"Best lane state is '{best_state}', cold-start ~{OVERHEAD_COLD_S:.0f}s"
+            overhead = _overrides.get(tier, OVERHEAD_COLD_S)
+            reclaim_s = 0.0
+            reason = f"Best lane state is '{best_state}', cold-start ~{overhead:.0f}s"
 
         expected = overhead + reclaim_s + queue_wait_s
         reason += queue_suffix
@@ -371,22 +464,41 @@ def estimate_ettft_local(
     if best_state == "sleeping":
         needs_reclaim = kv_budget_mb > 0 and kv_budget_mb > available_vram_mb
         if needs_reclaim:
-            reclaim_s = _estimate_reclaim_overhead_s(
-                all_provider_lanes or [],
-                view.model_name,
-            )
-            overhead = OVERHEAD_SLEEPING_S
             tier = ReadinessTier.SLEEPING_RECLAIM
-            reason = (
-                f"Sleeping + reclaim: KV cache needs {kv_budget_mb:.0f}MB, "
-                f"available {available_vram_mb:.0f}MB, "
-                f"reclaim ~{reclaim_s:.0f}s"
-            )
+            if tier in _overrides:
+                overhead = _overrides[tier]
+                reclaim_s = 0.0
+                reason = (
+                    f"Sleeping + reclaim (learned): {overhead:.1f}s "
+                    f"(KV {kv_budget_mb:.0f}MB, available {available_vram_mb:.0f}MB)"
+                )
+            else:
+                reclaim_s = _estimate_reclaim_overhead_s(
+                    all_provider_lanes or [],
+                    view.model_name,
+                    vram_deficit_mb=max(0.0, kv_budget_mb - available_vram_mb),
+                )
+                if math.isinf(reclaim_s):
+                    return EttftEstimate(
+                        expected_wait_s=float("inf"),
+                        tier=ReadinessTier.UNAVAILABLE,
+                        reasoning=(
+                            f"Sleeping + reclaim: insufficient victim VRAM to free "
+                            f"{kv_budget_mb - available_vram_mb:.0f}MB deficit"
+                        ),
+                        warmth_state=warmth_state,
+                    )
+                overhead = _overrides.get(ReadinessTier.SLEEPING, OVERHEAD_SLEEPING_S)
+                reason = (
+                    f"Sleeping + reclaim: KV cache needs {kv_budget_mb:.0f}MB, "
+                    f"available {available_vram_mb:.0f}MB, "
+                    f"reclaim ~{reclaim_s:.0f}s"
+                )
         else:
-            overhead = OVERHEAD_SLEEPING_S
-            reclaim_s = 0.0
             tier = ReadinessTier.SLEEPING
-            reason = f"Best lane is sleeping, wake ~{OVERHEAD_SLEEPING_S:.1f}s"
+            overhead = _overrides.get(tier, OVERHEAD_SLEEPING_S)
+            reclaim_s = 0.0
+            reason = f"Best lane is sleeping, wake ~{overhead:.1f}s"
 
         expected = overhead + reclaim_s + queue_wait_s
         reason += queue_suffix

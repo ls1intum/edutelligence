@@ -13,6 +13,7 @@ Usage:
     python3 tests/performance/plot_benchmark_distributions.py \
         --csv tests/performance/results/.../detailed.csv
 """
+
 from __future__ import annotations
 
 import argparse
