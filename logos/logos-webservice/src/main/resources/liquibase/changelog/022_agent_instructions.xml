@@ -55,6 +55,37 @@
         </rollback>
     </changeSet>
 
+    <!-- Workspaces the runner made before it could say that it made them.
+
+         `ephemeral` is what lets the sweep reclaim a working copy the
+         runner created for itself; rows written before that column existed
+         defaulted to false and are therefore invisible to it forever. On
+         production that is every workspace there is: ten volumes the runner
+         made, none of which its own reclamation can see.
+
+         Only the ones it created itself, matched on the author it stamps on
+         them. Nothing is reclaimed here — the flag says a volume *may* be,
+         once the workspace has been idle for as long as the sweep asks; the
+         row, its sessions and their history are untouched either way. -->
+    <changeSet id="022-agent-workspace-runner-owned" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="agent_workspaces" columnName="ephemeral"/>
+        </preConditions>
+        <sql>
+            UPDATE agent_workspaces
+               SET ephemeral = TRUE
+             WHERE ephemeral = FALSE
+               AND created_by = 'logos-agent (trigger)';
+        </sql>
+        <rollback>
+            <sql>
+                UPDATE agent_workspaces
+                   SET ephemeral = FALSE
+                 WHERE created_by = 'logos-agent (trigger)';
+            </sql>
+        </rollback>
+    </changeSet>
+
     <!-- The checks a finished session still owes an answer for.
 
          A session ends minutes before the checks of what it pushed
