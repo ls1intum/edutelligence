@@ -109,7 +109,7 @@ def test_parse_gate_result_extracts_anchor_and_inline_hint():
         '"anchor":{"file":"Sort.java","line":42},"inlineHint":"off-by-one at the last index?"}'
     )
     g = _gate(raw)
-    assert g.anchor == {"file": "Sort.java", "line": 42}
+    assert g.anchor == ("Sort.java", 42)
     assert g.inline_hint == "off-by-one at the last index?"
 
 
@@ -1144,7 +1144,7 @@ def test_an_anchor_that_points_nowhere_is_dropped_with_its_cue():
 
 def test_the_last_line_of_a_file_is_a_valid_anchor():
     gate = _gate(_anchored("Sort.java", 60))
-    assert gate.anchor == {"file": "Sort.java", "line": 60}
+    assert gate.anchor == ("Sort.java", 60)
     assert gate.inline_hint == "off-by-one?"
 
 
@@ -1158,7 +1158,7 @@ def test_an_empty_file_has_no_line_to_anchor():
 def test_outer_whitespace_around_the_path_is_forgiven():
     """Forgiven, not rewritten: a path is never turned into a different one that happens to fit."""
     gate = _gate(_anchored("  Sort.java  ", 42))
-    assert gate.anchor == {"file": "Sort.java", "line": 42}
+    assert gate.anchor == ("Sort.java", 42)
 
 
 def test_without_a_repository_no_anchor_is_forwarded():

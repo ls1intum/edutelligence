@@ -105,7 +105,7 @@ def _safe_anchor_path(raw_file: object) -> Optional[str]:
 
 def _valid_anchor(
     raw_anchor: object, repository: Optional[Mapping[str, str]]
-) -> Optional[dict]:
+) -> Optional[tuple[str, int]]:
     """The anchor if it points at a real line of a file Iris actually saw, else None.
 
     The model is asked for a location it verified in the code it was given, so the snapshot it
@@ -119,7 +119,6 @@ def _valid_anchor(
     if raw_anchor is None:
         return None
     reason = None
-    path = None
     if not isinstance(raw_anchor, dict):
         reason = "not an object"
     elif repository is None:
@@ -139,7 +138,7 @@ def _valid_anchor(
         elif line > len(repository[path].splitlines()):
             reason = "line past the end of the file"
         else:
-            return {"file": path, "line": line}
+            return path, line
     logger.warning("dropping the anchor %s: %s", raw_anchor, reason)
     return None
 
@@ -150,7 +149,7 @@ class GateResult:
     message: Optional[str]
     confidence: float
     rationale: Optional[str]
-    anchor: Optional[dict] = None
+    anchor: Optional[tuple[str, int]] = None
     inline_hint: Optional[str] = None
     # True when "silent" is the fail-safe for unusable model output, not a decision the model made.
     # The two are otherwise indistinguishable downstream, and on help_request they must not be:
@@ -226,9 +225,7 @@ def parse_gate_result(
     if not math.isfinite(confidence):
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
-    rationale = obj.get("rationale")
-    if not isinstance(rationale, str):
-        rationale = None
+    rationale = _as_opt_str(obj.get("rationale"))
     anchor = None
     inline_hint = None
     # Silent means the student sees nothing at all, and the anchor and the inline hint are the
@@ -286,34 +283,32 @@ def parse_confirm_close_result(raw: str) -> ConfirmCloseResult:
                 else MIXED_SCHEMA_CLOSE_RATIONALE
             ),
         )
-    resolved = obj.get("resolved")
-    if not isinstance(resolved, bool):
+    # `is not True` also fails closed on a truthy non-bool (1, "yes"), which bool() would let through.
+    if obj.get("resolved") is not True:
         return ConfirmCloseResult(False, None, None, _as_opt_str(obj.get("rationale")))
-    if resolved:
-        sentence = _as_opt_str(obj.get("closingSentence"))
-        label = _as_opt_str(obj.get("episodeLabel"))
-        rationale = _as_opt_str(obj.get("rationale"))
-        if sentence is None or label is None:
-            logger.warning(
-                "confirm_close returned resolved=true without %s; using the fallback",
-                "closingSentence" if sentence is None else "episodeLabel",
-            )
-            # rationale is normally empty on a resolved close, so it is free to carry the
-            # marker to Artemis and on into the client's evaluation log without a DTO change.
-            rationale = (
-                f"{DEGRADED_CLOSE_RATIONALE} ({rationale})"
-                if rationale
-                else DEGRADED_CLOSE_RATIONALE
-            )
-            return ConfirmCloseResult(
-                True,
-                sentence or CONFIRM_CLOSE_FALLBACK_SENTENCE,
-                label or CONFIRM_CLOSE_FALLBACK_LABEL,
-                rationale,
-                degraded=True,
-            )
-        return ConfirmCloseResult(True, sentence, label, rationale)
-    return ConfirmCloseResult(False, None, None, _as_opt_str(obj.get("rationale")))
+    sentence = _as_opt_str(obj.get("closingSentence"))
+    label = _as_opt_str(obj.get("episodeLabel"))
+    rationale = _as_opt_str(obj.get("rationale"))
+    if sentence is None or label is None:
+        logger.warning(
+            "confirm_close returned resolved=true without %s; using the fallback",
+            "closingSentence" if sentence is None else "episodeLabel",
+        )
+        # rationale is normally empty on a resolved close, so it is free to carry the
+        # marker to Artemis and on into the client's evaluation log without a DTO change.
+        rationale = (
+            f"{DEGRADED_CLOSE_RATIONALE} ({rationale})"
+            if rationale
+            else DEGRADED_CLOSE_RATIONALE
+        )
+        return ConfirmCloseResult(
+            True,
+            sentence or CONFIRM_CLOSE_FALLBACK_SENTENCE,
+            label or CONFIRM_CLOSE_FALLBACK_LABEL,
+            rationale,
+            degraded=True,
+        )
+    return ConfirmCloseResult(True, sentence, label, rationale)
 
 
 def summarize_signal(signal: StruggleSignal) -> str:
@@ -408,18 +403,18 @@ class StruggleInterventionPipeline(
             StruggleInterventionPipelineExecutionDTO, Variant
         ],
     ) -> str:
-        course = getattr(state.dto, "course", None)
-        intent = getattr(state.dto, "intent", "decide")
+        course = state.dto.course
+        intent = state.dto.intent
         tmpl = {
             "decide": self.system_prompt_template,
             "confirm_close": self.confirm_close_template,
             "help_request": self.help_request_template,
         }[intent]
         return tmpl.render(
-            course_name=getattr(course, "name", "the course") or "the course",
+            course_name=(course.name if course else None) or "the course",
             signal_summary=summarize_signal(state.dto.struggle_signal),
             episode=state.dto.episode,
-            proactivity_mode=getattr(state.dto, "proactivity_mode", "push"),
+            proactivity_mode=state.dto.proactivity_mode,
         )
 
     def is_memiris_memory_creation_enabled(
@@ -444,7 +439,7 @@ class StruggleInterventionPipeline(
     ) -> str:
         cb = state.callback
         status = cast(StruggleInterventionStatusUpdateDTO, cb.status)
-        intent = getattr(state.dto, "intent", "decide")
+        intent = state.dto.intent
         if intent == "confirm_close":
             cc = parse_confirm_close_result(state.result or "")
             status.resolved = cc.resolved
@@ -482,8 +477,7 @@ class StruggleInterventionPipeline(
             return ""
         status.action = gate.action
         status.rationale = gate.rationale
-        status.anchor_file = gate.anchor["file"] if gate.anchor else None
-        status.anchor_line = gate.anchor["line"] if gate.anchor else None
+        status.anchor_file, status.anchor_line = gate.anchor or (None, None)
         status.inline_hint = gate.inline_hint
         cb.finish(
             result=gate.message,

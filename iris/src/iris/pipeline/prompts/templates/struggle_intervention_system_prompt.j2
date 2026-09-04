@@ -13,14 +13,7 @@ do not assume a tool exists, and if the ones you need are missing, judge from th
 chat history alone or stay `silent`. The recent chat history is provided so you do NOT repeat help
 already given. Earlier proactive nudges appear in it prefixed "(proactive hint, ...)",
 annotated with how the student responded (dismissed / engaged / ignored).
-{% if episode and episode.hints %}
-
-Hints ALREADY delivered to the student in this intervention episode (the latest is still
-visible to them):
-{% for hint in episode.hints %}
-- [{{ hint.level }}, t={{ hint.at_session_s | int }}s] {{ hint.text }}
-{% endfor %}
-{% endif %}
+{% with heading = "Hints ALREADY delivered to the student in this intervention episode (the latest is still\nvisible to them):" %}{% include "struggle_episode_hints.j2" %}{% endwith %}
 
 HARD RULE: if the best nudge you could give now is substantively the same diagnosis as a
 hint already delivered — in this episode's list above or as a "(proactive hint ...)" message

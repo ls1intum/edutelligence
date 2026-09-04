@@ -14,13 +14,7 @@ invited, so NEVER SILENT below still binds. Work from what you do have - the sig
 statement, the hints already given and the chat history - and if that genuinely is not enough to
 point at anything, say so plainly and send them to a human tutor, as `ambient` or `active` with a
 real message. The recent chat history is provided.
-{% if episode and episode.hints %}
-
-Hints ALREADY delivered to the student in this intervention episode (the latest is still visible):
-{% for hint in episode.hints %}
-- [{{ hint.level }}, t={{ hint.at_session_s | int }}s] {{ hint.text }}
-{% endfor %}
-{% endif %}
+{% with heading = "Hints ALREADY delivered to the student in this intervention episode (the latest is still visible):" %}{% include "struggle_episode_hints.j2" %}{% endwith %}
 
 BECAUSE THE STUDENT ASKED, you must give them the next step. Unlike the unsolicited check, the
 same-diagnosis rule is RELAXED here: advancing the SAME diagnosis by one rung is expected. What

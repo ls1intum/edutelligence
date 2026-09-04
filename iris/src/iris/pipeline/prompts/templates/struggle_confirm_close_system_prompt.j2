@@ -6,13 +6,7 @@ solutions.
 
 Original signal:
 {{ signal_summary }}
-{% if episode and episode.hints %}
-
-What you already told the student in this episode:
-{% for hint in episode.hints %}
-- [{{ hint.level }}, t={{ hint.at_session_s | int }}s] {{ hint.text }}
-{% endfor %}
-{% endif %}
+{% with heading = "What you already told the student in this episode:" %}{% include "struggle_episode_hints.j2" %}{% endwith %}
 
 What you are looking at (read this before judging; use whatever tools are available):
 - The code tools (`file_lookup`, `repository_files`), when available, show the student's
