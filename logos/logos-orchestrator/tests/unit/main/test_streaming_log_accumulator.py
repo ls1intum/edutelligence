@@ -37,16 +37,19 @@ def test_chat_completions_stream_accumulates_text_and_usage():
     assert payload["usage"]["total_tokens"] == 5
 
 
-def test_mid_stream_error_frame_is_captured():
+def test_mid_stream_error_frame_is_captured_without_clobbering_earlier_usage():
     # A content filter / context-length error that fires after generation began
-    # arrives as a data: {"error": {...}} frame with an HTTP 200 stream.
+    # arrives as a data: {"error": {...}} frame with an HTTP 200 stream. It must
+    # not overwrite the usage chunk that preceded it.
     acc = _StreamingLogAccumulator()
     acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":"Partial"}}]}\n\n')
+    acc.feed(b'data: {"id":"c1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}\n\n')
     acc.feed(b'data: {"error":{"message":"content flagged mid-stream","type":"invalid_request_error"}}\n\n')
     acc.finish()
 
     assert acc.full_text == "Partial"
     assert acc.upstream_error == {"message": "content flagged mid-stream", "type": "invalid_request_error"}
+    assert acc.usage() == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
 
 
 def test_clean_chat_stream_has_no_upstream_error():

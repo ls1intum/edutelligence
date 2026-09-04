@@ -1477,8 +1477,10 @@ class _StreamingLogAccumulator:
         blob_error = blob.get("error")
         if isinstance(blob_error, dict) and blob_error:
             self.upstream_error = blob_error
-        elif isinstance(blob_error, str) and blob_error:
+            return
+        if isinstance(blob_error, str) and blob_error:
             self.upstream_error = {"message": blob_error}
+            return
 
         event_type = blob.get("type")
         if isinstance(event_type, str) and event_type.startswith("response."):
