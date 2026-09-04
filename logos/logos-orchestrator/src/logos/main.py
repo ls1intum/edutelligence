@@ -1519,6 +1519,20 @@ class _StreamingLogAccumulator:
             response = blob.get("response")
             if isinstance(response, dict):
                 self.responses_final = response
+            # A terminal ``response.failed`` is the Responses-API equivalent of a
+            # mid-stream ``data: {"error": {...}}`` frame: generation began, the
+            # bytes reached the client, but the request is not a success and must
+            # not be billed. ``response.incomplete`` is deliberately excluded: it
+            # means the generation stopped at max_output_tokens or a content
+            # filter, and the partial output it carries is real, billed usage.
+            if event_type == "response.failed":
+                err = response.get("error") if isinstance(response, dict) else None
+                if isinstance(err, dict) and err:
+                    self.upstream_error = err
+                elif isinstance(err, str) and err:
+                    self.upstream_error = {"message": err}
+                else:
+                    self.upstream_error = {"message": "Responses API stream reported response.failed"}
 
     def _consume_messages_event(self, event_type: str, blob: Dict[str, Any]) -> None:
         """Consume one Anthropic Messages SSE event.
@@ -3775,12 +3789,18 @@ async def _streaming_response(
                     )
                 _live_streams.finish(request_id)
                 stream_log.finish()
+                # A terminal ``response.failed`` frame ends the stream cleanly,
+                # but the request still failed and must not be billed or logged
+                # as a success.
+                if error_message is None and stream_log.upstream_error:
+                    error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
+                billable = stream_completed and stream_log.upstream_error is None
                 response_payload = stream_log.response_payload()
                 usage_tokens = _usage_tokens_from_payload(
                     response_payload,
                     prepared_payload,
                     request_path or "",
-                    billable_request=stream_completed,
+                    billable_request=billable,
                 )
                 if log_id:
                     with DBManager() as db:
