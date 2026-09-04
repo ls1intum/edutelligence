@@ -28,9 +28,12 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
 @Service
 public class ProviderService {
 
+    // Mirrors the Postgres enum threshold_enum (liquibase 000 + 014) and
+    // ThresholdLevel in this package — keep in sync.
     private static final Set<String> VALID_PRIVACY_LEVELS = Set.of(
         "LOCAL", "CLOUD_IN_EU_BY_EU_PROVIDER",
-        "CLOUD_IN_EU_BY_US_PROVIDER", "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
+        "CLOUD_IN_EU_BY_US_PROVIDER", "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+        "THIRD_PARTY_HARDWARE"
     );
 
     private final ProviderRepository providerRepository;

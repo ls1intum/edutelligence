@@ -57,6 +57,10 @@ export class Policies implements OnInit {
     { value: 'CLOUD_IN_EU_BY_EU_PROVIDER', label: 'CLOUD IN EU BY EU PROVIDER' },
     { value: 'CLOUD_IN_EU_BY_US_PROVIDER', label: 'CLOUD IN EU BY US PROVIDER' },
     { value: 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', label: 'CLOUD NOT IN EU BY US PROVIDER' },
+    // Hardware outside operator control (e.g. a personal Mac MLX worker) —
+    // the machine's owner can inspect the running processes, so this is the
+    // least trusted tier: only policies with this threshold route to it.
+    { value: 'THIRD_PARTY_HARDWARE', label: 'THIRD-PARTY HARDWARE' },
   ];
 
   readonly teamOptions = computed<AppSelectOption[]>(() => [
@@ -197,6 +201,7 @@ export class Policies implements OnInit {
       CLOUD_IN_EU_BY_EU_PROVIDER: 'EU / EU',
       CLOUD_IN_EU_BY_US_PROVIDER: 'EU / US',
       CLOUD_NOT_IN_EU_BY_US_PROVIDER: 'Non-EU / US',
+      THIRD_PARTY_HARDWARE: 'Third-party hardware',
     };
     return labels[level] ?? level;
   }
@@ -207,6 +212,7 @@ export class Policies implements OnInit {
       CLOUD_IN_EU_BY_EU_PROVIDER: 'eu-eu',
       CLOUD_IN_EU_BY_US_PROVIDER: 'eu-us',
       CLOUD_NOT_IN_EU_BY_US_PROVIDER: 'non-eu',
+      THIRD_PARTY_HARDWARE: 'third-party',
     };
     return classes[level] ?? 'local';
   }

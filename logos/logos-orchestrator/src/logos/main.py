@@ -512,6 +512,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
+        "telemetry_available": bool(devices.get("telemetry_available", devices.get("nvidia_smi_available", False))),
         "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
@@ -753,7 +754,13 @@ def _build_live_local_provider_sample(
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
-    if devices.get("nvidia_smi_available"):
+    # telemetry_available is the backend-neutral successor to
+    # nvidia_smi_available: it means "the worker measured this on real
+    # hardware", whether that hardware reports through nvidia-smi or through
+    # Metal's device_info. Metal workers set it and leave nvidia_smi_available
+    # False, so gating on the old field alone would discard their free-memory
+    # reading and fall back to the coarser total-minus-used estimate.
+    if devices.get("telemetry_available") or devices.get("nvidia_smi_available"):
         remaining_vram_mb = float(devices.get("free_memory_mb") or 0.0)
     elif total_vram_mb > 0:
         remaining_vram_mb = max(total_vram_mb - used_vram_mb, 0.0)

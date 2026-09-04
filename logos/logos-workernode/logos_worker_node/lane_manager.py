@@ -13,6 +13,8 @@ from typing import Any, Awaitable, Callable, Iterable
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.calibration import calibration_gpu_slice
 from logos_worker_node.host_ram import measure_process_tree_host_ram_mb
+from logos_worker_node.metal import is_metal_backend
+from logos_worker_node.metal_process import MetalVllmProcessHandle
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import (
     DeviceSummary,
@@ -22,6 +24,7 @@ from logos_worker_node.models import (
     LaneEvent,
     LaneStatus,
     LoadedModel,
+    MetalConfig,
     OllamaConfig,
     ProcessState,
     VllmConfig,
@@ -248,9 +251,27 @@ def _create_handle(
     lane_config: LaneConfig,
     model_profiles: ModelProfileRegistry | None = None,
     per_gpu_total_mb: Callable[[], float] | None = None,
+    metal_config: MetalConfig | None = None,
 ) -> ProcessHandle:
-    """Factory: create the correct process handle based on backend type."""
+    """Factory: create the correct process handle based on backend type.
+
+    ``lane_config.vllm`` stays the only wire-level distinction: the orchestrator
+    asks for a vLLM lane and does not need to know whether this particular
+    worker serves it with CUDA or with Metal. Which of the two applies is a
+    property of the node, decided here, so no protocol change is needed to put
+    an Apple Silicon worker into the fleet.
+    """
     if lane_config.vllm:
+        if is_metal_backend():
+            return MetalVllmProcessHandle(
+                lane_id,
+                port,
+                global_config,
+                vllm_engine_config,
+                model_profiles=model_profiles,
+                per_gpu_total_mb=per_gpu_total_mb,
+                metal_config=metal_config,
+            )
         return VllmProcessHandle(
             lane_id,
             port,
@@ -293,9 +314,13 @@ class LaneManager:
         model_cache: Any | None = None,
         auto_reboot_on_stuck_gpu: bool = True,
         reboot_sentinel_path: str = "/host/reboot-requested",
+        metal_config: MetalConfig | None = None,
     ) -> None:
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
+        # Only consulted when is_metal_backend() is true; harmless defaults
+        # otherwise, so the CUDA path needs no conditional.
+        self._metal_config = metal_config or MetalConfig()
         self._nvidia_smi_available = nvidia_smi_available or (lambda: True)
         self._gpu_device_count = gpu_device_count or (lambda: 1)
         self._per_gpu_vram_mb = per_gpu_vram_mb or (lambda: 0.0)
@@ -355,31 +380,45 @@ class LaneManager:
         # probe keeps the slice's VRAM to itself. Leftover GPUs stay placeable.
         self._calibration_gpu_subset: frozenset[int] | None = None
 
-    def validate_capabilities(self, capabilities_models: list[str]) -> list[str]:
+    def validate_capabilities(
+        self,
+        capabilities_models: list[str],
+        hf_home: str,
+        cache_root: str = "",
+    ) -> list[str]:
         """Check which capabilities_models are available locally.
 
-        For each model, checks if it exists in the HF cache or models path.
-        Returns a list of models that could NOT be found (warnings only,
-        doesn't block startup).
+        For each model, checks the HF hub cache, the direct model path under
+        the models path, and (when given) the direct model path under the
+        cache root. Returns a list of models that could NOT be found (warnings
+        only, doesn't block startup).
+
+        ``hf_home``/``cache_root`` come from the caller's resolved storage
+        layout — the same directory the lane processes download into — rather
+        than being re-derived here: on a Mac the inherited ollama models path
+        does not exist, and re-deriving would check a location the lanes
+        never read.
         """
         import os
 
         missing = []
-        hf_home = os.environ.get("HF_HOME", os.path.join(self._global_config.models_path, ".hf"))
         models_path = self._global_config.models_path
         for model_name in capabilities_models:
             # Check HF cache (transformers style: models--org--name)
             hf_cache_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
-            # Check direct model path
-            direct_path = os.path.join(models_path, model_name)
-            if not os.path.isdir(hf_cache_dir) and not os.path.isdir(direct_path):
+            # Check direct model path (ollama-style models dir, and — on
+            # backends with their own cache root — a model dir placed there)
+            checked = [os.path.join(models_path, model_name)]
+            if cache_root:
+                checked.append(os.path.join(cache_root, model_name))
+            if not os.path.isdir(hf_cache_dir) and not any(os.path.isdir(p) for p in checked):
                 missing.append(model_name)
                 logger.warning(
                     "Capability model '%s' not found locally (checked %s and %s). "
                     "Ensure the model is downloaded before it can be loaded.",
                     model_name,
                     hf_cache_dir,
-                    direct_path,
+                    ", ".join(checked),
                 )
         if not missing:
             logger.info(
@@ -1082,6 +1121,31 @@ class LaneManager:
                 exhausted_lids.append(lid)
                 continue
 
+            # Skip if the crash was a Metal allocation failure: the model does
+            # not fit this machine's working-set budget (or max buffer length),
+            # and restarting it unchanged fails identically — the same reason
+            # the CUDA fatal-error path stops retrying. Unlike CUDA fatals this
+            # wedges nothing (Metal memory is reclaimed on exit), so no reboot
+            # is involved; the operator fixes the fit (smaller quantization,
+            # lower max_model_len, higher iogpu.wired_limit_mb) and re-adds
+            # the lane, which resets this decision with it.
+            if handle is not None and getattr(handle, "has_metal_allocation_failure", False):
+                logger.error(
+                    "Lane '%s' crashed with a Metal allocation failure in recent logs; "
+                    "skipping restart (the model does not fit this machine's Metal "
+                    "budget — resize it and re-add the lane)",
+                    lid,
+                )
+                self._record_event(
+                    lid,
+                    "crash_restart_skipped_metal_allocation",
+                    model=lane_config.model,
+                    details="Metal allocation failure patterns detected in process logs",
+                    port=status.port,
+                )
+                exhausted_lids.append(lid)
+                continue
+
             # Circuit breaker: skip if restart budget exhausted
             restart_count = self._crash_restart_counts.get(lid, 0)
             if restart_count >= _MAX_CRASH_RESTARTS:
@@ -1767,6 +1831,10 @@ class LaneManager:
             )
             return lane_config
 
+        # Left as nvidia_smi_available on purpose — unlike the headroom gate,
+        # this one should NOT run on Metal. Auto-placement picks which physical
+        # GPU a lane is pinned to; Apple Silicon has exactly one, so there is
+        # nothing to choose and the lane's gpu_devices must stay untouched.
         if not snapshot.nvidia_smi_available:
             return lane_config
 
@@ -2021,13 +2089,20 @@ class LaneManager:
                 )
                 break  # can't check — proceed with spawn
 
-            if not snapshot.nvidia_smi_available:
+            # nvidia_smi_available stays False on Metal nodes (there is no
+            # nvidia-smi to speak of), so gate on the backend-neutral flag and
+            # fall back to the legacy one for snapshots that predate it. A
+            # Metal snapshot on the sysctl-fallback path also reports
+            # telemetry_available=False (its budget is an estimate, not a
+            # measurement), which skips the gate the same way a broken GPU
+            # poll does — degraded numbers must not drive placement.
+            if not (snapshot.telemetry_available or snapshot.nvidia_smi_available):
                 break
 
             # Check free VRAM on target devices
             min_free_mb = float("inf")
             for fallback_idx, device in enumerate(snapshot.devices):
-                if device.kind != "nvidia":
+                if device.kind not in ("nvidia", "metal"):
                     continue
                 raw_idx = device.extra.get("index", fallback_idx)
                 try:
@@ -2128,6 +2203,7 @@ class LaneManager:
             lane_config,
             model_profiles=self._model_profiles,
             per_gpu_total_mb=self._per_gpu_vram_mb,
+            metal_config=self._metal_config,
         )
         if hf_home_override and hasattr(handle, "hf_home_override"):
             handle.hf_home_override = hf_home_override
@@ -2216,6 +2292,7 @@ class LaneManager:
             new_config,
             model_profiles=self._model_profiles,
             per_gpu_total_mb=self._per_gpu_vram_mb,
+            metal_config=self._metal_config,
         )
         await new_handle.init()
 
@@ -2355,6 +2432,7 @@ class LaneManager:
                             orig_lc,
                             model_profiles=self._model_profiles,
                             per_gpu_total_mb=self._per_gpu_vram_mb,
+                            metal_config=self._metal_config,
                         )
                         await restored.init()
                         await restored.spawn(orig_lc)
@@ -2384,6 +2462,7 @@ class LaneManager:
                         lc,
                         model_profiles=self._model_profiles,
                         per_gpu_total_mb=self._per_gpu_vram_mb,
+                        metal_config=self._metal_config,
                     )
                     await restored.init()
                     await restored.spawn(lc)

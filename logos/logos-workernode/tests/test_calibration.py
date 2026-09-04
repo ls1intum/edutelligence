@@ -55,6 +55,16 @@ from logos_worker_node.calibration import (
 from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 from logos_worker_node.models import AppConfig
 
+
+@pytest.fixture(autouse=True)
+def _pin_backend_to_cuda(monkeypatch):
+    """calibration.py is the CUDA measurement path (nvidia-smi,
+    /proc/meminfo). These tests exercise it directly, so the backend must be
+    pinned: on a developer's Mac is_metal_backend() auto-detects darwin and
+    the startup path now skips calibration by construction."""
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
+
+
 # ── helpers ────────────────────────────────────────────────────────────
 
 

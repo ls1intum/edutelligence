@@ -1,0 +1,152 @@
+# =============================================================================
+# Logos Worker Node — Apple Silicon / MLX reference configuration
+#
+# Copy to config.yml (install-macos.sh seeds it on first run and never
+# overwrites it afterwards). Credentials belong in .env, not here.
+#
+# Differences from the CUDA config.example.yml, all consequences of the
+# platform rather than choices:
+#   • Unified memory — no separate VRAM pool. The budget is Metal's
+#     max_recommended_working_set_size (~78% of RAM unless iogpu.wired_limit_mb
+#     is set), NOT total RAM.
+#   • tensor_parallel_size is always 1 — one integrated GPU.
+#   • Sleep mode is unavailable (it is built on CUDA virtual memory). The
+#     orchestrator falls back to stop/start to reclaim memory.
+#   • Calibration is unavailable on this backend (the worker skips it
+#     automatically, no flag needed); profiles are supplied by hand below.
+# =============================================================================
+
+worker:
+  port: 8080
+  # No nvidia-smi to poll; this drives the Metal/vm_stat sampler instead.
+  gpu_poll_interval: 5
+  lane_port_start: 11436
+  lane_port_end: 11499
+  name: logos-workernode-mlx
+
+  # Reboot-on-stuck-GPU is CUDA-only and force-disabled on Metal regardless of
+  # this value: a killed process releases its unified memory to the kernel, so
+  # the wedged-driver state that path exists for cannot occur.
+  auto_reboot_on_stuck_gpu: false
+
+  # Persistent root for weights and caches. MUST be set on macOS — the default
+  # falls back to the ollama models path, which does not exist here.
+  cache_path: "~/logos-workernode-mlx/cache"
+
+  # Bound the lane count explicitly. On unified memory an over-subscribed node
+  # does not fail fast — it swaps, and throughput collapses instead.
+  max_lanes: 1
+
+
+logos:
+  # Models this node advertises. Every entry needs a profile under
+  # model_profile_overrides below, otherwise main.py drops it from the
+  # advertised capabilities and the orchestrator will not route to it.
+  capabilities_models:
+    # 4bit is the default: the build the sizing table measures, and the only
+    # one that fits the 36 GB reference machine. On a 64 GB+ Mac change this
+    # entry to "mlx-community/Qwen3.8-27B-8bit".
+    - "mlx-community/Qwen3.8-27B-4bit"
+
+
+engines:
+  metal:
+    # Empty resolves ~/.venv-vllm-metal/bin/{vllm,python}, which is where
+    # vllm-metal's install.sh puts them.
+    vllm_binary: ""
+    metal_python: ""
+
+    # Share of the Metal working set a lane may claim. The counterpart to
+    # --gpu-memory-utilization, which vllm-metal ignores.
+    memory_fraction: 0.85
+
+    # Qwen3.5/3.6/3.8 checkpoints advertise a multimodal config, but vllm-metal
+    # serves this family text-only unless the native path is forced. Leaving
+    # this at "auto" is the supported configuration; "multimodal-native" is
+    # experimental and only relevant if you need image input.
+    multimodal_mode: "auto"
+
+  vllm:
+    # Worker-wide kill switch. Metal has no CuMemAllocator, so lanes report
+    # sleep_state="unsupported" and the server switches to stop/start.
+    disable_sleep_mode: true
+
+    model_overrides:
+      # One entry per model the node may serve (capabilities_models picks
+      # which is advertised); the caps are identical — they constrain the
+      # family, not the quantization. Every advertised model needs one:
+      # Qwen3.8 is a hybrid (16 SDPA layers carry a growing KV cache, the
+      # other 48 are GDN linear layers with a fixed per-sequence state, and
+      # only the SDPA layers scale with context), so a lane spawned without
+      # max_model_len lets vLLM size against the model's full 262144 window
+      # and will not fit.
+      "mlx-community/Qwen3.8-27B-4bit":
+        tensor_parallel_size: 1
+        max_model_len: 32768
+        # MLX quantization is declared in the checkpoint's config.json; do not
+        # pass --quantization, vLLM infers it.
+        quantization: ""
+        # vLLM reserves 4 GB for its multimodal processor cache by default.
+        # This family is served text-only on this backend (see
+        # engines.metal.multimodal_mode above), so that reservation buys
+        # nothing and costs 4 GB on a node where unified memory is the
+        # binding constraint — an over-subscribed Mac does not fail fast, it
+        # swaps. Zeroing it is safe here for a second reason: the field also
+        # gates the post-wake /reset_mm_cache POST, and sleep/wake does not
+        # exist on Metal.
+        mm_processor_cache_gb: 0
+        # Leave gpu_memory_utilization unset: vllm-metal derives one from
+        # VLLM_METAL_MEMORY_FRACTION=auto by measuring the real Metal working
+        # set (0.92 observed on a 36 GB M3 Pro) and logs the breakdown at
+        # startup. A hand-set value replaces that measurement with a guess.
+      "mlx-community/Qwen3.8-27B-8bit":
+        tensor_parallel_size: 1
+        max_model_len: 32768
+        quantization: ""
+        mm_processor_cache_gb: 0
+
+
+# ── Capacity profiles (hand-measured; replaces calibration) ──────────────────
+# calibration.py measures VRAM against nvidia-smi and samples /proc/meminfo,
+# neither of which exists here, so calibration is unavailable on this backend
+# and the worker skips it automatically (no flag required). Set the numbers
+# below by hand; a profile with residency_source="override" counts as valid,
+# so the model is advertised normally (see main.py, the ready_caps filter).
+#
+# Read the numbers off the lane's own startup log — vllm-metal prints the full
+# breakdown, which beats estimating:
+#
+#   Paged attention memory breakdown: metal_limit=30.15GB, fraction=0.92,
+#   usable_metal=27.74GB, model_memory=15.13GB, overhead=1.16GB,
+#   kv_budget=11.44GB, per_block_bytes=105902080, num_blocks=108,
+#   max_tokens_cached=84672
+#   Hybrid cache initialized: 16 SDPA layers (108 blocks), 48 linear layers
+#
+#   base_residency_mb  ≈ (model_memory + overhead) in MiB
+#   kv_per_token_bytes ≈ kv_budget / max_tokens_cached
+#
+# The 4bit values below come from that log for the 4bit build on a 36 GB
+# M3 Pro (measured 2026-08-26, vllm-metal 0.3.0.dev20260826 / vLLM 0.28.0).
+#
+# Sizing reference, Qwen3.8-27B:
+#   weights   8bit ≈ 27.5 GB | 4bit ≈ 15.1 GB (measured)
+#   KV        ≈ 135 KiB per token (hybrid: only 16 of 64 layers scale)
+#   budget    Metal working set ≈ 0.78 × RAM, then × ~0.92 usable
+#     36 GB Mac → 27.7 GB usable → 8bit does NOT fit; 4bit leaves ~11 GB for KV
+#     64 GB Mac → ~46 GB usable  → 8bit fits with ~18 GB for KV
+#    128 GB Mac → ~91 GB usable  → 8bit fits comfortably at full context
+model_profile_overrides:
+  # The default build — measured, not estimated.
+  "mlx-community/Qwen3.8-27B-4bit":
+    base_residency_mb: 16680
+    kv_per_token_bytes: 138344
+    max_context_length: 262144
+    disk_size_bytes: 16106127360
+
+  # 8bit alternative for 64 GB+ Macs: weights scale by the quantization
+  # ratio, KV cost is the same — re-measure on the target Mac and correct.
+  "mlx-community/Qwen3.8-27B-8bit":
+    base_residency_mb: 29400
+    kv_per_token_bytes: 138344
+    max_context_length: 262144
+    disk_size_bytes: 29527900160

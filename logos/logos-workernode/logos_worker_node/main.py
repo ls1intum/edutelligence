@@ -25,6 +25,7 @@ from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
+from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
 from logos_worker_node.model_cache import create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import model_can_sleep
@@ -44,8 +45,9 @@ def _download_one_model(model_name: str, hf_home: str) -> None:
     """Blocking download of a single model into the HF hub cache.
 
     Uses huggingface_hub.snapshot_download with HF_TOKEN from the environment.
-    Imported lazily because huggingface_hub is supplied transitively by the
-    vLLM runtime image and is not a declared dependency of this package.
+    Imported lazily to keep worker startup cheap; huggingface_hub is a
+    declared dependency (requirements.txt) because the isolated macOS worker
+    venv installs nothing beyond that file.
     """
     from huggingface_hub import snapshot_download
 
@@ -90,6 +92,16 @@ async def _auto_calibrate_if_needed(
         "yes",
     ):
         logger.info("Auto-calibration disabled via LOGOS_SKIP_AUTO_CALIBRATION")
+        return
+
+    # The Metal backend has no nvidia-smi and no /proc/meminfo to measure
+    # against, so calibration is impossible there by construction. Profiles
+    # come from model_profile_overrides instead — no flag required.
+    if is_metal_backend():
+        logger.info(
+            "Auto-calibration unavailable on the Metal backend — skipping "
+            "(use model_profile_overrides for capacity profiles)"
+        )
         return
 
     caps = cfg.logos.capabilities_models if cfg.logos else []
@@ -283,23 +295,36 @@ async def _auto_calibrate_if_needed(
         model_profiles._load_persisted()
 
 
+def _resolve_worker_cache_root(cfg) -> str:
+    """The cache root exactly as the lane process handles that will spawn use it.
+
+    The Metal backend overrides ``_resolve_persistent_cache_root`` with a
+    macOS-appropriate fallback (the ollama models path is not creatable
+    without root on a Mac), so pick the resolver of the handle that will
+    actually spawn the lanes. Startup validation and the background prefetch
+    must inspect and download the same directory the lanes read weights from.
+    """
+    from logos_worker_node.metal_process import MetalVllmProcessHandle
+    from logos_worker_node.vllm_process import VllmProcessHandle
+
+    handle_cls = MetalVllmProcessHandle if is_metal_backend() else VllmProcessHandle
+    return handle_cls._resolve_persistent_cache_root(cfg.engines.ollama)
+
+
 def _log_storage_layout(cfg) -> None:
     """Log the resolved storage paths for HF + the four compilation/JIT caches.
 
     Surfaces (a) where the cache root resolves from — env var vs. config field
-    vs. ollama-path fallback — and (b) the absolute path each cache will use,
-    so a single grep at boot is enough to debug "is X being persisted?"
-    questions.
+    vs. fallback — and (b) the absolute path each cache will use, so a single
+    grep at boot is enough to debug "is X being persisted?" questions.
     """
-    from logos_worker_node.vllm_process import VllmProcessHandle
-
-    cache_root = VllmProcessHandle._resolve_persistent_cache_root(cfg.engines.ollama)
+    cache_root = _resolve_worker_cache_root(cfg)
     if os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip():
         source = "LOGOS_WORKER_CACHE_ROOT env var"
     elif cfg.worker.cache_path:
         source = "config.yml worker.cache_path"
     else:
-        source = "fallback: engines.ollama.models_path"
+        source = "fallback: engines.ollama.models_path or backend default"
 
     hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
     cache_dir = os.path.join(cache_root, ".cache")
@@ -333,15 +358,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     _log_storage_layout(cfg)
 
-    gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
+    # Device telemetry. Both collectors expose the same surface, so everything
+    # downstream (LaneManager, runtime status) is backend-agnostic.
+    if is_metal_backend():
+        gpu_collector = MetalMetricsCollector(
+            poll_interval=cfg.worker.gpu_poll_interval,
+            metal_python=cfg.engines.metal.metal_python,
+        )
+    else:
+        gpu_collector = GpuMetricsCollector(poll_interval=cfg.worker.gpu_poll_interval)
     await gpu_collector.start()
 
     # Watchdog for unrecoverable GPU wedges (GSP RPC failure, PCIe drop,
     # cudaErrorDevicesUnavailable). Drives the host through reboot(2) when
     # node_health reports a gpu-* failure for several consecutive ticks.
     # Requires CAP_SYS_BOOT in the container; see compose `cap_add: [SYS_BOOT]`.
-    gpu_watchdog = GpuWatchdog(state_dir=get_state_dir())
-    await gpu_watchdog.start()
+    #
+    # Skipped on Metal: every failure mode it detects is an NVIDIA driver
+    # condition read out of nvidia-smi, and its remedy — rebooting the host —
+    # has no counterpart here. Metal memory belongs to the process and the
+    # kernel reclaims it on exit, so a wedged lane is fixed by restarting the
+    # lane, which the lane manager already does.
+    gpu_watchdog = None
+    if not is_metal_backend():
+        gpu_watchdog = GpuWatchdog(state_dir=get_state_dir())
+        await gpu_watchdog.start()
 
     # Pre-warm FlashInfer JIT kernels (single-process, sequential) so that
     # subsequent vLLM launches — including TP>1 — find cached .so files and
@@ -372,7 +413,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # ── tmpfs RAM cache (created before calibration so models can be loaded
     # from RAM during VRAM measurement, then evicted to free space) ──────────
-    hf_home = os.environ.get("HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache"))
+    # Same resolution the lanes receive: the model cache and the startup
+    # prefetch must use the HF_HOME the lane processes download into — on a
+    # Mac without LOGOS_WORKER_CACHE_ROOT that is not the ollama models path.
+    cache_root = _resolve_worker_cache_root(cfg)
+    hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
     model_cache = create_model_cache(
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,
@@ -523,13 +568,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gpu_force_poll=gpu_collector.force_poll,
         max_lanes=cfg.worker.max_lanes,
         model_cache=model_cache,
-        auto_reboot_on_stuck_gpu=cfg.worker.auto_reboot_on_stuck_gpu,
+        auto_reboot_on_stuck_gpu=cfg.worker.auto_reboot_on_stuck_gpu and not is_metal_backend(),
         reboot_sentinel_path=cfg.worker.reboot_sentinel_path,
+        metal_config=cfg.engines.metal,
     )
 
     # Validate capabilities models at startup (warnings only)
     if cfg.logos and cfg.logos.capabilities_models:
-        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models)
+        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models, hf_home, cache_root)
         if missing and cfg.worker.prefetch_missing_models:
             # Fire-and-forget: download missing weights in the background so the
             # worker boots into zero-lane mode immediately and serves the models
@@ -550,7 +596,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply static lanes from config")
             await lane_manager.close()
-            await gpu_watchdog.stop()
+            if gpu_watchdog is not None:
+                await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
 
@@ -582,7 +629,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("Failed to apply lanes from config")
             await lane_manager.close()
-            await gpu_watchdog.stop()
+            if gpu_watchdog is not None:
+                await gpu_watchdog.stop()
             await gpu_collector.stop()
             raise
     else:
@@ -665,7 +713,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Error destroying lanes", exc_info=True)
     await lane_manager.close()
-    await gpu_watchdog.stop()
+    if gpu_watchdog is not None:
+        await gpu_watchdog.stop()
     await gpu_collector.stop()
     # Cancel any pending background RAM cache copies. Won't roll back an
     # rsync that's already in flight, but stops the worker from queueing

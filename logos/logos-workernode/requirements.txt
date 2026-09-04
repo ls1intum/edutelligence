@@ -5,3 +5,8 @@ pyyaml>=6.0,<7.0
 pydantic>=2.0,<3.0
 websockets>=12.0,<15.0
 prometheus-client>=0.21.0,<1.0
+# Startup model prefetch (main._download_one_model) and the sharded-checkpoint
+# helper import this directly; on the Linux image it previously arrived
+# transitively via vLLM, but the isolated macOS worker venv only installs
+# this file.
+huggingface_hub>=0.34.0,<2.0

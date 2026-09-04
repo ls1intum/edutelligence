@@ -1,8 +1,11 @@
+// Mirrors the Postgres enum threshold_enum (liquibase 000 + 014) and
+// ThresholdLevel in logos-orchestrator — keep in sync.
 export type ThresholdLevel =
   | 'LOCAL'
   | 'CLOUD_IN_EU_BY_EU_PROVIDER'
   | 'CLOUD_IN_EU_BY_US_PROVIDER'
-  | 'CLOUD_NOT_IN_EU_BY_US_PROVIDER';
+  | 'CLOUD_NOT_IN_EU_BY_US_PROVIDER'
+  | 'THIRD_PARTY_HARDWARE';
 
 // API returns snake_case (backend uses manual toMap() with snake_case keys)
 export interface Policy {
