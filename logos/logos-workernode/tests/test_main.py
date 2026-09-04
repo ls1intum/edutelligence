@@ -69,3 +69,68 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
 
         with pytest.raises(RuntimeError, match="nvidia-smi"):
             await context.__aenter__()
+
+
+def test_download_one_model_explicit_quant_beats_operator_pin(tmp_path, monkeypatch) -> None:
+    # Regression: an explicit repo:quant reference must prefetch the quant it
+    # names. resolve_gguf_spec serves the embedded quant and ignores any
+    # operator pin, so the prefetch has to download the same one — otherwise
+    # the lane boots against a quant that was never fetched.
+    calls: list[dict] = []
+
+    def fake(**kwargs) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    worker_main._download_one_model("unsloth/Qwen3-8B-GGUF:Q8_0", str(tmp_path), "Q4_K_M")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["repo_id"] == "unsloth/Qwen3-8B-GGUF"
+    assert kwargs["allow_patterns"] is not None
+    # The embedded quant (Q8_0), not the operator pin (Q4_K_M), is downloaded.
+    assert all("q8_0" in pattern.lower() for pattern in kwargs["allow_patterns"])
+    assert all("q4_k_m" not in pattern.lower() for pattern in kwargs["allow_patterns"])
+
+
+def test_download_one_model_skips_local_file_refs(tmp_path, monkeypatch) -> None:
+    # Regression: local GGUF file references (absolute AND relative) point at
+    # the host filesystem, not a Hub repository — the prefetch must not
+    # attempt to download them (the relative form used to fall through to
+    # snapshot_download(repo_id="./models")).
+    pytest.importorskip("huggingface_hub")
+
+    def _no_download(**kwargs) -> None:
+        raise AssertionError(f"local reference must not be downloaded: {kwargs}")
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", _no_download)
+
+    # Absolute local file …
+    worker_main._download_one_model(str(tmp_path / "models" / "model.gguf"), str(tmp_path))
+    # … relative local file (resolved against the working directory) …
+    monkeypatch.chdir(tmp_path)
+    worker_main._download_one_model("./models/model.gguf", str(tmp_path))
+    # … and the local directory reference, as before.
+    worker_main._download_one_model(f"{tmp_path}/qwen-GGUF:Q4_K_M", str(tmp_path))
+
+
+def test_startup_hf_home_blank_env_falls_back_to_models_path(tmp_path, monkeypatch) -> None:
+    # Regression: a blank/whitespace HF_HOME must fall back to
+    # <models_path>/.hf_cache — the directory the startup prefetch populates
+    # and capability validation checks — instead of resolving to a relative
+    # "hub" path under the working directory that ignores cached weights.
+    cfg = AppConfig()
+    cfg.engines.ollama.models_path = str(tmp_path / "models")
+    fallback = str(tmp_path / "models" / ".hf_cache")
+
+    monkeypatch.setenv("HF_HOME", "")
+    assert worker_main._startup_hf_home(cfg) == fallback
+    monkeypatch.setenv("HF_HOME", "   ")
+    assert worker_main._startup_hf_home(cfg) == fallback
+    monkeypatch.delenv("HF_HOME")
+    assert worker_main._startup_hf_home(cfg) == fallback
+    # A real value still wins.
+    monkeypatch.setenv("HF_HOME", "/explicit/hf")
+    assert worker_main._startup_hf_home(cfg) == "/explicit/hf"

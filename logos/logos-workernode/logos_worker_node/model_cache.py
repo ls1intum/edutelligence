@@ -42,8 +42,17 @@ _BULK_FILE_THRESHOLD_BYTES = 10 * 1024 * 1024
 
 
 def _hf_model_dir_name(model_name: str) -> str:
-    """Convert ``org/name`` to ``models--org--name`` (HF cache convention)."""
-    return "models--" + model_name.replace("/", "--")
+    """Convert a model reference to its HF cache dir name (``models--org--name``).
+
+    Keyed on the bare repo id (``gguf.hf_cache_dir_name``) so every GGUF
+    reference form (bare repo, ``repo:quant``, ``repo/file.gguf``) resolves to
+    the same directory the startup prefetch fills — otherwise the RAM cache
+    looks in a directory the prefetch never populated and silently finds
+    nothing. Non-GGUF references are unchanged.
+    """
+    from logos_worker_node import gguf  # noqa: PLC0415 — lazy: keep gguf out of module import
+
+    return gguf.hf_cache_dir_name(model_name)
 
 
 def _has_bulk_file(model_dir: Path) -> bool:

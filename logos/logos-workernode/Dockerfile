@@ -211,7 +211,31 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
          # 5. FlashInfer (no-op while it ships as a vLLM dependency; kept so
          #    it stays installed if vLLM ever drops the dependency)
          && uv pip install --no-cache --no-deps flashinfer-python \
-         # 6. Pin the CUDA compiler wheels to the runtime-header version.
+         # 6. GGUF serving: vLLM moved GGUF quantization out of the tree
+         #    (vllm-project/vllm#39583); the out-of-tree plugin restores it
+         #    and is auto-loaded through vLLM's plugin entry point. Worker
+         #    lanes address GGUF models as repo:quant / file references
+         #    (see logos_worker_node/gguf.py). Prebuilt wheel — no CUDA build
+         #    step.
+         #
+         #    Blast radius: vllm.general_plugins is evaluated on EVERY vLLM
+         #    engine start, and the plugin's register() is not passive — it
+         #    registers the GGUF quantization, loader and config parser and
+         #    applies three monkey-patches over vLLM internals (EngineArgs,
+         #    the speculator-override hook, the diffusers loader). Those
+         #    wrappers run inside every lane on the node (AWQ, safetensors,
+         #    …), not only GGUF lanes: they detect GGUF references and pass
+         #    through otherwise, but a bug in the plugin reaches every lane.
+         #
+         #    Installed with --no-deps (like the FlashInfer step above): the
+         #    plugin declares unpinned deps on gguf, vllm and torch, and a
+         #    plain install lets the resolver float torch/vllm out from under
+         #    the pinned CUDA stack below. gguf is installed explicitly first
+         #    (a --no-deps plugin does not pull it); it is otherwise already
+         #    in and the explicit install is a no-op when it is.
+         && uv pip install --no-cache gguf \
+         && uv pip install --no-cache --no-deps "vllm-gguf-plugin==0.0.5" \
+         # 7. Pin the CUDA compiler wheels to the runtime-header version.
          #    torch pins nvidia-cuda-runtime (the headers, CUDART_VERSION)
          #    but NOT nvidia-cuda-nvcc, so the resolver floats nvcc to the
          #    newest minor (e.g. nvcc 13.2 vs headers 13.0). FlashInfer's
@@ -242,7 +266,7 @@ RUN if [ "$INSTALL_VLLM" = "1" ]; then \
         test -x "$CUDA_HOME/bin/nvcc"; \
         test -f "$CUDA_HOME/include/cuda_runtime.h"; \
         # Guard: nvcc and the runtime headers must agree on the CUDA minor
-        # version (see install step 6), or FlashInfer JIT fails at runtime.
+        # version (see install step 7), or FlashInfer JIT fails at runtime.
         cudart=$(sed -n 's/^#define CUDART_VERSION[[:space:]]*\([0-9]*\).*/\1/p' "$CUDA_HOME/include/cuda_runtime_api.h"); \
         hdr_mm="$((cudart / 1000)).$((cudart % 1000 / 10))"; \
         nvcc_mm=$("$CUDA_HOME/bin/nvcc" --version | sed -n 's/.*release \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p'); \

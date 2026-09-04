@@ -2442,6 +2442,42 @@ def test_plans_from_config_forwards_extra_args(tmp_path: Path) -> None:
     assert hf in _build_vllm_cmd(plan, "vllm", "127.0.0.1", 9000, "4G")
 
 
+def test_gguf_calibration_spec_resolves_from_local_cache_offline(monkeypatch, tmp_path: Path) -> None:
+    """A GGUF repo already in the HF cache resolves without the Hub.
+
+    The calibration fingerprint builds the same command the spawn runs, and
+    for a GGUF model that command resolves the serve reference from the local
+    HF cache first (HuggingFace Hub as fallback). Resolving before the model
+    is in the local cache would list the Hub — a network call inside the KV
+    sweep, and a hard failure when the Hub is unreachable for a repo that is
+    already downloaded. With ``hf_home`` pointing at the populated cache the
+    reference resolves from local files and the Hub is never consulted.
+    """
+    from logos_worker_node import calibration
+    from logos_worker_node.calibration import _resolve_gguf_calibration_spec
+
+    # A bare -GGUF repo present in the local HF cache (Q4_K_M and a larger Q8_0).
+    repo_dir = tmp_path / "hub" / "models--unsloth--Qwen3-8B-GGUF"
+    snapshot = repo_dir / "snapshots" / "rev"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs" / "main").write_text("rev")
+    (snapshot / "Qwen3-8B-Q4_K_M.gguf").write_bytes(b"\x00" * 1024)
+    (snapshot / "Qwen3-8B-Q8_0.gguf").write_bytes(b"\x00" * 4096)
+
+    # The Hub is unreachable: if the resolver reaches for it, the run fails,
+    # so a successful resolution proves the local cache was used.
+    def _no_network(_repo: str):
+        raise RuntimeError("no hub access")
+
+    monkeypatch.setattr(calibration, "fetch_repo_gguf_files", _no_network)
+
+    spec = _resolve_gguf_calibration_spec({"model": "unsloth/Qwen3-8B-GGUF"}, str(tmp_path))
+    assert spec is not None
+    assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    assert spec.quant == "Q4_K_M"
+
+
 def test_plans_from_config_never_takes_internal_bookkeeping(tmp_path: Path) -> None:
     """The retry counters steer the sweep and must not be settable from config."""
     from logos_worker_node.calibration import plans_from_config
@@ -2654,6 +2690,123 @@ def test_result_to_profile_dict_maps_sleep_mode_disabled() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GGUF: second-stage detection in the calibration command builder
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_build_vllm_cmd_resolves_plain_named_cached_gguf_repo(tmp_path: Path) -> None:
+    """A cached GGUF-only repo with a plain name resolves to repo:QUANT.
+
+    The resolver runs for every model, so the cached file listing — not just
+    the -GGUF naming convention — decides. Under the old name guard this plan
+    calibrated against the bare repo while the lane serves repo:QUANT, and
+    the probe failed.
+    """
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    repo_dir = tmp_path / "hub" / "models--org--plain-llm"
+    snapshot = repo_dir / "snapshots" / "rev"
+    snapshot.mkdir(parents=True)
+    (repo_dir / "refs").mkdir(parents=True)
+    (repo_dir / "refs" / "main").write_text("rev")
+    (snapshot / "plain-llm-Q4_K_M.gguf").write_bytes(b"\x00" * 1024)
+
+    cmd = _build_vllm_cmd({"model": "org/plain-llm"}, "vllm", "127.0.0.1", 9000, "4G", hf_home=str(tmp_path))
+    assert cmd[cmd.index("serve") + 1] == "org/plain-llm:Q4_K_M"
+
+
+def test_build_vllm_cmd_ordinary_model_keeps_the_bare_repo(tmp_path: Path) -> None:
+    """Running the resolver for every model must not touch non-GGUF plans.
+
+    A cached listing without GGUF files is authoritative: the resolver
+    returns None and the command keeps the bare repository.
+    """
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    repo_dir = tmp_path / "hub" / "models--org--sft-model"
+    snapshot = repo_dir / "snapshots" / "rev"
+    snapshot.mkdir(parents=True)
+    (repo_dir / "refs").mkdir(parents=True)
+    (repo_dir / "refs" / "main").write_text("rev")
+    (snapshot / "model-00001-of-00002.safetensors").write_bytes(b"\x00" * 16)
+
+    cmd = _build_vllm_cmd({"model": "org/sft-model"}, "vllm", "127.0.0.1", 9000, "4G", hf_home=str(tmp_path))
+    assert cmd[cmd.index("serve") + 1] == "org/sft-model"
+
+
+def test_build_vllm_cmd_plain_named_uncached_model_never_lists_the_hub(monkeypatch) -> None:
+    """An uncached plain-named model must not trigger a Hub listing.
+
+    The Hub fallback is reserved for names that look like GGUF repos; for
+    everything else the resolver concludes from the (missing) cache listing.
+    """
+    from logos_worker_node import calibration
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    def _no_network(_repo: str):
+        raise AssertionError("Hub must not be listed for a plain-named model without a cache entry")
+
+    monkeypatch.setattr(calibration, "fetch_repo_gguf_files", _no_network)
+    cmd = _build_vllm_cmd({"model": "org/some-model"}, "vllm", "127.0.0.1", 9000, "4G")
+    assert cmd[cmd.index("serve") + 1] == "org/some-model"
+
+
+def test_calibrate_disk_fallback_passes_persistent_hf_home_to_spawn(monkeypatch, tmp_path: Path) -> None:
+    """When tmpfs declines the copy, the persistent HF root still reaches the spawn.
+
+    ensure_cached_sync returns the cache that actually holds the weights —
+    the tmpfs root on success, the persistent source root otherwise. The old
+    disk branch only logged it, so hf_home stayed None: a bare GGUF repo
+    then resolved from the Hub instead of its local cache and failed offline.
+    """
+    from logos_worker_node import calibration
+    from logos_worker_node.calibration import calibrate_model
+
+    persistent_root = tmp_path / "persistent"
+    # Plain-named repo whose GGUF weights live in the persistent cache.
+    repo_dir = persistent_root / "hub" / "models--org--plain-llm"
+    snapshot = repo_dir / "snapshots" / "rev"
+    snapshot.mkdir(parents=True)
+    (repo_dir / "refs").mkdir(parents=True)
+    (repo_dir / "refs" / "main").write_text("rev")
+    (snapshot / "plain-llm-Q4_K_M.gguf").write_bytes(b"\x00" * 1024)
+
+    class DiskOnlyCache:
+        """A RAM cache that declines the tmpfs copy (full / unavailable)."""
+
+        def __init__(self) -> None:
+            self._cache_hub = tmp_path / "tmpfs" / "hub"
+
+        def ensure_cached_sync(self, model_name: str) -> str:  # noqa: ARG002
+            return str(persistent_root)
+
+    def _no_network(_repo: str):
+        raise AssertionError("Hub must not be listed — the weights are cached locally")
+
+    patches = _patch_calibration_infra()
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        monkeypatch.setattr(calibration, "fetch_repo_gguf_files", _no_network)
+        result = calibrate_model(
+            _make_plan("org/plain-llm"),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=Path("/tmp/test-calibration-logs"),
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            model_cache=DiskOnlyCache(),
+        )
+        assert result.success, result.error
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    spawn_mock = managers["spawn"]
+    hf_homes = [call.kwargs["hf_home"] for call in spawn_mock.call_args_list]
+    assert hf_homes, "spawn_vllm was never called"
+    assert all(h == str(persistent_root) for h in hf_homes), f"hf_home not propagated: {hf_homes}"
+
+
 # Cold-load & wake-from-sleep timing (issue #627)
 # ═══════════════════════════════════════════════════════════════════════
 

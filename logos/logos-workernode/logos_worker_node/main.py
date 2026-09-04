@@ -40,38 +40,102 @@ logger = logging.getLogger("logos_worker_node")
 _LANE_MANAGER_SHUTDOWN_TIMEOUT = 90
 
 
-def _download_one_model(model_name: str, hf_home: str) -> None:
+def _download_one_model(model_name: str, hf_home: str, gguf_quant: str = "") -> None:
     """Blocking download of a single model into the HF hub cache.
 
     Uses huggingface_hub.snapshot_download with HF_TOKEN from the environment.
     Imported lazily because huggingface_hub is supplied transitively by the
     vLLM runtime image and is not a declared dependency of this package.
+
+    GGUF repositories ship every quantization in one repo (tens of GB of
+    duplicates) — when the model resolves to a GGUF reference only the
+    selected quant's files are downloaded, mirroring what the GGUF plugin's
+    own download resolves to.
     """
+    from logos_worker_node import gguf
+
+    # Local references (/path/model.gguf, ./models/model.gguf, /path/dir:
+    # <quant>) name host-filesystem locations, not Hub repositories — a
+    # download can never make them available, so the capability check (the
+    # local path itself) is their whole proof and the prefetch has nothing
+    # to do. (Checked before the huggingface_hub import: a local reference
+    # never needs the transitive dependency.)
+    if model_name.startswith("/") or gguf.is_local_gguf_file_ref(model_name):
+        logger.info("Prefetch: %s is a local reference — nothing to download", model_name)
+        return
+
     from huggingface_hub import snapshot_download
 
     # validate_capabilities checks <hf_home>/hub/models--org--name, so download
     # into <hf_home>/hub to match (HF_HUB_CACHE == HF_HOME/hub).
     cache_dir = os.path.join(hf_home, "hub")
+    token = os.environ.get("HF_TOKEN") or None
+
+    if not gguf.is_gguf_model(model_name):
+        snapshot_download(repo_id=model_name, cache_dir=cache_dir, token=token)
+        return
+
+    # Resolve the quant to filter on. An explicit repo:quant reference is
+    # authoritative: resolve_gguf_spec serves the embedded quant and ignores
+    # any operator pin, so the prefetch must download the same one or the lane
+    # would boot against a quant that was never fetched. A bare GGUF repository
+    # takes an operator pin, else the quant picked from its file listing.
+    if gguf.is_remote_gguf_ref(model_name):
+        quant = model_name.rsplit(":", 1)[1]
+    elif gguf.is_gguf_file_ref(model_name):
+        quant = ""
+    else:
+        quant = gguf_quant
+        if not quant:
+            repo = gguf.repo_id_of(model_name)
+            try:
+                quant = gguf.select_quant(gguf.candidate_quants(list(gguf.fetch_repo_gguf_files(repo)))) or ""
+            except Exception:
+                logger.warning(
+                    "Prefetch: could not list %s for quant selection — downloading "
+                    "the full repository instead (all quantizations)",
+                    repo,
+                    exc_info=True,
+                )
+
+    allow_patterns = gguf.download_allow_patterns(model_name, quant)
+    if not allow_patterns:
+        # Nothing left to filter on (e.g. listing failed for a bare repo) —
+        # fall back to the pre-GGUF behaviour of downloading the whole repo.
+        snapshot_download(repo_id=model_name, cache_dir=cache_dir, token=token)
+        return
+
+    logger.info("Prefetch: GGUF download for %s limited to patterns %s", model_name, allow_patterns)
     snapshot_download(
-        repo_id=model_name,
+        repo_id=gguf.repo_id_of(model_name),
         cache_dir=cache_dir,
-        token=os.environ.get("HF_TOKEN") or None,
+        allow_patterns=allow_patterns,
+        token=token,
     )
 
 
-async def _prefetch_missing_models(missing: list[str], hf_home: str) -> None:
+async def _prefetch_missing_models(
+    missing: list[str],
+    hf_home: str,
+    gguf_quants: dict[str, str] | None = None,
+) -> None:
     """Download missing capability models in the background, one at a time.
 
     Sequential to avoid saturating disk/network bandwidth. Each model is
     fetched in a worker thread so the event loop (heartbeats, lane commands)
     keeps running while large weights stream in. Failures are logged and do
     not abort the remaining downloads or worker startup.
+
+    ``gguf_quants`` maps model name → operator-pinned GGUF quant (from
+    engines.vllm.model_overrides) so a GGUF repo downloads only the one
+    quantization the lane will serve.
     """
     logger.info("Prefetching %d missing capability model(s): %s", len(missing), missing)
     for model_name in missing:
+        quant = (gguf_quants or {}).get(model_name, "")
         try:
             logger.info("Prefetch: downloading %s …", model_name)
-            await asyncio.to_thread(_download_one_model, model_name, hf_home)
+            await asyncio.to_thread(_download_one_model, model_name, hf_home, quant)
             logger.info("Prefetch: %s download complete", model_name)
         except Exception:
             logger.warning("Prefetch: failed to download %s", model_name, exc_info=True)
@@ -323,6 +387,17 @@ def _log_storage_layout(cfg) -> None:
     )
 
 
+def _startup_hf_home(cfg) -> str:
+    """HF cache root for startup cache work (RAM cache source, prefetch).
+
+    A blank/whitespace ``HF_HOME`` falls back to ``<models_path>/.hf_cache``
+    — the directory the startup prefetch populates and capability validation
+    checks — instead of a relative ``hub`` path under the working directory
+    that would ignore every cached weight.
+    """
+    return os.environ.get("HF_HOME", "").strip() or os.path.join(cfg.engines.ollama.models_path, ".hf_cache")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
@@ -372,7 +447,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # ── tmpfs RAM cache (created before calibration so models can be loaded
     # from RAM during VRAM measurement, then evicted to free space) ──────────
-    hf_home = os.environ.get("HF_HOME", os.path.join(cfg.engines.ollama.models_path, ".hf_cache"))
+    hf_home = _startup_hf_home(cfg)
     model_cache = create_model_cache(
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,
@@ -529,12 +604,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Validate capabilities models at startup (warnings only)
     if cfg.logos and cfg.logos.capabilities_models:
-        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models)
+        # Operator-pinned GGUF quants per model (from
+        # engines.vllm.model_overrides): a bare GGUF repository's lane serves
+        # the pinned quant, so capability validation must check that quant in
+        # the cache and the prefetch must download only it.
+        gguf_quants: dict[str, str] = {}
+        if cfg.engines and cfg.engines.vllm:
+            for model_name in cfg.logos.capabilities_models:
+                pinned = str((cfg.engines.vllm.model_overrides.get(model_name) or {}).get("gguf_quant") or "")
+                if pinned:
+                    gguf_quants[model_name] = pinned
+        missing = lane_manager.validate_capabilities(cfg.logos.capabilities_models, gguf_quants)
         if missing and cfg.worker.prefetch_missing_models:
             # Fire-and-forget: download missing weights in the background so the
             # worker boots into zero-lane mode immediately and serves the models
             # it already has while the rest stream in.
-            asyncio.create_task(_prefetch_missing_models(missing, hf_home))
+            asyncio.create_task(_prefetch_missing_models(missing, hf_home, gguf_quants))
 
     # ── Static lanes (pinned, never removed by the capacity planner) ──────
     static_lane_ids: set[str] = set()

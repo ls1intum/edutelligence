@@ -56,6 +56,17 @@ try:
 except ImportError:
     _HAS_YAML = False
 
+from logos_worker_node.gguf import (
+    GgufServeSpec,
+    effective_hf_home,
+    fetch_repo_gguf_files,
+    is_explicit_gguf_ref,
+    list_cached_model_weights,
+    needs_hub_listing,
+    repo_id_of,
+    resolve_gguf_spec,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -817,9 +828,24 @@ def _build_vllm_cmd(
     host: str,
     port: int,
     kv_cache_memory_bytes: str,
+    *,
+    hf_home: str | None = None,
 ) -> list[str]:
     """Build the vLLM command list without spawning a process."""
     model = plan["model"]
+    # GGUF models are served through the out-of-tree GGUF plugin under a
+    # resolved reference (repo:quant or file) — mirror the serving lane's
+    # _build_cmd so the probe measures exactly what production runs.
+    #
+    # The resolver runs for EVERY model, not just names that look like GGUF:
+    # it re-checks the cached file listing before concluding, and returns None
+    # for ordinary models. Guarding on the name first (the old behaviour)
+    # skipped that second-stage detection, so a cached GGUF-only repository
+    # whose name doesn't follow the -GGUF/_GGUF convention calibrated against
+    # the bare repo and failed, while the same model served fine in a lane.
+    gguf_spec = _resolve_gguf_calibration_spec(plan, hf_home)
+    if gguf_spec is not None:
+        model = gguf_spec.serve_ref
     tp = int(plan.get("tensor_parallel_size", 1))
     dtype = str(plan.get("dtype", "auto"))
     quant = str(plan.get("quantization") or "")
@@ -892,8 +918,78 @@ def _build_vllm_cmd(
         cmd.append("--enforce-eager")
     if disable_custom_all_reduce:
         cmd.append("--disable-custom-all-reduce")
+    if gguf_spec is not None:
+        # The probe addresses the model by plan["model"] (warmup request);
+        # alias the resolved GGUF reference back to that name.
+        cmd.extend(["--served-model-name", plan["model"]])
+        if gguf_spec.tokenizer:
+            cmd.extend(["--tokenizer", gguf_spec.tokenizer])
     cmd.extend(extra_args)
     return cmd
+
+
+def _default_hf_home() -> str:
+    """Resolved persistent HF cache root: ``<cache root>/.hf_cache``.
+
+    The cache root is ``LOGOS_WORKER_CACHE_ROOT`` when set, else the ollama
+    models_path — the same root the startup prefetch populates. Empty when
+    neither is available, in which case the caller falls back to the Hub.
+    """
+    cache_root = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
+    if not cache_root:
+        try:
+            from logos_worker_node.config import get_config  # noqa: PLC0415
+
+            cache_root = str(get_config().engines.ollama.models_path or "").strip()
+        except Exception:  # noqa: BLE001
+            cache_root = ""
+    return str(Path(cache_root) / ".hf_cache") if cache_root else ""
+
+
+def _resolve_gguf_calibration_spec(plan: dict[str, Any], hf_home: str | None) -> GgufServeSpec | None:
+    """Resolve the GGUF serve reference for a calibration plan.
+
+    Same detection the serving lane uses (see vllm_process._resolve_gguf_spec):
+    file listing from the local HF cache first, HuggingFace Hub as fallback.
+    Calibration runs in a worker thread, so the Hub listing is a plain
+    blocking call there.
+    """
+    model = plan["model"]
+    file_names: list[tuple[str, int]] | None = None
+    non_gguf_weights: list[str] | None = None
+    if not is_explicit_gguf_ref(model):
+        # Respect the inherited HF_HOME (and the explicit cache root) before
+        # the resolved default, so the local listing is consulted before the
+        # Hub — matching the serving lane.
+        effective = effective_hf_home(hf_home)
+        if not effective:
+            effective = _default_hf_home()
+        cached = list_cached_model_weights(effective, model)
+        if cached is not None:
+            file_names, non_gguf_weights = cached
+        # An authoritative (possibly empty) local listing stays local; only an
+        # absent one falls back to the Hub.
+        if needs_hub_listing(file_names, model):
+            try:
+                file_names = list(fetch_repo_gguf_files(repo_id_of(model)))
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "GGUF quant selection for %s falls back to the configured "
+                    "gguf_quant (if any): HuggingFace listing failed",
+                    model,
+                    exc_info=True,
+                )
+                file_names = None
+    try:
+        return resolve_gguf_spec(
+            model,
+            gguf_quant=str(plan.get("gguf_quant") or ""),
+            gguf_tokenizer=str(plan.get("gguf_tokenizer") or ""),
+            gguf_file_names=file_names,
+            non_gguf_weight_names=non_gguf_weights,
+        )
+    except ValueError as exc:
+        raise RuntimeError(f"GGUF model {model}: {exc}") from exc
 
 
 def spawn_vllm(
@@ -910,7 +1006,7 @@ def spawn_vllm(
     """Spawn vLLM and return ``(process, cmd_list)``."""
     tp = int(plan.get("tensor_parallel_size", 1))
 
-    cmd = _build_vllm_cmd(plan, vllm_binary, host, port, kv_cache_memory_bytes)
+    cmd = _build_vllm_cmd(plan, vllm_binary, host, port, kv_cache_memory_bytes, hf_home=hf_home)
 
     env = os.environ.copy()
     env["VLLM_SERVER_DEV_MODE"] = "1"
@@ -918,10 +1014,16 @@ def spawn_vllm(
     vllm_dir = str(Path(vllm_binary).resolve().parent)
     env["PATH"] = f"{vllm_dir}{os.pathsep}{env.get('PATH', '')}"
 
-    # Override HF_HOME to load from tmpfs RAM cache if provided.
-    if hf_home:
-        env["HF_HOME"] = hf_home
-        logger.info("  HF_HOME=%s (tmpfs RAM cache)", hf_home)
+    # Point the child at the cache the resolver consulted: an explicit hf_home
+    # (tmpfs RAM cache / operator override) wins, else the inherited HF_HOME,
+    # else the resolved default cache root — the same root
+    # _resolve_gguf_calibration_spec resolved the weights from. Without this, a
+    # GGUF repo resolved from the default cache root spawns a vLLM that never
+    # looks there and misses the weights offline.
+    resolved_hf_home = effective_hf_home(hf_home) or _default_hf_home()
+    if resolved_hf_home:
+        env["HF_HOME"] = resolved_hf_home
+        logger.info("  HF_HOME=%s", resolved_hf_home)
 
     # NCCL P2P: disabled by default (PCIe-only assumed).
     # Set nccl_p2p_available=True for NVLink setups.
@@ -1693,7 +1795,35 @@ def calibrate_model(
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
         if plan_overrides:
             planned.update(plan_overrides)
-        fingerprint = _cmd_fingerprint(_build_vllm_cmd(planned, vllm_binary, host, port, kv_str))
+        # Populate the RAM cache BEFORE the fingerprint, not before the spawn.
+        # The fingerprint builds the same vLLM command the spawn runs, and for a
+        # GGUF model that command resolves the serve reference from the local
+        # HF cache first (HuggingFace Hub as fallback). If the fingerprint ran
+        # before the model was cached it would resolve from the Hub instead — a
+        # network call inside the KV sweep, and a hard failure when the Hub is
+        # unreachable for a repo that is already downloaded. Caching first also
+        # sets hf_home to the root the spawn will load from (tmpfs when the
+        # copy succeeded, the persistent cache otherwise), so the fingerprint
+        # and the spawn resolve to the same reference.
+        if not _ram_cached and model_cache is not None:
+            logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
+            _hf = model_cache.ensure_cached_sync(model) or None
+            if _hf:
+                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
+                # Both branches point hf_home at the cache the weights
+                # actually live in: the tmpfs root when the copy succeeded,
+                # the persistent HF cache root when it did not (full,
+                # unavailable, or declined). Skipping the assignment on the
+                # disk branch left hf_home=None, so a bare GGUF repo
+                # resolved from the Hub instead of its local cache — a hard
+                # failure when the Hub is unreachable.
+                hf_home = _hf
+                if is_tmpfs:
+                    logger.info("  [RAM cache] %s → loading from tmpfs", model)
+                else:
+                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+            _ram_cached = True
+        fingerprint = _cmd_fingerprint(_build_vllm_cmd(planned, vllm_binary, host, port, kv_str, hf_home=hf_home))
         # Whitelist: known-good from a previous calibration run.  Trust the
         # result — skip the expensive vLLM spawn during the binary search.
         if allow_whitelist and fingerprint in succeeded_commands:
@@ -1712,18 +1842,6 @@ def calibrate_model(
             )
             _probes[kv_mb] = "skip"
             return None
-        # Lazy RAM cache: copy model into tmpfs on first real spawn.
-        if not _ram_cached and model_cache is not None:
-            logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
-            _hf = model_cache.ensure_cached_sync(model) or None
-            if _hf:
-                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
-                if is_tmpfs:
-                    hf_home = _hf
-                    logger.info("  [RAM cache] %s → loading from tmpfs", model)
-                else:
-                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
-            _ram_cached = True
         # Remember where this probe's output starts so every later extraction
         # parses THIS probe rather than the tail of the shared append log.
         _spawn_log_offset = _log_size(log_path)
@@ -2287,7 +2405,9 @@ def calibrate_model(
         for _attempt in range(_FINAL_MEASUREMENT_RETRIES):
             _final_kv_str = _format_kv_mb(_final_kv)
             _final_planned = {**plan, "kv_cache_memory_bytes": _final_kv_str}
-            _final_fp = _cmd_fingerprint(_build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str))
+            _final_fp = _cmd_fingerprint(
+                _build_vllm_cmd(_final_planned, vllm_binary, host, port, _final_kv_str, hf_home=hf_home)
+            )
             failed_commands.discard(_final_fp)
             proc = _try_start(_final_kv, record_blacklist=False, allow_whitelist=False)
             if proc is not None:
@@ -2328,7 +2448,9 @@ def calibrate_model(
         succeeded_commands.clear()
         _fixed_kv_str = _format_kv_mb(kv_cache_sent_mb)
         _fixed_planned = {**plan, "kv_cache_memory_bytes": _fixed_kv_str}
-        _fixed_fp = _cmd_fingerprint(_build_vllm_cmd(_fixed_planned, vllm_binary, host, port, _fixed_kv_str))
+        _fixed_fp = _cmd_fingerprint(
+            _build_vllm_cmd(_fixed_planned, vllm_binary, host, port, _fixed_kv_str, hf_home=hf_home)
+        )
         if _fixed_fp in failed_commands:
             failed_commands.discard(_fixed_fp)
             logger.info(
