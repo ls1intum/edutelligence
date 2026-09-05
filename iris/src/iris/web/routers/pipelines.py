@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sentry_sdk import capture_exception
 
 from iris.common.logging_config import get_logger, get_request_id, set_request_id
+from iris.config import settings as app_settings
 from iris.dependencies import TokenValidator
 from iris.domain import (
     ChatPipelineExecutionDTO,
@@ -14,6 +15,9 @@ from iris.domain import (
 )
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
+)
+from iris.domain.chat.ask_user_chat.ask_user_chat_pipeline_execution_dto import (
+    AskUserPipelineExecutionDTO,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -29,6 +33,7 @@ from iris.llm.llm_configuration import LlmConfigurationError
 from iris.llm.llm_manager import LlmManager
 from iris.llm.llm_requirements import missing_llm_requirements
 from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
+from iris.pipeline.chat.ask_user_pipeline import AskUserPipeline
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
@@ -52,6 +57,7 @@ from iris.retrieval.lecture.lecture_global_search_retrieval import (
 from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import (
+    AskUserStatusCallback,
     AutonomousTutorCallback,
     ChatRunCallback,
     CompetencyExtractionCallback,
@@ -66,6 +72,11 @@ router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = get_logger(__name__)
 
 _global_search_executor = TracedThreadPoolExecutor(max_workers=100)
+# Bounded so one slow LLM call can't serialize every concurrent quiz session
+# behind it; tune via pipelines.ask_user_max_workers in application.yml.
+_ask_user_executor = TracedThreadPoolExecutor(
+    max_workers=app_settings.pipelines.ask_user_max_workers
+)
 
 
 def run_chat_pipeline_worker(
@@ -339,6 +350,58 @@ def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDTO):
     thread.start()
 
 
+def run_ask_user_pipeline_worker(
+    dto: AskUserPipelineExecutionDTO,
+    variant_id: str,
+    event: str | None,
+    request_id: str,
+):
+    set_request_id(request_id)
+    logger.info("Ask-user pipeline started")
+    try:
+        callback = AskUserStatusCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            event=event,
+        )
+    except Exception as e:
+        logger.error("Error creating ask-user callback", exc_info=e)
+        capture_exception(e)
+        return
+
+    try:
+        variant = find_variant(AskUserPipeline.get_variants(), variant_id)
+        is_local = bool(getattr(dto, "settings", None) and dto.settings.is_local())
+        pipeline = AskUserPipeline(local=is_local, variant=variant)
+        pipeline(dto=dto, variant=variant, callback=callback, event=event)
+
+    except Exception as e:
+        logger.error("Error running ask-user pipeline", exc_info=e)
+        callback.fail("Fatal error.", exception=e)
+
+
+@router.post(
+    "/ask-user/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_ask_user_pipeline(
+    event: str | None = Query(None, description="Event query parameter"),
+    dto: AskUserPipelineExecutionDTO = Body(
+        description="Ask-user Pipeline Execution DTO"
+    ),
+):
+    variant = validate_pipeline_variant(dto.settings, AskUserPipeline)
+    request_id = get_request_id()
+    _ask_user_executor.submit(
+        run_ask_user_pipeline_worker,
+        dto,
+        variant,
+        event,
+        request_id,
+    )
+
+
 def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: str):
     set_request_id(request_id)
     try:
@@ -475,6 +538,11 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
         case "AUTONOMOUS_TUTOR":
             return get_available_variants(
                 safe_get_variants(AutonomousTutorPipeline.get_variants), available_llms
+            )
+        case "ASK_USER":
+            return get_available_variants(
+                safe_get_variants(AskUserPipeline.get_variants),
+                available_llms,
             )
         case _:
             raise HTTPException(
