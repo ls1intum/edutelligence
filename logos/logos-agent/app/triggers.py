@@ -781,7 +781,18 @@ class TriggerPoller:
                 # is a different thing from working on it, and the work
                 # comes first.
                 continue
-            requester = await github.who_asked_for_a_review(number, login)
+            answer = await github.who_asked_for_a_review(number, login)
+            if answer is None:
+                # The timeline is longer than the runner can read, and what
+                # was read is its oldest part — the newest request is not in
+                # it. An old matching actor from the remainder is not the
+                # authorization for acting now.
+                logger.info(
+                    "the timeline of pull request #%s is longer than the runner can read; not acting on its review request",
+                    number,
+                )
+                continue
+            requester, request_event_id = answer
             if not requester or not await self._writer(requester):
                 logger.info(
                     "the review request on #%s comes from %s, who does not direct this runner",
@@ -798,15 +809,27 @@ class TriggerPoller:
             branch = await self._writable_head(number)
             found.append(
                 {
-                    # One request per reviewer per pull request: asking
+                    # One request per timeline event, not per person: asking
                     # again after the agent has answered means removing and
-                    # re-adding it, which is a new request and reads as one.
-                    "ref": f"pr-{number}-review-requested-{requester.lower()}",
+                    # re-adding it, which writes a new event. The event's
+                    # identity keeps the new request from being mistaken
+                    # for the one already answered — a ref built from the
+                    # requester alone would suppress it forever.
+                    "ref": (
+                        f"pr-{number}-review-requested-{requester.lower()}-event-{request_event_id}"
+                        if request_event_id is not None
+                        else f"pr-{number}-review-requested-{requester.lower()}"
+                    ),
                     "kind": "review-request",
                     "task": await review_request_task(
                         number, title, str(pull.get("body") or ""), requester, branch=branch
                     ),
                     "branch": branch,
+                    # A fork's head is nobody's to push to. The task says so
+                    # in words, but a prompt is a request, not a gate: the
+                    # launch still derives a local branch and the finalizer
+                    # still holds the credential, so the row says it too.
+                    "no_push": branch is None,
                     # Nothing to push to: read the pull request's own code
                     # so the review is at least about the right diff.
                     "read_ref": None if branch else f"refs/pull/{number}/head",
@@ -891,16 +914,23 @@ class TriggerPoller:
         """
         return login.lower() in settings.review_bots or await self._writer(login)
 
-    async def _may_direct_changes(self, comments: list[dict[str, Any]]) -> bool:
-        """Whether anyone in this conversation may direct a code change."""
+    async def _trusted_comments(self, comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The comments in this conversation whose authors may direct a code change."""
+        directed = []
         for comment in comments:
             author = str((comment.get("user") or {}).get("login") or "")
             if author and await self._writer(author):
-                return True
-        return False
+                directed.append(comment)
+        return directed
 
     async def _pull_request(self, number: int) -> dict[str, Any] | None:
         """That number as a pull request, or None when it is an issue.
+
+        Only the 404 of a plain issue is read as None. Any other failure of
+        the lookup — a rate limit, a dead credential, a network blip —
+        propagates: answering a question from the default branch and
+        recording its ref would make a momentary failure permanent, and the
+        next pass is the one that asks again.
 
         Cached for the pass: one thread asks about one number, and a poll
         that answered three questions about the same pull request would
@@ -909,7 +939,9 @@ class TriggerPoller:
         if number not in self._pulls:
             try:
                 self._pulls[number] = await github.pull_request(number) or None
-            except Exception:
+            except github.GitHubError as exc:
+                if exc.status != 404:
+                    raise
                 # A plain issue answers 404 here, which is the ordinary
                 # case rather than a failure.
                 self._pulls[number] = None
@@ -1022,9 +1054,22 @@ class TriggerPoller:
             # and answering it with a description of the change is not what
             # was asked.
             branch = pull["branch"] if pull else (await self._writable_head(number) if other else None)
-            if branch is not None and not await self._may_direct_changes(thread["comments"]):
-                logger.info("comments on #%s come from outside the repository; answering without a branch", number)
-                branch = None
+            comments = thread["comments"]
+            if branch is not None:
+                # A writable branch makes the answer a code change, and a
+                # code change may only be steered by people who may direct
+                # changes. A conversation holds as many words as it holds:
+                # with one writer among strangers, the strangers' words
+                # would otherwise reach the session that carries the push
+                # credential. They stay out of the task; the conversation
+                # as a whole is still answered, so the ref and the reaction
+                # are built from every comment in it.
+                directed = await self._trusted_comments(comments)
+                if not directed:
+                    logger.info("comments on #%s come from outside the repository; answering without a branch", number)
+                    branch = None
+                else:
+                    comments = directed
             newest = thread["newest_id"]
             inline = kind == "inline"
             candidates.append(
@@ -1038,11 +1083,16 @@ class TriggerPoller:
                     "task": await thread_task(
                         number,
                         title,
-                        thread["comments"],
+                        comments,
                         branch=branch,
                         reading=other is not None,
                     ),
                     "branch": branch,
+                    # A thread with no writer in it is answered in words:
+                    # the row tells the credentialed finalizer as much,
+                    # because the task text is written before the session
+                    # launches and could in principle be anything else.
+                    "no_push": branch is None,
                     # No branch to push to, but a pull request to read.
                     "read_ref": f"refs/pull/{number}/head" if other is not None and not branch else None,
                     "workspace": workspace_name("pr", number, title) if branch or other else None,
@@ -1109,6 +1159,11 @@ class TriggerPoller:
                 # made per session in the UI.
                 deploy_to_dev=False,
                 screenshot_paths=[],
+                # Kept on the row for the same reason as everything else
+                # the finalizer needs: it runs minutes later, in another
+                # process, and is told what the session may do by the
+                # database, not by the task it was queued with.
+                no_push=bool(candidate.get("no_push")),
                 trigger_kind=candidate["kind"],
                 trigger_ref=candidate["ref"],
                 reply_target=candidate.get("reply_target"),

@@ -25,5 +25,6 @@
     <include file="liquibase/changelog/020_agent_sessions.xml"/>
     <include file="liquibase/changelog/021_agent_controls.xml"/>
     <include file="liquibase/changelog/022_agent_instructions.xml"/>
+    <include file="liquibase/changelog/023_agent_session_no_push.xml"/>
 
 </databaseChangeLog>

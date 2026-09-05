@@ -730,7 +730,11 @@ class TestTheCloudIsNotAGpu:
         # And it still holds no slots.
         assert reading.total_slots == 8
 
-    def test_the_engine_s_own_figure_wins_over_the_ledger(self):
+    def test_the_ledger_s_backlog_survives_an_empty_engine_queue(self):
+        # The engine's empty wait list is one queue stage, the ledger's
+        # backlog another: a GPU-bound request can sit in the orchestrator's
+        # queue while vLLM correctly reports nothing waiting behind it, and
+        # the zero must not erase the seven.
         payload = scheduler_state([loaded(0, 8, queue_depth=7)], queue_total=0)
         payload["logosnode"]["providers"]["1"]["models"]["0"]["scheduler_signals"] = {
             "queue_waiting_current": 0.0,
@@ -739,6 +743,29 @@ class TestTheCloudIsNotAGpu:
 
         reading = capacity.parse_scheduler_state(payload)
 
-        # The ledger said seven were waiting; vLLM says none are. The ledger
-        # is the one that cannot see inside the engine.
-        assert reading.queue_total == 0
+        assert reading.queue_total == 7
+        assert reading.saturated
+
+    def test_the_two_queue_stages_are_added_not_chosen(self):
+        payload = scheduler_state([loaded(0, 8, queue_depth=3)], queue_total=0)
+        payload["logosnode"]["providers"]["1"]["models"]["0"]["scheduler_signals"] = {
+            "queue_waiting_current": 4.0,
+            "requests_running_current": 0.0,
+        }
+
+        reading = capacity.parse_scheduler_state(payload)
+
+        assert reading.queue_total == 7
+
+    def test_the_same_model_on_two_providers_counts_the_backlog_once(self):
+        # The scheduler's queue is keyed by model alone: both deployments
+        # report the same backlog, and it is one queue, not two.
+        payload = scheduler_state([loaded(0, 8, queue_depth=5)])
+        payload["logosnode"]["providers"]["2"] = {
+            "name": "node-b",
+            "models": {"0": loaded(0, 8, queue_depth=5)},
+        }
+
+        reading = capacity.parse_scheduler_state(payload)
+
+        assert reading.queue_total == 5

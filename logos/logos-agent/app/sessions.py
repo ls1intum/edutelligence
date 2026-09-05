@@ -152,6 +152,16 @@ def artifact_dir(session_id: int) -> Path:
     return Path(settings.artifact_root) / str(session_id)
 
 
+def state_dir(session_id: int) -> Path:
+    """The runner's own per-session state.
+
+    On the runner's filesystem, not on the artefact volume the agent writes
+    to: the container mounts this directory read-only, so what the runner
+    says into it — the pause mark — cannot be written back by the session.
+    """
+    return Path(settings.state_root) / str(session_id)
+
+
 def _give_to_session_user(path: Path) -> None:
     """Hand a host-side artefact path to the unprivileged session user.
 
@@ -807,18 +817,25 @@ class SessionManager:
         one of the three attempts its request had.
 
         So the runner says so itself. It is the one that froze the session;
-        it does not need to recognise a sentence to know that. Best effort,
+        it does not need to recognise a sentence to know that. The mark goes
+        into the state directory the container mounts read-only — not into
+        the artefacts the agent writes — because a line the agent could
+        append would let it reclassify its own failures as platform pauses
+        and draw sixty continuations where it is owed three. Best effort,
         because a mark that cannot be written costs only the older, weaker
         signal — and the pause itself must not fail over it.
         """
-        marker = artifact_dir(session_id) / INTERRUPTION_FILE
+        marker = state_dir(session_id) / INTERRUPTION_FILE
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
             with marker.open("a", encoding="utf-8") as handle:
                 handle.write("paused\n")
-            _give_to_session_user(marker)
+            # The container's agent user has to read the mark; the write
+            # protection is the read-only mount, not ownership, so the file
+            # only needs to be world-readable, no matter the runner's umask.
+            os.chmod(marker, 0o644)
         except (OSError, ValueError) as exc:
-            # ValueError as well as OSError: an artefact root that is not a
+            # ValueError as well as OSError: a state root that is not a
             # usable path at all fails before the filesystem is reached, and
             # giving capacity back matters more than being able to explain it.
             logger.info("could not mark session %s as interrupted: %s", session_id, exc)
@@ -992,6 +1009,14 @@ class SessionManager:
             directory = artifact_dir(sid)
             directory.mkdir(parents=True, exist_ok=True)
             _give_to_session_user(directory)
+            # The runner's state for this session, mounted read-only into the
+            # container. Best effort, for the same reason the mark itself is:
+            # a state directory that cannot be created degrades to the older,
+            # weaker signal, and the launch must not fail over it.
+            try:
+                state_dir(sid).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.info("could not create the state directory for session %s: %s", sid, exc)
             # The pictures a request carries, fetched by the side that has a
             # token and a network. An issue whose whole description is a
             # screenshot is unreadable to the sandbox otherwise.
@@ -1045,6 +1070,9 @@ class SessionManager:
                 ),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
+                # The agent's container is the one that reads the pause mark;
+                # the helper phases never do, and stay without the mount.
+                state_host_path=str(state_dir(sid)),
                 session_id=sid,
             )
             # Boundary: the container exists but has not run. Give it back
@@ -1220,6 +1248,12 @@ class SessionManager:
             # /artifacts is its output root; there is no per-session prefix
             # to get wrong.
             "LOGOS_ARTIFACT_DIR": "/artifacts",
+            # The runner's own state for this session, mounted read-only.
+            # The pause mark lives there rather than in the artefacts: the
+            # artefact directory is writable for the agent, and a line it
+            # could append would let it reclassify its own failures as
+            # platform pauses — sixty continuations where it is owed three.
+            "LOGOS_STATE_DIR": "/logos/state",
             # Where an answer goes when the session was asked something. The
             # task text names the same file; this is what makes it available
             # to anything else in the container that wants it.
@@ -1407,7 +1441,22 @@ class SessionManager:
         than settled as a success with a deploy attached.
         """
         session = await db.get_session(session_id)
-        if not session or not session.get("branch_name"):
+        if not session:
+            logger.warning("no session %s to finalize", session_id)
+            return False
+        if session.get("no_push"):
+            # A read-only session: the row says its work is not to reach the
+            # repository, so the credentialed finalization is not run at
+            # all — not skipped after it started, refused before it did.
+            # The launch did give it a local branch to work in, and the
+            # checkout it answered from may hold unpushed edits; none of
+            # that may travel to the remote. The reply it owes is in the
+            # artifact directory, and the runner posts it from there
+            # without a push. "The work reached the repository" is true by
+            # construction: there is nothing to land.
+            logger.info("session %s is read-only; leaving the remote alone", session_id)
+            return True
+        if not session.get("branch_name"):
             logger.warning("no branch recorded for session %s; cannot finalize", session_id)
             return False
         workspace = await db.get_workspace(session["workspace_id"])
@@ -1812,6 +1861,9 @@ class SessionManager:
                 model=session.get("model"),
                 created_by=by,
                 open_pull_request=bool(session.get("open_pull_request")),
+                # Read-only is a property of the work, not the attempt: a
+                # retried answer still must not push.
+                no_push=bool(session.get("no_push")),
                 # Deploying is a decision per attempt, not a property of the
                 # work.
                 deploy_to_dev=False,
@@ -1956,11 +2008,17 @@ class SessionManager:
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
 
         workspace_id, settled_branch = session_row.get("workspace_id"), session_row.get("branch_name")
-        if succeeded and workspace_id and settled_branch:
+        if succeeded and workspace_id and settled_branch and not session_row.get("no_push"):
             # The workspace now belongs to this branch. That is what lets a
             # review on the pull request find this working copy again — and
             # with it the conversation that produced the change — instead of
             # starting somewhere else from main.
+            #
+            # A read-only session's branch exists nowhere but the volume it
+            # was worked in: pointing the workspace at it would make the
+            # next session's preparation fetch a ref the remote never had.
+            # The workspace keeps the base it was created with — the pull
+            # request it was created to read.
             try:
                 await db.set_workspace_base_branch(int(workspace_id), str(settled_branch))
             except Exception as exc:

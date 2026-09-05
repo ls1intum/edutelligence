@@ -495,23 +495,39 @@ async def review_requests(login: str) -> list[dict[str, Any]]:
     return asked
 
 
-async def who_asked_for_a_review(number: int, login: str) -> str:
-    """The account that last asked `login` to review this pull request.
+async def who_asked_for_a_review(number: int, login: str) -> tuple[str, int | None] | None:
+    """The account that last asked `login` to review this pull request, and
+    the timeline event that said so.
 
     From the timeline, because the pull request itself only says who is
     being asked and not who did the asking — and who did the asking is what
-    decides whether the runner acts on it.
+    decides whether the runner acts on it. The event's identity comes with
+    the actor because the asking is an event, not a state: removing the
+    agent and adding it back is a *new* request, and the memory of the old
+    one must not answer for the new.
+
+    A complete read answers with the actor, or the empty string when the
+    timeline names none. An incomplete read answers with None instead: the
+    timeline is read oldest-first, so what a long pull request loses to the
+    page ceiling is precisely its *newest* events — where the request that
+    decides this question sits. The oldest matching actor the remainder
+    still holds is some old gesture, and acting on it would be a guess the
+    timeline no longer supports.
     """
-    events = await _get_all(f"/repos/{settings.repo_slug}/issues/{number}/timeline")
+    events, truncated = await _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/timeline")
+    if truncated:
+        return None
     wanted = login.strip().lower()
     actor = ""
+    event_id: int | None = None
     for event in events:
         if not isinstance(event, dict) or event.get("event") != "review_requested":
             continue
         requested = str(((event.get("requested_reviewer") or {}).get("login")) or "").lower()
         if requested == wanted:
             actor = str(((event.get("actor") or {}).get("login")) or "")
-    return actor
+            event_id = event.get("id") if isinstance(event.get("id"), int) else None
+    return actor, event_id
 
 
 async def pull_request(number: int) -> dict[str, Any]:

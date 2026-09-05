@@ -341,6 +341,16 @@ def _rebuild_git_metadata(repo_url: str) -> None:
     run(["git", "remote", "add", "origin", repo_url], cwd=CHECKOUT, quiet=True)
 
 
+def _remote_default_branch() -> str | None:
+    """The branch the remote's HEAD points at, or None when it cannot be read."""
+    process = run(["git", "ls-remote", "--symref", "origin", "HEAD"], cwd=CHECKOUT, quiet=True, check=False)
+    for line in (process.stdout or "").splitlines():
+        match = re.match(r"ref: (refs/heads/\S+)\s+HEAD", line)
+        if match:
+            return match.group(1)[len("refs/heads/"):].strip()
+    return None
+
+
 def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -> None:
     """Get a clean working copy of `base_branch` on a fresh `branch`.
 
@@ -402,6 +412,25 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
         # from the base it was given, never from another session's leftovers.
         run(["git", "reset", "--hard", "FETCH_HEAD" if reading else f"origin/{base_branch}"], cwd=CHECKOUT)
         run(["git", "clean", "-fdx"], cwd=CHECKOUT, check=False)
+
+    # The task a reviewing agent is given tells it to run
+    # `git diff origin/<default>...HEAD` — and that ref is not in every
+    # checkout this function builds. A clone of a feature branch
+    # materialises only that branch, and a fetch of a pull request's ref
+    # writes only FETCH_HEAD, so a checkout prepared for either one holds
+    # the code under discussion but nothing to diff it against. Fetch the
+    # remote's default branch into its remote-tracking ref so the command
+    # works however the checkout was built. A failure here does not fail
+    # the preparation: the base is already where the session needs it.
+    default = _remote_default_branch()
+    if default:
+        process = run(
+            ["git", "fetch", "--depth", "50", "origin", f"{default}:refs/remotes/origin/{default}"],
+            cwd=CHECKOUT,
+            check=False,
+        )
+        if process.returncode != 0:
+            log(f"could not fetch the default branch {default!r}; the checkout keeps its base only")
 
     _configure_git_identity()
     # -B so a retried session reuses its branch name instead of failing.
@@ -505,11 +534,15 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
     # Re-anchor the session's branch on the base it was given (the rebuild
     # removed its ref, see above).
     run(["git", "update-ref", f"refs/heads/{branch}", "FETCH_HEAD"], cwd=CHECKOUT, quiet=True)
-    # Track the remote branch when a previous run left one, so the
-    # force-with-lease push below verifies against what is actually there.
-    # A first run has none; the lease then requires the remote branch to be
-    # absent, which it is.
-    run(["git", "fetch", "--depth", "50", "origin", branch], cwd=CHECKOUT, check=False, quiet=True)
+    # Bring the remote branch back as a ref of this checkout when a previous
+    # run left one: the rebuild removed its tracking ref, and without an
+    # explicit destination the fetch would leave the tip in FETCH_HEAD alone,
+    # while the run that changes nothing reads the tip from
+    # refs/remotes/origin/<branch> and the force-with-lease push below
+    # verifies against it. A first run has no remote branch: the fetch fails
+    # quietly, the tracking ref stays absent, and the lease then requires the
+    # remote branch to be absent, which it is.
+    run(["git", "fetch", "--depth", "50", "origin", f"{branch}:refs/remotes/origin/{branch}"], cwd=CHECKOUT, check=False, quiet=True)
     run(["git", "symbolic-ref", "HEAD", f"refs/heads/{branch}"], cwd=CHECKOUT, quiet=True)
     # Mixed reset: the index follows the branch, the working tree — the
     # agent's work — is left exactly as it stands.
@@ -603,10 +636,13 @@ _INTERRUPTIONS = (
 )
 
 # What the runner appends to whenever it freezes this session, in the
-# artefact directory it shares with us. The authoritative signal, and the
-# reason the list above is no longer load-bearing: matching an upstream
-# tool's prose means a session dies quietly the next time somebody rewrites
-# a sentence. The runner froze us; it knows, and it says so.
+# runner's state directory the runner mounts into us read-only. The
+# authoritative signal, and the reason the list above is no longer
+# load-bearing: matching an upstream tool's prose means a session dies
+# quietly the next time somebody rewrites a sentence. The runner froze us;
+# it knows, and it says so. The mark is not in the artefact directory:
+# that one is ours to write, and a line we could append would reclassify
+# our own failures as platform pauses.
 INTERRUPTION_FILE = "interruptions"
 
 # How many times a run may be picked up again after an interruption nobody
@@ -654,8 +690,12 @@ def _pauses_so_far() -> int:
     Counted rather than flagged: a run has to know whether it was frozen
     during *itself*, and a flag set by an earlier pause would make every
     later failure look like an interruption.
+
+    The directory is the runner's state, mounted read-only: whatever else
+    this container can write, it cannot add a line here, so a count greater
+    than the one taken before the run began is a pause that really happened.
     """
-    path = Path(os.environ.get("LOGOS_ARTIFACT_DIR", "/artifacts")) / INTERRUPTION_FILE
+    path = Path(os.environ.get("LOGOS_STATE_DIR", "/logos/state")) / INTERRUPTION_FILE
     try:
         return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
     except (OSError, UnicodeDecodeError):

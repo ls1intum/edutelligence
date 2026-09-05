@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- A session that must not write to the repository.
+
+         A review request that names a branch the runner may not write to,
+         and a question on a thread without one, are answered from a
+         checkout that is read by the agent's own code — but nothing of
+         what that code does may reach the remote. The task prompt says so,
+         yet a prompt is a request, not a gate: the launch still derives a
+         local branch, and the finalizer still runs the commit and push
+         with a credential, so any edit an answer makes ends up as a new
+         branch in the very repository the session was only allowed to
+         read.
+
+         The capability is kept on the row next to `open_pull_request`
+         (what the session is allowed to do when it finishes) so the
+         finalizer can be refused by the database rather than by the text
+         of a task that was written two hours earlier. Defaults to the
+         historical behaviour: a session pushes unless it is told it may
+         not. -->
+    <changeSet id="023-agent-session-no-push" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="no_push"/></not>
+        </preConditions>
+        <sql>ALTER TABLE agent_sessions ADD COLUMN no_push BOOLEAN NOT NULL DEFAULT FALSE;</sql>
+        <rollback>
+            <sql>ALTER TABLE agent_sessions DROP COLUMN IF EXISTS no_push;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

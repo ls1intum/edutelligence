@@ -130,31 +130,37 @@ def _describe(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
-def _waiting(model: dict) -> int:
-    """How many requests are queued for one local deployment.
+def _queue_parts(model: dict) -> tuple[int, int]:
+    """The two queue stages for one deployment, kept apart.
 
-    The engine's own figure where it reports one, the orchestrator's ledger
-    otherwise — the same order of preference as :func:`_live`, and for the
-    same reason. Read separately from it because this is also asked of
-    deployments that hold no slots to measure: a model that is asleep has
-    no capacity and can still have somebody waiting for it.
+    ``queue_depth`` is the orchestrator's backlog for the model, which the
+    scheduler keys by model alone; ``queue_waiting_current`` is the engine's
+    wait list for this one deployment. They are not two readings of one
+    queue: a GPU-bound request can sit in the orchestrator's queue while the
+    engine correctly reports nothing waiting behind it, and letting either
+    figure stand in for the other is how a waiting user became invisible.
+    The caller counts the depth once per model and adds the wait per
+    deployment — an asleep model still contributes both, since waking a lane
+    takes the VRAM the running sessions are sitting on.
     """
     signals = model.get("scheduler_signals") or {}
     if not isinstance(signals, dict):
         signals = {}
     reported = signals.get("queue_waiting_current")
-    if isinstance(reported, (int, float)):
-        return max(0, int(reported))
-    return max(0, int(model.get("queue_depth") or 0))
+    wait = max(0, int(reported)) if isinstance(reported, (int, float)) else 0
+    return max(0, int(model.get("queue_depth") or 0)), wait
 
 
 def _live(model: dict, capacity: int) -> tuple[int, int, float]:
     """What a model is really doing: in flight, waiting, and how full it is.
 
     The engine's own numbers where it reports them, the orchestrator's
-    ledger only as a fallback. They disagree in production — a lane the
-    ledger counted as serving two requests reported none running and an
-    empty KV cache — and the ledger is the one that cannot see inside vLLM.
+    ledger only as the in-flight fallback. They disagree in production — a
+    lane the ledger counted as serving two requests reported none running
+    and an empty KV cache — and the ledger is the one that cannot see
+    inside vLLM. The queue figure never falls back, because the ledger's
+    ``queue_depth`` is a separate stage of the queue, not a second reading
+    of the engine's list (see :func:`_queue_parts`).
 
     The third figure is the one that matters most and has no slot count in
     it at all: the KV cache. A model can be three requests into a
@@ -177,8 +183,11 @@ def _live(model: dict, capacity: int) -> tuple[int, int, float]:
     ledger_active = float(model.get("active") or 0)
     active = int(min(running if running is not None else ledger_active, capacity))
 
+    # The engine's wait list for this deployment only. The ledger's
+    # model-wide backlog is a different queue stage, not a fallback reading
+    # of this one — the caller counts it once per model and adds it.
     waiting = number("queue_waiting_current")
-    queue = int(waiting if waiting is not None else float(model.get("queue_depth") or 0))
+    queue = int(waiting) if waiting is not None else 0
 
     cache = number("gpu_cache_usage_percent_max", "gpu_cache_usage_percent_avg")
     return active, queue, (cache or 0.0) / 100.0
@@ -246,28 +255,37 @@ def parse_scheduler_state(
     total = 0
     fleet_busy = 0
     fleet_total = 0
+    # The ledger's backlog is keyed by model, not by deployment: the same
+    # model on two providers reports the same queue, and it is one queue,
+    # not two. The engine's wait is the opposite — one list per deployment
+    # — and is added where it is seen.
+    model_depth: dict[str, int] = {}
     for provider_id, provider in providers.items():
         deployments = (provider or {}).get("models") or {}
         for model_id, model in deployments.items():
             if not isinstance(model, dict):
-                continue
-            # Only loaded models hold capacity. An unloaded one contributes
-            # nothing to either side of the ratio: its slots do not exist yet,
-            # and counting them would make an idle-looking fleet out of a node
-            # that simply has nothing resident.
-            #
-            # Its queue still counts. A request waiting for a local model
-            # that is asleep is a request waiting for a lane to be woken,
-            # and waking it takes the VRAM our sessions are sitting on.
-            capacity = int(model.get("max_capacity") or 0)
-            if not model.get("loaded") or capacity <= 0:
-                queue_total += _waiting(model)
                 continue
             # Normalised: the platform is case-insensitive about model
             # names, and "Qwen" and "qwen" reported by two providers must
             # not become two pools — the busiest of which would then be one
             # provider's view of a model, not the model.
             name = str(model.get("model_name") or model_id).strip().lower()
+            depth, wait = _queue_parts(model)
+            model_depth[name] = max(model_depth.get(name, 0), depth)
+            capacity = int(model.get("max_capacity") or 0)
+            if not model.get("loaded") or capacity <= 0:
+                # Only loaded models hold capacity. An unloaded one
+                # contributes nothing to either side of the ratio: its slots
+                # do not exist yet, and counting them would make an
+                # idle-looking fleet out of a node that simply has nothing
+                # resident.
+                #
+                # Its queue still counts. A request waiting for a local
+                # model that is asleep is a request waiting for a lane to be
+                # woken, and waking it takes the VRAM our sessions are
+                # sitting on.
+                queue_total += wait
+                continue
             active, waiting, cache = _live(model, capacity)
             fleet_total += capacity
             fleet_busy += active
@@ -282,6 +300,19 @@ def parse_scheduler_state(
             slots[1] += waiting
             slots[2] += capacity
             slots[3] = max(slots[3], cache)
+
+    # The ledger's backlog folds into the model it belongs to. For a model
+    # this lane serves that puts it in front of the subtraction of our own
+    # sessions below, which must be able to empty it exactly as before — a
+    # queue that reads as empty is the signal that no user is waiting, and
+    # on our lane the requests it can hold are our own. For a model the
+    # lane does not serve it goes straight to the total, where the queue is
+    # not narrowed either.
+    for name, depth in model_depth.items():
+        if name in per_model:
+            per_model[name][1] += depth
+        else:
+            queue_total += depth
 
     # Ours come off each model *once*, after its deployments are added up:
     # the same model served by three providers is one lane, and subtracting

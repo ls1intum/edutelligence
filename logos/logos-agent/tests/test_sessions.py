@@ -1375,6 +1375,72 @@ class TestAgentPhaseIsolation:
         # already has.
         assert transitions == [SessionStatus.SUCCEEDED]
 
+    async def test_a_modified_read_only_checkout_reaches_no_remote(self, monkeypatch, tmp_path):
+        # A session the row says may not push can still *make* changes —
+        # the agent edits the checkout it read from — yet none of them may
+        # travel to the repository. The launch gave it a local branch all
+        # the same, and the task text it was started with is no gate: the
+        # finalizer is the one process that holds a credential for the
+        # remote, so the proof is that it is never run for this row. No
+        # helper container is created, nothing is pushed, and the workspace
+        # is not pointed at a branch the remote does not have. The session
+        # still settles as a success, and its reply still travels — to the
+        # thread, where a read-only answer belongs.
+        from app import sessions
+
+        self._patch_base(monkeypatch, tmp_path)
+        created: list = []
+        transitions: list = []
+        base_pointing: list = []
+        posted: list = []
+        row = {
+            **self.ROW,
+            "no_push": True,
+            "open_pull_request": False,
+            "trigger_kind": "review-request",
+            "reply_target": "issue:812",
+        }
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_transition(_sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def fake_point(_workspace_id, _base_branch):
+            base_pointing.append((_workspace_id, _base_branch))
+
+        async def fake_post_reply(_self, _sid):
+            posted.append(_sid)
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(row))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+        monkeypatch.setattr(sessions.db, "set_workspace_base_branch", fake_point)
+        monkeypatch.setattr(sessions.SessionManager, "_post_reply", fake_post_reply)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        # The checkout may hold the agent's edits, but the only process
+        # that could carry them to the remote was never created.
+        assert created == []
+        # The row still leaves the non-pausable state into a terminal one:
+        # a read-only session settles, it is not stranded in finalizing.
+        assert transitions == [SessionStatus.FINALIZING, SessionStatus.SUCCEEDED]
+        # Nothing landed, so the workspace keeps the base it was created
+        # with — pointing it at the local-only branch would make the next
+        # session's preparation fetch a ref the remote never had.
+        assert base_pointing == []
+        # The answer still goes where the question was asked.
+        assert posted == [7]
+
     async def test_a_scheduler_pass_cannot_pause_a_finalizing_session(self, monkeypatch, tmp_path):
         # The agent exited cleanly and settlement claimed finalizing before
         # the finalizer started; the agent container is gone. A high-load
@@ -4892,11 +4958,18 @@ class TestSayingThatItFroze:
         async def add_event(*_args, **_kwargs):
             return None
 
+        # State and artefacts get separate directories: the mark belongs to
+        # the state side, and a pause must leave nothing in the artefacts
+        # the agent writes.
         monkeypatch.setattr(sessions.docker_engine, "pause_container", pause_container)
         monkeypatch.setattr(sessions.SessionManager, "_detach_from_model_gateway", detach)
         monkeypatch.setattr(sessions.db, "transition_session", transition_session)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
-        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(
+            sessions,
+            "settings",
+            replace(sessions.settings, state_root=str(tmp_path / "state"), artifact_root=str(tmp_path / "artefacts")),
+        )
 
     async def test_a_pause_leaves_a_mark_the_session_can_read(self, monkeypatch, tmp_path):
         from app import sessions
@@ -4906,8 +4979,11 @@ class TestSayingThatItFroze:
 
         await sessions.manager._pause({"id": 7, "container_id": "cid-7"}, "users are queueing")
 
-        marker = tmp_path / "7" / INTERRUPTION_FILE
+        marker = tmp_path / "state" / "7" / INTERRUPTION_FILE
         assert marker.read_text().strip() == "paused"
+        # ...and only there. In the artefacts the agent could append its own
+        # lines, and with them buy sixty continuations where it is owed three.
+        assert not (tmp_path / "artefacts" / "7" / INTERRUPTION_FILE).exists()
 
     async def test_every_pause_adds_one(self, monkeypatch, tmp_path):
         from app import sessions
@@ -4920,7 +4996,7 @@ class TestSayingThatItFroze:
 
         # Counted, not flagged: a run has to know whether it was frozen
         # during itself, not whether it ever was.
-        marker = tmp_path / "7" / INTERRUPTION_FILE
+        marker = tmp_path / "state" / "7" / INTERRUPTION_FILE
         assert len(marker.read_text().strip().splitlines()) == 2
 
     async def test_a_container_that_could_not_be_frozen_leaves_nothing(self, monkeypatch, tmp_path):
@@ -4933,14 +5009,14 @@ class TestSayingThatItFroze:
 
         # The agent exited between the reading and the call: nothing was
         # frozen, so nothing was interrupted.
-        assert not (tmp_path / "7" / INTERRUPTION_FILE).exists()
+        assert not (tmp_path / "state" / "7" / INTERRUPTION_FILE).exists()
 
     async def test_a_mark_that_cannot_be_written_does_not_stop_the_pause(self, monkeypatch, tmp_path):
         from app import sessions
 
         self.install(monkeypatch, tmp_path)
         monkeypatch.setattr(
-            sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path / "nope" / "\0bad"))
+            sessions, "settings", replace(sessions.settings, state_root=str(tmp_path / "nope" / "\0bad"))
         )
 
         # Giving capacity back matters more than being able to explain it.
