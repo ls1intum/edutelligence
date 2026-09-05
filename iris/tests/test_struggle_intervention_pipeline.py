@@ -462,10 +462,9 @@ def test_build_system_message_selects_help_request_template():
 #
 # Regression for a live spoiler: after three escalating follow-ups the gate returned
 # the implementation in prose ("scan 0..i-1, keep lo/hi, record mid when it fits...").
-# The old help-request prompt asked for "one notch MORE concrete than the last" with no
-# absolute ceiling, and none of the three struggle prompts defined what a spoiler is --
-# the decide prompt only pointed at "the same no-solution rules as the normal exercise
-# chat", which the struggle pipeline never loads.
+# An escalation rule without an absolute ceiling gets there, and so does pointing at
+# "the same no-solution rules as the normal exercise chat", which this pipeline never
+# loads. Every struggle prompt therefore has to define a spoiler itself.
 # ---------------------------------------------------------------------------
 
 
@@ -530,8 +529,8 @@ def test_contract_names_the_prose_spoiler_classes():
     assert "State-variable names together with their update rule" in rendered
     assert "ordered sequence of steps whose endpoint is working code" in rendered
     assert "Writing code the student could take over as the fix" in rendered
-    # The blanket rule the old help-request guardrails carried, kept verbatim so it does not
-    # depend on a reader stitching the individual classes above together.
+    # The blanket rule, kept verbatim so it does not depend on a reader stitching the
+    # individual classes above together.
     assert "NEVER give the full or near-full solution" in rendered
     assert "NEVER write the code for them" in rendered
     # The contract governs the inline gutter cue too, not just the chat message.

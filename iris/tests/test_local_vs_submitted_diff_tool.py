@@ -40,8 +40,8 @@ def test_changed_file_shows_unified_diff_with_both_sides():
     assert "local/P.java" in out
     assert "-OLD" in out
     assert "+FIXED" in out
-    # Tools no longer push progress themselves: the stage API (`in_progress`) is
-    # gone and the activity system reports tool runs centrally.
+    # Tools do not push progress themselves; the activity system reports tool runs
+    # centrally.
     callback.in_progress.assert_not_called()
 
 

@@ -20,8 +20,8 @@ def _tool(repository):
 def test_success_path_is_line_numbered_1_based():
     tool, callback = _tool({"F.java": "a\nb\nc"})
     assert tool("F.java") == "F.java:\n   1| a\n   2| b\n   3| c\n"
-    # Tools no longer push progress themselves: the stage API (`in_progress`) is
-    # gone and the activity system reports tool runs centrally.
+    # Tools do not push progress themselves; the activity system reports tool runs
+    # centrally.
     callback.in_progress.assert_not_called()
 
 
