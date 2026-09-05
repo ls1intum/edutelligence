@@ -72,6 +72,9 @@ def test_none_submission_reports_unavailable():
     assert tool() == _UNAVAILABLE
 
 
+_NO_NEWLINE = "\\ No newline at end of file"
+
+
 def test_final_newline_only_change_is_reported_as_a_change():
     # The live file gained a trailing newline and is otherwise identical. Stripping terminators
     # before comparing made this look like "no changes", so the tool told the model the working
@@ -81,20 +84,31 @@ def test_final_newline_only_change_is_reported_as_a_change():
     out = tool()
     assert out != _NO_CHANGES
     assert "submitted/P.java" in out
-    # Both sides of the terminator change are in the hunk, so the model sees WHAT differs.
-    assert "-code" in out
-    assert "+code" in out
+    # The side without a terminator is closed off, so the two sides stay separate lines instead
+    # of running together into "-code+code".
+    assert f"-code\n{_NO_NEWLINE}\n" in out
+    assert "+code\n" in out
 
 
 def test_final_newline_removed_locally_is_also_reported_as_a_change():
-    # The other direction: the live file LOST its trailing newline. Same defect, and worth pinning
-    # separately because the two sides render differently in the hunk.
+    # The other direction: the live file LOST its trailing newline. Same defect, and the marker
+    # lands on the added side here.
     sub = _submission({"P.java": "code"}, {"P.java": "code\n"})
     tool, _ = _tool(sub)
     out = tool()
     assert out != _NO_CHANGES
-    assert "-code" in out
-    assert "+code" in out
+    assert "-code\n" in out
+    assert f"+code\n{_NO_NEWLINE}\n" in out
+
+
+def test_carriage_return_only_terminator_is_not_marked_as_missing():
+    # A lone \r IS a terminator, so it must not collect the marker; only a truly unterminated
+    # last line does.
+    sub = _submission({"P.java": "a\rb\r"}, {"P.java": "a\rc\r"})
+    tool, _ = _tool(sub)
+    out = tool()
+    assert out != _NO_CHANGES
+    assert _NO_NEWLINE not in out
 
 
 def test_identical_files_including_terminator_still_report_no_changes():

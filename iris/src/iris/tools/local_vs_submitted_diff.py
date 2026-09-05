@@ -65,14 +65,24 @@ def create_tool_local_vs_submitted_diff(
             local = live.get(path, "")
             # keepends, because the line terminator is part of the change: with it stripped,
             # "code" and "code\n" compare equal and a file that differs is reported as
-            # unchanged. The output is then joined as difflib emits it, terminators and all.
+            # unchanged.
             diff = difflib.unified_diff(
                 submitted.splitlines(keepends=True),
                 local.splitlines(keepends=True),
                 fromfile=f"submitted/{path}",
                 tofile=f"local/{path}",
             )
-            diff_text = "".join(diff)
+            # A line that carries no terminator would otherwise run into the next one and
+            # render as "-code+code". difflib does not close that gap itself, so the standard
+            # unified-diff marker does it here, exactly as git writes it.
+            diff_text = "".join(
+                (
+                    line
+                    if line.endswith(("\n", "\r"))
+                    else f"{line}\n\\ No newline at end of file\n"
+                )
+                for line in diff
+            )
             if diff_text:
                 parts.append(diff_text)
         return "\n\n".join(parts) if parts else _NO_CHANGES
